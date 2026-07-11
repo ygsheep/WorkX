@@ -1,0 +1,47 @@
+# Build output directories
+build/
+vcpkg_installed/
+.vcpkg/
+
+# IDE and editor directories
+.idea/
+.claude/
+.trae/
+.vscode/
+
+# Build artifacts
+*.exe
+*.lib
+*.pdb
+*.obj
+*.o
+*.out
+*.dll
+*.a
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+
+# Visual Studio
+.vs/
+*.user
+
+# Build logs and temp files
+*.log
+*.tmp
+*.bak
+*.swp
+.DS_Store
+
+# Configuration files (may contain user-specific settings)
+workx_session.json
+config.json
+*.env
+
+# Test outputs
+tests/*.log
+tests/*.out

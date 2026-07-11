@@ -1,0 +1,11 @@
+{
+    "name": "workx",
+    "version-string": "0.2.0",
+    "description": "Terminal AI chat client with multi-provider support and event-driven architecture",
+    "dependencies": [
+        "nlohmann-json",
+        "catch2",
+        "curl"
+    ],
+    "overrides": []
+}

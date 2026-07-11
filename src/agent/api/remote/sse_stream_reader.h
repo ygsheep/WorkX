@@ -1,0 +1,78 @@
+/**
+ * @file sse_stream_reader.h
+ * @brief SSE 流读取器
+ * @details 将 HTTP 响应数据通过 SSEParser 解析为 StreamChunk。
+ *          通过 ParseSSECallback 委托 Provider 特定解析逻辑。
+ * @version 2.0.0
+ * @date 2026-07
+ */
+
+#pragma once
+
+#include <string>
+#include <queue>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
+#include <functional>
+#include "agent/api/i_stream_reader.h"
+#include "agent/api/sse_parser.hpp"
+
+namespace workx {
+
+/// @brief SSE 事件解析回调
+/// @param event_type SSE event 类型（如 "content_block_delta"）
+/// @param data SSE data 内容
+/// @param out 输出的 StreamChunk
+/// @return true 如果解析出了有效 chunk
+using ParseSSECallback = std::function<bool(const std::string& event_type,
+                                            const std::string& data,
+                                            StreamChunk& out)>;
+
+/// @brief SSE 流读取器
+/// @details 从 HTTP 响应接收原始数据，通过 SSEParser 解析，通过回调输出 StreamChunk
+class SSEStreamReader : public IStreamReader {
+public:
+    /// @brief 构造
+    /// @param parse_cb SSE 事件解析回调（Provider 特定）
+    explicit SSEStreamReader(ParseSSECallback parse_cb);
+
+    ~SSEStreamReader() override;
+
+    // IStreamReader 接口
+    StreamState next(std::function<bool()> should_stop, StreamChunk& out) override;
+    void cancel() override;
+
+    /// @brief 喂入原始 HTTP 数据（由 curl 回调调用）
+    /// @param data 原始 SSE 数据块
+    void feed_data(const std::string& data);
+
+    /// @brief 标记 HTTP 响应结束
+    /// @param error 错误信息，空表示正常结束
+    void finish(const std::string& error = "");
+
+    /// @brief 是否已结束（包括正常结束和错误）
+    bool is_finished() const { return m_finished.load(); }
+
+private:
+    void on_sse_event(const SSEEvent& event);
+
+    ParseSSECallback m_parse_cb;  ///< Provider 特定解析回调
+
+    std::mutex m_queue_mutex;
+    std::condition_variable m_queue_cv;
+    std::queue<StreamChunk> m_chunk_queue;
+
+    std::atomic<bool> m_cancelled{false};
+    std::atomic<bool> m_finished{false};
+    std::string m_finish_error;
+
+    SSEParser m_sse_parser;
+
+    // 累积内容，用于 is_final 时填充 full_content
+    std::string m_content_buffer;
+    std::string m_reasoning_buffer;
+    int32_t m_token_count = 0;
+};
+
+} // namespace workx

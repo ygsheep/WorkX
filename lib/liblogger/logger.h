@@ -1,0 +1,374 @@
+﻿/**
+ * @file logger.h
+ * @brief 现代C++20轻量级日志系统
+ * @details
+ * 提供高性能、线程安全的日志记录功能，支持控制台输出和异步文件写入。
+ *
+ * 主要特性：
+ * - 线程安全：使用原子操作和互斥锁保证并发安全
+ * - 异步写入：独立线程处理文件I/O，不阻塞主线程
+ * - 重复过滤：智能过滤短时间内的重复日志
+ * - 格式化支持：使用std::format进行高效格式化
+ *
+ * @author DearTs Team
+ * @date 2025
+ * @version 2.0
+ *
+ * Copyright (c) 2025 DearTs Project. All rights reserved.
+ */
+
+#pragma once
+
+#include <iostream>
+#include <string>
+#include <sstream>
+#include <iomanip>
+#include <format>
+#include <chrono>
+#include <mutex>
+#include <atomic>
+#include <fstream>
+#include <thread>
+#include <queue>
+#include <condition_variable>
+#include <filesystem>
+#include <unordered_map>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#endif
+
+namespace Agent {
+
+// 取消 Windows 头文件定义的宏，避免与 LogLevel 枚举冲突
+#ifdef ERROR
+#undef ERROR
+#endif
+
+// ============================================================================
+// 日志级别
+// ============================================================================
+
+/**
+ * @brief 日志级别枚举
+ */
+enum class LogLevel : int {
+    TRACE = 0,    ///< 详细跟踪信息
+    DEBUG = 1,    ///< 调试信息
+    INFO = 2,     ///< 一般信息
+    WARN = 3,     ///< 警告信息
+    ERROR = 4,    ///< 错误信息
+    FATAL = 5     ///< 致命错误信息
+};
+
+namespace Detail {
+
+/**
+ * @brief 将日志级别转换为字符串
+ * @param level 日志级别
+ * @return 级别字符串
+ */
+constexpr const char* to_string(LogLevel level) noexcept {
+    switch (level) {
+        case LogLevel::TRACE: return "TRACE";
+        case LogLevel::DEBUG: return "DEBUG";
+        case LogLevel::INFO:  return "INFO";
+        case LogLevel::WARN:  return "WARN";
+        case LogLevel::ERROR: return "ERROR";
+        case LogLevel::FATAL: return "FATAL";
+        default: return "UNKNOWN";
+    }
+}
+
+/**
+ * @brief 从路径中提取文件名
+ * @param path 文件路径
+ * @return 文件名
+ */
+inline std::string extract_filename(const char* path) noexcept {
+    const char* last_slash = path;
+    for (const char* p = path; *p; ++p) {
+        if (*p == '/' || *p == '\\') {
+            last_slash = p + 1;
+        }
+    }
+    return std::string(last_slash);
+}
+
+} // namespace Detail
+
+// ============================================================================
+// Logger 核心类
+// ============================================================================
+
+/**
+ * @brief 日志记录器类
+ * @details
+ * 单例模式，线程安全的日志记录器。支持控制台输出和异步文件写入。
+ *
+ * 使用示例：
+ * @code
+ * auto& logger = DearTs::Logger::get_instance();
+ * logger.set_level(DearTs::LogLevel::DEBUG);
+ * logger.enable_file_output("logs/app.log", true);
+ * logger.info("Application started");
+ * @endcode
+ */
+class Logger final {  // 单例类，禁止继承
+    // 技巧：定义一个简单的结构体，并在构造函数中使用它
+    struct Token { explicit Token() = default; }; // 定义在私有区
+public:
+    explicit Logger(Token /*unused*/)
+    : m_level(static_cast<int>(LogLevel::INFO)),
+      m_file_enabled(false),
+      m_writer_running(false),
+      m_buffer_size(4096),
+      m_duplicate_window_ms(DEFAULT_DUPLICATE_WINDOW_MS) {
+    }
+    /**
+     * @brief 析构函数
+     */
+    ~Logger() {
+        // 停止写入线程
+        if (m_writer_thread.joinable()) {
+            m_writer_running.store(false, std::memory_order_relaxed);
+            m_queue_cv.notify_all();
+            m_writer_thread.detach();  // 使用 detach 避免阻塞
+        }
+
+        // 关闭文件流
+        {
+            std::lock_guard<std::mutex> file_lock(m_file_mutex);
+            if (m_file_stream.is_open()) {
+                m_file_stream.flush();
+                m_file_stream.close();
+            }
+        }
+    }
+    Logger(const Logger&) = delete;
+    Logger& operator=(const Logger&) = delete;
+    Logger(Logger&&) = delete;
+    Logger& operator=(Logger&&) = delete;
+
+    /**
+     * @brief 获取Logger单例实例
+     * @return Logger引用
+     */
+    static std::shared_ptr<Logger> get_instance() noexcept {
+        std::call_once(initFlag, []() {
+            // 使用 new 初始化 unique_ptr
+            instance = std::make_shared<Logger>(Token{});
+        });
+        return instance;
+    }
+
+    // ==================== 配置接口 ====================
+
+    /**
+     * @brief 设置日志级别
+     * @param level 日志级别
+     */
+    void set_level(LogLevel level) noexcept {
+        m_level.store(static_cast<int>(level), std::memory_order_relaxed);
+    }
+
+    /**
+     * @brief 获取当前日志级别
+     * @return 当前日志级别
+     */
+    LogLevel get_level() const noexcept {
+        return static_cast<LogLevel>(m_level.load(std::memory_order_relaxed));
+    }
+
+    /**
+     * @brief 启用或禁用文件输出
+     * @param filename 日志文件路径
+     * @param enable 是否启用文件输出
+     */
+    void enable_file_output(const std::string& filename, bool enable = true);
+
+    /**
+     * @brief 检查是否启用了文件输出
+     * @return 是否启用了文件输出
+     */
+    bool is_file_output_enabled() const noexcept {
+        return m_file_enabled.load(std::memory_order_relaxed);
+    }
+
+    /**
+     * @brief 设置缓冲区大小
+     * @param size 缓冲区大小（字节）
+     */
+    void set_buffer_size(size_t size) noexcept {
+        m_buffer_size.store(size, std::memory_order_relaxed);
+    }
+
+    // ==================== 日志记录接口 ====================
+
+    /**
+     * @brief 记录日志消息
+     * @param level 日志级别
+     * @param message 日志消息
+     * @param file 源文件名
+     * @param line 行号
+     */
+    void log(LogLevel level, const std::string& message,
+             const char* file = __builtin_FILE(), int line = __builtin_LINE());
+
+    /**
+     * @brief 记录TRACE级别日志
+     * @param msg 日志消息
+     */
+    void trace(const std::string& msg, const char* file = __builtin_FILE(), int line = __builtin_LINE()) {
+        log(LogLevel::TRACE, msg, file, line);
+    }
+
+    /**
+     * @brief 记录DEBUG级别日志
+     * @param msg 日志消息
+     */
+    void debug(const std::string& msg, const char* file = __builtin_FILE(), int line = __builtin_LINE()) {
+        log(LogLevel::DEBUG, msg, file, line);
+    }
+
+    /**
+     * @brief 记录INFO级别日志
+     * @param msg 日志消息
+     */
+    void info(const std::string& msg, const char* file = __builtin_FILE(), int line = __builtin_LINE()) {
+        log(LogLevel::INFO, msg, file, line);
+    }
+
+    /**
+     * @brief 记录WARN级别日志
+     * @param msg 日志消息
+     */
+    void warn(const std::string& msg, const char* file = __builtin_FILE(), int line = __builtin_LINE()) {
+        log(LogLevel::WARN, msg, file, line);
+    }
+
+    /**
+     * @brief 记录ERROR级别日志
+     * @param msg 日志消息
+     */
+    void error(const std::string& msg, const char* file = __builtin_FILE(), int line = __builtin_LINE()) {
+        log(LogLevel::ERROR, msg, file, line);
+    }
+
+    /**
+     * @brief 记录FATAL级别日志
+     * @param msg 日志消息
+     */
+    void fatal(const std::string& msg, const char* file = __builtin_FILE(), int line = __builtin_LINE()) {
+        log(LogLevel::FATAL, msg, file, line);
+    }
+
+
+private:
+
+    // ==================== 重复日志过滤 ====================
+
+    /**
+     * @brief 检查是否为重复消息
+     * @param message 日志消息
+     * @param file 源文件名
+     * @param line 行号
+     * @return 是否为重复消息
+     */
+    bool is_duplicate(const std::string& message, const char* file, int line);
+
+    // ==================== 日志格式化 ====================
+
+    /**
+     * @brief 格式化日志消息
+     * @param level 日志级别
+     * @param message 日志消息
+     * @param file 源文件名
+     * @param line 行号
+     * @return 格式化后的日志消息
+     */
+    std::string format_message(LogLevel level, const std::string& message,
+                               const char* file, int line) const noexcept;
+
+    // ==================== 文件写入 ====================
+
+    /**
+     * @brief 将消息加入写入队列
+     * @param message 日志消息
+     */
+    void enqueue_message(const std::string& message);
+
+    /**
+     * @brief 文件写入线程函数
+     */
+    void writer_thread_func();
+
+    // ==================== 成员变量 ====================
+    static std::shared_ptr<Logger> instance;
+    static std::once_flag initFlag;
+
+    // 日志级别
+    std::atomic<int> m_level{static_cast<int>(LogLevel::INFO)};
+    mutable std::mutex m_output_mutex;
+
+    // 文件输出
+    std::atomic<bool> m_file_enabled{false};
+    std::string m_filename;
+    mutable std::mutex m_file_mutex;
+    std::ofstream m_file_stream;
+
+    // 异步写入
+    std::queue<std::string> m_log_queue;
+    mutable std::mutex m_queue_mutex;
+    std::condition_variable m_queue_cv;
+    std::thread m_writer_thread;
+    std::atomic<bool> m_writer_running{false};
+    std::atomic<size_t> m_buffer_size{4096};
+
+    // 重复过滤
+    static constexpr int DEFAULT_DUPLICATE_WINDOW_MS = 1000;
+    std::atomic<int> m_duplicate_window_ms{DEFAULT_DUPLICATE_WINDOW_MS};
+    std::unordered_map<std::string, long long> m_last_messages;
+    mutable std::mutex m_duplicate_mutex;
+};
+
+// ============================================================================
+// 便捷访问函数
+// ============================================================================
+
+} // namespace DearTs
+
+// ============================================================================
+// 日志宏 - 统一简洁的 API
+// ============================================================================
+
+// 简单字符串日志（无需格式化）
+#define LOG_TRACE_STR(msg) Logger::get_instance()->trace(msg)
+#define LOG_DEBUG_STR(msg) Logger::get_instance()->debug(msg)
+#define LOG_INFO_STR(msg)  Logger::get_instance()->info(msg)
+#define LOG_WARN_STR(msg)  Logger::get_instance()->warn(msg)
+#define LOG_ERROR_STR(msg) Logger::get_instance()->error(msg)
+#define LOG_FATAL_STR(msg) Logger::get_instance()->fatal(msg)
+
+// 格式化日志（使用 std::format）
+// C++20 __VA_OPT__ 标准写法，兼容新预处理器
+#define LOG_TRACE(fmt, ...) Agent::Logger::get_instance()->trace(std::format(fmt __VA_OPT__(,) __VA_ARGS__))
+#define LOG_DEBUG(fmt, ...) Agent::Logger::get_instance()->debug(std::format(fmt __VA_OPT__(,) __VA_ARGS__))
+#define LOG_INFO(fmt, ...)  Agent::Logger::get_instance()->info(std::format(fmt __VA_OPT__(,) __VA_ARGS__))
+#define LOG_WARN(fmt, ...)  Agent::Logger::get_instance()->warn(std::format(fmt __VA_OPT__(,) __VA_ARGS__))
+#define LOG_ERROR(fmt, ...) Agent::Logger::get_instance()->error(std::format(fmt __VA_OPT__(,) __VA_ARGS__))
+#define LOG_FATAL(fmt, ...) Agent::Logger::get_instance()->fatal(std::format(fmt __VA_OPT__(,) __VA_ARGS__))
+
+// 向后兼容宏
+#define DEARTS_LOGGER() Logger::get_instance()
+#define DEARTS_LOG_TRACE(msg) Logger::get_instance()->trace(msg)
+#define DEARTS_LOG_DEBUG(msg) Logger::get_instance()->debug(msg)
+#define DEARTS_LOG_INFO(msg)  Logger::get_instance()->info(msg)
+#define DEARTS_LOG_WARN(msg)  Logger::get_instance()->warn(msg)
+#define DEARTS_LOG_ERROR(msg) Logger::get_instance()->error(msg)
+#define DEARTS_LOG_FATAL(msg) Logger::get_instance()->fatal(msg)
