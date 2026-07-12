@@ -16,7 +16,7 @@
 #include "agent/api/remote/http_client.h"
 #include "agent/api/provider/i_provider_adapter.h"
 
-namespace workx {
+namespace agent {
 
 /// @brief shared_ptr 到 unique_ptr<IStreamReader> 的适配包装
 /// @details RemoteBackend 内部用 shared_ptr 管理 SSEStreamReader 生命周期
@@ -70,4 +70,4 @@ private:
     std::shared_ptr<SSEStreamReader> m_active_reader;
 };
 
-} // namespace workx
+} // namespace agent

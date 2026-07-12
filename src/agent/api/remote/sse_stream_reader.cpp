@@ -10,7 +10,7 @@
 
 #include <iostream>
 
-namespace workx {
+namespace agent {
 
 SSEStreamReader::SSEStreamReader(ParseSSECallback parse_cb)
     : m_parse_cb(std::move(parse_cb))
@@ -111,4 +111,4 @@ void SSEStreamReader::on_sse_event(const SSEEvent& event) {
     }
 }
 
-} // namespace workx
+} // namespace agent

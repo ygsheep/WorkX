@@ -13,7 +13,7 @@
 #include "tui/core/platform/i_platform.h"
 #include "core/events/event_bus.h"
 
-namespace workx {
+namespace agent {
 
 // Win32 特殊键码
 static constexpr char32_t KEY_ARROW_UP   = 0xE002;

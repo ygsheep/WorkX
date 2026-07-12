@@ -18,7 +18,8 @@
 #include <chrono>
 #include <thread>
 
-namespace workx {
+
+namespace agent {
 
 ChatRenderer::ChatRenderer(Terminal* terminal)
     : m_terminal(terminal)

@@ -15,7 +15,7 @@
 #include <chrono>
 #include <functional>
 
-namespace workx {
+namespace agent {
 
 class Terminal;
 class StatusBar;

@@ -10,7 +10,7 @@
 #include <cstdio>
 #include <cmath>
 
-namespace workx {
+namespace agent {
 
 static const char* SPINNER_FRAMES[] = {
     "\xe2\xa0\x8b",

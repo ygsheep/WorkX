@@ -8,7 +8,7 @@
 
 #include <algorithm>
 
-namespace workx {
+namespace agent {
 
 DisplayBuffer::DisplayBuffer(int capacity) {
     m_capacity = capacity > 0 ? capacity : 1;

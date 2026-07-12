@@ -10,7 +10,7 @@
 
 #include "app/ui/path_completer.h"
 
-namespace workx {
+namespace agent {
 
 std::vector<std::pair<std::string, size_t>> complete_file_path(
     std::string_view prefix, size_t cursor_pos)

@@ -5,16 +5,16 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
-#include "agent/command/registry.h"
+#include "../src/agent/command/inclaude/registry.h"
 #include "agent/command/executor.h"
 #include "app/command/builtin_commands.h"
-#include "agent/command/command.h"
+#include "../src/agent/command/inclaude/command.h"
 #include "agent/core/chat_session.h"
 #include "agent/api/i_backend.h"
 #include "core/config/config_manager.h"
 
-using namespace workx;
-using namespace workx::command;
+using namespace agent;
+using namespace agent::command;
 
 /// @brief Mock ICompletionProvider 用于测试
 class MockProvider : public ICompletionProvider {

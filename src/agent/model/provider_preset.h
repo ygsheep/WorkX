@@ -14,7 +14,7 @@
 #include <vector>
 #include "agent/model/provider_type.h"
 
-namespace workx {
+namespace agent {
 
 /// @brief Provider 预设
 /// @details 一个预设包含名称、协议类型、默认 URL 和默认模型
@@ -43,4 +43,4 @@ const ProviderPreset* find_preset(std::string_view name);
 /// @return 预设名称的 vector（如 ["openai", "anthropic", "deepseek", ...]）
 std::vector<std::string_view> list_preset_names();
 
-} // namespace workx
+} // namespace agent

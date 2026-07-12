@@ -13,7 +13,7 @@
 #include <vector>
 #include <utility>
 
-namespace workx {
+namespace agent {
 
 /// @brief 文件路径补全：匹配给定前缀的文件/目录
 /// @param prefix 输入行前缀

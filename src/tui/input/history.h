@@ -11,7 +11,7 @@
 #include <vector>
 #include <filesystem>
 
-namespace workx {
+namespace agent {
 
 /**
  * @brief 输入历史管理器

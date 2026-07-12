@@ -15,7 +15,7 @@
 #include "agent/model/provider_preset.h"
 #include "tui/core/screen.h"
 
-namespace workx {
+namespace agent {
 
 class IPlatform;
 class Terminal;

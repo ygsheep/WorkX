@@ -14,7 +14,7 @@
 #include "agent/model/provider_type.h"
 #include "agent/api/chat_types.h"
 
-namespace workx {
+namespace agent {
 
 /// @brief Provider 协议适配器接口
 /// @details RemoteBackend 通过此接口屏蔽 OpenAI/Anthropic 等 API 差异
@@ -50,4 +50,4 @@ public:
                                  StreamChunk& out) const = 0;
 };
 
-} // namespace workx
+} // namespace agent

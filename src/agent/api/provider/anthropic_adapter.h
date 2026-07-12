@@ -10,7 +10,7 @@
 
 #include "agent/api/provider/i_provider_adapter.h"
 
-namespace workx {
+namespace agent {
 
 /// @brief Anthropic 协议适配器
 /// @details 适配 Anthropic Claude Messages API（/v1/messages）
@@ -31,4 +31,4 @@ public:
                          StreamChunk& out) const override;
 };
 
-} // namespace workx
+} // namespace agent

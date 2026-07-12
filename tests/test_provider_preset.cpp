@@ -6,7 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "agent/model/provider_preset.h"
 
-using namespace workx;
+using namespace agent;
 
 TEST_CASE("ProviderPreset find built-in presets", "[provider][preset]") {
     SECTION("openai preset exists") {

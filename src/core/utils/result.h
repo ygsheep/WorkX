@@ -13,7 +13,7 @@
 #include <format>
 #include <type_traits>
 
-namespace workx {
+namespace agent {
 
 namespace detail {
     template<typename T>

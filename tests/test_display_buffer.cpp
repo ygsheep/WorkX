@@ -7,7 +7,7 @@
 #include <catch2/matchers/catch_matchers.hpp>
 #include "tui/core/display_buffer.h"
 
-using workx::DisplayBuffer;
+using agent::DisplayBuffer;
 
 TEST_CASE("DisplayBuffer basic single line", "[display_buffer]") {
     // height=4 → scroll_h=1, content fills the single-row scroll region

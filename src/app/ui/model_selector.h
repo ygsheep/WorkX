@@ -10,7 +10,7 @@
 
 #include <string>
 
-namespace workx {
+namespace agent {
 
 class Terminal;
 class Screen;

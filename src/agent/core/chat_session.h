@@ -18,10 +18,10 @@
 #include "core/utils/result.h"
 #include "agent/message/types.h"
 
-namespace workx {
+namespace agent {
 
 /// @brief 对话会话
-/// @details 订阅 UserInputEvent/CommandEvent/InterruptEvent，
+/// @details 由外部驱动（main.cpp），通过 send_message() 提交文本，
 ///          后台 Task 调用 ICompletionProvider，发布 StreamTokenEvent/StreamDoneEvent
 class ChatSession {
 public:
@@ -47,6 +47,9 @@ public:
     /// @brief 是否正在生成
     bool is_generating() const { return m_generating.load(); }
 
+    /// @brief 提交用户消息，触发 LLM 推理
+    void send_message(const std::string& text);
+
     /// @brief 保存对话历史到文件
     Result<void, std::string> save_session(const std::string& path) const;
 
@@ -54,19 +57,16 @@ public:
     Result<void, std::string> load_session(const std::string& path);
 
 private:
-    /// @brief 处理用户输入
-    void on_user_input(const UserInputEvent& event);
-
     /// @brief 执行推理（在后台线程中运行）
     /// @param user_text 用户输入文本
     /// @param retry_attempt 当前重试次数（0=首次请求）
     void run_completion(const std::string& user_text, int retry_attempt = 0);
 
-    /// @brief 订阅所有事件
-    void subscribe_events();
+    /// @brief 订阅中断事件
+    void subscribe_interrupt();
 
-    /// @brief 取消所有订阅
-    void unsubscribe_events();
+    /// @brief 取消中断订阅
+    void unsubscribe_interrupt();
 
     std::unique_ptr<ICompletionProvider> m_provider;
     std::vector<ChatMessage> m_messages;
@@ -77,10 +77,8 @@ private:
     int m_max_retries = 3;
     int m_retry_delay_ms = 1000;
 
-    // 事件订阅 token
-    EventToken m_user_input_token;
-    EventToken m_command_token;
+    // 中断事件订阅
     EventToken m_interrupt_token;
 };
 
-} // namespace workx
+} // namespace agent

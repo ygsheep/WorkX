@@ -14,9 +14,9 @@
 #include <functional>
 #include <memory>
 #include <nlohmann/json.hpp>
-#include "agent/command/types.h"
+#include "types.h"
 
-namespace workx::command {
+namespace agent::command {
 
 /// 命令基类 — 对应 CommandBase
 /// 所有命令类型的公共接口
@@ -210,4 +210,4 @@ inline std::shared_ptr<LocalCommand> make_local_command(std::string name, std::s
     return std::make_shared<LocalCommand>(std::move(name), std::move(description));
 }
 
-} // namespace workx::command
+} // namespace agent::command

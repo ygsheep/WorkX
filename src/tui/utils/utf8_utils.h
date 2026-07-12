@@ -11,7 +11,7 @@
 #include <vector>
 #include <utility>
 
-namespace workx {
+namespace agent {
 
 /**
  * @brief 解码后的 UTF-8 字符单元

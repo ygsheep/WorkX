@@ -13,7 +13,7 @@
 
 #include "tui/render/markdown_renderer.h"
 
-namespace workx {
+namespace agent {
 
 class Terminal;
 

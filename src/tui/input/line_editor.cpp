@@ -10,7 +10,7 @@
 #include <cstdio>
 #include <cwctype>
 
-namespace workx {
+namespace agent {
 
 // Win32 特殊键码（与 platform_win32.cpp 一致）
 static constexpr char32_t KEY_ARROW_LEFT       = 0xE000;

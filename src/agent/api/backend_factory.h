@@ -10,7 +10,7 @@
 #include <memory>
 #include "agent/api/chat_types.h"
 
-namespace workx {
+namespace agent {
 
 class IBackend;
 
@@ -24,4 +24,4 @@ public:
     static std::unique_ptr<IBackend> create(const BackendConfig& config);
 };
 
-} // namespace workx
+} // namespace agent

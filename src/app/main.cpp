@@ -6,6 +6,7 @@
  * @date 2026-07
  */
 
+#include <algorithm>
 #include <filesystem>
 #include <format>
 #include <iostream>
@@ -17,8 +18,8 @@
 #include "agent/api/backend_factory.h"
 #include "agent/api/chat_types.h"
 #include "agent/api/i_backend.h"
-#include "agent/command/executor.h"
-#include "agent/command/registry.h"
+#include "agent/command/inclaude/registry.h"
+#include "agent/input/processor.h"
 #include "agent/core/chat_session.h"
 #include "agent/message/types.h"
 #include "agent/model/provider_preset.h"
@@ -39,7 +40,7 @@
 #include "tui/widgets/command_panel.h"
 #include "tui/widgets/status_bar.h"
 
-namespace workx {
+namespace agent {
 
 // ============================================================
 // 主函数
@@ -78,6 +79,28 @@ static int run(int argc, char* argv[]) {
 
     // ---- 从 ConfigManager 读取配置 ----
     auto& cfg = ConfigManager::instance();
+
+    // ---- 初始化日志系统 ----
+    {
+        auto logger = Agent::Logger::get_instance();
+
+        // 设置日志级别
+        std::string level_str = cfg.get_or<std::string>(keys::LOG_LEVEL, "info");
+        std::transform(level_str.begin(), level_str.end(), level_str.begin(), ::tolower);
+        if (level_str == "trace")       logger->set_level(Agent::LogLevel::TRACE);
+        else if (level_str == "debug")  logger->set_level(Agent::LogLevel::DEBUG);
+        else if (level_str == "warn")   logger->set_level(Agent::LogLevel::WARN);
+        else if (level_str == "error")  logger->set_level(Agent::LogLevel::ERROR);
+        else if (level_str == "fatal")  logger->set_level(Agent::LogLevel::FATAL);
+        else                            logger->set_level(Agent::LogLevel::INFO);
+
+        // 启用文件输出（默认写入 %APPDATA%/workx/logs/workx.log）
+        std::string log_file = cfg.get_or<std::string>(keys::LOG_FILE, "");
+        if (log_file.empty()) {
+            log_file = default_log_path().string();
+        }
+        logger->enable_file_output(log_file, true);
+    }
 
     // ---- Debug 启动信息 ----
     bool verbose = cfg.get_or<bool>(keys::VERBOSE, false);
@@ -125,7 +148,7 @@ static int run(int argc, char* argv[]) {
     // ---- Backend (可选) ----
     std::unique_ptr<ChatSession> session;
     std::shared_ptr<command::CommandRegistry> registry;
-    std::unique_ptr<command::CommandExecutor> executor;
+    std::unique_ptr<agent::input::InputProcessor> input_processor;
     IBackend* g_backend = nullptr;  // raw ptr, owned by ChatSession
 
     // 检查 Provider Preset（--provider 时自动填充 URL/Model）
@@ -192,7 +215,7 @@ static int run(int argc, char* argv[]) {
 
     // ---- 命令系统 ----
     registry = std::make_shared<command::CommandRegistry>();
-    executor = std::make_unique<command::CommandExecutor>(registry);
+    input_processor = std::make_unique<agent::input::InputProcessor>(registry);
 
     // ---- 启动时模型选择（model_name 为空时触发） ----
     if (g_backend && model_name.empty()) {
@@ -328,48 +351,62 @@ static int run(int argc, char* argv[]) {
         bottom_bar.on_input_changed(line);
     });
 
-    // ---- 事件订阅 ----
+    // ---- 事件订阅：统一用户输入管道 ----
+    // UserInputEvent 经过 InputParser(解析层) → InputProcessor(处理层)
+    // → 根据 ProcessResult 调用执行层组件
 
     auto input_token = EventBus::instance().subscribe<UserInputEvent>(
-        [&session](const UserInputEvent& e) {
-            // 无后端时，回显用户输入
-            if (!session) {
-                EventBus::instance().publish_async(StreamTokenEvent{
-                    .session_id = "default",
-                    .content_delta = "Echo: " + e.text + "\n",
-                    .reasoning_delta = "",
-                    .is_thinking = false,
-                    .token_count = 0
-                });
-                EventBus::instance().publish_async(StreamDoneEvent{
-                    .session_id = "default",
-                    .full_content = "Echo: " + e.text + "\n",
-                    .was_interrupted = false
-                });
-            }
-        }
-    );
+        [&session, &input_processor](const UserInputEvent& e) {
+            if (!input_processor) return;
 
-    auto cmd_token = EventBus::instance().subscribe<CommandEvent>(
-        [&executor](const CommandEvent& e) {
-            if (!executor) return;
-            std::string input = "/" + e.name;
-            if (!e.args.empty()) input += " " + e.args;
             command::CommandContext ctx;
-            auto result = executor->execute(input, ctx);
-            if (!result.result.text.empty()) {
+            auto result = input_processor->process(e.text, ctx);
+
+            if (result.is_error) {
+                EventBus::instance().publish_async(StreamErrorEvent{
+                    .session_id = "default",
+                    .message = result.output_text,
+                    .retryable = false
+                });
+                return;
+            }
+
+            // 命令有输出文本 → 直接发布
+            if (!result.output_text.empty()) {
                 EventBus::instance().publish_async(StreamTokenEvent{
                     .session_id = "default",
-                    .content_delta = result.result.text,
+                    .content_delta = result.output_text,
                     .reasoning_delta = "",
                     .is_thinking = false,
                     .token_count = 0
                 });
                 EventBus::instance().publish_async(StreamDoneEvent{
                     .session_id = "default",
-                    .full_content = result.result.text,
+                    .full_content = result.output_text,
                     .was_interrupted = false
                 });
+                return;
+            }
+
+            // 需要调 LLM
+            if (result.should_query) {
+                if (session) {
+                    session->send_message(e.text);
+                } else {
+                    // 无后端时回显
+                    EventBus::instance().publish_async(StreamTokenEvent{
+                        .session_id = "default",
+                        .content_delta = "Echo: " + e.text + "\n",
+                        .reasoning_delta = "",
+                        .is_thinking = false,
+                        .token_count = 0
+                    });
+                    EventBus::instance().publish_async(StreamDoneEvent{
+                        .session_id = "default",
+                        .full_content = "Echo: " + e.text + "\n",
+                        .was_interrupted = false
+                    });
+                }
             }
         }
     );
@@ -385,7 +422,6 @@ static int run(int argc, char* argv[]) {
 
     // ---- 清理 ----
     EventBus::instance().unsubscribe<UserInputEvent>(input_token);
-    EventBus::instance().unsubscribe<CommandEvent>(cmd_token);
     EventBus::instance().unsubscribe<ShutdownEvent>(shutdown_token);
 
     TaskManager::instance().cancelAll();
@@ -397,5 +433,5 @@ static int run(int argc, char* argv[]) {
 } // namespace workx
 
 int main(int argc, char* argv[]) {
-    return workx::run(argc, argv);
+    return agent::run(argc, argv);
 }

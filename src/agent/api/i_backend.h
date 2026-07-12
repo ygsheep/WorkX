@@ -15,7 +15,7 @@
 #include "agent/api/i_stream_reader.h"
 #include "agent/api/i_completion_provider.h"
 
-namespace workx {
+namespace agent {
 
 /// @brief 推理后端接口
 /// @details 同时实现 ICompletionProvider，可供 ChatSession 直接使用
@@ -52,4 +52,4 @@ public:
     virtual void set_model_name(const std::string& /*name*/) {}
 };
 
-} // namespace workx
+} // namespace agent

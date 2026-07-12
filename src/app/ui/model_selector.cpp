@@ -19,7 +19,7 @@
 #include "tui/core/terminal.h"
 #include "tui/widgets/select_panel.h"
 
-namespace workx {
+namespace agent {
 
 /// "Custom Model..." 选项的 sentinel id
 static constexpr const char* CUSTOM_MODEL_ID = "__custom__";

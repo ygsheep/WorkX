@@ -17,7 +17,7 @@
 #include <mutex>
 #include <condition_variable>
 
-using namespace workx;
+using namespace agent;
 
 // ============================================================
 // 测试辅助：使用 LM Studio 作为测试服务器

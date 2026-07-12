@@ -6,7 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "agent/api/provider/openai_adapter.h"
 
-using namespace workx;
+using namespace agent;
 
 TEST_CASE("OpenAIAdapter build_url", "[provider][openai]") {
     OpenAIAdapter adapter;

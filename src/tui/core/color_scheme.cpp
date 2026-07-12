@@ -6,6 +6,6 @@
 
 #include "tui/core/color_scheme.h"
 
-namespace workx {
+namespace agent {
 // 颜色方案目前为编译时常量，无需额外实现
 } // namespace workx

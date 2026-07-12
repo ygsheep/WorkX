@@ -9,7 +9,7 @@
 #include <algorithm>
 #include <thread>
 
-namespace workx {
+namespace agent {
 
 Task::Task(std::string name, TaskFunc func, float max_progress)
     : m_name(std::move(name))
@@ -26,7 +26,7 @@ void Task::execute() {
     m_status = TaskStatus::Running;
     m_start_time = std::chrono::steady_clock::now();
 
-    auto task_ptr = shared_from_this();
+    const auto task_ptr = shared_from_this();
 
     EventBus::instance().publish_async(TaskStartedEvent{
         .task = task_ptr,

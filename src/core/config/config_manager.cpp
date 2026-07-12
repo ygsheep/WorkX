@@ -12,7 +12,7 @@
 #include <fstream>
 #include <filesystem>
 
-namespace workx {
+namespace agent {
 
 bool ConfigManager::has(const std::string& key) const {
     std::lock_guard<std::mutex> lock(m_mutex);

@@ -19,7 +19,7 @@
 #include <thread>
 #include <filesystem>
 
-namespace workx {
+namespace agent {
 
 // 工厂函数声明（在 platform_win32.cpp 中定义）
 std::unique_ptr<IPlatform> create_platform();
@@ -170,33 +170,22 @@ void Terminal::run_simple() {
         if (line.empty()) continue;
 
         if (line[0] == '/') {
+            // 内置命令直接处理
             std::string cmd_text = line.substr(1);
-            std::string cmd_name;
-            std::string cmd_args;
-
             auto space_pos = cmd_text.find(' ');
-            if (space_pos != std::string::npos) {
-                cmd_name = cmd_text.substr(0, space_pos);
-                cmd_args = cmd_text.substr(space_pos + 1);
-            } else {
-                cmd_name = cmd_text;
-            }
+            std::string cmd_name = (space_pos != std::string::npos)
+                ? cmd_text.substr(0, space_pos) : cmd_text;
 
             if (cmd_name == "exit" || cmd_name == "quit") {
                 break;
             }
-
-            EventBus::instance().publish(CommandEvent{
-                .name = cmd_name,
-                .args = cmd_args
-            });
         } else {
             echo_input(line);
-
-            EventBus::instance().publish(UserInputEvent{
-                .text = line
-            });
         }
+
+        EventBus::instance().publish(UserInputEvent{
+            .text = line
+        });
 
         EventBus::instance().process_async_events();
 
@@ -301,17 +290,11 @@ void Terminal::run_advanced() {
         if (result.text.empty()) continue;
 
         if (result.is_command) {
+            // 内置命令直接处理
             std::string cmd_text = result.text.substr(1);
-            std::string cmd_name;
-            std::string cmd_args;
-
             auto space_pos = cmd_text.find(' ');
-            if (space_pos != std::string::npos) {
-                cmd_name = cmd_text.substr(0, space_pos);
-                cmd_args = cmd_text.substr(space_pos + 1);
-            } else {
-                cmd_name = cmd_text;
-            }
+            std::string cmd_name = (space_pos != std::string::npos)
+                ? cmd_text.substr(0, space_pos) : cmd_text;
 
             if (cmd_name == "exit" || cmd_name == "quit") {
                 m_running = false;
@@ -321,18 +304,13 @@ void Terminal::run_advanced() {
                 write("\x1b[2J\x1b[H");
                 continue;
             }
-
-            EventBus::instance().publish(CommandEvent{
-                .name = cmd_name,
-                .args = cmd_args
-            });
         } else {
             echo_input(result.text);
-
-            EventBus::instance().publish(UserInputEvent{
-                .text = result.text
-            });
         }
+
+        EventBus::instance().publish(UserInputEvent{
+            .text = result.text
+        });
 
         if (m_input_callback) {
             m_input_callback(result.text);

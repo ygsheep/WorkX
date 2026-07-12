@@ -15,7 +15,7 @@
 #include "app/config/cli_args.h"
 #include "core/config/config_manager.h"
 
-namespace workx {
+namespace agent {
 
 void parse_cli_args(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {

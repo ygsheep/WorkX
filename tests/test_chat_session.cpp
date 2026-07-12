@@ -9,7 +9,7 @@
 #include "agent/message/types.h"
 #include "core/config/config_manager.h"
 
-using namespace workx;
+using namespace agent;
 
 /// @brief Mock ICompletionProvider
 class MockProvider : public ICompletionProvider {

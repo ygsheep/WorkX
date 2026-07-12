@@ -9,7 +9,7 @@
 
 #include <chrono>
 
-namespace workx {
+namespace agent {
 
 Spinner::Spinner(Terminal* terminal)
     : m_terminal(terminal)

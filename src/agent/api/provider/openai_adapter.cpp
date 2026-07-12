@@ -12,7 +12,7 @@
 #include <nlohmann/json.hpp>
 #endif
 
-namespace workx {
+namespace agent {
 
 std::string OpenAIAdapter::build_url(const std::string& base_url) const {
     std::string url = base_url;
@@ -144,4 +144,4 @@ bool OpenAIAdapter::parse_sse_event(const std::string& /*event_type*/,
 #endif
 }
 
-} // namespace workx
+} // namespace agent

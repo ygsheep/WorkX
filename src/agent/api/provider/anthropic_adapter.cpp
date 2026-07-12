@@ -16,7 +16,7 @@
 #include <nlohmann/json.hpp>
 #endif
 
-namespace workx {
+namespace agent {
 
 std::string AnthropicAdapter::build_url(const std::string& base_url) const {
     std::string url = base_url;
@@ -169,4 +169,4 @@ bool AnthropicAdapter::parse_sse_event(const std::string& event_type,
 #endif
 }
 
-} // namespace workx
+} // namespace agent

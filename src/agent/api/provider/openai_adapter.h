@@ -10,7 +10,7 @@
 
 #include "agent/api/provider/i_provider_adapter.h"
 
-namespace workx {
+namespace agent {
 
 /// @brief OpenAI 协议适配器
 /// @details 支持 OpenAI 官方 API 及兼容 API（DeepSeek、Groq、Together 等）
@@ -31,4 +31,4 @@ public:
                          StreamChunk& out) const override;
 };
 
-} // namespace workx
+} // namespace agent

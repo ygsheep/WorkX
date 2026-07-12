@@ -19,7 +19,7 @@
 #define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
 #endif
 
-namespace workx {
+namespace agent {
 
 // Win32 特殊键码（Private Use Area，不与真实输入冲突）
 static constexpr char32_t KEY_ARROW_LEFT       = 0xE000;

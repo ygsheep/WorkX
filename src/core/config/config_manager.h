@@ -16,7 +16,7 @@
 #include <mutex>
 #include <vector>
 
-namespace workx {
+namespace agent {
 
 using ConfigValue = std::variant<bool, int, double, std::string>;
 

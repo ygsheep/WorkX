@@ -18,7 +18,7 @@
 #include "agent/api/i_stream_reader.h"
 #include "agent/api/sse_parser.hpp"
 
-namespace workx {
+namespace agent {
 
 /// @brief SSE 事件解析回调
 /// @param event_type SSE event 类型（如 "content_block_delta"）
@@ -75,4 +75,4 @@ private:
     int32_t m_token_count = 0;
 };
 
-} // namespace workx
+} // namespace agent

@@ -9,7 +9,7 @@
 #include "tui/core/color_scheme.h"
 #include "tui/utils/utf8_utils.h"
 
-namespace workx {
+namespace agent {
 
 // ---- 工具图标映射 ----
 

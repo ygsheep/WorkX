@@ -14,7 +14,7 @@
 #include <typeindex>
 #include <cstdint>
 
-namespace workx {
+namespace agent {
 
 class EventToken {
 public:

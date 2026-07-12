@@ -9,7 +9,7 @@
 
 #include <chrono>
 
-namespace workx {
+namespace agent {
 
 StreamingBuffer::StreamingBuffer(Terminal* terminal)
     : m_terminal(terminal)

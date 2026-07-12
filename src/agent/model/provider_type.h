@@ -12,7 +12,7 @@
 #include <string_view>
 #include "core/utils/result.h"
 
-namespace workx {
+namespace agent {
 
 /// @brief API 提供商协议类型
 /// @details 决定使用哪种协议格式（URL、认证、请求体、SSE 解析）
@@ -43,4 +43,4 @@ inline Result<ProviderType, std::string> provider_type_from_string(std::string_v
     );
 }
 
-} // namespace workx
+} // namespace agent

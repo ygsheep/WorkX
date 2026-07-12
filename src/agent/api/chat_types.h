@@ -13,7 +13,7 @@
 #include <chrono>
 #include "agent/model/provider_type.h"
 
-namespace workx {
+namespace agent {
 
 // ============================================================
 // ChatMessage
@@ -115,4 +115,4 @@ struct ModelInfo {
     int32_t context_length = 0;
 };
 
-} // namespace workx
+} // namespace agent

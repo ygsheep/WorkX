@@ -12,7 +12,7 @@
 #include <vector>
 #include <functional>
 
-namespace workx {
+namespace agent {
 
 class Terminal;
 

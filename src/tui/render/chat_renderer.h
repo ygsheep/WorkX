@@ -15,7 +15,7 @@
 
 #include "tui/core/tui_state.h"
 
-namespace workx {
+namespace agent {
 
 class Terminal;
 class StatusBar;

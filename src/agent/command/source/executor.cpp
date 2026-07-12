@@ -6,9 +6,9 @@
  * @date 2026-07
  */
 
-#include "agent/command/executor.h"
+#include "../inclaude/executor.h"
 
-namespace workx::command {
+namespace agent::command {
 
 CommandExecutor::CommandExecutor(std::shared_ptr<CommandRegistry> registry)
     : registry_(std::move(registry)) {}
@@ -78,4 +78,4 @@ std::pair<std::string, std::string> CommandExecutor::parse(const std::string& in
     return {command_name, args};
 }
 
-} // namespace workx::command
+} // namespace agent::command

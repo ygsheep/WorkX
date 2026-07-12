@@ -3,10 +3,11 @@
  * @brief SSE + NDJSON 流式解析器实现
  */
 
+#include <liblogger/logger.h>
 #include "agent/api/sse_parser.hpp"
 #include <algorithm>
 
-namespace workx {
+namespace agent {
 
 SSEParser::SSEParser(EventCallback callback)
     : m_callback(std::move(callback))
@@ -113,7 +114,7 @@ SSEEvent SSEParser::parse_event(const std::string& event_text) {
             try { event.retry = std::stoi(value); } catch (...) {}
         }
     }
-
+    LOG_INFO("SSEParser parsed event: {}", event.data);
     return event;
 }
 
@@ -167,4 +168,4 @@ void NDJSONParser::reset() {
     m_buffer.clear();
 }
 
-} // namespace workx
+} // namespace agent

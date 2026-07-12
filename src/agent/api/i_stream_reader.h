@@ -11,7 +11,7 @@
 #include <functional>
 #include "agent/api/chat_types.h"
 
-namespace workx {
+namespace agent {
 
 /// @brief 流式读取状态
 enum class StreamState {
@@ -37,4 +37,4 @@ public:
     virtual void cancel() = 0;
 };
 
-} // namespace workx
+} // namespace agent

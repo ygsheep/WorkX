@@ -15,6 +15,7 @@ set(TEST_SOURCES
     test_openai_adapter.cpp
     test_anthropic_adapter.cpp
     test_http_client.cpp
+    test_client.cpp
     test_utf8_utils.cpp
     test_markdown_renderer.cpp
     test_display_buffer.cpp

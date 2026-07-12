@@ -13,7 +13,7 @@
 #include <optional>
 #include <nlohmann/json.hpp>
 
-namespace workx::command {
+namespace agent::command {
 
 /// 命令可用性 — 对应 CommandAvailability
 enum class Availability {
@@ -70,4 +70,4 @@ struct PromptBlock {
     nlohmann::json image;       ///< 图片内容（可选）
 };
 
-} // namespace workx::command
+} // namespace agent::command

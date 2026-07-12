@@ -11,9 +11,9 @@
 #include <memory>
 #include <functional>
 
-#include "agent/command/registry.h"
+#include "../../agent/command/inclaude/registry.h"
 
-namespace workx {
+namespace agent {
 
 class ChatSession;
 

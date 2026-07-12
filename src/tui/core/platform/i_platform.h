@@ -10,7 +10,7 @@
 #include <string_view>
 #include "core/utils/result.h"
 
-namespace workx {
+namespace agent {
 
 /**
  * @brief 终端平台接口

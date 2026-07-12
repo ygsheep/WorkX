@@ -5,7 +5,7 @@
 
 #include "tui/utils/utf8_utils.h"
 
-namespace workx {
+namespace agent {
 
 std::vector<Utf8Cell> decode_utf8_cells(std::string_view text) {
     std::vector<Utf8Cell> result;

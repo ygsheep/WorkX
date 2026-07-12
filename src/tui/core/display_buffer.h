@@ -14,7 +14,7 @@
 #include <string_view>
 #include <vector>
 
-namespace workx {
+namespace agent {
 
 /**
  * @brief 聊天输出镜像缓冲

@@ -12,9 +12,9 @@
 #include <vector>
 #include <memory>
 #include <unordered_map>
-#include "agent/command/command.h"
+#include "command.h"
 
-namespace workx::command {
+namespace agent::command {
 
 /// 命令注册表 — 对应 commands.ts 的 getCommands() / getCommand()
 ///
@@ -53,4 +53,4 @@ private:
     std::unordered_map<std::string, std::shared_ptr<CommandBase>> name_index_;
 };
 
-} // namespace workx::command
+} // namespace agent::command

@@ -12,7 +12,7 @@
 #include <cstdio>
 #include <algorithm>
 
-namespace workx {
+namespace agent {
 
 CommandPanel::CommandPanel(Terminal* terminal)
     : m_terminal(terminal)

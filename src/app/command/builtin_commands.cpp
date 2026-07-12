@@ -9,11 +9,11 @@
 
 #include <format>
 
-#include "agent/command/command.h"
+#include "../../agent/command/inclaude/command.h"
 #include "agent/core/chat_session.h"
 #include "app/command/builtin_commands.h"
 
-namespace workx::command {
+namespace agent::command {
 
 void register_system_commands(CommandRegistry& registry, const SystemCommandContext& ctx) {
     CommandRegistry* reg_ptr = &registry;

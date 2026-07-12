@@ -14,7 +14,7 @@
 #include <vector>
 #include "tui/core/screen.h"
 
-namespace workx {
+namespace agent {
 
 class Terminal;
 class IPlatform;

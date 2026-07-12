@@ -6,7 +6,7 @@
 #include "agent/model/provider_preset.h"
 #include <algorithm>
 
-namespace workx {
+namespace agent {
 
 /// @brief 内置预设表
 /// @note openai-compatible 是特殊预设：无默认 URL/Model，用户必须提供 --remote
@@ -107,4 +107,4 @@ std::string build_preset_url(const ProviderPreset* preset) {
     return url;
 }
 
-} // namespace workx
+} // namespace agent

@@ -12,7 +12,7 @@
 #include <functional>
 #include <memory>
 
-namespace workx {
+namespace agent {
 
 class IPlatform;
 

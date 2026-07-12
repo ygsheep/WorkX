@@ -6,7 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "agent/api/provider/anthropic_adapter.h"
 
-using namespace workx;
+using namespace agent;
 
 TEST_CASE("AnthropicAdapter build_url", "[provider][anthropic]") {
     AnthropicAdapter adapter;

@@ -15,7 +15,7 @@
 #include <mutex>
 #include <chrono>
 
-namespace workx {
+namespace agent {
 
 enum class TaskType {
     Normal,

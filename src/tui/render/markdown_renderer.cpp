@@ -9,7 +9,7 @@
 #include <cctype>
 #include <sstream>
 
-namespace workx {
+namespace agent {
 
 // ---- helpers ----
 

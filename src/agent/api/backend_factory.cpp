@@ -9,7 +9,7 @@
 #include "agent/api/i_backend.h"
 #include "agent/api/remote/remote_backend.h"
 
-namespace workx {
+namespace agent {
 
 std::unique_ptr<IBackend> BackendFactory::create(const BackendConfig& config) {
     switch (config.type) {
@@ -23,4 +23,4 @@ std::unique_ptr<IBackend> BackendFactory::create(const BackendConfig& config) {
     }
 }
 
-} // namespace workx
+} // namespace agent

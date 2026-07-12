@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file events.h
  * @brief 所有事件类型定义
  * @details TUI/Session/Agent 层间通信事件
@@ -10,22 +10,14 @@
 #include <string>
 #include <vector>
 
-namespace workx {
+namespace agent {
 
 // ============================================================
 // 用户事件（TUI → Session）
 // ============================================================
-
-/// @brief 用户提交文本消息
+/// @brief 用户提交的原始文本（不含尾部换行）
 struct UserInputEvent {
     std::string text;
-    std::vector<std::string> attachments;  ///< 未来：文件附件
-};
-
-/// @brief 斜杠命令
-struct CommandEvent {
-    std::string name;   ///< 命令名（不含 /）
-    std::string args;   ///< 命令参数
 };
 
 /// @brief 中断请求（Ctrl+C）
@@ -141,4 +133,4 @@ struct ShutdownEvent {
     bool force = false;
 };
 
-} // namespace workx
+} // namespace agent

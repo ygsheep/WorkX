@@ -20,7 +20,7 @@
 #include <thread>
 #include <fstream>
 
-namespace workx {
+namespace agent {
 
 ChatSession::ChatSession(std::unique_ptr<ICompletionProvider> provider, int retry_delay_ms)
     : m_provider(std::move(provider))
@@ -30,11 +30,11 @@ ChatSession::ChatSession(std::unique_ptr<ICompletionProvider> provider, int retr
     m_max_retries = cfg.get_or<int>("backend.retry_count", 3);
     m_retry_delay_ms = cfg.get_or<int>("backend.retry_delay_ms", retry_delay_ms);
 
-    subscribe_events();
+    subscribe_interrupt();
 }
 
 ChatSession::~ChatSession() {
-    unsubscribe_events();
+    unsubscribe_interrupt();
     if (m_provider) {
         m_provider->interrupt();
     }
@@ -61,12 +61,7 @@ void ChatSession::regenerate() {
     }
 }
 
-void ChatSession::on_user_input(const UserInputEvent& event) {
-    // 以 '/' 开头的命令由 CommandExecutor 处理，不发送给后端
-    if (!event.text.empty() && event.text[0] == '/') {
-        return;
-    }
-
+void ChatSession::send_message(const std::string& text) {
     if (m_generating.load()) {
         EventBus::instance().publish_async(StreamErrorEvent{
             .session_id = "default",
@@ -76,7 +71,7 @@ void ChatSession::on_user_input(const UserInputEvent& event) {
         return;
     }
 
-    run_completion(event.text);
+    run_completion(text);
 }
 
 void ChatSession::run_completion(const std::string& user_text, int retry_attempt) {
@@ -394,11 +389,7 @@ Result<void, std::string> ChatSession::load_session(const std::string& path) {
 // 事件订阅
 // ============================================================
 
-void ChatSession::subscribe_events() {
-    m_user_input_token = EventBus::instance().subscribe<UserInputEvent>(
-        [this](const UserInputEvent& e) { on_user_input(e); }
-    );
-
+void ChatSession::subscribe_interrupt() {
     m_interrupt_token = EventBus::instance().subscribe<InterruptEvent>(
         [this](const InterruptEvent& /*e*/) {
             if (m_provider) {
@@ -408,9 +399,8 @@ void ChatSession::subscribe_events() {
     );
 }
 
-void ChatSession::unsubscribe_events() {
-    EventBus::instance().unsubscribe<UserInputEvent>(m_user_input_token);
+void ChatSession::unsubscribe_interrupt() {
     EventBus::instance().unsubscribe<InterruptEvent>(m_interrupt_token);
 }
 
-} // namespace workx
+} // namespace agent

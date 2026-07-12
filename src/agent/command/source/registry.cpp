@@ -6,9 +6,9 @@
  * @date 2026-07
  */
 
-#include "agent/command/registry.h"
+#include "../inclaude/registry.h"
 
-namespace workx::command {
+namespace agent::command {
 
 void CommandRegistry::register_command(std::shared_ptr<CommandBase> cmd) {
     name_index_[cmd->name()] = cmd;
@@ -80,4 +80,4 @@ size_t CommandRegistry::size() const {
     return commands_.size();
 }
 
-} // namespace workx::command
+} // namespace agent::command

@@ -44,19 +44,23 @@ set(WORKX_SOURCES
     src/tui/core/platform/platform_win32.cpp
     src/agent/core/chat_session.cpp
     src/agent/api/backend_factory.cpp
+    src/agent/api/client.cpp
     src/agent/api/remote/remote_backend.cpp
     src/agent/api/remote/sse_stream_reader.cpp
     src/agent/api/remote/http_client.cpp
     src/agent/model/provider_preset.cpp
     src/agent/api/provider/openai_adapter.cpp
     src/agent/api/provider/anthropic_adapter.cpp
-    src/agent/command/registry.cpp
-    src/agent/command/executor.cpp
+    src/agent/command/source/registry.cpp
+    src/agent/command/source/executor.cpp
     src/app/command/builtin_commands.cpp
     src/app/config/app_config.cpp
     src/app/config/cli_args.cpp
     src/app/ui/model_selector.cpp
     src/app/ui/path_completer.cpp
+    src/agent/input/parser.h
+    src/agent/input/processor.h
+    src/agent/input/types.h
 )
 
 add_library(libworkx STATIC ${WORKX_SOURCES})

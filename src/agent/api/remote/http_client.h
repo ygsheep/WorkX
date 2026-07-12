@@ -9,7 +9,7 @@
 
 #include "core/utils/result.h"
 
-namespace workx {
+namespace agent {
 
 struct ParsedUrl {
     std::string scheme;
@@ -58,4 +58,4 @@ private:
     std::unique_ptr<Impl> m_impl;
 };
 
-} // namespace workx
+} // namespace agent

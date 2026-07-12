@@ -12,7 +12,7 @@
 #include "app/config/app_config.h"
 #include "core/config/config_manager.h"
 
-namespace workx {
+namespace agent {
 
 void register_config_defaults() {
     auto& cfg = ConfigManager::instance();
@@ -88,6 +88,14 @@ void register_config_defaults() {
         .description = "Default save path for /save command",
         .default_value = std::string("")
     });
+    cfg.register_meta(keys::LOG_LEVEL, {
+        .description = "Log level (trace/debug/info/warn/error/fatal)",
+        .default_value = std::string("info")
+    });
+    cfg.register_meta(keys::LOG_FILE, {
+        .description = "Log file path (empty to disable file logging)",
+        .default_value = std::string("")
+    });
 }
 
 void load_from_env() {
@@ -109,6 +117,12 @@ void load_from_env() {
     }
     if (const char* val = std::getenv("WORKX_NO_COLOR")) {
         cfg.set(keys::NO_COLOR, true);
+    }
+    if (const char* val = std::getenv("WORKX_LOG_LEVEL")) {
+        cfg.set(keys::LOG_LEVEL, std::string(val));
+    }
+    if (const char* val = std::getenv("WORKX_LOG_FILE")) {
+        cfg.set(keys::LOG_FILE, std::string(val));
     }
 }
 
@@ -132,6 +146,22 @@ std::filesystem::path default_config_path() {
         return std::filesystem::path(home) / ".config" / "workx" / "config.json";
     }
     return std::filesystem::path("workx.json");
+#endif
+}
+
+std::filesystem::path default_log_path() {
+#ifdef _WIN32
+    const char* appdata = std::getenv("APPDATA");
+    if (appdata) {
+        return std::filesystem::path(appdata) / "workx" / "logs" / "workx.log";
+    }
+    return std::filesystem::path("workx.log");
+#else
+    const char* home = std::getenv("HOME");
+    if (home) {
+        return std::filesystem::path(home) / ".config" / "workx" / "logs" / "workx.log";
+    }
+    return std::filesystem::path("workx.log");
 #endif
 }
 

@@ -9,7 +9,7 @@
 
 #include <string_view>
 
-namespace workx {
+namespace agent {
 
 /**
  * @brief TUI 状态

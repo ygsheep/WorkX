@@ -14,7 +14,7 @@
 #include <memory>
 #include "tui/core/color_scheme.h"
 
-namespace workx {
+namespace agent {
 
 class Terminal;
 

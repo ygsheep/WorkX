@@ -9,7 +9,7 @@
 #include <algorithm>
 #include <format>
 
-namespace workx {
+namespace agent {
 
 Screen::Screen(Terminal* terminal)
     : m_terminal(terminal)

@@ -10,7 +10,7 @@
 
 #include <filesystem>
 
-namespace workx {
+namespace agent {
 
 /// 配置键字符串常量
 namespace keys {
@@ -34,6 +34,10 @@ namespace keys {
     // Session
     constexpr const char* SYSTEM_PROMPT  = "session.system_prompt";
     constexpr const char* SAVE_PATH      = "session.save_path";
+
+    // Logging
+    constexpr const char* LOG_LEVEL      = "logging.level";
+    constexpr const char* LOG_FILE       = "logging.file";
 }
 
 /// @brief 注册所有配置项的元数据（描述、默认值、验证函数）
@@ -47,5 +51,8 @@ void load_from_config_file(const std::filesystem::path& path);
 
 /// @brief 默认配置文件路径（平台相关）
 std::filesystem::path default_config_path();
+
+/// @brief 默认日志文件路径（平台相关）
+std::filesystem::path default_log_path();
 
 } // namespace workx

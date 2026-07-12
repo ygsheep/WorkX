@@ -9,7 +9,7 @@
 #include <fstream>
 #include <algorithm>
 
-namespace workx {
+namespace agent {
 
 History::History(size_t max_entries)
     : m_max_entries(max_entries)

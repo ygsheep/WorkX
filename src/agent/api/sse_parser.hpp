@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file sse_parser.hpp
  * @brief Server-Sent Events (SSE) + NDJSON 流式解析器
  * @details 增量解析，自动缓冲不完整数据块
@@ -12,7 +12,7 @@
 #include <sstream>
 #include <map>
 
-namespace workx {
+namespace agent {
 
 struct SSEEvent {
     std::string data;
@@ -61,4 +61,4 @@ private:
     void process_lines();
 };
 
-} // namespace workx
+} // namespace agent

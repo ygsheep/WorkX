@@ -7,7 +7,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "core/config/config_manager.h"
 
-using namespace workx;
+using namespace agent;
 
 TEST_CASE("ConfigManager basic set/get", "[config]") {
     auto& cfg = ConfigManager::instance();

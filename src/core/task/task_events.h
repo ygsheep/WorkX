@@ -9,7 +9,7 @@
 #include <string>
 #include <memory>
 
-namespace workx {
+namespace agent {
 
 class Task;
 

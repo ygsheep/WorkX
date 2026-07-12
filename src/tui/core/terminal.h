@@ -20,7 +20,7 @@
 #include "tui/input/history.h"
 #include "tui/core/display_buffer.h"
 
-namespace workx {
+namespace agent {
 
 class IPlatform;
 class LineEditor;

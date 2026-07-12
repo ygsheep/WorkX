@@ -11,11 +11,11 @@
 #include <string>
 #include <memory>
 #include <optional>
-#include "agent/command/command.h"
-#include "agent/command/registry.h"
-#include "agent/command/types.h"
+#include "command.h"
+#include "agent/command/inclaude/registry.h"
+#include "types.h"
 
-namespace workx::command {
+namespace agent::command {
 
 /// 命令执行结果（扩展版，包含元信息）
 struct ExecutorResult {
@@ -47,4 +47,4 @@ private:
     std::shared_ptr<CommandRegistry> registry_;
 };
 
-} // namespace workx::command
+} // namespace agent::command

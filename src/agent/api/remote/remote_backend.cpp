@@ -22,7 +22,7 @@
 #include <stdexcept>
 #include <iostream>
 
-namespace workx {
+namespace agent {
 
 // ============================================================
 // RemoteBackend 实现
@@ -71,7 +71,7 @@ Result<void, std::string> RemoteBackend::initialize(const BackendConfig& config)
     return Result<void, std::string>::ok();
 #else
     return Result<void, std::string>::err(
-        "RemoteBackend requires Boost.Beast. Rebuild with -DWORKX_USE_BEAST=ON"
+        "RemoteBackend requires CURL. Check CURL installation and reconfigure"
     );
 #endif
 }
@@ -224,7 +224,7 @@ Result<std::vector<ModelInfo>, std::string> RemoteBackend::list_models() {
 
 #else
     return Result<std::vector<ModelInfo>, std::string>::err(
-        "RemoteBackend requires Boost.Beast. Rebuild with -DWORKX_USE_BEAST=ON");
+        "RemoteBackend requires CURL. Check CURL installation and reconfigure");
 #endif
 }
 
@@ -243,4 +243,4 @@ void SharedPtrWrapper::cancel() {
     m_ptr->cancel();
 }
 
-} // namespace workx
+} // namespace agent

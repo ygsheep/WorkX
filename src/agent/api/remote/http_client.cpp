@@ -8,7 +8,7 @@
 #include <thread>
 #include <mutex>
 
-namespace workx {
+namespace agent {
 
 // ============================================================
 // Curl 全局初始化
@@ -354,4 +354,4 @@ void HttpClient::shutdown() {
     if (m_impl) m_impl->shutdown();
 }
 
-} // namespace workx
+} // namespace agent

@@ -11,7 +11,7 @@
 
 #include <algorithm>
 
-namespace workx {
+namespace agent {
 
 SelectPanel::SelectPanel(Terminal* terminal, Screen* screen)
     : m_terminal(terminal)
