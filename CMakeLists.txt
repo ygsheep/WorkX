@@ -32,6 +32,7 @@ set(WORKX_SOURCES
     src/tui/render/streaming_buffer.cpp
     src/tui/widgets/status_bar.cpp
     src/tui/widgets/command_panel.cpp
+    src/tui/widgets/file_search_panel.cpp
     src/tui/widgets/select_panel.cpp
     src/tui/widgets/bottom_bar_manager.cpp
     src/tui/setup/setup_wizard.cpp
@@ -53,11 +54,21 @@ set(WORKX_SOURCES
     src/agent/api/provider/anthropic_adapter.cpp
     src/agent/command/source/registry.cpp
     src/agent/command/source/executor.cpp
+    src/agent/tool/FileReadTool/file_read_tool.cpp
+    src/agent/tool/FileEditTool/file_edit_tool.cpp
+    src/agent/tool/FileWriteTool/file_write_tool.cpp
+    src/agent/tool/GlobTool/glob_tool.cpp
+    src/agent/tool/GrepTool/grep_tool.cpp
+    src/agent/tool/BashTool/bash_tool.cpp
+    src/agent/tool/AgentTool/agent_tool.cpp
+    src/agent/tool/MCPTool/mcp_tool.cpp
+    src/agent/tool/WebFetchTool/web_fetch_tool.cpp
     src/app/command/builtin_commands.cpp
     src/app/config/app_config.cpp
     src/app/config/cli_args.cpp
     src/app/ui/model_selector.cpp
     src/app/ui/path_completer.cpp
+    src/app/ui/file_index.cpp
     src/agent/input/parser.h
     src/agent/input/processor.h
     src/agent/input/types.h

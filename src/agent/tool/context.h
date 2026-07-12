@@ -1,4 +1,18 @@
+/**
+ * @file context.h
+ * @brief ToolContext — 工具执行上下文
+ * @details 在工具执行过程中传递的运行时信息：会话 ID、工作目录、权限模式、取消信号
+ * @version 1.0.0
+ * @date 2026-07
+ */
+
 #pragma once
+
+#include <string>
+#include <atomic>
+#include <nlohmann/json.hpp>
+
+namespace agent::tool {
 
 /// @brief 工具执行上下文
 ///
@@ -7,4 +21,26 @@
 /// - 工作目录路径
 /// - 权限模式
 /// - 中断信号（CancellationToken）
-/// - 对应参考实现中的 ToolUseContext（精简版）
+struct ToolContext {
+    std::string cwd;                        ///< 工作目录
+    std::string session_id;                 ///< 会话 ID
+    std::string request_id;                 ///< 请求 ID
+    std::string model;                      ///< 当前模型名称
+    nlohmann::json options;                 ///< 额外选项
+
+    /// @brief 检查是否已取消
+    /// @return 已取消返回 true
+    bool is_cancelled() const {
+        return cancelled_.load(std::memory_order_relaxed);
+    }
+
+    /// @brief 请求取消
+    void cancel() {
+        cancelled_.store(true, std::memory_order_relaxed);
+    }
+
+private:
+    std::atomic<bool> cancelled_{false};    ///< 取消标志
+};
+
+} // namespace agent::tool

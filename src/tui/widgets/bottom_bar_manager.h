@@ -19,13 +19,15 @@ class Terminal;
 class StatusBar;
 class CommandPanel;
 class SelectPanel;
+class FileSearchPanel;
 class Screen;
 
 /// @brief 底部区域模式
 enum class BottomBarMode {
-    STATUS_BAR,      ///< 默认状态栏
-    COMMAND_PANEL,   ///< 命令面板（输入 / 触发）
-    SELECT_PANEL,    ///< 选择面板（/model 等命令触发）
+    STATUS_BAR,          ///< 默认状态栏
+    COMMAND_PANEL,       ///< 命令面板（输入 / 触发）
+    SELECT_PANEL,        ///< 选择面板（/model 等命令触发）
+    FILE_SEARCH_PANEL,   ///< 文件搜索面板（输入 @ 触发）
 };
 
 /// @brief 底部区域管理器
@@ -61,6 +63,10 @@ public:
     SelectPanel& select_panel() { return *m_select_panel; }
     const SelectPanel& select_panel() const { return *m_select_panel; }
 
+    // ---- FileSearchPanel 委托 ----
+    FileSearchPanel& file_search_panel() { return *m_file_search_panel; }
+    const FileSearchPanel& file_search_panel() const { return *m_file_search_panel; }
+
     /// @brief 输入行内容变化时的通知
     /// @param line 当前行内容
     void on_input_changed(const std::string& line);
@@ -84,6 +90,9 @@ private:
     StatusBar* m_external_sb = nullptr;  ///< 外部 StatusBar（如 ChatRenderer 的），优先使用
     std::unique_ptr<CommandPanel> m_command_panel;
     std::unique_ptr<SelectPanel> m_select_panel;
+    std::unique_ptr<FileSearchPanel> m_file_search_panel;
+
+    std::string m_current_line;  ///< 当前行内容（用于 Tab 补全时构造替换文本）
 };
 
 } // namespace workx

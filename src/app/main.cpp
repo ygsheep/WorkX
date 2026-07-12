@@ -28,6 +28,7 @@
 #include "app/config/cli_args.h"
 #include "app/ui/model_selector.h"
 #include "app/ui/path_completer.h"
+#include "app/ui/file_index.h"
 #include "core/config/config_manager.h"
 #include "core/events/event_bus.h"
 #include "core/task/task_manager.h"
@@ -125,6 +126,17 @@ static int run(int argc, char* argv[]) {
     if (init_result.isErr()) {
         std::cerr << "Failed to initialize terminal: " << init_result.error() << "\n";
         return 1;
+    }
+
+    // ---- 文件索引构建（TUI 启动时扫描工作目录）----
+    {
+        namespace fs = std::filesystem;
+        std::string cwd = fs::current_path().string();
+        auto& index = global_file_index();
+        index.build(cwd);
+        if (verbose) {
+            std::cerr << "[debug] File index built: " << index.size() << " files\n";
+        }
     }
 
     // ---- 首次运行向导 ----

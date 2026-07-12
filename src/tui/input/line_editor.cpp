@@ -404,6 +404,15 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
                         continue;
                     }
                 }
+                // 文件搜索面板 Tab 补全（包含 @ 时触发）
+                if (m_line.find('@') != std::string::npos && m_command_tab_cb) {
+                    auto completion = m_command_tab_cb();
+                    if (!completion.empty() && completion != m_line) {
+                        set_line_contents(completion, static_cast<int>(completion.size()));
+                        if (m_input_changed_cb) m_input_changed_cb(m_line);
+                        continue;
+                    }
+                }
                 // 通用 Tab 补全
                 auto candidates = m_completion_cb(m_line, m_byte_pos);
                 if (!candidates.empty()) {
@@ -461,14 +470,16 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
                     m_byte_pos = next_utf8_char_pos(m_line, m_byte_pos);
                 }
             } else if (input_char == KEY_ARROW_UP) {
-                // 命令面板模式：↑ 转发给命令面板
-                if (!is_continuation && !m_line.empty() && m_line[0] == '/' && m_command_nav_cb) {
+                // 命令面板/文件搜索面板模式：↑ 转发给面板
+                if (!is_continuation && !m_line.empty() && m_command_nav_cb &&
+                    (m_line[0] == '/' || m_line.find('@') != std::string::npos)) {
                     if (m_command_nav_cb(input_char)) continue;
                 }
                 if (!is_continuation) history_prev();
             } else if (input_char == KEY_ARROW_DOWN) {
-                // 命令面板模式：↓ 转发给命令面板
-                if (!is_continuation && !m_line.empty() && m_line[0] == '/' && m_command_nav_cb) {
+                // 命令面板/文件搜索面板模式：↓ 转发给面板
+                if (!is_continuation && !m_line.empty() && m_command_nav_cb &&
+                    (m_line[0] == '/' || m_line.find('@') != std::string::npos)) {
                     if (m_command_nav_cb(input_char)) continue;
                 }
                 if (!is_continuation) history_next();
