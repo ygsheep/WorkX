@@ -151,7 +151,26 @@ public:
 
     void write_output(std::string_view text) override {
         if (text.empty()) return;
-        fwrite(text.data(), 1, text.size(), stdout);
+        if (!m_raw_mode_enabled) {
+            // 非 raw mode：OPOST 启用，终端驱动自动转换 \n → \r\n
+            fwrite(text.data(), 1, text.size(), stdout);
+            return;
+        }
+        // raw mode 下 OPOST 被禁用，\n 只下移一行不回列首。
+        // 手动翻译裸 \n → \r\n（已是 \r\n 的不重复翻译）。
+        size_t start = 0;
+        for (size_t i = 0; i < text.size(); ++i) {
+            if (text[i] == '\n' && (i == 0 || text[i - 1] != '\r')) {
+                if (i > start) {
+                    fwrite(text.data() + start, 1, i - start, stdout);
+                }
+                fwrite("\r\n", 1, 2, stdout);
+                start = i + 1;
+            }
+        }
+        if (start < text.size()) {
+            fwrite(text.data() + start, 1, text.size() - start, stdout);
+        }
     }
 
     void move_cursor(int cols) override {

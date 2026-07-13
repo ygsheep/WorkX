@@ -14,6 +14,60 @@
 
 namespace agent {
 
+#ifdef WORKX_HAS_NLOHMANN_JSON
+namespace {
+
+/// 将 dot 分隔的 key 写入嵌套 JSON（如 "backend.api_key" → j["backend"]["api_key"]）
+void set_nested_json(nlohmann::json& j, const std::string& key, const ConfigValue& value) {
+    nlohmann::json* current = &j;
+    size_t start = 0;
+    while (true) {
+        size_t dot = key.find('.', start);
+        if (dot == std::string::npos) {
+            std::string leaf = key.substr(start);
+            if (std::holds_alternative<bool>(value)) {
+                (*current)[leaf] = std::get<bool>(value);
+            } else if (std::holds_alternative<int>(value)) {
+                (*current)[leaf] = std::get<int>(value);
+            } else if (std::holds_alternative<double>(value)) {
+                (*current)[leaf] = std::get<double>(value);
+            } else if (std::holds_alternative<std::string>(value)) {
+                (*current)[leaf] = std::get<std::string>(value);
+            }
+            return;
+        }
+        std::string section = key.substr(start, dot - start);
+        if (!current->contains(section) || !(*current)[section].is_object()) {
+            (*current)[section] = nlohmann::json::object();
+        }
+        current = &(*current)[section];
+        start = dot + 1;
+    }
+}
+
+/// 递归展平嵌套 JSON object 为 dot 分隔的 flat key
+void flatten_json(const nlohmann::json& j, const std::string& prefix,
+                  std::unordered_map<std::string, ConfigValue>& values) {
+    for (auto& [key, value] : j.items()) {
+        std::string full_key = prefix.empty() ? key : prefix + "." + key;
+        if (value.is_boolean()) {
+            values[full_key] = value.get<bool>();
+        } else if (value.is_number_integer()) {
+            values[full_key] = value.get<int>();
+        } else if (value.is_number()) {
+            values[full_key] = value.get<double>();
+        } else if (value.is_string()) {
+            values[full_key] = value.get<std::string>();
+        } else if (value.is_object()) {
+            flatten_json(value, full_key, values);
+        }
+        // 数组和 null 被忽略
+    }
+}
+
+} // anonymous namespace
+#endif
+
 bool ConfigManager::has(const std::string& key) const {
     std::lock_guard<std::mutex> lock(m_mutex);
     return m_values.find(key) != m_values.end();
@@ -66,17 +120,9 @@ Result<void, std::string> ConfigManager::load_from_file(const std::filesystem::p
         file >> j;
         file.close();
 
-        for (auto& [key, value] : j.items()) {
-            if (value.is_boolean()) {
-                m_values[key] = value.get<bool>();
-            } else if (value.is_number_integer()) {
-                m_values[key] = value.get<int>();
-            } else if (value.is_number()) {
-                m_values[key] = value.get<double>();
-            } else if (value.is_string()) {
-                m_values[key] = value.get<std::string>();
-            }
-        }
+        // 递归展平嵌套 JSON（支持 {"backend": {"api_key": "..."}} 格式）
+        // 同时向后兼容旧的扁平格式 {"backend.api_key": "..."}
+        flatten_json(j, "", m_values);
 
         return Result<void, std::string>::ok();
 
@@ -102,15 +148,8 @@ Result<void, std::string> ConfigManager::save_to_file(const std::filesystem::pat
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         for (const auto& [key, value] : m_values) {
-            if (std::holds_alternative<bool>(value)) {
-                j[key] = std::get<bool>(value);
-            } else if (std::holds_alternative<int>(value)) {
-                j[key] = std::get<int>(value);
-            } else if (std::holds_alternative<double>(value)) {
-                j[key] = std::get<double>(value);
-            } else if (std::holds_alternative<std::string>(value)) {
-                j[key] = std::get<std::string>(value);
-            }
+            // 将 dot 分隔的 key 写为嵌套 JSON（"backend.api_key" → j["backend"]["api_key"]）
+            set_nested_json(j, key, value);
         }
     }
 
