@@ -77,18 +77,9 @@ public:
     virtual const std::string& type() const = 0;
 
     // --- setters ---
-
     void set_is_enabled(std::function<bool()> fn) { is_enabled_ = std::move(fn); }
     void set_is_hidden(bool hidden) { is_hidden_ = hidden; }
-    void set_user_invocable(bool invocable) { user_invocable_ = invocable; }
-    void set_disable_model_invocation(bool disable) { disable_model_invocation_ = disable; }
     void set_argument_hint(std::string hint) { argument_hint_ = std::move(hint); }
-    void set_source(std::string source) { source_ = std::move(source); }
-    void set_loaded_from(LoadSource source) { loaded_from_ = source; }
-    void set_version(std::string version) { version_ = std::move(version); }
-    void set_immediate(bool immediate) { immediate_ = immediate; }
-    void set_sensitive(bool sensitive) { sensitive_ = sensitive; }
-    void set_when_to_use(std::string desc) { when_to_use_ = std::move(desc); }
 
 protected:
     CommandBase() = default;
@@ -139,32 +130,8 @@ public:
         return prompt_generator_(args, ctx);
     }
 
-    void set_progress_message(std::string msg) { progress_message_ = std::move(msg); }
-    const std::string& progress_message() const { return progress_message_; }
-
-    void set_content_length(size_t len) { content_length_ = len; }
-    size_t content_length() const { return content_length_; }
-
-    void set_allowed_tools(std::vector<std::string> tools) { allowed_tools_ = std::move(tools); }
-    const std::vector<std::string>& allowed_tools() const { return allowed_tools_; }
-
-    void set_arg_names(std::vector<std::string> names) { arg_names_ = std::move(names); }
-    const std::vector<std::string>& arg_names() const { return arg_names_; }
-
-    void set_model(std::string model) { model_ = std::move(model); }
-    const std::optional<std::string>& model() const { return model_; }
-
-    void set_context_type(std::string ctx) { context_type_ = std::move(ctx); }
-    const std::optional<std::string>& context_type() const { return context_type_; }
-
 private:
     PromptGenerator prompt_generator_;
-    std::string progress_message_;
-    size_t content_length_{0};
-    std::vector<std::string> allowed_tools_;
-    std::vector<std::string> arg_names_;
-    std::optional<std::string> context_type_;
-    std::optional<std::string> model_;
 };
 
 /// 本地命令 — 对应 LocalCommand
@@ -192,12 +159,8 @@ public:
         return call_(args, ctx);
     }
 
-    void set_supports_non_interactive(bool supported) { supports_non_interactive_ = supported; }
-    bool supports_non_interactive() const { return supports_non_interactive_; }
-
 private:
     CommandCall call_;
-    bool supports_non_interactive_{true};
 };
 
 /// 便捷函数：创建 PromptCommand

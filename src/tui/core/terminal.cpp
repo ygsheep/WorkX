@@ -210,7 +210,7 @@ void Terminal::echo_input(const std::string& text) {
     m_platform->write_output(cmd);
     m_platform->write_output("> ");
     m_platform->write_output(text);
-    m_platform->write_output("\n");
+    m_platform->write_output("\r\n");
     m_platform->write_output(get_color_ansi(ColorRole::Default));
     m_platform->flush();
 
@@ -576,7 +576,7 @@ void Terminal::display_welcome() {
                 set_color(info_color);
                 write(info);
             }
-            write("\n");
+            write("\r\n");
             reset_color();
             std::this_thread::sleep_for(std::chrono::milliseconds(30));
         };
@@ -616,7 +616,7 @@ void Terminal::display_welcome() {
         reset_color();
     }
 
-    write("\n");
+    write("\r\n");
 }
 
 } // namespace workx

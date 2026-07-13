@@ -5,6 +5,8 @@
 
 #include "tui/utils/utf8_utils.h"
 
+#include <numeric>
+
 namespace agent {
 
 std::vector<Utf8Cell> decode_utf8_cells(std::string_view text) {
@@ -57,11 +59,9 @@ std::vector<Utf8Cell> decode_utf8_cells(std::string_view text) {
 }
 
 int display_width(std::string_view text) {
-    int total = 0;
-    for (const auto& cell : decode_utf8_cells(text)) {
-        total += cell.width;
-    }
-    return total;
+    auto cells = decode_utf8_cells(text);
+    return std::accumulate(cells.begin(), cells.end(), 0,
+        [](int acc, const auto& cell) { return acc + cell.width; });
 }
 
 std::string truncate_to_width(std::string_view text, int max_width) {

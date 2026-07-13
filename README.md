@@ -60,6 +60,14 @@ src/
 
 > **注意**: 当前版本仅支持 Windows 平台。
 
+### Linux
+```bash
+cmake -B _build -DCMAKE_TOOLCHAIN_FILE=/home/young/WorkSpace/vcpkg/scripts/buildsystems/vcpkg.cmake
+cd _build && make
+
+
+```
+
 ### Windows (MSVC)
 
 ```bash

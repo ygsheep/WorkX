@@ -272,7 +272,7 @@ void ChatRenderer::start() {
             // 结果摘要
             std::string preview = e.result;
             if (preview.length() > 200) {
-                preview = preview.substr(0, 200) + "...";
+                preview.replace(200, std::string::npos, "...");
             }
 
             m_terminal->set_color(marker_color);

@@ -8,6 +8,8 @@
 
 #include "../inclaude/registry.h"
 
+#include <algorithm>
+
 namespace agent::command {
 
 void CommandRegistry::register_command(std::shared_ptr<CommandBase> cmd) {
@@ -20,55 +22,19 @@ std::shared_ptr<CommandBase> CommandRegistry::find_by_name(const std::string& na
     return it != name_index_.end() ? it->second : nullptr;
 }
 
-std::vector<std::shared_ptr<CommandBase>> CommandRegistry::get_enabled_commands() const {
-    std::vector<std::shared_ptr<CommandBase>> result;
-    for (const auto& cmd : commands_) {
-        if (cmd->is_enabled()) {
-            result.push_back(cmd);
-        }
-    }
-    return result;
-}
-
 std::vector<std::shared_ptr<CommandBase>> CommandRegistry::get_user_invocable_commands() const {
     std::vector<std::shared_ptr<CommandBase>> result;
-    for (const auto& cmd : commands_) {
-        if (cmd->is_enabled() && cmd->is_user_invocable() && !cmd->is_hidden()) {
-            result.push_back(cmd);
-        }
-    }
-    return result;
-}
-
-std::vector<std::shared_ptr<CommandBase>> CommandRegistry::get_model_invocable_commands() const {
-    std::vector<std::shared_ptr<CommandBase>> result;
-    for (const auto& cmd : commands_) {
-        if (cmd->is_enabled() && !cmd->is_model_invocation_disabled()) {
-            if (dynamic_cast<PromptCommand*>(cmd.get())) {
-                result.push_back(cmd);
-            }
-        }
-    }
+    std::copy_if(commands_.begin(), commands_.end(), std::back_inserter(result),
+        [](const auto& cmd) {
+            return cmd->is_enabled() && cmd->is_user_invocable() && !cmd->is_hidden();
+        });
     return result;
 }
 
 std::vector<std::shared_ptr<CommandBase>> CommandRegistry::get_by_type(const std::string& type) const {
     std::vector<std::shared_ptr<CommandBase>> result;
-    for (const auto& cmd : commands_) {
-        if (cmd->type() == type) {
-            result.push_back(cmd);
-        }
-    }
-    return result;
-}
-
-std::vector<std::shared_ptr<CommandBase>> CommandRegistry::get_by_source(LoadSource source) const {
-    std::vector<std::shared_ptr<CommandBase>> result;
-    for (const auto& cmd : commands_) {
-        if (cmd->loaded_from() == source) {
-            result.push_back(cmd);
-        }
-    }
+    std::copy_if(commands_.begin(), commands_.end(), std::back_inserter(result),
+        [&](const auto& cmd) { return cmd->type() == type; });
     return result;
 }
 

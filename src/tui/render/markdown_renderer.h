@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file markdown_renderer.h
  * @brief Markdown 表格解析与渲染
  * @details 将 Markdown 表格语法转换为 Unicode box-drawing 字符画表格
@@ -159,17 +159,5 @@ std::string render_list_item(std::string_view line);
  * @param lines 代码行
  */
 std::string render_code_block(std::string_view lang, const std::vector<std::string>& lines);
-
-// ============================================================================
-// 完整文档渲染
-// ============================================================================
-
-/**
- * @brief 渲染完整 Markdown 文档
- * @details 状态机处理：代码块、表格、标题、分隔线、列表、段落
- * @param lines 所有文本行
- * @return 渲染后的 ANSI 字符串
- */
-std::string render_markdown(const std::vector<std::string>& lines);
 
 } // namespace workx

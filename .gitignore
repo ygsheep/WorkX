@@ -1,5 +1,6 @@
 # Build output directories
 build/
+_build/
 vcpkg_installed/
 .vcpkg/
 

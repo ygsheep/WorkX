@@ -1,37 +1,51 @@
 {
     "version": 6,
-    "configurePresets": [
-        {
-            "name": "default",
-            "displayName": "Debug (vcpkg)",
-            "description": "Debug build using vcpkg toolchain",
-            "generator": "Visual Studio 18 2026",
-            "toolchainFile": "D:/Programs/vcpkg/scripts/buildsystems/vcpkg.cmake",
-            "binaryDir": "${sourceDir}/build",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug"
-            }
-        },
-        {
-            "name": "release",
-            "displayName": "Release (vcpkg)",
-            "description": "Release build using vcpkg toolchain",
-            "generator": "Visual Studio 18 2026",
-            "toolchainFile": "D:/Programs/vcpkg/scripts/buildsystems/vcpkg.cmake",
-            "binaryDir": "${sourceDir}/build",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release"
-            }
-        }
-    ],
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "Debug (vcpkg)",
+      "description": "Debug build using vcpkg toolchain",
+      "generator": "Visual Studio 18 2026",
+      "toolchainFile": "D:/Programs/vcpkg/scripts/buildsystems/vcpkg.cmake",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Release (vcpkg)",
+      "description": "Release build using vcpkg toolchain",
+      "generator": "Visual Studio 18 2026",
+      "toolchainFile": "D:/Programs/vcpkg/scripts/buildsystems/vcpkg.cmake",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "Linux_Debug",
+      "displayName": "Linux_Debug (vcpkg)",
+      "description": "Linux_Debug build using vcpkg toolchain",
+      "toolchainFile": "/home/young/WorkSpace/vcpkg/scripts/buildsystems/vcpkg.cmake",
+      "binaryDir": "${sourceDir}/build_Linux",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    }
+  ],
     "buildPresets": [
         {
             "name": "default",
             "configurePreset": "default"
         },
-        {
-            "name": "release",
-            "configurePreset": "release"
-        }
+      {
+        "name": "release",
+        "configurePreset": "release"
+      },
+      {
+        "name": "Linux_Debug",
+        "configurePreset": "Linux_Debug"
+      }
     ]
 }

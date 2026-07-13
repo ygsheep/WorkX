@@ -187,7 +187,6 @@ public:
     }
 
     void cancel() { m_cancelled.store(true); }
-    bool is_cancelled() const { return m_cancelled.load(); }
 
     void on_transfer_done(const CURLcode code) {
         if (m_cancelled.load()) { finish(""); return; }

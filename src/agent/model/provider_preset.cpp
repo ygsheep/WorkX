@@ -72,20 +72,16 @@ static const ProviderPreset s_presets[] = {
 };
 
 const ProviderPreset* find_preset(std::string_view name) {
-    for (const auto& preset : s_presets) {
-        if (preset.name == name) {
-            return &preset;
-        }
-    }
-    return nullptr;
+    auto it = std::find_if(std::begin(s_presets), std::end(s_presets),
+        [&](const auto& preset) { return preset.name == name; });
+    return it != std::end(s_presets) ? &*it : nullptr;
 }
 
 std::vector<std::string_view> list_preset_names() {
     std::vector<std::string_view> names;
-    names.reserve(sizeof(s_presets) / sizeof(s_presets[0]));
-    for (const auto& preset : s_presets) {
-        names.push_back(preset.name);
-    }
+    names.reserve(std::size(s_presets));
+    std::transform(std::begin(s_presets), std::end(s_presets), std::back_inserter(names),
+        [](const auto& preset) { return preset.name; });
     return names;
 }
 

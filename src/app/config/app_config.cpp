@@ -115,7 +115,7 @@ void load_from_env() {
             cfg.set(keys::TIMEOUT_MS, std::stoi(val));
         } catch (...) {}
     }
-    if (const char* val = std::getenv("WORKX_NO_COLOR")) {
+    if (std::getenv("WORKX_NO_COLOR") != nullptr) {
         cfg.set(keys::NO_COLOR, true);
     }
     if (const char* val = std::getenv("WORKX_LOG_LEVEL")) {

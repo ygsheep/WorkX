@@ -7,6 +7,7 @@
 #include "tui/utils/utf8_utils.h"
 #include <algorithm>
 #include <cctype>
+#include <numeric>
 #include <sstream>
 
 namespace agent {
@@ -35,9 +36,8 @@ bool is_table_separator(std::string_view line, std::vector<TableAlign>& alignmen
     auto trimmed = trim_sv(line);
     if (trimmed.empty() || trimmed.front() != '|') return false;
 
-    // Split by | like a table row
+    // split_table_row 保证至少返回一个 cell（尾部 push_back），无需 empty 检查
     auto cells = split_table_row(trimmed);
-    if (cells.empty()) return false;
 
     for (const auto& cell : cells) {
         // Trim and check colon position (start = left, end = right)
@@ -261,9 +261,8 @@ std::string render_table(const MarkdownTable& table, int max_width) {
     // Each column: | + space + content + space → col_width + 2 + 1 (for border)
     // Total = num_cols * (col_width + 3) + 1 (rightmost border)
     auto calc_total = [&]() {
-        int total = 1;  // rightmost border
-        for (const int w : col_widths) total += w + 3;  // border + space + content + space
-        return total;
+        return 1 + std::accumulate(col_widths.begin(), col_widths.end(), 0,
+            [](int acc, int w) { return acc + w + 3; });  // border + space + content + space
     };
 
     // Reduce column widths if exceeding max_width
@@ -507,10 +506,8 @@ bool is_horizontal_rule(std::string_view line) {
     if (t.size() < 3) return false;
     char c = t[0];
     if (c != '-' && c != '*' && c != '_') return false;
-    for (char ch : t) {
-        if (ch != c && ch != ' ') return false;
-    }
-    return true;
+    return std::all_of(t.begin(), t.end(),
+        [c](char ch) { return ch == c || ch == ' '; });
 }
 
 std::string render_hr(int width) {
@@ -537,10 +534,8 @@ bool is_list_item(std::string_view line) {
 
     size_t dot = t.find('.');
     if (dot > 0 && dot != std::string::npos && dot + 1 < t.size() && t[dot + 1] == ' ') {
-        for (size_t i = 0; i < dot; ++i)
-            if (!std::isdigit(static_cast<unsigned char>(t[i])))
-                return false;
-        return true;
+        return std::all_of(t.begin(), t.begin() + dot,
+            [](char ch) { return std::isdigit(static_cast<unsigned char>(ch)); });
     }
     return false;
 }
@@ -615,105 +610,6 @@ std::string render_code_block(std::string_view lang,
     for (int i = 0; i < inner_h; ++i)
         os << BOX_H;
     os << BOX_BR << ansi::RESET << "\n";
-
-    return os.str();
-}
-
-// ============================================================================
-// 完整文档渲染
-// ============================================================================
-
-std::string render_markdown(const std::vector<std::string>& lines) {
-    std::ostringstream os;
-
-    bool in_code_block = false;
-    std::string code_lang;
-    std::vector<std::string> code_lines;
-    TableBuffer table_buf;
-    bool in_table = false;
-
-    for (size_t i = 0; i < lines.size(); ++i) {
-        const std::string& ln = lines[i];
-
-        if (in_code_block) {
-            if (ln.size() >= 3 && ln[0] == '`' && ln[1] == '`' && ln[2] == '`') {
-                os << render_code_block(code_lang, code_lines);
-                in_code_block = false;
-                code_lang.clear();
-                code_lines.clear();
-            } else {
-                code_lines.push_back(ln);
-            }
-            continue;
-        }
-
-        if (ln.size() >= 3 && ln[0] == '`' && ln[1] == '`' && ln[2] == '`') {
-            if (in_table) {
-                if (table_buf.is_complete()) {
-                    auto table = parse_table(table_buf.lines());
-                    if (table.valid) os << render_table(table);
-                }
-                table_buf.clear();
-                in_table = false;
-            }
-            in_code_block = true;
-            code_lang = (ln.size() > 3) ? trim_str(ln.substr(3)) : "";
-            code_lines.clear();
-            continue;
-        }
-
-        if (is_table_row(ln) || in_table) {
-            if (table_buf.feed_line(ln)) {
-                in_table = true;
-                continue;
-            } else {
-                if (table_buf.is_complete()) {
-                    auto table = parse_table(table_buf.lines());
-                    if (table.valid) os << render_table(table);
-                }
-                table_buf.clear();
-                in_table = false;
-            }
-        }
-
-        if (!ln.empty() && ln[0] == '#') {
-            int level = 0;
-            while (level < static_cast<int>(ln.size()) && ln[level] == '#')
-                level++;
-            if (level >= 1 && level <= 6) {
-                std::string text = trim_str(ln.substr(level));
-                os << render_heading(level, text);
-                continue;
-            }
-        }
-
-        if (is_horizontal_rule(ln)) {
-            os << render_hr(60);
-            continue;
-        }
-
-        if (is_list_item(ln)) {
-            os << render_list_item(ln);
-            continue;
-        }
-
-        if (ln.empty() || trim_str(ln).empty()) {
-            os << "\n";
-            continue;
-        }
-
-        os << render_inline(ln) << "\n";
-    }
-
-    if (in_code_block) {
-        os << render_code_block(code_lang, code_lines);
-    }
-    if (in_table) {
-        if (table_buf.is_complete()) {
-            auto table = parse_table(table_buf.lines());
-            if (table.valid) os << render_table(table);
-        }
-    }
 
     return os.str();
 }

@@ -27,20 +27,11 @@ public:
     /// 按名查找命令（精确匹配）
     std::shared_ptr<CommandBase> find_by_name(const std::string& name) const;
 
-    /// 获取所有已启用命令
-    std::vector<std::shared_ptr<CommandBase>> get_enabled_commands() const;
-
     /// 获取所有用户可调用命令（用于命令面板）
     std::vector<std::shared_ptr<CommandBase>> get_user_invocable_commands() const;
 
-    /// 获取所有模型可调用命令（用于 SkillTool）
-    std::vector<std::shared_ptr<CommandBase>> get_model_invocable_commands() const;
-
     /// 获取指定类型的命令
     std::vector<std::shared_ptr<CommandBase>> get_by_type(const std::string& type) const;
-
-    /// 获取指定来源的命令
-    std::vector<std::shared_ptr<CommandBase>> get_by_source(LoadSource source) const;
 
     /// 检查命令是否存在
     bool exists(const std::string& name) const;

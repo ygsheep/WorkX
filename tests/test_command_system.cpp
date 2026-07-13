@@ -6,7 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers.hpp>
 #include "../src/agent/command/inclaude/registry.h"
-#include "agent/command/executor.h"
+#include "agent/command/inclaude/executor.h"
 #include "app/command/builtin_commands.h"
 #include "../src/agent/command/inclaude/command.h"
 #include "agent/core/chat_session.h"

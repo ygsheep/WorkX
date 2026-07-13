@@ -326,7 +326,8 @@ static int run(int argc, char* argv[]) {
     command::register_system_commands(*registry, sys_ctx);
 
     // CommandPanel 初始化（从 CommandRegistry 获取命令列表）
-    if (registry) {
+    // registry 由 make_shared 创建，保证非空，无需空检查
+    {
         std::vector<CommandEntry> entries;
         for (const auto& cmd : registry->get_user_invocable_commands()) {
             const auto& hint = cmd->argument_hint();
@@ -395,6 +396,7 @@ static int run(int argc, char* argv[]) {
                 EventBus::instance().publish_async(StreamDoneEvent{
                     .session_id = "default",
                     .full_content = result.output_text,
+                    .full_reasoning = "",
                     .was_interrupted = false
                 });
                 return;
@@ -416,6 +418,7 @@ static int run(int argc, char* argv[]) {
                     EventBus::instance().publish_async(StreamDoneEvent{
                         .session_id = "default",
                         .full_content = "Echo: " + e.text + "\n",
+                        .full_reasoning = "",
                         .was_interrupted = false
                     });
                 }

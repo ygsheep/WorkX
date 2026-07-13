@@ -38,6 +38,9 @@ public:
 
             case InputType::Text:
                 return process_text_prompt(parsed);
+
+            default:
+                return {.should_query = false, .output_text = ""};
         }
     }
 

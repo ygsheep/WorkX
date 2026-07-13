@@ -9,6 +9,7 @@
 #include <cassert>
 #include <cstdio>
 #include <cwctype>
+#include <numeric>
 
 namespace agent {
 
@@ -175,10 +176,8 @@ void LineEditor::set_line_contents(const std::string& new_line, int cursor_byte_
     move_to_line_start();
 
     // 清除当前行
-    int total_width = 0;
-    for (int w : m_widths) {
-        total_width += (w > 0 ? w : 1);
-    }
+    int total_width = std::accumulate(m_widths.begin(), m_widths.end(), 0,
+        [](int acc, int w) { return acc + (w > 0 ? w : 1); });
     if (total_width > 0) {
         std::string spaces(static_cast<size_t>(total_width), ' ');
         m_platform->write_output(spaces);

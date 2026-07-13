@@ -6,6 +6,7 @@
  * @date 2026-07
  */
 
+#include <algorithm>
 #include <vector>
 
 #include "agent/api/chat_types.h"
@@ -28,13 +29,13 @@ std::string select_model_interactive(
     Terminal* term, Screen* scr, IBackend* bk,
     const std::string& current_model)
 {
-    static constexpr char32_t KEY_UP    = 0xE002;
-    static constexpr char32_t KEY_DOWN  = 0xE003;
-    static constexpr char32_t KEY_TAB   = 0x09;
-    static constexpr char32_t KEY_ENTER = 0x0D;
-    static constexpr char32_t KEY_ESC   = 0x1B;
-    static constexpr char32_t KEY_SPACE = 0x20;
-    static constexpr char32_t KEY_CTRL_C = 0xE009;
+    constexpr char32_t KEY_UP    = 0xE002;
+    constexpr char32_t KEY_DOWN  = 0xE003;
+    constexpr char32_t KEY_TAB   = 0x09;
+    constexpr char32_t KEY_ENTER = 0x0D;
+    constexpr char32_t KEY_ESC   = 0x1B;
+    constexpr char32_t KEY_SPACE = 0x20;
+    constexpr char32_t KEY_CTRL_C = 0xE009;
 
     auto& cfg = ConfigManager::instance();
 
@@ -70,9 +71,9 @@ std::string select_model_interactive(
 
     if (result.isOk()) {
         auto models = result.unwrap();
-        for (auto& m : models) {
-            model_names.push_back(std::move(m.name));
-        }
+        model_names.reserve(models.size());
+        std::transform(models.begin(), models.end(), std::back_inserter(model_names),
+            [](auto& m) { return std::move(m.name); });
     }
 
     if (model_names.empty()) {
@@ -86,19 +87,19 @@ std::string select_model_interactive(
     // 构建 SelectPanel 数据
     SelectPanel select_panel(term, scr);
     std::vector<SelectItem> items;
-    for (const auto& name : model_names) {
-        items.push_back({name, name, false});
-    }
+    items.reserve(model_names.size() + 1);
+    std::transform(model_names.begin(), model_names.end(), std::back_inserter(items),
+        [](const auto& name) { return SelectItem{name, name, false}; });
     items.push_back({CUSTOM_MODEL_ID, "Custom Model...", false});
     select_panel.set_tabs({{"Models", items}});
     select_panel.set_title("Select Model");
 
     // 设置初始光标到当前模型
-    for (int i = 0; i < static_cast<int>(items.size()); i++) {
-        if (items[i].id == current_model) {
-            for (int j = 0; j < i; j++) select_panel.move_down();
-            break;
-        }
+    auto it = std::find_if(items.begin(), items.end(),
+        [&](const SelectItem& item) { return item.id == current_model; });
+    if (it != items.end()) {
+        int i = static_cast<int>(std::distance(items.begin(), it));
+        for (int j = 0; j < i; j++) select_panel.move_down();
     }
 
     // 交互循环

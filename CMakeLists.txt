@@ -42,7 +42,6 @@ set(WORKX_SOURCES
     src/tui/render/markdown_renderer.cpp
     src/tui/render/spinner.cpp
     src/tui/input/history.cpp
-    src/tui/core/platform/platform_win32.cpp
     src/agent/core/chat_session.cpp
     src/agent/api/backend_factory.cpp
     src/agent/api/client.cpp
@@ -74,7 +73,16 @@ set(WORKX_SOURCES
     src/agent/input/types.h
 )
 
+# Add platform-specific source
+if(WIN32)
+    list(APPEND WORKX_SOURCES src/tui/core/platform/platform_win32.cpp)
+else()
+    list(APPEND WORKX_SOURCES src/tui/core/platform/platform_posix.cpp)
+endif()
+
 add_library(libworkx STATIC ${WORKX_SOURCES})
+
+# end modification: platform-specific sources handled conditionally
 target_include_directories(libworkx PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
     $<INSTALL_INTERFACE:include>

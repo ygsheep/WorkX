@@ -119,7 +119,6 @@ public:
                     }
                 }
 
-                high_surrogate = 0;
                 return static_cast<char32_t>(wc);
             }
         }

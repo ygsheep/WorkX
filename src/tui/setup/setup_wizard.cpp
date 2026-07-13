@@ -58,13 +58,13 @@ bool SetupWizard::run_wizard() {
     m_screen->resize(80, 30);
 
     // 欢迎文字
-    m_screen->write(0, 2, "Welcome to Workx! Let's set up your API provider.", ColorRole::System);
+    m_screen->write(0, 2, "欢迎使用 Workx！请设置 API 提供商。", ColorRole::System);
     m_cursor_row = 2;
 
     // 步骤1：选择 Provider
     const ProviderPreset* preset = select_provider();
     if (!preset) {
-        m_screen->write(m_cursor_row, 2, "Setup cancelled. Use --help to see CLI options.", ColorRole::System);
+        m_screen->write(m_cursor_row, 2, "设置已取消。使用 --help 查看 CLI 选项。", ColorRole::System);
         m_screen->flush();
         m_platform->flush();
         return false;
@@ -138,14 +138,14 @@ const ProviderPreset* SetupWizard::select_provider() {
 
     while (true) {
         // 画标题
-        m_screen->write(list_start, 2, "Select API Provider:", ColorRole::StatusBar);
+        m_screen->write(list_start, 2, "选择 API 提供商：", ColorRole::StatusBar);
 
         // 画列表
         for (int i = 0; i < static_cast<int>(presets.size()); i++) {
             int r = list_start + 1 + i;
             const auto* p = presets[i];
             bool custom = (std::string(p->name) == "openai-compatible");
-            std::string url = custom ? "(custom URL + protocol)" : build_preset_url(p);
+            std::string url = custom ? "(自定义 URL + 协议)" : build_preset_url(p);
 
             const char* bullet = (i == selected) ? "\xe2\x97\x8f" : "\xe2\x97\x8b";
             std::string text = std::format("{} {:<18} \xe2\x86\x92 {}",
@@ -156,7 +156,7 @@ const ProviderPreset* SetupWizard::select_provider() {
 
         // 底部提示
         int hint_row = list_start + 1 + static_cast<int>(presets.size());
-        m_screen->write(hint_row, 4, "\xe2\x86\x91\xe2\x86\x93 navigate  Enter select  q quit",
+        m_screen->write(hint_row, 4, "\xe2\x86\x91\xe2\x86\x93 导航  回车选择  q 退出",
                         ColorRole::Dim);
 
         m_screen->flush();
@@ -192,7 +192,7 @@ ProviderType SetupWizard::select_protocol() {
     const int start_row = m_cursor_row;
 
     while (true) {
-        m_screen->write(start_row, 2, "Select Protocol Type:", ColorRole::StatusBar);
+        m_screen->write(start_row, 2, "选择协议类型：", ColorRole::StatusBar);
         for (int i = 0; i < static_cast<int>(options.size()); i++) {
             const char* bullet = (i == selected) ? "\xe2\x97\x8f" : "\xe2\x97\x8b";
             ColorRole color = (i == selected) ? ColorRole::Prompt : ColorRole::Default;
@@ -200,7 +200,7 @@ ProviderType SetupWizard::select_protocol() {
                            std::format("{} {}", bullet, options[i]), color);
         }
         m_screen->write(start_row + 1 + static_cast<int>(options.size()), 4,
-                        "\xe2\x86\x91\xe2\x86\x93 navigate  Enter select", ColorRole::Dim);
+                        "\xe2\x86\x91\xe2\x86\x93 导航  回车选择", ColorRole::Dim);
         m_screen->flush();
         m_platform->flush();
 
@@ -223,8 +223,8 @@ ProviderType SetupWizard::select_protocol() {
 // ============================================================
 
 std::string SetupWizard::prompt_url() {
-    m_screen->write(m_cursor_row, 2, "Enter Custom API Base URL:", ColorRole::StatusBar);
-    m_screen->write(m_cursor_row + 1, 4, "Example: http://localhost:1234", ColorRole::Dim);
+    m_screen->write(m_cursor_row, 2, "输入自定义 API 地址：", ColorRole::StatusBar);
+    m_screen->write(m_cursor_row + 1, 4, "示例：http://localhost:1234", ColorRole::Dim);
     m_screen->flush();
     m_terminal->write(std::format("\x1b[{};1H", m_cursor_row + 3));
     return read_input_line("Base URL", false);
@@ -232,8 +232,8 @@ std::string SetupWizard::prompt_url() {
 
 std::string SetupWizard::prompt_model() {
     m_cursor_row += 2;
-    m_screen->write(m_cursor_row, 2, "Enter Model Name:", ColorRole::StatusBar);
-    m_screen->write(m_cursor_row + 1, 4, "Leave empty to set later.", ColorRole::Dim);
+    m_screen->write(m_cursor_row, 2, "输入模型名称：", ColorRole::StatusBar);
+    m_screen->write(m_cursor_row + 1, 4, "留空可稍后设置。", ColorRole::Dim);
     m_screen->flush();
     m_terminal->write(std::format("\x1b[{};1H", m_cursor_row + 2));
     return read_input_line("Model Name", false);
@@ -241,11 +241,11 @@ std::string SetupWizard::prompt_model() {
 
 std::string SetupWizard::prompt_api_key(const std::string& provider_name, bool required) {
     m_screen->write(m_cursor_row, 2,
-                    std::format("Enter API Key for {}:", provider_name), ColorRole::StatusBar);
+                    std::format("输入 {} 的 API Key：", provider_name), ColorRole::StatusBar);
     int input_row = m_cursor_row + 1;
     if (!required) {
         m_screen->write(m_cursor_row + 1, 4,
-                        "Leave empty for local servers (e.g. LM Studio).", ColorRole::Dim);
+                        "本地服务（如 LM Studio）可留空。", ColorRole::Dim);
         input_row++;
     }
     m_screen->flush();
@@ -321,20 +321,20 @@ void SetupWizard::save_and_confirm(const std::string& provider_name,
     int r = m_cursor_row;
 
     if (result.isOk()) {
-        m_screen->write(r, 2, "Configuration Saved!", ColorRole::StatusBar);
-        m_screen->write(r + 1, 4, "\xe2\x9c\x93  Saved successfully!", ColorRole::System);
-        m_screen->write(r + 2, 4, std::format("Provider: {}", display_name), ColorRole::Default);
+        m_screen->write(r, 2, "配置已保存！", ColorRole::StatusBar);
+        m_screen->write(r + 1, 4, "\xe2\x9c\x93  保存成功！", ColorRole::System);
+        m_screen->write(r + 2, 4, std::format("提供商：{}", display_name), ColorRole::Default);
         if (!model_name.empty())
-            m_screen->write(r + 3, 4, std::format("Model: {}", model_name), ColorRole::Default);
-        m_screen->write(r + 4, 4, std::format("Config: {}", save_path.string()), ColorRole::Dim);
-        m_screen->write(r + 5, 4, "Use --provider or edit config to change.", ColorRole::Dim);
+            m_screen->write(r + 3, 4, std::format("模型：{}", model_name), ColorRole::Default);
+        m_screen->write(r + 4, 4, std::format("配置：{}", save_path.string()), ColorRole::Dim);
+        m_screen->write(r + 5, 4, "使用 --provider 或编辑配置来更改。", ColorRole::Dim);
     } else {
-        m_screen->write(r, 2, "Save failed", ColorRole::StatusBar);
+        m_screen->write(r, 2, "保存失败", ColorRole::StatusBar);
         m_screen->write(r + 1, 4, "x  " + result.error(), ColorRole::Error);
-        m_screen->write(r + 2, 4, "Settings used for this session only.", ColorRole::Dim);
+        m_screen->write(r + 2, 4, "设置仅本次会话有效。", ColorRole::Dim);
     }
 
-    m_screen->write(r + 6, 4, "Press any key to continue...", ColorRole::Dim);
+    m_screen->write(r + 6, 4, "按任意键继续...", ColorRole::Dim);
     m_screen->flush();
     m_platform->flush();
 

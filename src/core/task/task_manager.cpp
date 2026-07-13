@@ -146,9 +146,8 @@ std::vector<std::shared_ptr<Task>> TaskManager::getRunningTasks() const {
     std::lock_guard<std::mutex> lock(m_tasks_mutex);
 
     std::vector<std::shared_ptr<Task>> running;
-    for (const auto& task : m_tasks) {
-        if (task->isRunning()) running.push_back(task);
-    }
+    std::copy_if(m_tasks.begin(), m_tasks.end(), std::back_inserter(running),
+        [](const auto& task) { return task->isRunning(); });
     return running;
 }
 

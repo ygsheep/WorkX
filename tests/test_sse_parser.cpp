@@ -6,7 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "agent/api/sse_parser.hpp"
 
-using namespace workx;
+using namespace agent;
 
 TEST_CASE("SSEParser basic event", "[sse]") {
     std::vector<SSEEvent> events;
