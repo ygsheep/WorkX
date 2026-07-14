@@ -22,9 +22,9 @@ namespace agent::tool {
 /// @brief FileRead 工具输入
 struct FileReadInput {
     std::string file_path;                  ///< 文件路径
-    std::optional<int> offset;              ///< 起始行号（从 0 开始）
+    std::optional<int> offset;              ///< 起始行号（1-based，默认 1）
     std::optional<int> limit;               ///< 读取行数限制
-    std::optional<int> pages;               ///< PDF 分页读取
+    std::optional<std::string> pages;       ///< PDF 页码范围（如 "1-5"、"3"、"10-20"）
 };
 
 /// @brief FileRead 工具输出

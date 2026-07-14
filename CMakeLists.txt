@@ -53,6 +53,7 @@ set(WORKX_SOURCES
     src/agent/api/provider/anthropic_adapter.cpp
     src/agent/command/source/registry.cpp
     src/agent/command/source/executor.cpp
+    src/agent/tool/encoding.cpp
     src/agent/tool/FileReadTool/file_read_tool.cpp
     src/agent/tool/FileEditTool/file_edit_tool.cpp
     src/agent/tool/FileWriteTool/file_write_tool.cpp
