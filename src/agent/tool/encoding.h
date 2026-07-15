@@ -55,4 +55,11 @@ std::vector<std::string> read_as_utf8_lines(
 /// @return 编码名称字符串（如 "UTF-8"、"GBK"）
 const char* encoding_name(Encoding encoding);
 
+/// @brief 规范化行尾：去除行末的 '\r'（CRLF → LF）
+/// @details std::getline 读取 CRLF 文件时仅剥离 '\n'，行末会残留 '\r'。
+///          本函数移除行末 '\r'，保证内部存储统一为 LF 风格，
+///          避免输出混入 '\r' 导致 TUI 显示异常。
+/// @param line 待处理的行（原地修改）
+void normalize_eol(std::string& line);
+
 } // namespace agent::tool

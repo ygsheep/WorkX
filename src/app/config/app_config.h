@@ -38,6 +38,10 @@ namespace keys {
     // Logging
     constexpr const char* LOG_LEVEL      = "logging.level";
     constexpr const char* LOG_FILE       = "logging.file";
+
+    // Tool — FileReadTool
+    constexpr const char* FILE_READ_MAX_SIZE  = "tool.file_read.max_file_size_bytes";
+    constexpr const char* FILE_READ_MAX_LINES = "tool.file_read.max_lines_to_read";
 }
 
 /// @brief 注册所有配置项的元数据（描述、默认值、验证函数）

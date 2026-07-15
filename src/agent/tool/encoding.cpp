@@ -185,28 +185,55 @@ static int validate_utf8(const unsigned char* buf, size_t len) {
     return has_multibyte ? 2 : 1;
 }
 
-/// @brief GBK 启发式检测
+/// @brief GBK 启发式检测（增强版：字符频率统计）
 /// @details GBK 双字节：首字节 0x81-0xFE，次字节 0x40-0xFE（不含 0x7F）
+///          增强策略：
+///          1. 全序列校验：任一不合法双字节序列立即否决（原逻辑保留）
+///          2. 最小双字节数量：至少 3 个，避免短样本误判
+///          3. 双字节占比：双字节字符 / 总字符 ≥ 5%，排除纯 ASCII 偶混高位字节
+///          4. 常用汉字占比：首字节落在 0xB0-0xF7（GB2312 一级+二级汉字）的双字节
+///             占比 ≥ 20%，用于区分 Shift-JIS（日文假名首字节多在 0x81-0x9F）
 static bool is_likely_gbk(const unsigned char* buf, size_t len) {
-    bool has_double = false;
+    size_t total_chars = 0;        // 总字符数（单字节+双字节各算 1）
+    size_t double_byte_chars = 0;  // 双字节字符数
+    size_t common_chinese = 0;     // 常用汉字（首字节 0xB0-0xF7）
+
     for (size_t i = 0; i < len; ) {
         const unsigned char c = buf[i];
         if (c < 0x80) {
+            ++total_chars;
             ++i;
         } else if (c >= 0x81 && c <= 0xFE) {
             if (i + 1 >= len) break; // 最后一个字节无法判断
             const unsigned char c2 = buf[i + 1];
             if (c2 >= 0x40 && c2 <= 0xFE && c2 != 0x7F) {
-                has_double = true;
+                ++total_chars;
+                ++double_byte_chars;
+                if (c >= 0xB0 && c <= 0xF7) {
+                    ++common_chinese;
+                }
                 i += 2;
             } else {
                 return false; // 不符合 GBK 模式
             }
         } else {
-            return false;
+            return false; // 0x80 / 0xFF 不是合法 GBK 首字节
         }
     }
-    return has_double;
+
+    if (double_byte_chars < 3) return false;  // 样本太少，不可靠
+
+    const double db_ratio = static_cast<double>(double_byte_chars) / total_chars;
+    const double common_ratio = static_cast<double>(common_chinese) / double_byte_chars;
+
+    // 双字节占比过低：可能是纯 ASCII 偶混入高位字节
+    if (db_ratio < 0.05) return false;
+
+    // 常用汉字比例过低：可能是 Shift-JIS 等其他 CJK 编码
+    // （日文假名首字节多在 0x81-0x9F，不在 0xB0-0xF7 常用汉字范围）
+    if (common_ratio < 0.2) return false;
+
+    return true;
 }
 
 // ============================================================
@@ -271,6 +298,7 @@ std::vector<std::string> read_as_utf8_lines(const fs::path& path, Encoding encod
 
         std::string line;
         while (std::getline(file, line)) {
+            normalize_eol(line);
             lines.push_back(std::move(line));
         }
         return lines;
@@ -308,6 +336,7 @@ std::vector<std::string> read_as_utf8_lines(const fs::path& path, Encoding encod
     std::istringstream stream(utf8_content);
     std::string line;
     while (std::getline(stream, line)) {
+        normalize_eol(line);
         lines.push_back(std::move(line));
     }
     return lines;
@@ -322,6 +351,12 @@ const char* encoding_name(Encoding encoding) {
         case Encoding::Ascii:   return "ASCII";
         case Encoding::Binary:  return "Binary";
         default:                return "Unknown";
+    }
+}
+
+void normalize_eol(std::string& line) {
+    if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
     }
 }
 

@@ -11,6 +11,7 @@
 
 #include "app/config/app_config.h"
 #include "core/config/config_manager.h"
+#include "agent/tool/constants.h"
 
 namespace agent {
 
@@ -95,6 +96,28 @@ void register_config_defaults() {
     cfg.register_meta(keys::LOG_FILE, {
         .description = "Log file path (empty to disable file logging)",
         .default_value = std::string("")
+    });
+
+    // Tool — FileReadTool
+    cfg.register_meta(keys::FILE_READ_MAX_SIZE, {
+        .description = "Max file size in bytes for Read tool (default 2MB)",
+        .default_value = static_cast<int>(agent::tool::constants::MAX_FILE_SIZE_BYTES),
+        .validate_callback = [](const ConfigValue& v) -> Result<void, std::string> {
+            if (std::holds_alternative<int>(v) && std::get<int>(v) <= 0) {
+                return Result<void, std::string>::err("max_file_size_bytes must be positive");
+            }
+            return Result<void, std::string>::ok();
+        }
+    });
+    cfg.register_meta(keys::FILE_READ_MAX_LINES, {
+        .description = "Max lines to read per call for Read tool (default 2000)",
+        .default_value = agent::tool::constants::MAX_LINES_TO_READ,
+        .validate_callback = [](const ConfigValue& v) -> Result<void, std::string> {
+            if (std::holds_alternative<int>(v) && std::get<int>(v) <= 0) {
+                return Result<void, std::string>::err("max_lines_to_read must be positive");
+            }
+            return Result<void, std::string>::ok();
+        }
     });
 }
 

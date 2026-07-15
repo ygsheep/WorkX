@@ -129,7 +129,7 @@ flowchart TD
 1. **BOM 检测**：UTF-8 (`EF BB BF`)、UTF-16LE (`FF FE`)、UTF-16BE (`FE FF`)
 2. **null 字节**：判定为 `Binary`，拒绝读取（UTF-16 已由 BOM 排除，不会误判）
 3. **UTF-8 验证**：逐字节校验多字节序列（`0xxxxxxx` / `110xxxxx 10xxxxxx` / …），纯 7-bit 返回 `Ascii`
-4. **GBK 启发式**：双字节首字节 `0x81-0xFE`，次字节 `0x40-0xFE`（不含 `0x7F`）
+4. **GBK 启发式（增强版）**：双字节首字节 `0x81-0xFE`，次字节 `0x40-0xFE`（不含 `0x7F`）；叠加频率统计——至少 3 个双字节字符、双字节占比 ≥ 5%、常用汉字（首字节 `0xB0-0xF7`）占比 ≥ 20%，以区分 Shift-JIS 等其他 CJK 编码
 
 | 编码 | 来源 | 读取策略 |
 |------|------|----------|
@@ -193,11 +193,51 @@ const char* encoding_name(Encoding encoding);
   （转换本身需要完整字节流，无法流式）
 ```
 
-### 7. 文件大小限制
+### 7. 行尾符规范化（CRLF → LF）
 
-- 超过 2MB（`MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024`）的文件拒绝读取
+`std::getline` 读取 CRLF 文件时仅剥离 `\n`，行末会残留 `\r`，导致输出混入不可见 `\r` 影响 TUI 显示。`normalize_eol()` 在每行入列前剥离末尾 `\r`，保证内部存储统一为 LF 风格。
+
+覆盖全部 3 处 `getline` 调用：
+- `file_read_tool.cpp` 流式读取路径（UTF-8/ASCII/Unknown）
+- `encoding.cpp` UTF-8/ASCII 直接读取路径
+- `encoding.cpp` UTF-16/GBK 转换后按行分割路径
+
+```cpp
+// encoding.h
+void normalize_eol(std::string& line);
+
+// 实现仅一行：检查末尾 '\r' 并 pop_back
+```
+
+> **注意**：仅处理 CRLF → LF，不处理孤立的 CR（老 Mac 格式 `\r`-only）。后者极少见且 `std::getline` 不以 `\r` 分行，需 binary 模式 + 手动分割，不在本次范围内。
+
+### 8. 文件大小限制
+
+- 默认超过 2MB（`MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024`）的文件拒绝读取
+- 可通过配置键 `tool.file_read.max_file_size_bytes` 自定义
 - 引导 LLM 对大文件使用 `offset` / `limit` 分段读取
 - 避免一次性将大文件加载到内存导致性能问题
+
+### 9. 配置化参数
+
+`MAX_FILE_SIZE_BYTES` 和 `MAX_LINES_TO_READ` 可通过 `ConfigManager` 运行时配置，回退到 `constants.h` 编译期默认值：
+
+| 配置键 | 类型 | 默认值 | 验证 |
+|--------|------|--------|------|
+| `tool.file_read.max_file_size_bytes` | int | 2097152 (2MB) | 必须 > 0 |
+| `tool.file_read.max_lines_to_read` | int | 2000 | 必须 > 0 |
+
+```cpp
+// file_read_tool.cpp — call() 开头读取配置
+const size_t max_file_size = static_cast<size_t>(
+    agent::ConfigManager::instance().get_or<int>(
+        agent::keys::FILE_READ_MAX_SIZE,
+        static_cast<int>(constants::MAX_FILE_SIZE_BYTES)
+    )
+);
+```
+
+> **设计说明**：`prompt()` 仍使用 `constants.h` 作为 LLM 文档默认值（prompt 在启动时生成并缓存），`call()` 中的实际限制由配置决定。如需让 LLM 感知自定义限制，需后续将 `prompt()` 改为动态生成。
 
 ## 错误处理
 
@@ -284,7 +324,9 @@ nlohmann::json input = {
 | `weakly_canonical` 而非 `canonical` | 后者要求路径必须存在，前者更宽容 |
 | 使用 `std::error_code` 重载 | 避免 `std::filesystem` 异常抛出 |
 | 文件大小限制 2MB | 避免一次性读取大文件耗尽内存，引导 LLM 使用 offset/limit 分段 |
-| 常量集中管理 `constants.h` | `MAX_FILE_SIZE_BYTES`/`MAX_LINES_TO_READ`/`PDF_MAX_PAGES_PER_READ` 统一管理 |
+| 常量集中管理 `constants.h` | `MAX_FILE_SIZE_BYTES`/`MAX_LINES_TO_READ`/`PDF_MAX_PAGES_PER_READ` 统一管理，同时作为配置回退默认值 |
+| 运行时配置覆盖常量 | `call()` 中通过 `ConfigManager::get_or()` 读取配置，回退 `constants.h`；`prompt()` 仍用常量作为 LLM 文档默认值 |
+| GBK 检测叠加频率统计 | 全序列校验 + 双字节占比 + 常用汉字占比，降低 Shift-JIS 误判率 |
 | prompt 声明 "必须绝对路径" 但代码宽容相对路径 | 对 LLM 给出最佳实践指引，同时保持工具鲁棒性 |
 | `pages` 为 string 类型 | 支持页码范围（如 "1-5"、"10-20"），比 int 更灵活 |
 | `additionalProperties: false` | 严格 schema 校验，防止 LLM 传入未定义字段 |
@@ -398,6 +440,9 @@ nlohmann::json input = {
 - [x] 空文件处理（返回 `<system-reminder>` 警告而非空字符串）
 - [x] 默认 2000 行限制（`MAX_LINES_TO_READ` 已启用，prompt 已声明）
 - [x] 流式读取（UTF-8 路径单次遍历，仅存储目标范围行，提前退出优化）
+- [x] 行尾符规范化（CRLF → LF，剥离 `std::getline` 残留的 `\r`）
+- [x] GBK 检测精度增强（字符频率统计：双字节占比 + 常用汉字占比，区分 Shift-JIS）
+- [x] 配置化参数（`MAX_FILE_SIZE_BYTES` / `MAX_LINES_TO_READ` 可通过 `config_manager` 配置，回退 `constants.h` 默认值）
 
 ### 短期目标 — 待对齐项
 
@@ -409,9 +454,3 @@ nlohmann::json input = {
 - [ ] 截图读取支持（随图片支持一起实现）
 - [ ] Jupyter Notebook 支持（`.ipynb` 解析，返回单元格与输出）
 - [ ] PDF 文件支持（`pages` 字段，按页读取，`PDF_MAX_PAGES_PER_READ` 限制）
-
-### 长期目标 — 性能与扩展
-
-- [ ] 行尾符规范化（CRLF/LF 统一处理）
-- [ ] 配置化参数（`MAX_FILE_SIZE_BYTES`、默认行数限制可配置）
-- [ ] GBK 检测精度增强（结合字符频率统计，降低误判率）

@@ -11,6 +11,8 @@
 #include "agent/tool/FileReadTool/file_read_tool.h"
 #include "agent/tool/constants.h"
 #include "agent/tool/encoding.h"
+#include "core/config/config_manager.h"
+#include "app/config/app_config.h"
 
 #include <fstream>
 #include <sstream>
@@ -208,6 +210,19 @@ ToolResult FileReadTool::call(
     // 1. 解析输入 JSON 为 FileReadInput 结构
     FileReadInput read_input = input.get<FileReadInput>();
 
+    // 读取可配置参数（回退到 constants.h 编译期默认值）
+    // prompt() 仍使用 constants.h 作为文档默认值，实际限制由此处配置决定
+    const size_t max_file_size = static_cast<size_t>(
+        agent::ConfigManager::instance().get_or<int>(
+            agent::keys::FILE_READ_MAX_SIZE,
+            static_cast<int>(constants::MAX_FILE_SIZE_BYTES)
+        )
+    );
+    const int max_lines = agent::ConfigManager::instance().get_or<int>(
+        agent::keys::FILE_READ_MAX_LINES,
+        constants::MAX_LINES_TO_READ
+    );
+
     // 2. 路径解析：相对路径基于 ctx.cwd 解析，再规范化为绝对路径
     fs::path file_path(read_input.file_path);
     if (file_path.is_relative()) {
@@ -236,12 +251,12 @@ ToolResult FileReadTool::call(
         return ToolResult::error("Path is not a regular file: " + read_input.file_path);
     }
 
-    // 6. 文件大小检查：超过 MAX_FILE_SIZE_BYTES 拒绝（需用 offset/limit 分段）
+    // 6. 文件大小检查：超过 max_file_size 拒绝（需用 offset/limit 分段）
     const auto file_size = fs::file_size(file_path, ec);
-    if (!ec && file_size > MAX_FILE_SIZE_BYTES) {
+    if (!ec && file_size > max_file_size) {
         return ToolResult::error(std::format(
             "File size {} bytes exceeds maximum {} bytes; use offset and limit for larger files",
-            file_size, MAX_FILE_SIZE_BYTES
+            file_size, max_file_size
         ));
     }
 
@@ -252,7 +267,7 @@ ToolResult FileReadTool::call(
     }
 
     const int offset = read_input.offset.value_or(1);
-    const int limit = read_input.limit.value_or(MAX_LINES_TO_READ);
+    const int limit = read_input.limit.value_or(max_lines);
 
     std::vector<std::string> target_lines;
     int total_lines = 0;
@@ -278,13 +293,14 @@ ToolResult FileReadTool::call(
             file.seekg(0); // 无 BOM，回到开头
         }
 
-        target_lines.reserve(static_cast<size_t>(std::min(limit, MAX_LINES_TO_READ)));
+        target_lines.reserve(static_cast<size_t>(std::min(limit, max_lines)));
         std::string line;
 
         // 单次遍历：计数所有行，仅存储 [offset, offset+limit) 范围内的行
         while (std::getline(file, line)) {
             ++total_lines;
             if (total_lines >= offset && total_lines < offset + limit) {
+                normalize_eol(line);  // 剥离 CRLF 残留的 '\r'
                 target_lines.push_back(std::move(line));
             }
             // 已读取到目标范围末尾，检查是否还有更多行后提前退出
