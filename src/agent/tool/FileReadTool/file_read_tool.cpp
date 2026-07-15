@@ -3,14 +3,16 @@
  * @brief FileReadTool 实现
  * @details 文件读取工具的具体实现：路径解析、编码检测、行号格式化、offset/limit 流式读取。
  *          所有 filesystem 操作使用 std::error_code 重载，避免异常抛出。
+ *          v1.4.0：成功读取后调用 FileReadStateTracker 记录状态（pre-read/staleness 支持）。
  * @author workx
- * @version 1.3.0
+ * @version 1.4.0
  * @date 2026-07
  */
 
 #include "agent/tool/FileReadTool/file_read_tool.h"
 #include "agent/tool/constants.h"
 #include "agent/tool/encoding.h"
+#include "agent/tool/FileReadState/file_read_state.h"
 #include "core/config/config_manager.h"
 #include "app/config/app_config.h"
 
@@ -329,14 +331,48 @@ ToolResult FileReadTool::call(
 
     // 空文件检查：返回提示信息而非空字符串（对齐 Claude Code 行为）
     if (total_lines == 0) {
+        // 记录读取状态（空文件，完整视图）—— 供 FileWriteTool 做 pre-read 检查
+        std::error_code mtime_ec;
+        const auto mtime = fs::last_write_time(file_path, mtime_ec);
+        FileReadStateTracker::instance().record_read(
+            file_path.generic_string(),
+            std::string{},
+            mtime_ec ? std::filesystem::file_time_type{} : mtime,
+            false  // 空文件视为完整视图
+        );
         return ToolResult::ok(std::string{"<system-reminder>File exists but has empty contents.</system-reminder>"});
     }
 
-    // offset 超出范围
+    // offset 超出范围（不记录状态，读取实际失败）
     if (offset > total_lines) {
         return ToolResult::error(std::format(
             "offset {} is beyond the file's {} lines", offset, total_lines
         ));
+    }
+
+    // 记录读取状态（供 FileWriteTool 做 pre-read / staleness 检查）
+    // - content：LF 规范化后的内容快照（用于 mtime 变化时的内容对比回退）
+    // - is_partial_view：offset != 1 或未读完所有行时为 true（部分视图不可做内容对比）
+    {
+        std::error_code mtime_ec;
+        const auto mtime = fs::last_write_time(file_path, mtime_ec);
+
+        std::string content_snapshot;
+        content_snapshot.reserve(target_lines.size() * 80);
+        for (size_t i = 0; i < target_lines.size(); ++i) {
+            if (i > 0) content_snapshot += '\n';
+            content_snapshot += target_lines[i];
+        }
+
+        const int lines_read = static_cast<int>(target_lines.size());
+        const bool is_partial = (offset != 1) || has_more || (lines_read < total_lines);
+
+        FileReadStateTracker::instance().record_read(
+            file_path.generic_string(),
+            std::move(content_snapshot),
+            mtime_ec ? std::filesystem::file_time_type{} : mtime,
+            is_partial
+        );
     }
 
     // 9. 格式化输出（带行号，1-based）

@@ -57,6 +57,8 @@ set(WORKX_SOURCES
     src/agent/tool/FileReadTool/file_read_tool.cpp
     src/agent/tool/FileEditTool/file_edit_tool.cpp
     src/agent/tool/FileWriteTool/file_write_tool.cpp
+    src/agent/tool/FileWriteTool/diff.cpp
+    src/agent/tool/FileReadState/file_read_state.cpp
     src/agent/tool/GlobTool/glob_tool.cpp
     src/agent/tool/GrepTool/grep_tool.cpp
     src/agent/tool/BashTool/bash_tool.cpp

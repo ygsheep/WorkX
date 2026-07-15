@@ -60,37 +60,69 @@ std::string AnthropicAdapter::build_request_body(const CompletionRequest& reques
         }
 
         nlohmann::json m;
+
         switch (msg.role) {
             case ChatMessage::Role::User:
                 m["role"] = "user";
-                break;
-            case ChatMessage::Role::Assistant:
-                m["role"] = "assistant";
-                break;
-            case ChatMessage::Role::Tool:
-                // Anthropic 使用 tool_use / tool_result content blocks
-                // 简化处理：作为 user 消息（带 tool 标记）
-                m["role"] = "user";
-                m["content"] = "[Tool result from " + msg.tool_name + "]: " + msg.content;
+                m["content"] = msg.content;
                 messages.push_back(m);
-                continue;
+                break;
+
+            case ChatMessage::Role::Assistant: {
+                m["role"] = "assistant";
+                // 有 tool_uses 时 content 为 content blocks 数组（text + tool_use）
+                if (!msg.tool_uses.empty()) {
+                    nlohmann::json content_blocks = nlohmann::json::array();
+                    if (!msg.content.empty()) {
+                        content_blocks.push_back({{"type", "text"}, {"text", msg.content}});
+                    }
+                    for (const auto& tu : msg.tool_uses) {
+                        content_blocks.push_back({
+                            {"type", "tool_use"},
+                            {"id", tu.id},
+                            {"name", tu.name},
+                            {"input", tu.input.is_null() ? nlohmann::json::object() : tu.input}
+                        });
+                    }
+                    m["content"] = std::move(content_blocks);
+                } else {
+                    if (!msg.reasoning_content.empty()) {
+                        m["content"] = msg.reasoning_content + "\n" + msg.content;
+                    } else {
+                        m["content"] = msg.content;
+                    }
+                }
+                messages.push_back(m);
+                break;
+            }
+
+            case ChatMessage::Role::Tool:
+                // Anthropic: tool_result 作为 user 消息的 content block
+                m["role"] = "user";
+                m["content"] = nlohmann::json::array({
+                    {
+                        {"type", "tool_result"},
+                        {"tool_use_id", msg.tool_call_id},
+                        {"content", msg.content}
+                    }
+                });
+                messages.push_back(m);
+                break;
+
             default:
                 continue;
         }
-
-        if (!msg.reasoning_content.empty()) {
-            // 将 reasoning_content 合并到 content 前作为思考过程
-            m["content"] = msg.reasoning_content + "\n" + msg.content;
-        } else {
-            m["content"] = msg.content;
-        }
-        messages.push_back(m);
     }
 
     if (!system_prompt.empty()) {
         j["system"] = system_prompt;
     }
     j["messages"] = std::move(messages);
+
+    // 工具 schema（function calling）
+    if (request.has_tools()) {
+        j["tools"] = request.tools;
+    }
 
     if (request.temperature >= 0) {
         j["temperature"] = request.temperature;
@@ -116,15 +148,31 @@ bool AnthropicAdapter::parse_sse_event(const std::string& event_type,
         auto json_obj = nlohmann::json::parse(data);
 
         if (event_type == "content_block_delta") {
-            // 内容增量
+            // 内容增量或 tool_use input 增量
             const auto& delta = json_obj["delta"];
+            const std::string delta_type = delta.value("type", "");
+            if (delta_type == "input_json_delta") {
+                // tool_use input JSON 增量
+                out.is_tool_use_delta = true;
+                out.tool_input_delta = delta.value("partial_json", "");
+                return true;
+            }
             if (delta.contains("text") && !delta["text"].is_null()) {
                 out.content_delta = delta["text"].get<std::string>();
                 return true;
             }
         } else if (event_type == "content_block_start") {
-            // 内容块开始，可能包含初始文本
+            // 内容块开始：tool_use 或 text
             const auto& block = json_obj["content_block"];
+            const std::string block_type = block.value("type", "text");
+            if (block_type == "tool_use") {
+                // tool_use 块开始
+                out.is_tool_use_start = true;
+                out.tool_use_id = block.value("id", "");
+                out.tool_name = block.value("name", "");
+                return true;
+            }
+            // 文本块可能有初始内容
             if (block.contains("text") && !block["text"].is_null()) {
                 out.content_delta = block["text"].get<std::string>();
                 return !out.content_delta.empty();
@@ -135,7 +183,7 @@ bool AnthropicAdapter::parse_sse_event(const std::string& event_type,
             if (delta.contains("stop_reason") && !delta["stop_reason"].is_null()) {
                 auto stop_reason = delta["stop_reason"].get<std::string>();
                 if (stop_reason == "end_turn" || stop_reason == "max_tokens" ||
-                    stop_reason == "stop_sequence") {
+                    stop_reason == "stop_sequence" || stop_reason == "tool_use") {
                     out.is_final = true;
                     // usage 信息
                     if (json_obj.contains("usage") && !json_obj["usage"].is_null()) {

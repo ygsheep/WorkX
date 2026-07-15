@@ -23,6 +23,9 @@
 #include "agent/core/chat_session.h"
 #include "agent/message/types.h"
 #include "agent/model/provider_preset.h"
+#include "agent/tool/FileReadTool/file_read_tool.h"
+#include "agent/tool/FileWriteTool/file_write_tool.h"
+#include "agent/tool/registry.h"
 #include "app/command/builtin_commands.h"
 #include "app/config/app_config.h"
 #include "app/config/cli_args.h"
@@ -218,8 +221,18 @@ static int run(int argc, char* argv[]) {
             std::cerr << "[debug]   model:    " << model_name << "\n";
         }
 
-        // 设置系统提示词
+        // 注册工具到 ToolRegistry（启用 function calling）
+        auto tool_registry = std::make_shared<agent::tool::ToolRegistry>();
+        tool_registry->register_tool(std::make_shared<agent::tool::FileReadTool>());
+        tool_registry->register_tool(std::make_shared<agent::tool::FileWriteTool>());
+        session->set_tool_registry(tool_registry);
+
+        // 设置系统提示词（拼接工具 prompt，让 LLM 知道如何使用工具）
         std::string sys_prompt = cfg.get_or<std::string>(keys::SYSTEM_PROMPT, "");
+        for (const auto& t : tool_registry->get_all_tools()) {
+            sys_prompt += "\n\n";
+            sys_prompt += t->prompt();
+        }
         if (!sys_prompt.empty()) {
             session->set_system_prompt(sys_prompt);
         }

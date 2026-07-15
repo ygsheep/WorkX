@@ -58,7 +58,39 @@ std::string OpenAIAdapter::build_request_body(const CompletionRequest& request,
         if (msg.role == ChatMessage::Role::Tool) {
             m["tool_call_id"] = msg.tool_call_id;
         }
+        // assistant 工具调用（OpenAI tool_calls 格式）
+        if (msg.role == ChatMessage::Role::Assistant && !msg.tool_uses.empty()) {
+            nlohmann::json tool_calls = nlohmann::json::array();
+            for (const auto& tu : msg.tool_uses) {
+                tool_calls.push_back({
+                    {"id", tu.id},
+                    {"type", "function"},
+                    {"function", {
+                        {"name", tu.name},
+                        {"arguments", tu.input.is_null() ? "{}" : tu.input.dump()}
+                    }}
+                });
+            }
+            m["tool_calls"] = std::move(tool_calls);
+        }
         messages.push_back(m);
+    }
+
+    // tools 转换：内部格式 {name, description, input_schema} → OpenAI {type:"function", function:{...}}
+    if (request.has_tools()) {
+        nlohmann::json tools_arr = nlohmann::json::array();
+        for (const auto& tool : request.tools) {
+            tools_arr.push_back({
+                {"type", "function"},
+                {"function", {
+                    {"name", tool.value("name", "")},
+                    {"description", tool.value("description", "")},
+                    {"parameters", tool.contains("input_schema") && !tool["input_schema"].is_null()
+                        ? tool["input_schema"] : nlohmann::json::object()}
+                }}
+            });
+        }
+        j["tools"] = std::move(tools_arr);
     }
 
     if (request.max_tokens > 0) {
@@ -116,10 +148,36 @@ bool OpenAIAdapter::parse_sse_event(const std::string& /*event_type*/,
             out.reasoning_delta = delta["reasoning_content"].get<std::string>();
         }
 
+        // tool_calls 增量（function calling）
+        if (delta.contains("tool_calls") && !delta["tool_calls"].empty()) {
+            const auto& tc = delta["tool_calls"][0];
+            const auto& func = tc.value("function", nlohmann::json::object());
+
+            // 首次出现：带 id（或 function.name）
+            if (tc.contains("id") && !tc["id"].is_null()) {
+                out.is_tool_use_start = true;
+                out.tool_use_id = tc["id"].get<std::string>();
+                out.tool_name = func.value("name", "");
+                // 首次可能也带 arguments 增量
+                if (func.contains("arguments") && !func["arguments"].is_null()) {
+                    out.is_tool_use_delta = true;
+                    out.tool_input_delta = func["arguments"].get<std::string>();
+                }
+                return true;
+            }
+
+            // 后续：只有 arguments 增量
+            if (func.contains("arguments") && !func["arguments"].is_null()) {
+                out.is_tool_use_delta = true;
+                out.tool_input_delta = func["arguments"].get<std::string>();
+                return true;
+            }
+        }
+
         // finish_reason
         if (choice.contains("finish_reason") && !choice["finish_reason"].is_null()) {
             auto finish_reason = choice["finish_reason"].get<std::string>();
-            if (finish_reason == "stop" || finish_reason == "length") {
+            if (finish_reason == "stop" || finish_reason == "length" || finish_reason == "tool_calls") {
                 out.is_final = true;
                 // usage 信息
                 if (json_obj.contains("usage") && !json_obj["usage"].is_null()) {
@@ -130,7 +188,8 @@ bool OpenAIAdapter::parse_sse_event(const std::string& /*event_type*/,
             }
         }
 
-        return !out.content_delta.empty() || !out.reasoning_delta.empty() || out.is_final;
+        return !out.content_delta.empty() || !out.reasoning_delta.empty() ||
+               out.is_tool_use_start || out.is_tool_use_delta || out.is_final;
 
     } catch (const nlohmann::json::parse_error&) {
         return false;

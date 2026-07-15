@@ -17,12 +17,15 @@
 #include "core/events/event_bus.h"
 #include "core/utils/result.h"
 #include "agent/message/types.h"
+#include "agent/tool/registry.h"
+#include "agent/tool/executor.h"
 
 namespace agent {
 
 /// @brief 对话会话
 /// @details 由外部驱动（main.cpp），通过 send_message() 提交文本，
-///          后台 Task 调用 ICompletionProvider，发布 StreamTokenEvent/StreamDoneEvent
+///          后台 Task 调用 ICompletionProvider，发布 StreamTokenEvent/StreamDoneEvent。
+///          支持工具调用（function calling）：LLM 返回 tool_use → 执行工具 → tool_result → 继续推理
 class ChatSession {
 public:
     /// @brief 构造
@@ -34,6 +37,10 @@ public:
 
     /// @brief 添加系统提示词
     void set_system_prompt(const std::string& prompt);
+
+    /// @brief 设置工具注册表（启用 function calling）
+    /// @param registry 工具注册表（含已注册的工具实例）
+    void set_tool_registry(std::shared_ptr<tool::ToolRegistry> registry);
 
     /// @brief 清空对话历史
     void clear_history();
@@ -57,7 +64,10 @@ public:
     Result<void, std::string> load_session(const std::string& path);
 
 private:
-    /// @brief 执行推理（在后台线程中运行）
+    /// @brief 构建推理请求（含 tools schema 和消息历史）
+    CompletionRequest build_request() const;
+
+    /// @brief 执行推理（在后台线程中运行，含 agent 循环）
     /// @param user_text 用户输入文本
     /// @param retry_attempt 当前重试次数（0=首次请求）
     void run_completion(const std::string& user_text, int retry_attempt = 0);
@@ -72,6 +82,10 @@ private:
     std::vector<ChatMessage> m_messages;
     std::string m_system_prompt;
     std::atomic<bool> m_generating{false};
+
+    // 工具注册表与执行器（可选，为空时不启用 function calling）
+    std::shared_ptr<tool::ToolRegistry> m_tool_registry;
+    std::unique_ptr<tool::ToolExecutor> m_tool_executor;
 
     // 重试配置
     int m_max_retries = 3;
