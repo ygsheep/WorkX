@@ -59,7 +59,7 @@ static const ProviderPreset s_presets[] = {
         .default_model = "",
         .api_path      = "/v1/chat/completions",
         .timeout_ms    = 120000,
-        .retry_delay_ms = 5000
+        .retry_delay_ms = 10000   // 本地模型重试延迟 10s（指数退避上限 60s）
     },
     {
         .name          = "openai-compatible",

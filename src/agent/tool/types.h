@@ -119,15 +119,17 @@ struct GrepOutput {
 // JSON 序列化（NLOHMANN_DEFINE_TYPE_* 宏）
 // ============================================================
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(FileReadInput, file_path, offset, limit, pages)
+// 输入结构体使用 WITH_DEFAULT：LLM 可省略有默认值/可选字段
+// 输出结构体使用普通版本：仅序列化（tool → JSON），不涉及反序列化
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(FileReadInput, file_path, offset, limit, pages)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(FileReadOutput, type, file_path, content, total_lines, start_line)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(FileEditInput, file_path, old_string, new_string, replace_all)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(FileEditInput, file_path, old_string, new_string, replace_all)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(FileEditOutput, file_path, content, structured_patch, original_file)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(FileWriteInput, file_path, content)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(FileWriteInput, file_path, content)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(FileWriteOutput, type, file_path, content, structured_patch, original_file)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(GlobInput, pattern, cwd)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(GlobInput, pattern, cwd)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(GlobOutput, files, directories)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(GrepInput, pattern, path, case_insensitive, regex)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(GrepInput, pattern, path, case_insensitive, regex)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(GrepOutput::Match, file_path, line_number, line_content)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(GrepOutput, matches)
 

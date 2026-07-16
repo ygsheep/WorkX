@@ -43,6 +43,7 @@ set(WORKX_SOURCES
     src/tui/render/spinner.cpp
     src/tui/input/history.cpp
     src/agent/core/chat_session.cpp
+    src/agent/core/react_loop.cpp
     src/agent/api/backend_factory.cpp
     src/agent/api/client.cpp
     src/agent/api/remote/remote_backend.cpp

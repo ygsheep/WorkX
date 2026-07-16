@@ -185,6 +185,11 @@ void ChatRenderer::start() {
                 if (input_row < 1) input_row = 1;
                 m_terminal->cursor_to_pos(input_row, 3);
             }
+
+            // 重置流式状态：为 ReAct 循环中下一轮 Thought 做准备
+            // （中间 StreamDoneEvent 后，下一轮 Thought 需要重新初始化流式输出）
+            m_streaming_started.store(false);
+            m_reasoning_buffer.clear();
         })
     );
 
@@ -197,6 +202,8 @@ void ChatRenderer::start() {
             }
             m_stream_buf->stop();
             m_formatter->reset();
+            m_streaming_started.store(false);
+            m_reasoning_buffer.clear();
 
             // 渲染错误块
             m_terminal->set_color(ColorRole::CodeBlock);
@@ -239,6 +246,12 @@ void ChatRenderer::start() {
     // ---- ToolCallEvent ----
     m_token_tool_call = std::make_unique<EventToken>(
         bus.subscribe<ToolCallEvent>([this](const ToolCallEvent& e) {
+            // 停止思考 spinner（工具执行阶段不再显示 "Thinking"）
+            if (m_spinner_active) {
+                m_terminal->spinner_stop();
+                m_spinner_active = false;
+            }
+
             auto icon = get_tool_icon(e.tool_name);
             std::string indent(m_tool_indent * 2, ' ');
 

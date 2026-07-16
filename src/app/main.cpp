@@ -418,7 +418,17 @@ static int run(int argc, char* argv[]) {
             // 需要调 LLM
             if (result.should_query) {
                 if (session) {
-                    session->send_message(e.text);
+                    // 使用处理后的文本（已展开 @file 引用为文件内容）
+                    std::string query_text;
+                    if (!result.messages.empty()) {
+                        for (size_t i = 0; i < result.messages.size(); ++i) {
+                            if (i > 0) query_text += "\n\n";
+                            query_text += result.messages[i];
+                        }
+                    } else {
+                        query_text = e.text;
+                    }
+                    session->send_message(query_text);
                 } else {
                     // 无后端时回显
                     EventBus::instance().publish_async(StreamTokenEvent{

@@ -51,10 +51,13 @@ std::string OpenAIAdapter::build_request_body(const CompletionRequest& request,
             case ChatMessage::Role::Assistant: m["role"] = "assistant"; break;
             case ChatMessage::Role::Tool:      m["role"] = "tool"; break;
         }
-        m["content"] = msg.content;
-        if (!msg.reasoning_content.empty()) {
-            m["reasoning_content"] = msg.reasoning_content;
+        // content：assistant 带 tool_calls 时 content 可能为空，用 null 而非空字符串
+        if (msg.role == ChatMessage::Role::Assistant && !msg.tool_uses.empty() && msg.content.empty()) {
+            m["content"] = nullptr;
+        } else {
+            m["content"] = msg.content;
         }
+        // 注意：reasoning_content 不发送给模型（非标准字段，会干扰 Gemma 等模型）
         if (msg.role == ChatMessage::Role::Tool) {
             m["tool_call_id"] = msg.tool_call_id;
         }
@@ -153,10 +156,16 @@ bool OpenAIAdapter::parse_sse_event(const std::string& /*event_type*/,
             const auto& tc = delta["tool_calls"][0];
             const auto& func = tc.value("function", nlohmann::json::object());
 
-            // 首次出现：带 id（或 function.name）
-            if (tc.contains("id") && !tc["id"].is_null()) {
+            // 首次出现：带 id 和/或 function.name
+            // （标准 OpenAI 格式带 id；部分兼容模型如 Gemma 可能只有 function.name）
+            const bool has_id = tc.contains("id") && !tc["id"].is_null();
+            const bool has_name = func.contains("name") && !func["name"].is_null()
+                                  && !func["name"].get<std::string>().empty();
+            if (has_id || has_name) {
                 out.is_tool_use_start = true;
-                out.tool_use_id = tc["id"].get<std::string>();
+                if (has_id) {
+                    out.tool_use_id = tc["id"].get<std::string>();
+                }
                 out.tool_name = func.value("name", "");
                 // 首次可能也带 arguments 增量
                 if (func.contains("arguments") && !func["arguments"].is_null()) {

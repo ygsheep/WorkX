@@ -83,9 +83,18 @@ public:
             return exec_result;
         }
 
-        // 5. 执行工具
-        exec_result.result = tool->call(input, ctx);
-        exec_result.is_error = exec_result.result.is_error;
+        // 5. 执行工具（异常安全：防止工具内部异常向上传播）
+        try {
+            exec_result.result = tool->call(input, ctx);
+            exec_result.is_error = exec_result.result.is_error;
+        } catch (const std::exception& e) {
+            exec_result.result = ToolResult::error(
+                std::string("Tool threw exception: ") + e.what());
+            exec_result.is_error = true;
+        } catch (...) {
+            exec_result.result = ToolResult::error("Tool threw unknown exception");
+            exec_result.is_error = true;
+        }
         return exec_result;
     }
 

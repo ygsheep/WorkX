@@ -18,7 +18,6 @@
 #include "core/utils/result.h"
 #include "agent/message/types.h"
 #include "agent/tool/registry.h"
-#include "agent/tool/executor.h"
 
 namespace agent {
 
@@ -64,9 +63,6 @@ public:
     Result<void, std::string> load_session(const std::string& path);
 
 private:
-    /// @brief 构建推理请求（含 tools schema 和消息历史）
-    CompletionRequest build_request() const;
-
     /// @brief 执行推理（在后台线程中运行，含 agent 循环）
     /// @param user_text 用户输入文本
     /// @param retry_attempt 当前重试次数（0=首次请求）
@@ -83,9 +79,8 @@ private:
     std::string m_system_prompt;
     std::atomic<bool> m_generating{false};
 
-    // 工具注册表与执行器（可选，为空时不启用 function calling）
+    // 工具注册表（可选，为空时不启用 function calling）
     std::shared_ptr<tool::ToolRegistry> m_tool_registry;
-    std::unique_ptr<tool::ToolExecutor> m_tool_executor;
 
     // 重试配置
     int m_max_retries = 3;
