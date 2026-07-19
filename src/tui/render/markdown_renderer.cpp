@@ -4,6 +4,7 @@
  */
 
 #include "tui/render/markdown_renderer.h"
+#include "tui/render/syntax_highlighter.h"
 #include "tui/utils/utf8_utils.h"
 #include <algorithm>
 #include <cctype>
@@ -574,9 +575,34 @@ std::string render_code_block(std::string_view lang,
                                const std::vector<std::string>& lines) {
     std::ostringstream os;
 
+    // 1. 先把代码块整体交给语法高亮器 (按 lang 选 grammar, 未知 lang 原样返回)
+    //    每行自包含 ANSI, 不会跨行泄漏颜色, 可安全按 \n split 后逐行渲染
+    std::string joined;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (i) joined.push_back('\n');
+        joined += lines[i];
+    }
+    std::string highlighted = highlight_code(lang, joined);
+
+    // 2. 按 \n 重新拆成行 (高亮后行数应与原始一致)
+    std::vector<std::string> hl_lines;
+    {
+        std::string cur;
+        for (char c : highlighted) {
+            if (c == '\n') { hl_lines.push_back(std::move(cur)); cur.clear(); }
+            else cur.push_back(c);
+        }
+        hl_lines.push_back(std::move(cur));
+        // 防御: 若行数不一致 (不应发生), 回退到原始 lines
+        if (hl_lines.size() != lines.size()) {
+            hl_lines = lines;
+        }
+    }
+
+    // 3. 计算最大显示宽度 (用 ansi_display_width 剥离 ANSI 后再算)
     int max_w = 0;
-    for (const auto& l : lines) {
-        int w = display_width(l);
+    for (const auto& l : hl_lines) {
+        int w = ansi_display_width(l);
         if (w > max_w) max_w = w;
     }
     int lang_w = lang.empty() ? 0 : display_width(lang) + 2;
@@ -597,8 +623,8 @@ std::string render_code_block(std::string_view lang,
     }
     os << BOX_TR << ansi::RESET << "\n";
 
-    for (const auto& l : lines) {
-        int w = display_width(l);
+    for (const auto& l : hl_lines) {
+        int w = ansi_display_width(l);
         int pad = max_w - w;
         os << ansi::GRAY << BOX_V << ansi::RESET << " " << l;
         for (int i = 0; i < pad; ++i)

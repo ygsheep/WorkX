@@ -1,41 +1,64 @@
 # Workx
 
-> 一个现代化的终端 AI 聊天客户端，基于事件驱动架构，支持多 AI 提供商。
+> 一个现代化的终端 Code Agent / Work Agent，基于 ReAct 循环与工具调用架构，能够自主完成编码、调试、文件操作与任务编排。
 
 ## 特性
 
+- **自主任务执行**: 基于 ReAct 循环（推理 + 行动），Agent 自主规划并调用工具完成任务，而非简单问答
+- **工具调用能力**: 内置文件读写、编辑、Glob/Grep 搜索、Bash 执行、Web 抓取、子 Agent 调度等工具
 - **多提供商支持**: 内置 OpenAI、Anthropic、DeepSeek 等预设，一键切换
-- **SSE 流式响应**: 实时显示 AI 回复，无需等待完整响应
-- **Markdown 渲染**: 支持表格、标题、列表、代码块、强调等完整 Markdown 语法
+- **权限控制系统**: 对敏感工具调用进行权限校验，支持多种权限模式
+- **上下文管理**: 自动 Token 压缩与记忆管理，长任务也能保持连贯上下文
+- **MCP 协议集成**: 通过 Model Context Protocol 接入外部数据源与工具
+- **SSE 流式响应**: 实时显示 Agent 推理与工具调用过程
+- **Markdown 渲染**: 支持表格、标题、列表、代码块（Tree-sitter 语法高亮）、强调等完整 Markdown 语法
+- **Diff 可视化**: 文件编辑以带背景色的 Diff 形式呈现，清晰展示增删改动
 - **命令系统**: `/help`、`/exit`、`/clear`、`/regen`、`/model` 等内置命令
 - **自定义模型**: 支持添加自定义模型和 API 端点
 - **彩色输出**: 终端彩色渲染，语法高亮的代码块
-- **输入历史**: 支持上下箭头浏览历史输入
 
 ## 架构概览
 
 ```
 src/
-├── agent/          # AI 后端接口层
-│   ├── api/        # REST API 适配器、SSE 流读取、HTTP 客户端
-│   ├── command/    # 命令执行器和注册表
-│   ├── core/       # 聊天会话、查询引擎
-│   └── model/      # 模型配置、提供商预设
-├── app/            # 应用层
-│   ├── command/    # 内置系统命令
-│   ├── config/     # 配置管理、CLI 参数解析
-│   └── ui/         # 模型选择器、路径补全
-├── core/           # 核心基础设施
-│   ├── config/     # 配置管理器
-│   ├── events/     # 事件总线
-│   └── task/       # 任务管理器
-└── tui/            # 终端用户界面
-    ├── core/       # 终端封装、屏幕管理、显示缓冲
-    ├── input/      # 行编辑器、输入历史
-    ├── render/     # 聊天渲染、Markdown 渲染、输出格式化
-    ├── setup/      # 设置向导
-    ├── utils/      # UTF-8 工具函数
-    └── widgets/    # 状态栏、命令面板、底部栏
+├── agent/              # Agent 核心层
+│   ├── api/            # LLM 后端接口（OpenAI/Anthropic 适配器、SSE 流、HTTP 客户端）
+│   ├── command/        # 命令执行器与注册表
+│   ├── compact/        # Token 压缩与上下文截断
+│   ├── core/           # 会话管理、查询引擎、ReAct 推理循环
+│   ├── input/          # 输入解析与处理
+│   ├── message/        # 消息构建与历史管理
+│   ├── model/          # 模型配置、提供商预设、模型路由
+│   ├── permission/     # 权限校验、权限模式、规则定义
+│   ├── prompt/         # 系统提示词与记忆管理
+│   ├── tool/           # 工具集（Agent 自主调用的能力）
+│   │   ├── AgentTool/      # 子 Agent 调度（任务分解与并行执行）
+│   │   ├── BashTool/       # Shell 命令执行
+│   │   ├── FileEditTool/   # 文件精确编辑
+│   │   ├── FileReadTool/   # 文件读取
+│   │   ├── FileWriteTool/  # 文件写入（含 Diff 生成）
+│   │   ├── GlobTool/       # 文件名模式匹配
+│   │   ├── GrepTool/       # 内容正则搜索
+│   │   ├── MCPTool/        # Model Context Protocol 工具桥接
+│   │   └── WebFetchTool/   # 网页内容抓取
+│   └── util/           # 异步、JSON Schema、字符串工具
+├── app/                # 应用层
+│   ├── command/        # 内置系统命令
+│   ├── config/         # 配置管理、CLI 参数解析
+│   ├── ui/             # 模型选择器、路径补全、文件索引
+│   └── main.cpp        # 程序入口
+├── core/               # 核心基础设施
+│   ├── config/         # 配置管理器
+│   ├── events/         # 事件总线（驱动 Agent 与 UI 解耦）
+│   ├── task/           # 任务管理器
+│   └── utils/          # Result 类型等通用工具
+└── tui/                # 终端用户界面
+    ├── core/           # 终端封装、屏幕管理、显示缓冲（Win32/POSIX）
+    ├── input/          # 行编辑器、输入历史
+    ├── render/         # 聊天渲染、Markdown 渲染、Tree-sitter 语法高亮、流式缓冲
+    ├── setup/          # 设置向导
+    ├── utils/          # UTF-8 工具函数
+    └── widgets/        # 状态栏、命令面板、文件搜索面板、底部栏
 ```
 
 ## 支持的 AI 提供商
@@ -49,6 +72,22 @@ src/
 | Together AI | `together` | mistralai/Mixtral-8x22B-Instruct-v0.1 |
 | LM Studio | `lm-studio` | (自定义) |
 | Custom URL | `openai-compatible` | (自定义) |
+
+## Agent 工具能力
+
+WorkX 的核心是 Agent 自主调用工具完成任务。内置工具集如下：
+
+| 工具 | 说明 |
+|------|------|
+| `FileReadTool` | 读取文件内容，支持行范围与偏移 |
+| `FileWriteTool` | 创建或覆盖文件，并生成 Diff |
+| `FileEditTool` | 基于字符串替换的精确编辑 |
+| `GlobTool` | 按文件名 glob 模式快速查找文件 |
+| `GrepTool` | 基于 ripgrep 的内容正则搜索 |
+| `BashTool` | 执行 Shell 命令（受权限系统管控） |
+| `WebFetchTool` | 抓取并提取网页内容 |
+| `AgentTool` | 启动子 Agent 处理子任务，支持并行调度 |
+| `MCPTool` | 桥接 MCP 服务器，接入外部工具与数据源 |
 
 ## 前置条件
 
@@ -114,8 +153,11 @@ build\bin\workx.exe
 ## 测试
 
 ```bash
-# 运行单元测试
-build/bin/workx_tests.exe
+# 运行单元测试 (默认构建)
+build/bin/workx_unit_tests.exe
+
+# 运行集成测试 (需启用 -DWORKX_BUILD_INTEGRATION_TESTS=ON, 且需 LM Studio)
+build/bin/workx_integration_tests.exe
 ```
 
 项目包含 100+ 个测试用例，覆盖核心功能模块。

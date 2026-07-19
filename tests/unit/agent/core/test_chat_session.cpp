@@ -11,6 +11,8 @@
 
 using namespace agent;
 
+namespace {
+
 /// @brief Mock ICompletionProvider
 class MockProvider : public ICompletionProvider {
 public:
@@ -33,11 +35,13 @@ public:
 };
 
 /// @brief 创建测试用 ChatSession
-static std::unique_ptr<ChatSession> make_test_session() {
+std::unique_ptr<ChatSession> make_test_session() {
     return std::make_unique<ChatSession>(
         std::unique_ptr<ICompletionProvider>(new MockProvider())
     );
 }
+
+} // anonymous namespace
 
 TEST_CASE("ChatSession basic operations", "[session]") {
     auto& cfg = ConfigManager::instance();

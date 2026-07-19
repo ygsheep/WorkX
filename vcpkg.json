@@ -5,7 +5,8 @@
     "dependencies": [
         "nlohmann-json",
         "catch2",
-        "curl"
+        "curl",
+        "tree-sitter"
     ],
     "overrides": []
 }

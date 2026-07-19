@@ -12,6 +12,7 @@
 #include <memory>
 #include <chrono>
 #include <atomic>
+#include <unordered_map>
 
 #include "tui/core/tui_state.h"
 
@@ -51,6 +52,12 @@ public:
 private:
     void transition_to(TuiState new_state);
 
+    /// @brief 活跃工具调用上下文 (ToolCallEvent 存, ToolResultEvent 取)
+    struct ToolCallInfo {
+        std::string tool_name;
+        std::string arguments;  ///< 原始 JSON 字符串, 用于解析 file_path 等
+    };
+
     Terminal* m_terminal;
     std::unique_ptr<StatusBar> m_status_bar;
     std::unique_ptr<OutputFormatter> m_formatter;
@@ -83,6 +90,9 @@ private:
 
     // 工具调用嵌套层级
     int m_tool_indent = 0;
+
+    // 活跃工具调用上下文 (call_id → info), 用于 ToolResultEvent 时推断语言/路径
+    std::unordered_map<std::string, ToolCallInfo> m_pending_tool_calls;
 };
 
 } // namespace workx

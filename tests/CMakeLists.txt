@@ -1,31 +1,17 @@
-# 测试构建配置
+# 测试构建总入口
+# @details 按测试类型拆分为 unit / integration 两层:
+#   - unit: 纯单元测试, 无外部依赖, 默认构建
+#   - integration: 需要外部服务 (LM Studio / mock server), 通过 option 控制
 
 enable_testing()
 
 find_package(Catch2 CONFIG REQUIRED)
 
-# 测试可执行文件
-set(TEST_SOURCES
-    test_main.cpp
-    test_config_manager.cpp
-    test_command_system.cpp
-    test_sse_parser.cpp
-    test_chat_session.cpp
-    test_provider_preset.cpp
-    test_openai_adapter.cpp
-    test_anthropic_adapter.cpp
-    test_http_client.cpp
-    test_client.cpp
-    test_utf8_utils.cpp
-    test_markdown_renderer.cpp
-    test_display_buffer.cpp
-)
+# 单元测试: 默认构建
+add_subdirectory(unit)
 
-add_executable(workx_tests ${TEST_SOURCES})
-target_compile_definitions(workx_tests PRIVATE SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-target_link_libraries(workx_tests PRIVATE libworkx Catch2::Catch2WithMain)
-
-include(Catch)
-catch_discover_tests(workx_tests
-    DL_PATHS "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>"
-)
+# 集成测试: 默认 OFF, 避免 CI 因找不到 LM Studio 而失败
+option(WORKX_BUILD_INTEGRATION_TESTS "Build integration tests (require external services like LM Studio)" OFF)
+if(WORKX_BUILD_INTEGRATION_TESTS)
+    add_subdirectory(integration)
+endif()
