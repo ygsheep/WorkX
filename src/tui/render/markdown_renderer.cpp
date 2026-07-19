@@ -7,6 +7,7 @@
 #include "tui/utils/utf8_utils.h"
 #include <algorithm>
 #include <cctype>
+#include <format>
 #include <numeric>
 #include <sstream>
 
@@ -571,45 +572,32 @@ std::string render_list_item(std::string_view line) {
 // ============================================================================
 
 std::string render_code_block(std::string_view lang,
-                               const std::vector<std::string>& lines) {
+                               const std::vector<std::string>& lines,
+                               int max_width) {
+    (void)lang;  // 不显示语言标签
     std::ostringstream os;
 
-    int max_w = 0;
-    for (const auto& l : lines) {
-        int w = display_width(l);
-        if (w > max_w) max_w = w;
+    // 无边框样式：黑底白字 + 行号，无 → 符号
+    constexpr const char* BG_BLACK = "\x1b[40;37m";  // 黑底白字
+
+    // 计算行号宽度
+    int line_count = static_cast<int>(lines.size());
+    int line_w = 1;
+    for (int n = line_count; n >= 10; n /= 10) ++line_w;
+
+    // 渲染每行：行号 + 空格 + 内容，整行黑底白字，填充到终端宽度
+    for (int i = 0; i < line_count; ++i) {
+        os << BG_BLACK;
+        std::string prefix = std::format(" {:>{}}  ", i + 1, line_w);
+        os << prefix << lines[i];
+        // 填充空格到终端宽度，让背景色覆盖整行
+        if (max_width > 0) {
+            int used = display_width(prefix) + display_width(lines[i]);
+            int pad = max_width - used;
+            for (int j = 0; j < pad; ++j) os << " ";
+        }
+        os << ansi::RESET << "\n";
     }
-    int lang_w = lang.empty() ? 0 : display_width(lang) + 2;
-    if (lang_w > max_w) max_w = lang_w;
-
-    int inner_h = max_w + 2;
-
-    os << ansi::GRAY << BOX_TL << BOX_H;
-    if (!lang.empty()) {
-        os << " " << ansi::RESET << ansi::YELLOW << lang
-           << ansi::RESET << ansi::GRAY << " ";
-        int h_after = inner_h - 1 - display_width(lang) - 2;
-        for (int i = 0; i < h_after; ++i)
-            os << BOX_H;
-    } else {
-        for (int i = 0; i < inner_h - 1; ++i)
-            os << BOX_H;
-    }
-    os << BOX_TR << ansi::RESET << "\n";
-
-    for (const auto& l : lines) {
-        int w = display_width(l);
-        int pad = max_w - w;
-        os << ansi::GRAY << BOX_V << ansi::RESET << " " << l;
-        for (int i = 0; i < pad; ++i)
-            os << " ";
-        os << " " << ansi::GRAY << BOX_V << ansi::RESET << "\n";
-    }
-
-    os << ansi::GRAY << BOX_BL;
-    for (int i = 0; i < inner_h; ++i)
-        os << BOX_H;
-    os << BOX_BR << ansi::RESET << "\n";
 
     return os.str();
 }

@@ -91,9 +91,20 @@ public:
 
             if (record.EventType == KEY_EVENT && record.Event.KeyEvent.bKeyDown) {
                 wchar_t wc = record.Event.KeyEvent.uChar.UnicodeChar;
+                const DWORD ctrl_mask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
+                const bool ctrl_pressed = (record.Event.KeyEvent.dwControlKeyState & ctrl_mask) != 0;
+
+                // Ctrl 字母组合键：UnicodeChar 可能非 0（如 Ctrl+O=0x0F, Ctrl+C=0x03），
+                // 需在 wc==0 检查之前先拦截
+                if (ctrl_pressed) {
+                    switch (record.Event.KeyEvent.wVirtualKeyCode) {
+                        case 'C':       return KEY_CTRL_C;
+                        case 'O':       return KEY_CTRL_O;
+                        default:        break;  // 其他 Ctrl 组合键走默认逻辑
+                    }
+                }
+
                 if (wc == 0) {
-                    const DWORD ctrl_mask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
-                    const bool ctrl_pressed = (record.Event.KeyEvent.dwControlKeyState & ctrl_mask) != 0;
                     switch (record.Event.KeyEvent.wVirtualKeyCode) {
                         case VK_LEFT:   return ctrl_pressed ? KEY_CTRL_ARROW_LEFT  : KEY_ARROW_LEFT;
                         case VK_RIGHT:  return ctrl_pressed ? KEY_CTRL_ARROW_RIGHT : KEY_ARROW_RIGHT;
@@ -102,8 +113,6 @@ public:
                         case VK_HOME:   return KEY_HOME;
                         case VK_END:    return KEY_END;
                         case VK_DELETE: return KEY_DELETE;
-                        case 'C':       if (ctrl_pressed) return KEY_CTRL_C; else continue;
-                        case 'O':       if (ctrl_pressed) return KEY_CTRL_O; else continue;
                         default:        continue;
                     }
                 }

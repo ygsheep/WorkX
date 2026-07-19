@@ -23,6 +23,7 @@
 #include "agent/core/chat_session.h"
 #include "agent/message/types.h"
 #include "agent/model/provider_preset.h"
+#include "agent/tool/FileEditTool/file_edit_tool.h"
 #include "agent/tool/FileReadTool/file_read_tool.h"
 #include "agent/tool/FileWriteTool/file_write_tool.h"
 #include "agent/tool/registry.h"
@@ -225,6 +226,7 @@ static int run(int argc, char* argv[]) {
         auto tool_registry = std::make_shared<agent::tool::ToolRegistry>();
         tool_registry->register_tool(std::make_shared<agent::tool::FileReadTool>());
         tool_registry->register_tool(std::make_shared<agent::tool::FileWriteTool>());
+        tool_registry->register_tool(std::make_shared<agent::tool::FileEditTool>());
         session->set_tool_registry(tool_registry);
 
         // 设置系统提示词（拼接工具 prompt，让 LLM 知道如何使用工具）
@@ -233,6 +235,13 @@ static int run(int argc, char* argv[]) {
             sys_prompt += "\n\n";
             sys_prompt += t->prompt();
         }
+        // @file 引用说明：用户消息中的 <file path="..."> 标签由前端预处理注入，
+        // 已包含文件完整内容。LLM 不应再对其中路径调用 Read 工具，避免重复读取。
+        sys_prompt +=
+            "\n\n"
+            "用户消息中可能出现 <file path=\"...\">...</file> 标签，这是用户通过 "
+            "@path 语法引用的文件内容，已由前端读取并注入。对此类标签内的路径，"
+            "禁止再次调用 Read 工具读取；直接基于标签内已有内容回答用户问题。";
         if (!sys_prompt.empty()) {
             session->set_system_prompt(sys_prompt);
         }
@@ -290,9 +299,15 @@ static int run(int argc, char* argv[]) {
     ChatRenderer renderer(&terminal);
     renderer.start();
 
-    // ---- Ctrl+O 回调：切换思考视图 ----
-    terminal.set_ctrl_o_callback([&renderer]() {
-        renderer.toggle_thinking_view();
+    // ---- Ctrl+O 回调：切换详情视图 ----
+    terminal.set_ctrl_o_callback([&renderer]() -> bool {
+        renderer.toggle_detail_view();
+        return renderer.is_detail_view_active();
+    });
+
+    // ---- 详情视图按键回调：滚动/退出 ----
+    terminal.set_detail_input_callback([&renderer](char32_t key) -> bool {
+        return renderer.handle_detail_input(key);
     });
 
     // ---- BottomBarManager 初始化 ----

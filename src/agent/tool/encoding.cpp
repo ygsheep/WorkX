@@ -155,6 +155,166 @@ static std::string gbk_to_utf8(const char* data, size_t size) {
 #endif
 }
 
+/// @brief UTF-8 → UTF-16LE 转换（不含 BOM）
+/// @details 处理 1-4 字节 UTF-8 序列，输出小端序 UTF-16 码元。
+///          BMP 之外字符（U+10000+）编码为代理对。
+static std::string utf8_to_utf16le(const std::string& utf8) {
+    std::string result;
+    result.reserve(utf8.size() * 2);
+
+    const auto append_le = [&result](uint16_t cu) {
+        result += static_cast<char>(cu & 0xFF);
+        result += static_cast<char>((cu >> 8) & 0xFF);
+    };
+
+    const size_t n = utf8.size();
+    for (size_t i = 0; i < n; ) {
+        const unsigned char c = static_cast<unsigned char>(utf8[i]);
+        uint32_t cp = 0;
+
+        if (c < 0x80) {
+            cp = c;
+            ++i;
+        } else if (c < 0xC2) {
+            // 非法首字节，替换为 U+FFFD
+            cp = 0xFFFD;
+            ++i;
+        } else if (c < 0xE0) {
+            if (i + 1 >= n) { cp = 0xFFFD; ++i; continue; }
+            cp = ((c & 0x1F) << 6) | (static_cast<unsigned char>(utf8[i + 1]) & 0x3F);
+            i += 2;
+        } else if (c < 0xF0) {
+            if (i + 2 >= n) { cp = 0xFFFD; ++i; continue; }
+            cp = ((c & 0x0F) << 12)
+               | ((static_cast<unsigned char>(utf8[i + 1]) & 0x3F) << 6)
+               | (static_cast<unsigned char>(utf8[i + 2]) & 0x3F);
+            i += 3;
+        } else if (c < 0xF5) {
+            if (i + 3 >= n) { cp = 0xFFFD; ++i; continue; }
+            cp = ((c & 0x07) << 18)
+               | ((static_cast<unsigned char>(utf8[i + 1]) & 0x3F) << 12)
+               | ((static_cast<unsigned char>(utf8[i + 2]) & 0x3F) << 6)
+               | (static_cast<unsigned char>(utf8[i + 3]) & 0x3F);
+            i += 4;
+        } else {
+            cp = 0xFFFD;
+            ++i;
+        }
+
+        if (cp <= 0xFFFF) {
+            append_le(static_cast<uint16_t>(cp));
+        } else {
+            // 代理对编码
+            cp -= 0x10000;
+            const uint16_t hi = 0xD800 + static_cast<uint16_t>(cp >> 10);
+            const uint16_t lo = 0xDC00 + static_cast<uint16_t>(cp & 0x3FF);
+            append_le(hi);
+            append_le(lo);
+        }
+    }
+    return result;
+}
+
+/// @brief UTF-8 → UTF-16BE 转换（不含 BOM）
+static std::string utf8_to_utf16be(const std::string& utf8) {
+    std::string result;
+    result.reserve(utf8.size() * 2);
+
+    const auto append_be = [&result](uint16_t cu) {
+        result += static_cast<char>((cu >> 8) & 0xFF);
+        result += static_cast<char>(cu & 0xFF);
+    };
+
+    const size_t n = utf8.size();
+    for (size_t i = 0; i < n; ) {
+        const unsigned char c = static_cast<unsigned char>(utf8[i]);
+        uint32_t cp = 0;
+
+        if (c < 0x80) {
+            cp = c;
+            ++i;
+        } else if (c < 0xC2) {
+            cp = 0xFFFD;
+            ++i;
+        } else if (c < 0xE0) {
+            if (i + 1 >= n) { cp = 0xFFFD; ++i; continue; }
+            cp = ((c & 0x1F) << 6) | (static_cast<unsigned char>(utf8[i + 1]) & 0x3F);
+            i += 2;
+        } else if (c < 0xF0) {
+            if (i + 2 >= n) { cp = 0xFFFD; ++i; continue; }
+            cp = ((c & 0x0F) << 12)
+               | ((static_cast<unsigned char>(utf8[i + 1]) & 0x3F) << 6)
+               | (static_cast<unsigned char>(utf8[i + 2]) & 0x3F);
+            i += 3;
+        } else if (c < 0xF5) {
+            if (i + 3 >= n) { cp = 0xFFFD; ++i; continue; }
+            cp = ((c & 0x07) << 18)
+               | ((static_cast<unsigned char>(utf8[i + 1]) & 0x3F) << 12)
+               | ((static_cast<unsigned char>(utf8[i + 2]) & 0x3F) << 6)
+               | (static_cast<unsigned char>(utf8[i + 3]) & 0x3F);
+            i += 4;
+        } else {
+            cp = 0xFFFD;
+            ++i;
+        }
+
+        if (cp <= 0xFFFF) {
+            append_be(static_cast<uint16_t>(cp));
+        } else {
+            cp -= 0x10000;
+            const uint16_t hi = 0xD800 + static_cast<uint16_t>(cp >> 10);
+            const uint16_t lo = 0xDC00 + static_cast<uint16_t>(cp & 0x3FF);
+            append_be(hi);
+            append_be(lo);
+        }
+    }
+    return result;
+}
+
+/// @brief UTF-8 → GBK 转换（平台相关）
+/// @details Windows: WideCharToMultiByte (CP_936)
+///          失败时回退为原 UTF-8 字节流（避免数据丢失）。
+static std::string utf8_to_gbk(const std::string& utf8) {
+#ifdef _WIN32
+    // UTF-8 → UTF-16
+    const int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8.data(),
+                                         static_cast<int>(utf8.size()), nullptr, 0);
+    if (wlen == 0) return utf8; // 回退
+
+    std::wstring wstr(static_cast<size_t>(wlen), 0);
+    MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()),
+                        wstr.data(), wlen);
+
+    // UTF-16 → GBK (CP_936)
+    const int glen = WideCharToMultiByte(936, 0, wstr.c_str(), wlen,
+                                         nullptr, 0, nullptr, nullptr);
+    if (glen == 0) return utf8; // 回退
+
+    std::string result(static_cast<size_t>(glen), 0);
+    WideCharToMultiByte(936, 0, wstr.c_str(), wlen,
+                        result.data(), glen, nullptr, nullptr);
+    return result;
+#else
+    iconv_t cd = iconv_open("GBK", "UTF-8");
+    if (cd == reinterpret_cast<iconv_t>(-1)) return utf8;
+
+    size_t in_left = utf8.size();
+    size_t out_left = utf8.size() * 2; // GBK 最坏情况
+    std::string result(out_left, 0);
+
+    char* in_buf = const_cast<char*>(utf8.data());
+    char* out_buf = result.data();
+
+    const size_t ret = iconv(cd, &in_buf, &in_left, &out_buf, &out_left);
+    iconv_close(cd);
+
+    if (ret == static_cast<size_t>(-1)) return utf8; // 回退
+
+    result.resize(result.size() - out_left);
+    return result;
+#endif
+}
+
 /// @brief 验证字节序列是否为合法 UTF-8
 /// @return 0=非UTF-8, 1=纯ASCII, 2=含多字节序列的UTF-8
 static int validate_utf8(const unsigned char* buf, size_t len) {
@@ -340,6 +500,94 @@ std::vector<std::string> read_as_utf8_lines(const fs::path& path, Encoding encod
         lines.push_back(std::move(line));
     }
     return lines;
+}
+
+std::string read_file_as_utf8(const fs::path& path, Encoding encoding) {
+    // UTF-8/ASCII：直接读取并跳过 BOM
+    if (encoding == Encoding::Utf8 || encoding == Encoding::Ascii
+        || encoding == Encoding::Unknown || encoding == Encoding::Binary) {
+        std::ifstream file(path, std::ios::binary);
+        if (!file.is_open()) return {};
+
+        std::string content((std::istreambuf_iterator<char>(file)),
+                            std::istreambuf_iterator<char>());
+
+        // 跳过 UTF-8 BOM（若存在）
+        if (content.size() >= 3
+            && static_cast<unsigned char>(content[0]) == 0xEF
+            && static_cast<unsigned char>(content[1]) == 0xBB
+            && static_cast<unsigned char>(content[2]) == 0xBF) {
+            content.erase(0, 3);
+        }
+        return content;
+    }
+
+    // 非 UTF-8：全量读取 + 编码转换（跳过 BOM）
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) return {};
+
+    std::string content((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+
+    switch (encoding) {
+        case Encoding::Utf16LE:
+            // FF FE BOM (2 字节)
+            if (content.size() >= 2) {
+                return utf16le_to_utf8(content.data() + 2, content.size() - 2);
+            }
+            return {};
+        case Encoding::Utf16BE:
+            // FE FF BOM (2 字节)
+            if (content.size() >= 2) {
+                return utf16be_to_utf8(content.data() + 2, content.size() - 2);
+            }
+            return {};
+        case Encoding::Gbk:
+            return gbk_to_utf8(content.data(), content.size());
+        default:
+            return content;
+    }
+}
+
+bool write_file_with_encoding(
+    const fs::path& path,
+    const std::string& utf8_content,
+    Encoding encoding
+) {
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if (!file.is_open()) return false;
+
+    switch (encoding) {
+        case Encoding::Utf16LE: {
+            // FF FE BOM
+            file.put(static_cast<char>(0xFF));
+            file.put(static_cast<char>(0xFE));
+            const std::string encoded = utf8_to_utf16le(utf8_content);
+            file.write(encoded.data(), static_cast<std::streamsize>(encoded.size()));
+            break;
+        }
+        case Encoding::Utf16BE: {
+            // FE FF BOM
+            file.put(static_cast<char>(0xFE));
+            file.put(static_cast<char>(0xFF));
+            const std::string encoded = utf8_to_utf16be(utf8_content);
+            file.write(encoded.data(), static_cast<std::streamsize>(encoded.size()));
+            break;
+        }
+        case Encoding::Gbk: {
+            const std::string encoded = utf8_to_gbk(utf8_content);
+            file.write(encoded.data(), static_cast<std::streamsize>(encoded.size()));
+            break;
+        }
+        default:
+            // UTF-8/ASCII/Binary/Unknown：原样写入（不加 BOM，对齐 CC 行为）
+            file.write(utf8_content.data(),
+                       static_cast<std::streamsize>(utf8_content.size()));
+            break;
+    }
+
+    file.flush();
+    return static_cast<bool>(file);
 }
 
 const char* encoding_name(Encoding encoding) {

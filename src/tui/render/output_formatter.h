@@ -51,6 +51,7 @@ private:
 
     // collected code-block lines (rendered at close via render_code_block)
     std::vector<std::string> m_code_lines;
+    std::string m_current_code_line;  ///< 当前代码行累积缓冲（流式 chunk 拼接）
 
     // normal text line buffer (processed at newline via render_inline / render_heading / render_hr)
     std::string m_text_line;

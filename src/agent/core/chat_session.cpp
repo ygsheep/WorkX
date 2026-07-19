@@ -162,12 +162,13 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
                     switch (step.type) {
                         case ReActStepType::Thought:
                             // 发布 AgentStepEvent
+                            // 注意：description 只用简短占位。流式期间 on_token 已通过
+                            // StreamTokenEvent 把 thought_text 完整渲染到终端，这里若再
+                            // 写完整文本会导致 UI 重复显示同一份内容。
                             EventBus::instance().publish_async(AgentStepEvent{
                                 .step_id = std::format("thought-{}", step.step_number),
                                 .step_number = step.step_number,
-                                .description = step.thought_text.empty()
-                                    ? "(thinking)"
-                                    : step.thought_text
+                                .description = "(thinking)"
                             });
                             // 有 tool_use 时发布中间 StreamDoneEvent，
                             // 让 UI 知道本轮 LLM 流式输出结束

@@ -117,9 +117,16 @@ public:
     /// @brief 设置 Tab 补全回调
     void set_completion_callback(CompletionCallback cb);
 
-    /// @brief 设置 Ctrl+O 回调（思考视图切换）
-    using CtrlOCallback = std::function<void()>;
+    /// @brief 设置 Ctrl+O 回调（详情视图切换）
+    /// @return 回调返回 true 表示进入了详情视图（terminal 应进入滚动输入循环）
+    using CtrlOCallback = std::function<bool()>;
     void set_ctrl_o_callback(CtrlOCallback cb);
+
+    /// @brief 设置详情视图按键回调（滚动/退出）
+    /// @param key 按键码（platform 返回的 char32_t）
+    /// @return true 表示仍在详情视图，false 表示已退出（terminal 应退出循环）
+    using DetailInputCallback = std::function<bool(char32_t)>;
+    void set_detail_input_callback(DetailInputCallback cb);
 
     /// @brief 设置状态栏刷新回调（每次输入循环迭代后调用）
     using StatusRefreshCallback = std::function<void()>;
@@ -169,6 +176,11 @@ private:
     void run_simple();
     void run_advanced();
 
+    /// @brief 详情视图输入循环（Ctrl+O 进入后调用）
+    /// @details 循环读取按键，调用 m_detail_input_callback 处理滚动/退出，
+    ///          直到回调返回 false（退出详情视图）或终端关闭
+    void detail_view_loop();
+
     /// @brief 原子化输出用户输入回显（灰底 + "> " 前缀），防止后台事件泵线程干扰
     void echo_input(const std::string& text);
 
@@ -180,6 +192,7 @@ private:
 
     InputCallback m_input_callback;
     CtrlOCallback m_ctrl_o_callback;
+    DetailInputCallback m_detail_input_callback;
     StatusRefreshCallback m_status_refresh_callback;
     bool m_running = false;
     bool m_initialized = false;

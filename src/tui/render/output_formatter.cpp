@@ -159,9 +159,9 @@ void OutputFormatter::feed(std::string_view text) {
                 start_code_block();
                 pos = end;
             } else {
-                // buffer code line
+                // buffer code line: 累积到当前行，遇到 \n 才 push（修复流式 chunk 被拆成多行的问题）
                 size_t end = (nl != std::string_view::npos) ? nl : text.size();
-                m_code_lines.push_back(std::string(text.substr(pos, end - pos)));
+                m_current_code_line += std::string(text.substr(pos, end - pos));
                 pos = end;
             }
         } else {
@@ -180,7 +180,9 @@ void OutputFormatter::feed(std::string_view text) {
         // ---- handle newline ----
         if (nl != std::string_view::npos) {
             if (m_in_code_block) {
-                // line already pushed above, nothing extra
+                // 遇到换行，push 当前代码行
+                m_code_lines.push_back(m_current_code_line);
+                m_current_code_line.clear();
             } else if (m_buffering_table_line) {
                 if (m_table_buf.feed_line(m_pending_line)) {
                     m_in_table = m_table_buf.is_active();
@@ -221,6 +223,11 @@ void OutputFormatter::flush() {
         m_text_line.clear();
     }
     if (m_in_code_block) {
+        // flush 当前代码行（如果有内容）
+        if (!m_current_code_line.empty()) {
+            m_code_lines.push_back(m_current_code_line);
+            m_current_code_line.clear();
+        }
         end_code_block();
     }
     if (m_in_table || m_buffering_table_line) {
@@ -250,6 +257,7 @@ void OutputFormatter::reset() {
     m_code_lang.clear();
     m_at_line_start = true;
     m_code_lines.clear();
+    m_current_code_line.clear();
     m_text_line.clear();
     m_indent_level = 0;
     m_table_buf.clear();
@@ -268,7 +276,8 @@ void OutputFormatter::start_code_block() {
 
 void OutputFormatter::end_code_block() {
     if (!m_code_lines.empty() || !m_code_lang.empty()) {
-        m_terminal->write(render_code_block(m_code_lang, m_code_lines));
+        int w = m_terminal->get_terminal_width();
+        m_terminal->write(render_code_block(m_code_lang, m_code_lines, w));
     }
     m_in_code_block = false;
     m_code_lang.clear();

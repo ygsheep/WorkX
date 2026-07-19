@@ -279,10 +279,14 @@ void Terminal::run_advanced() {
             continue;
         }
 
-        // Ctrl+O 切换思考视图
+        // Ctrl+O 切换详情视图
         if (result.ctrl_o) {
             if (m_ctrl_o_callback) {
-                m_ctrl_o_callback();
+                bool entered = m_ctrl_o_callback();
+                if (entered) {
+                    // 进入了详情视图，进入滚动输入循环
+                    detail_view_loop();
+                }
             }
             continue;
         }
@@ -476,6 +480,29 @@ void Terminal::set_input_callback(InputCallback cb) {
 
 void Terminal::set_ctrl_o_callback(CtrlOCallback cb) {
     m_ctrl_o_callback = std::move(cb);
+}
+
+void Terminal::set_detail_input_callback(DetailInputCallback cb) {
+    m_detail_input_callback = std::move(cb);
+}
+
+void Terminal::detail_view_loop() {
+    // 详情视图输入循环：读取按键 → 调用回调处理滚动/退出
+    // 回调返回 false 表示退出详情视图
+    while (m_running) {
+        if (!m_detail_input_callback) break;
+        char32_t key = m_platform->read_char();
+        // 事件泵：在等待按键期间可能积累了异步事件，处理一下
+        EventBus::instance().process_async_events();
+        if (m_status_refresh_callback) {
+            m_status_refresh_callback();
+        }
+        if (m_bottom_bar) {
+            m_bottom_bar->render();
+        }
+        bool still_active = m_detail_input_callback(key);
+        if (!still_active) break;
+    }
 }
 
 void Terminal::set_status_refresh_callback(StatusRefreshCallback cb) {

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file tui_state.h
  * @brief TUI 状态机
  * @details 定义 TuiState 枚举和状态转换逻辑
@@ -19,7 +19,8 @@ enum class TuiState {
     THINKING,       ///< 模型思考中（显示推理块 + 计时器）
     STREAMING,      ///< 流式输出内容
     TOOL_RUNNING,   ///< 工具调用执行中
-    ERROR           ///< 错误状态
+    ERROR,          ///< 错误状态
+    DETAIL_VIEW     ///< Ctrl+O 详情视图（拦截输入用于滚动）
 };
 
 /**
@@ -32,6 +33,7 @@ constexpr std::string_view tui_state_name(TuiState state) {
         case TuiState::STREAMING:    return "streaming";
         case TuiState::TOOL_RUNNING: return "tool";
         case TuiState::ERROR:        return "error";
+        case TuiState::DETAIL_VIEW:  return "detail";
         default:                     return "unknown";
     }
 }
@@ -66,6 +68,11 @@ public:
     static bool is_valid_transition(TuiState from, TuiState to) {
         if (from == to) return true;
 
+        // DETAIL_VIEW 是叠加态，可从任何状态进入，也可回到任何状态
+        // （实际上由 ChatRenderer 直接 force_state 切换，不走 transition_to）
+        if (to == TuiState::DETAIL_VIEW) return true;
+        if (from == TuiState::DETAIL_VIEW) return true;
+
         switch (from) {
             case TuiState::IDLE:
                 return to == TuiState::THINKING;
@@ -90,6 +97,9 @@ public:
             case TuiState::ERROR:
                 return to == TuiState::IDLE       // any input clears error
                     || to == TuiState::THINKING;  // retry
+
+            case TuiState::DETAIL_VIEW:
+                return true;  // 已在前面处理，兜底
         }
         return false;
     }

@@ -19,6 +19,7 @@ set(TEST_SOURCES
     test_utf8_utils.cpp
     test_markdown_renderer.cpp
     test_display_buffer.cpp
+    test_file_edit_tool.cpp
 )
 
 add_executable(workx_tests ${TEST_SOURCES})
