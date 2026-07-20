@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file result.h
  * @brief Result<T,E> — Rust 风格错误处理类型
  * @details 零堆分配，header-only，无外部依赖
@@ -193,4 +193,4 @@ template<typename T> struct is_result<volatile T> : is_result<T> {};
 template<typename T> struct is_result<const volatile T> : is_result<T> {};
 template<typename T> inline constexpr bool is_result_v = is_result<T>::value;
 
-} // namespace workx
+} // namespace agent

@@ -8,9 +8,7 @@
 
 #include "agent/api/provider/openai_adapter.h"
 
-#ifdef WORKX_HAS_NLOHMANN_JSON
 #include <nlohmann/json.hpp>
-#endif
 
 namespace agent {
 
@@ -37,10 +35,15 @@ std::vector<std::pair<std::string, std::string>> OpenAIAdapter::build_headers(
 
 std::string OpenAIAdapter::build_request_body(const CompletionRequest& request,
                                                const std::string& model_name) const {
-#ifdef WORKX_HAS_NLOHMANN_JSON
     nlohmann::json j;
     j["model"] = model_name;
     j["stream"] = request.stream;
+
+    // 流式传输时启用 usage 上报（OpenAI 要求 stream_options.include_usage=true）
+    // 否则流式响应中 usage 永远为 0
+    if (request.stream) {
+        j["stream_options"] = {{"include_usage", true}};
+    }
 
     auto& messages = j["messages"];
     for (const auto& msg : request.messages) {
@@ -51,11 +54,21 @@ std::string OpenAIAdapter::build_request_body(const CompletionRequest& request,
             case ChatMessage::Role::Assistant: m["role"] = "assistant"; break;
             case ChatMessage::Role::Tool:      m["role"] = "tool"; break;
         }
-        m["content"] = msg.content;
+        // assistant with tool_calls 时 content 应为 null（OpenAI 规范要求）
+        // 其他情况用实际 content 字符串
+        if (msg.role == ChatMessage::Role::Assistant && !msg.tool_uses.empty()) {
+            m["content"] = nullptr;
+        } else {
+            m["content"] = msg.content;
+        }
         if (!msg.reasoning_content.empty()) {
             m["reasoning_content"] = msg.reasoning_content;
         }
+        // Tool 消息必须带 tool_call_id，空时跳过该消息（避免 OpenAI 返回 400）
         if (msg.role == ChatMessage::Role::Tool) {
+            if (msg.tool_call_id.empty()) {
+                continue;  // 跳过无效 Tool 消息
+            }
             m["tool_call_id"] = msg.tool_call_id;
         }
         // assistant 工具调用（OpenAI tool_calls 格式）
@@ -107,9 +120,6 @@ std::string OpenAIAdapter::build_request_body(const CompletionRequest& request,
     }
 
     return j.dump();
-#else
-    return "{\"model\":\"" + model_name + "\",\"stream\":true,\"messages\":[]}";
-#endif
 }
 
 bool OpenAIAdapter::parse_sse_event(const std::string& /*event_type*/,
@@ -121,17 +131,27 @@ bool OpenAIAdapter::parse_sse_event(const std::string& /*event_type*/,
         return true;
     }
 
-#ifdef WORKX_HAS_NLOHMANN_JSON
     try {
         auto json_obj = nlohmann::json::parse(data);
 
-        // 检查错误
+        // 错误事件：把错误信息塞入 content_delta 让用户看到，并标记 final 终止流
+        // （StreamChunk 暂无 error_message 字段，新增字段留待后续重构）
         if (json_obj.contains("error")) {
-            return false;
+            const auto& err = json_obj.value("error", nlohmann::json::object());
+            std::string err_msg = err.value("message", "Unknown OpenAI error");
+            out.content_delta = std::string("[OpenAI Error] ") + err_msg;
+            out.is_final = true;
+            return true;
         }
 
-        // 解析 choices[0].delta
+        // choices 空：可能是 usage chunk（开启 include_usage=true 后最后 chunk 的 choices 为空）
         if (!json_obj.contains("choices") || json_obj["choices"].empty()) {
+            if (json_obj.contains("usage") && !json_obj["usage"].is_null()) {
+                const auto& usage = json_obj.value("usage", nlohmann::json::object());
+                out.prompt_tokens = usage.value("prompt_tokens", 0);
+                out.generated_tokens = usage.value("completion_tokens", 0);
+                return true;  // 仅更新 usage，不算 final
+            }
             return false;
         }
 
@@ -149,39 +169,47 @@ bool OpenAIAdapter::parse_sse_event(const std::string& /*event_type*/,
         }
 
         // tool_calls 增量（function calling）
+        // OpenAI 实际行为：多个 tool_call 时按 index 顺序分开发送，不会在同个 chunk 内混合
+        // 遍历数组处理第一个非空元素，StreamChunk 只能存一个 tool_call 增量
         if (delta.contains("tool_calls") && !delta["tool_calls"].empty()) {
-            const auto& tc = delta["tool_calls"][0];
-            const auto& func = tc.value("function", nlohmann::json::object());
+            for (const auto& tc : delta["tool_calls"]) {
+                const auto& func = tc.value("function", nlohmann::json::object());
 
-            // 首次出现：带 id（或 function.name）
-            if (tc.contains("id") && !tc["id"].is_null()) {
-                out.is_tool_use_start = true;
-                out.tool_use_id = tc["id"].get<std::string>();
-                out.tool_name = func.value("name", "");
-                // 首次可能也带 arguments 增量
+                // 首次出现：带 id（或 function.name）
+                if (tc.contains("id") && !tc["id"].is_null()) {
+                    out.is_tool_use_start = true;
+                    out.tool_use_id = tc["id"].get<std::string>();
+                    out.tool_name = func.value("name", "");
+                    // 首次可能也带 arguments 增量
+                    if (func.contains("arguments") && !func["arguments"].is_null()) {
+                        out.is_tool_use_delta = true;
+                        out.tool_input_delta = func["arguments"].get<std::string>();
+                    }
+                    return true;  // 一次只处理一个 tool_call start
+                }
+
+                // 后续：只有 arguments 增量
                 if (func.contains("arguments") && !func["arguments"].is_null()) {
                     out.is_tool_use_delta = true;
                     out.tool_input_delta = func["arguments"].get<std::string>();
+                    return true;  // 一次只处理一个 delta
                 }
-                return true;
-            }
-
-            // 后续：只有 arguments 增量
-            if (func.contains("arguments") && !func["arguments"].is_null()) {
-                out.is_tool_use_delta = true;
-                out.tool_input_delta = func["arguments"].get<std::string>();
-                return true;
             }
         }
 
-        // finish_reason
+        // finish_reason：新增 content_filter（OpenAI 内容审核触发时返回）
         if (choice.contains("finish_reason") && !choice["finish_reason"].is_null()) {
             auto finish_reason = choice["finish_reason"].get<std::string>();
-            if (finish_reason == "stop" || finish_reason == "length" || finish_reason == "tool_calls") {
+            if (finish_reason == "stop" || finish_reason == "length" ||
+                finish_reason == "tool_calls" || finish_reason == "content_filter") {
                 out.is_final = true;
+                // content_filter 时附加提示信息
+                if (finish_reason == "content_filter") {
+                    out.content_delta = "[Content filtered by provider]";
+                }
                 // usage 信息
                 if (json_obj.contains("usage") && !json_obj["usage"].is_null()) {
-                    const auto& usage = json_obj["usage"];
+                    const auto& usage = json_obj.value("usage", nlohmann::json::object());
                     out.prompt_tokens = usage.value("prompt_tokens", 0);
                     out.generated_tokens = usage.value("completion_tokens", 0);
                 }
@@ -196,11 +224,10 @@ bool OpenAIAdapter::parse_sse_event(const std::string& /*event_type*/,
     } catch (const std::exception&) {
         return false;
     }
-#else
-    // 无 JSON 库时的回退：直接作为文本
-    out.content_delta = data;
-    return true;
-#endif
+}
+
+IProviderAdapter::ModelEndpointResult OpenAIAdapter::get_models_endpoint() const {
+    return {true, "/v1/models"};
 }
 
 } // namespace agent

@@ -10,15 +10,13 @@
 #include "agent/api/provider/openai_adapter.h"
 #include "agent/api/provider/anthropic_adapter.h"
 #include "core/events/event_bus.h"
-#include "core/config/config_manager.h"
 #include "agent/message/types.h"
 
-#ifdef WORKX_HAS_NLOHMANN_JSON
 #include <nlohmann/json.hpp>
-#endif
 
 #include <liblogger/logger.h>
 
+#include <algorithm>
 #include <stdexcept>
 #include <iostream>
 
@@ -41,11 +39,6 @@ Result<void, std::string> RemoteBackend::initialize(const BackendConfig& config)
     }
 
     m_config = config;
-
-    // 从 ConfigManager 读取重试配置
-    auto& cfg = ConfigManager::instance();
-    m_retry_count = cfg.get_or<int>("backend.retry_count", 3);
-    m_retry_delay_ms = cfg.get_or<int>("backend.retry_delay_ms", 1000);
 
     // 根据 ProviderType 创建对应的协议适配器
     switch (config.provider) {
@@ -99,9 +92,16 @@ ModelInfo RemoteBackend::get_model_info() const {
     };
 }
 
-std::unique_ptr<IStreamReader> RemoteBackend::submit_completion(const CompletionRequest& request) {
+std::shared_ptr<IStreamReader> RemoteBackend::submit_completion(const CompletionRequest& request) {
 #ifdef WORKX_HAS_CURL
     if (!m_ready.load() || !m_adapter || !m_http_client) {
+        return nullptr;
+    }
+
+    // 加锁检查在飞请求，避免覆盖旧 reader 导致 HTTP 仍跑但 reader 失联
+    std::lock_guard<std::mutex> lock(m_active_mutex);
+    if (m_active_reader) {
+        // 已有在飞请求，拒绝新请求
         return nullptr;
     }
 
@@ -122,15 +122,18 @@ std::unique_ptr<IStreamReader> RemoteBackend::submit_completion(const Completion
     auto header_pairs = m_adapter->build_headers(m_config.api_key);
 
     // 通过 HttpClient 发送异步流式 POST
+    // on_complete 在 HttpClient poll 线程触发，需加锁与 submit_completion/interrupt 同步
     m_http_client->async_post_stream(
         url, header_pairs, body, reader,
         [this]() {
+            std::lock_guard<std::mutex> lock(m_active_mutex);
             m_generating.store(false);
             m_active_reader.reset();
         },
         m_config.timeout_ms);
 
-    return std::unique_ptr<IStreamReader>(new SharedPtrWrapper(reader));
+    // 直接返回 shared_ptr<IStreamReader>，避免 SharedPtrWrapper 适配层
+    return reader;
 
 #else
     (void)request;
@@ -139,6 +142,7 @@ std::unique_ptr<IStreamReader> RemoteBackend::submit_completion(const Completion
 }
 
 void RemoteBackend::interrupt() {
+    std::lock_guard<std::mutex> lock(m_active_mutex);
     if (m_active_reader) {
         m_active_reader->cancel();
         if (m_http_client) {
@@ -159,24 +163,44 @@ Result<std::vector<ModelInfo>, std::string> RemoteBackend::list_models() {
         return Result<std::vector<ModelInfo>, std::string>::err("Backend not ready");
     }
 
-    // 构建 /v1/models URL
+    // 检查 provider 是否支持 list_models HTTP 端点
+    // Anthropic 无公开 list models 端点，返回内置模型列表
+    auto endpoint = m_adapter->get_models_endpoint();
+    if (!endpoint.supported) {
+        auto builtin = m_adapter->get_builtin_models();
+        if (!builtin.empty()) {
+            return Result<std::vector<ModelInfo>, std::string>::ok(std::move(builtin));
+        }
+        return Result<std::vector<ModelInfo>, std::string>::err(
+            "This provider does not support list_models endpoint");
+    }
+
+    // 构建 URL（用 endpoint.url_suffix，如 "/v1/models"）
     std::string url = m_config.base_url;
     if (url.empty()) {
         return Result<std::vector<ModelInfo>, std::string>::err("base_url is empty");
     }
     while (!url.empty() && url.back() == '/') url.pop_back();
-    url += "/v1/models";
+    url += endpoint.url_suffix;
 
     auto header_pairs = m_adapter->build_headers(m_config.api_key);
 
-#ifdef WORKX_HAS_NLOHMANN_JSON
     // debug: 记录请求信息
     LOG_INFO("[debug/models] GET {}", url);
     for (const auto& [k, v] : header_pairs) {
-        std::string val = (k == "Authorization") ? "Bearer ***" : v;
+        // 安全：对所有可能的认证头脱敏，避免泄露 api key
+        std::string k_lower = k;
+        std::transform(k_lower.begin(), k_lower.end(), k_lower.begin(), ::tolower);
+        std::string val;
+        if (k_lower == "authorization" || k_lower == "x-api-key" ||
+            k_lower == "x-goog-api-key" || k_lower.find("key") != std::string::npos ||
+            k_lower.find("token") != std::string::npos) {
+            val = "***";
+        } else {
+            val = v;
+        }
         LOG_INFO("[debug/models]  {}:{} ", k, val);
     }
-#endif
 
     // 同步 GET 请求
     auto [status_code, body, error] = m_http_client->get(url, header_pairs, 15000);
@@ -192,7 +216,6 @@ Result<std::vector<ModelInfo>, std::string> RemoteBackend::list_models() {
     }
 
     // 解析 JSON 响应
-#ifdef WORKX_HAS_NLOHMANN_JSON
     try {
         auto json = nlohmann::json::parse(body);
         std::vector<ModelInfo> models;
@@ -218,29 +241,11 @@ Result<std::vector<ModelInfo>, std::string> RemoteBackend::list_models() {
         return Result<std::vector<ModelInfo>, std::string>::err(
             std::format("JSON parse error: {}", e.what()));
     }
-#else
-    return Result<std::vector<ModelInfo>, std::string>::err("JSON library not available");
-#endif
 
 #else
     return Result<std::vector<ModelInfo>, std::string>::err(
         "RemoteBackend requires CURL. Check CURL installation and reconfigure");
 #endif
-}
-
-// ============================================================
-// SharedPtrWrapper 实现
-// ============================================================
-
-SharedPtrWrapper::SharedPtrWrapper(std::shared_ptr<SSEStreamReader> ptr)
-    : m_ptr(std::move(ptr)) {}
-
-StreamState SharedPtrWrapper::next(std::function<bool()> should_stop, StreamChunk& out) {
-    return m_ptr->next(std::move(should_stop), out);
-}
-
-void SharedPtrWrapper::cancel() {
-    m_ptr->cancel();
 }
 
 } // namespace agent

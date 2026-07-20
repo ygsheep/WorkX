@@ -322,8 +322,9 @@ TEST_CASE("render_table inline markdown in cells", "[markdown]") {
     // Cell text should still be present (without **)
     REQUIRE(output.find("\xe6\xa8\xa1\xe5\x9e\x8b\xe5\x90\x8d\xe7\xa7\xb0") != std::string::npos);  // 模型名称
     REQUIRE(output.find("\xe6\x96\xb9\xe6\xb3\x95") != std::string::npos);  // 方法
-    // Yellow ANSI code should be present for bold rendering
-    REQUIRE(output.find("\x1b[33m") != std::string::npos);  // \e[33m = yellow
+    // Bold ANSI code should be present for **bold** rendering
+    // render_inline 用 \x1b[1m (BOLD) 而非 \x1b[33m (YELLOW)
+    REQUIRE(output.find("\x1b[1m") != std::string::npos);  // \e[1m = bold
 }
 
 // ---- TableBuffer ----

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file display_buffer.h
  * @brief 聊天滚动区域物理行镜像
  * @details 通过 tee Terminal::write / set_color / reset_color 的输出，
@@ -82,4 +82,4 @@ private:
     std::string m_text_run;            ///< 挂起的纯文本累积
 };
 
-} // namespace workx
+} // namespace agent

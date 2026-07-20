@@ -107,4 +107,4 @@ private:
     std::string m_input_buffer;       ///< 用户已输入的文本
 };
 
-} // namespace workx
+} // namespace agent

@@ -13,4 +13,4 @@ namespace agent {
 /// @brief CLI 参数解析（最高优先级，覆盖配置文件和环境变量）
 void parse_cli_args(int argc, char* argv[]);
 
-} // namespace workx
+} // namespace agent

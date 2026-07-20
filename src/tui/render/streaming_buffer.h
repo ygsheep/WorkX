@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file streaming_buffer.h
  * @brief Token 流式缓冲区
  * @details 减少 mutex 锁竞争：Token 写入先进入缓冲区，刷新线程每 16ms 批量写入
@@ -57,4 +57,4 @@ private:
     static constexpr int FLUSH_INTERVAL_MS = 16;  // ~60fps
 };
 
-} // namespace workx
+} // namespace agent

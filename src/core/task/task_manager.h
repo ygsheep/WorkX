@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file task_manager.h
  * @brief 异步任务管理器
  * @details 管理任务执行、进度跟踪和协作式取消
@@ -13,7 +13,9 @@
 #include <vector>
 #include <atomic>
 #include <mutex>
+#include <condition_variable>
 #include <chrono>
+#include <thread>
 
 namespace agent {
 
@@ -65,9 +67,9 @@ public:
         }
     }
 
+    // 仅设置取消请求标志，不立即修改 status；由 execute() 检测后置 Cancelled
     void cancel() {
         m_should_cancel = true;
-        m_status = TaskStatus::Cancelled;
     }
 
     [[nodiscard]] bool shouldCancel() const { return m_should_cancel; }
@@ -135,9 +137,7 @@ public:
     void start(std::shared_ptr<Task> task);
     void cancel(std::shared_ptr<Task> task);
 
-    [[nodiscard]] const std::vector<std::shared_ptr<Task>>& getTasks() const {
-        return m_tasks;
-    }
+    [[nodiscard]] std::vector<std::shared_ptr<Task>> getTasks() const;
 
     [[nodiscard]] std::vector<std::shared_ptr<Task>> getRunningTasks() const;
     void update();
@@ -149,8 +149,14 @@ private:
     TaskManager() = default;
     ~TaskManager();
 
-    std::vector<std::shared_ptr<Task>> m_tasks;
+    struct TaskEntry {
+        std::shared_ptr<Task> task;
+        std::thread thread;
+    };
+
+    std::vector<TaskEntry> m_entries;
     mutable std::mutex m_tasks_mutex;
+    std::condition_variable m_tasks_cv;
 };
 
-} // namespace workx
+} // namespace agent

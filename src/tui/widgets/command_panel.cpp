@@ -142,7 +142,12 @@ void CommandPanel::render() {
         content += " /";
         content += cmd.name;
 
-        int padding = 16 - static_cast<int>(cmd.name.size()) - 1;
+        // F.6：padding 动态计算，避免小屏幕溢出
+        // 原 `16 - name.size() - 1` 在 name 较长时为负数（已被 if 判定跳过），
+        // 但 16 这个基准值对小终端过大；改为基于终端宽度的动态值，范围 [4, 16]
+        int term_w = m_terminal->get_terminal_width();
+        int pad_base = std::min(16, std::max(4, term_w / 8));
+        int padding = pad_base - static_cast<int>(cmd.name.size()) - 1;
         if (padding > 0) content += std::string(padding, ' ');
 
         if (!is_selected) {
@@ -170,4 +175,4 @@ void CommandPanel::clear() {
     m_last_rendered.clear();
 }
 
-} // namespace workx
+} // namespace agent

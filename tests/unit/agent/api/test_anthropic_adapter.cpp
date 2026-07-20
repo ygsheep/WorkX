@@ -36,7 +36,8 @@ TEST_CASE("AnthropicAdapter build_headers", "[provider][anthropic]") {
                 has_api_key = true;
             }
             if (k == "anthropic-version") {
-                REQUIRE(v == "2023-06-01");
+                // Phase 1 升级到 2025-01-01 以支持 thinking content block
+                REQUIRE(v == "2025-01-01");
                 has_version = true;
             }
         }

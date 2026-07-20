@@ -204,4 +204,4 @@ std::string BottomBarManager::handle_tab() {
     return "";
 }
 
-} // namespace workx
+} // namespace agent

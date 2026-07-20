@@ -22,8 +22,8 @@ public:
 
     /// @brief 提交推理请求
     /// @param request 推理请求参数
-    /// @return 流式读取器，失败时返回 nullptr
-    virtual std::unique_ptr<IStreamReader> submit_completion(const CompletionRequest& request) = 0;
+    /// @return 流式读取器（shared_ptr 以支持跨线程共享生命周期），失败时返回 nullptr
+    virtual std::shared_ptr<IStreamReader> submit_completion(const CompletionRequest& request) = 0;
 
     /// @brief 中断当前推理
     virtual void interrupt() = 0;

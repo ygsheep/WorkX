@@ -53,9 +53,10 @@ public:
     /// @brief 绘制边框盒子
     /// @param row 起始行
     /// @param col 起始列
-    /// @param width 盒子宽度（含边框）
+    /// @param width 盒子宽度（含边框，>=4）
+    /// @param height 盒子高度（含边框，>=3）
     /// @param title 标题文本
-    void draw_box(int row, int col, int width, const std::string& title);
+    void draw_box(int row, int col, int width, int height, const std::string& title);
 
     /// @brief 清空虚拟缓冲区，标记全屏脏
     void clear();
@@ -95,4 +96,4 @@ private:
     std::vector<ScreenLine> m_previous;   // 上一帧
 };
 
-} // namespace workx
+} // namespace agent

@@ -156,36 +156,41 @@ void load_from_config_file(const std::filesystem::path& path) {
     }
 }
 
-std::filesystem::path default_config_path() {
+// F.5：统一配置目录解析，优先级链：
+//   1. $WORKX_CONFIG_DIR 环境变量（用户/管理员显式指定）
+//   2. $APPDATA (Windows) / $XDG_CONFIG_HOME (POSIX)
+//   3. $USERPROFILE (Windows) / $HOME (POSIX)
+//   4. 当前工作目录（最后回退，避免从快捷方式启动时配置丢失）
+static std::filesystem::path get_config_dir() {
+    // 1. 显式环境变量优先
+    if (const char* env = std::getenv("WORKX_CONFIG_DIR")) {
+        if (env[0] != '\0') return std::filesystem::path(env);
+    }
 #ifdef _WIN32
-    const char* appdata = std::getenv("APPDATA");
-    if (appdata) {
-        return std::filesystem::path(appdata) / "workx" / "config.json";
+    if (const char* env = std::getenv("APPDATA")) {
+        if (env[0] != '\0') return std::filesystem::path(env) / "workx";
     }
-    return std::filesystem::path("workx.json");
+    if (const char* env = std::getenv("USERPROFILE")) {
+        if (env[0] != '\0') return std::filesystem::path(env) / ".workx";
+    }
 #else
-    const char* home = std::getenv("HOME");
-    if (home) {
-        return std::filesystem::path(home) / ".config" / "workx" / "config.json";
+    if (const char* env = std::getenv("XDG_CONFIG_HOME")) {
+        if (env[0] != '\0') return std::filesystem::path(env) / "workx";
     }
-    return std::filesystem::path("workx.json");
+    if (const char* env = std::getenv("HOME")) {
+        if (env[0] != '\0') return std::filesystem::path(env) / ".config" / "workx";
+    }
 #endif
+    // 4. 最后回退：当前工作目录下的 .workx
+    return std::filesystem::current_path() / ".workx";
+}
+
+std::filesystem::path default_config_path() {
+    return get_config_dir() / "config.json";
 }
 
 std::filesystem::path default_log_path() {
-#ifdef _WIN32
-    const char* appdata = std::getenv("APPDATA");
-    if (appdata) {
-        return std::filesystem::path(appdata) / "workx" / "logs" / "workx.log";
-    }
-    return std::filesystem::path("workx.log");
-#else
-    const char* home = std::getenv("HOME");
-    if (home) {
-        return std::filesystem::path(home) / ".config" / "workx" / "logs" / "workx.log";
-    }
-    return std::filesystem::path("workx.log");
-#endif
+    return get_config_dir() / "logs" / "workx.log";
 }
 
-} // namespace workx
+} // namespace agent

@@ -12,6 +12,7 @@
 
 #include <sstream>
 #include <algorithm>
+#include <functional>
 
 namespace agent::tool {
 
@@ -51,25 +52,57 @@ std::vector<std::string> split_lines(const std::string& content) {
     return lines;
 }
 
-/// @brief 构建 LCS 长度矩阵
-/// @details dp[i][j] = old_lines[0..i) 与 new_lines[0..j) 的 LCS 长度。
-///          矩阵大小 (old_size+1) x (new_size+1)。
+/// @brief LCS 长度阈值：超过此行数降级为全替换 diff，避免 OOM
+/// @details 5000 行 × 5000 行 × 4 字节 ≈ 100 MB，仍可接受；
+///          超过则降级（如 2.5 万行 → 2.5 GB 内存会 OOM）。
+constexpr size_t LCS_MAX_LINES = 5000;
+
+/// @brief 对每行计算 hash，LCS 比较时先用 hash 比较（O(1)），
+///        hash 相同时再 fallback 到 string 比较，保证碰撞时正确性。
+/// @details 大文件中相同行密集（如代码 import 区），string == 比较 O(len)
+///          会累积显著开销；hash 比较可将相同行判断降至 O(1)。
+std::vector<size_t> hash_lines(const std::vector<std::string>& lines) {
+    std::vector<size_t> hashes;
+    hashes.reserve(lines.size());
+    const std::hash<std::string> hasher{};
+    for (const auto& line : lines) {
+        hashes.push_back(hasher(line));
+    }
+    return hashes;
+}
+
+/// @brief 构建 LCS 长度矩阵（一维数组紧凑存储）
+/// @details dp[i*(n+1)+j] = old_lines[0..i) 与 new_lines[0..j) 的 LCS 长度。
+///          矩阵大小 (old_size+1) * (new_size+1)，用一维 vector 替代 vector<vector<int>>
+///          减少 inner vector 的开销与碎片。
 /// @param old_lines 旧行列表
 /// @param new_lines 新行列表
-/// @return LCS 长度矩阵
-std::vector<std::vector<int>> build_lcs_table(
+/// @return LCS 长度矩阵（一维存储，索引 [i][j] = i*(n+1)+j）
+std::vector<int> build_lcs_table(
     const std::vector<std::string>& old_lines,
-    const std::vector<std::string>& new_lines
+    const std::vector<std::string>& new_lines,
+    const std::vector<size_t>& old_hashes,
+    const std::vector<size_t>& new_hashes
 ) {
-    const auto m = old_lines.size();
-    const auto n = new_lines.size();
-    std::vector<std::vector<int>> dp(m + 1, std::vector<int>(n + 1, 0));
+    const size_t m = old_lines.size();
+    const size_t n = new_lines.size();
+    const size_t row_size = n + 1;
+    std::vector<int> dp((m + 1) * row_size, 0);
     for (size_t i = 1; i <= m; ++i) {
+        const size_t base_i = i * row_size;
+        const size_t base_im1 = (i - 1) * row_size;
+        const size_t hash_a = old_hashes[i - 1];
+        const std::string& line_a = old_lines[i - 1];
         for (size_t j = 1; j <= n; ++j) {
-            if (old_lines[i - 1] == new_lines[j - 1]) {
-                dp[i][j] = dp[i - 1][j - 1] + 1;
+            // hash 相同时再 fallback string 比较，避免碰撞误判
+            bool equal = (hash_a == new_hashes[j - 1]);
+            if (equal) {
+                equal = (line_a == new_lines[j - 1]);
+            }
+            if (equal) {
+                dp[base_i + j] = dp[base_im1 + (j - 1)] + 1;
             } else {
-                dp[i][j] = std::max(dp[i - 1][j], dp[i][j - 1]);
+                dp[base_i + j] = std::max(dp[base_im1 + j], dp[base_i + (j - 1)]);
             }
         }
     }
@@ -79,24 +112,35 @@ std::vector<std::vector<int>> build_lcs_table(
 /// @brief 回溯 LCS 矩阵生成 diff 序列
 /// @details 从右下角回溯至左上角：
 ///          - old[i-1] == new[j-1] → Equal，i-- j--
-///          - dp[i-1][j] >= dp[i][j-1] → Remove(old[i-1])，i--
-///          - 否则 → Add(new[j-1])，j--
+///          - dp[i][j-1] >= dp[i-1][j] → Add(new[j-1])，j--
+///          - 否则 → Remove(old[i-1])，i--
 ///          回溯结果逆序，需反转。
 /// @param old_lines 旧行列表
 /// @param new_lines 新行列表
-/// @param dp LCS 长度矩阵
+/// @param dp LCS 长度矩阵（一维存储）
+/// @param row_size 每行元素数 (n+1)
 /// @return diff 行列表（按文件顺序）
 std::vector<DiffLine> backtrack_diff(
     const std::vector<std::string>& old_lines,
     const std::vector<std::string>& new_lines,
-    const std::vector<std::vector<int>>& dp
+    const std::vector<size_t>& old_hashes,
+    const std::vector<size_t>& new_hashes,
+    const std::vector<int>& dp,
+    size_t row_size
 ) {
     std::vector<DiffLine> diff;
     size_t i = old_lines.size();
     size_t j = new_lines.size();
 
     while (i > 0 || j > 0) {
-        if (i > 0 && j > 0 && old_lines[i - 1] == new_lines[j - 1]) {
+        bool equal = false;
+        if (i > 0 && j > 0) {
+            // hash 先比较，相同再 fallback string
+            if (old_hashes[i - 1] == new_hashes[j - 1]) {
+                equal = (old_lines[i - 1] == new_lines[j - 1]);
+            }
+        }
+        if (i > 0 && j > 0 && equal) {
             diff.push_back({
                 DiffOp::Equal,
                 static_cast<int>(i),
@@ -105,7 +149,7 @@ std::vector<DiffLine> backtrack_diff(
             });
             --i;
             --j;
-        } else if (j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+        } else if (j > 0 && (i == 0 || dp[i * row_size + (j - 1)] >= dp[(i - 1) * row_size + j])) {
             diff.push_back({
                 DiffOp::Add,
                 0,
@@ -161,8 +205,24 @@ std::vector<DiffLine> generate_line_diff(
         return diff;
     }
 
-    const auto dp = build_lcs_table(old_lines, new_lines);
-    return backtrack_diff(old_lines, new_lines, dp);
+    // 大文件降级：任一侧超过 LCS_MAX_LINES 行则跳过 LCS，生成全替换 diff
+    // （LCS O(m*n) 内存，2.5 万行 ≈ 2.5 GB 会 OOM）
+    if (old_lines.size() > LCS_MAX_LINES || new_lines.size() > LCS_MAX_LINES) {
+        std::vector<DiffLine> diff;
+        diff.reserve(old_lines.size() + new_lines.size());
+        for (size_t i = 0; i < old_lines.size(); ++i) {
+            diff.push_back({DiffOp::Remove, static_cast<int>(i + 1), 0, old_lines[i]});
+        }
+        for (size_t j = 0; j < new_lines.size(); ++j) {
+            diff.push_back({DiffOp::Add, 0, static_cast<int>(j + 1), new_lines[j]});
+        }
+        return diff;
+    }
+
+    const auto old_hashes = hash_lines(old_lines);
+    const auto new_hashes = hash_lines(new_lines);
+    const auto dp = build_lcs_table(old_lines, new_lines, old_hashes, new_hashes);
+    return backtrack_diff(old_lines, new_lines, old_hashes, new_hashes, dp, new_lines.size() + 1);
 }
 
 std::string format_diff(

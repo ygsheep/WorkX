@@ -24,6 +24,11 @@ FileSearchPanel::FileSearchPanel(Terminal* terminal)
 void FileSearchPanel::set_query(const std::string& query) {
     m_query = query;
     m_selected = 0;
+    // 按需刷新文件索引（方案 E）：
+    // - 工具写入/删除文件后会标记 dirty，此时触发重建
+    // - 即便没有 dirty，超过 2 秒也会重建一次，覆盖外部文件变更
+    // - 2 秒防抖避免每次按键都全量扫描目录
+    global_file_index().refresh_if_needed(2000);
     search_files();
 }
 

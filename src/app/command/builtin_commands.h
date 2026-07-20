@@ -11,7 +11,7 @@
 #include <memory>
 #include <functional>
 
-#include "../../agent/command/inclaude/registry.h"
+#include "agent/command/inclaude/registry.h"
 
 namespace agent {
 
@@ -33,4 +33,4 @@ struct SystemCommandContext {
 void register_system_commands(CommandRegistry& registry, const SystemCommandContext& ctx);
 
 } // namespace command
-} // namespace workx
+} // namespace agent

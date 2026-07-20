@@ -69,7 +69,7 @@ MarkdownTable parse_table(const std::vector<std::string>& lines);
  * @param max_width 最大显示宽度，0=不限宽
  * @return 多行字符串，含 ┌─┬─┐│├─┼─┤└─┴─┘ 边框
  */
-std::string render_table(const MarkdownTable& table, int max_width = 0);
+std::string render_table(const MarkdownTable& table, int max_width = 0, int indent = 0);
 
 /**
  * @brief 表格流式缓冲状态机
@@ -160,4 +160,13 @@ std::string render_list_item(std::string_view line);
  */
 std::string render_code_block(std::string_view lang, const std::vector<std::string>& lines);
 
-} // namespace workx
+/**
+ * @brief 渲染整段 Markdown 文本（块级渲染）
+ * @details 处理代码块（```）、标题（#）、列表（- / * / + / N.）、分隔线（---）、表格（|）、行内格式
+ *          用于非流式场景（如 ctrl+o 思考视图）一次性渲染整段文本
+ * @param text Markdown 文本（可含多行）
+ * @return 渲染后的多行字符串（含 ANSI 颜色）
+ */
+std::string render_markdown_block(std::string_view text);
+
+} // namespace agent

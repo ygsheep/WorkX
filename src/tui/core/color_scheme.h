@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file color_scheme.h
  * @brief 颜色方案
  * @details ColorRole 枚举和 ANSI 颜色映射
@@ -66,7 +66,7 @@ constexpr std::string_view get_color_ansi(ColorRole role) {
         case ColorRole::Default:           return "\x1b[0m";
         case ColorRole::Prompt:            return "\x1b[33m";           // 黄色
         case ColorRole::UserInput:         return "\x1b[48;5;236m";   // 深灰背景
-        case ColorRole::Assistant:         return "\x1b[36m";           // 青色
+        case ColorRole::Assistant:         return "\x1b[39m";           // 默认前景色（跟随终端配置，通常白色/浅灰）
         case ColorRole::Reasoning:         return "\x1b[90m";           // 灰色
         case ColorRole::System:            return "\x1b[35m";           // 紫色
         case ColorRole::Error:             return "\x1b[1m\x1b[31m";   // 粗体红色
@@ -100,4 +100,4 @@ constexpr std::string_view get_color_ansi(ColorRole role) {
     }
 }
 
-} // namespace workx
+} // namespace agent

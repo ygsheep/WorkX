@@ -5,16 +5,13 @@
 
 #include "core/config/config_manager.h"
 
-#ifdef WORKX_HAS_NLOHMANN_JSON
 #include <nlohmann/json.hpp>
-#endif
 
 #include <fstream>
 #include <filesystem>
 
 namespace agent {
 
-#ifdef WORKX_HAS_NLOHMANN_JSON
 namespace {
 
 /// 将 dot 分隔的 key 写入嵌套 JSON（如 "backend.api_key" → j["backend"]["api_key"]）
@@ -66,7 +63,6 @@ void flatten_json(const nlohmann::json& j, const std::string& prefix,
 }
 
 } // anonymous namespace
-#endif
 
 bool ConfigManager::has(const std::string& key) const {
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -95,7 +91,6 @@ Result<ConfigMeta, std::string> ConfigManager::get_meta(const std::string& key) 
 }
 
 Result<void, std::string> ConfigManager::load_from_file(const std::filesystem::path& path) {
-#ifdef WORKX_HAS_NLOHMANN_JSON
     if (!std::filesystem::exists(path)) {
         return Result<void, std::string>::err(
             std::format("Config file not found: {}", path.string())
@@ -135,14 +130,9 @@ Result<void, std::string> ConfigManager::load_from_file(const std::filesystem::p
             std::format("Error reading {}: {}", path.string(), e.what())
         );
     }
-#else
-    (void)path;
-    return Result<void, std::string>::err("JSON persistence requires nlohmann/json");
-#endif
 }
 
 Result<void, std::string> ConfigManager::save_to_file(const std::filesystem::path& path) {
-#ifdef WORKX_HAS_NLOHMANN_JSON
     nlohmann::json j;
 
     {
@@ -174,10 +164,6 @@ Result<void, std::string> ConfigManager::save_to_file(const std::filesystem::pat
             std::format("Error writing {}: {}", path.string(), e.what())
         );
     }
-#else
-    (void)path;
-    return Result<void, std::string>::err("JSON persistence requires nlohmann/json");
-#endif
 }
 
 void ConfigManager::add_change_callback(
@@ -226,4 +212,4 @@ std::string ConfigScope::make_key(const std::string& key) const {
     return m_prefix + key;
 }
 
-} // namespace workx
+} // namespace agent

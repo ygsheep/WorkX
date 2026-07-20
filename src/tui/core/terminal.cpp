@@ -57,11 +57,16 @@ Result<void, std::string> Terminal::initialize() {
     });
 
     // 加载历史文件
+    // G.3：原代码在 POSIX 系统也尝试 USERPROFILE（POSIX 无此变量，会回退到 ".")
+    // 修正：平台分支明确区分 Windows 和 POSIX 的家目录解析
     {
         namespace fs = std::filesystem;
-        const char* home = getenv("USERPROFILE");
+        const char* home = nullptr;
 #ifdef _WIN32
-        if (!home) home = getenv("APPDATA");
+        home = getenv("USERPROFILE");
+        if (!home || home[0] == '\0') home = getenv("APPDATA");
+#else
+        home = getenv("HOME");
 #endif
         auto history_path = fs::path(home ? home : ".") / ".workx_history";
         m_history.load(history_path);
@@ -210,8 +215,12 @@ void Terminal::echo_input(const std::string& text) {
     m_platform->write_output(cmd);
     m_platform->write_output("> ");
     m_platform->write_output(text);
+    // 用当前背景色填充到行尾（EL 序列 \x1b[K 应用当前 SGR 背景色）
+    // 实现整行灰色背景，而不是只有文字部分有背景色
+    m_platform->write_output("\x1b[K");
+    // 先清除背景色再换行，避免 \r\n 时背景色延伸到下一行（trailing background）
+    m_platform->write_output("\x1b[0m");
     m_platform->write_output("\r\n");
-    m_platform->write_output(get_color_ansi(ColorRole::Default));
     m_platform->flush();
 
     m_current_color = ColorRole::Default;
@@ -223,6 +232,8 @@ void Terminal::echo_input(const std::string& text) {
         m_display_buffer->feed(cmd);
         m_display_buffer->feed("> ");
         m_display_buffer->feed(text);
+        m_display_buffer->feed("\x1b[K");
+        m_display_buffer->feed("\x1b[0m");
         m_display_buffer->feed("\n");
     }
 }
@@ -377,9 +388,9 @@ void Terminal::write(std::string_view text) {
 void Terminal::write_safe(std::string_view text, bool feed_buffer) {
     std::lock_guard<std::mutex> lock(m_output_mutex);
     // 统一 save/restore cursor，防止跨滚动区域边界 restore 失效
-    m_platform->write_output("\x1b[s");
+    m_platform->write_output("\x1b" "7");  // DECSC (VT100 标准，兼容性优于 \x1b[s)
     m_platform->write_output(text);
-    m_platform->write_output("\x1b[u");
+    m_platform->write_output("\x1b" "8");  // DECRC (VT100 标准，兼容性优于 \x1b[u)
     m_platform->flush();
     if (feed_buffer && m_display_buffer && !m_overlay_active) {
         m_display_buffer->feed(text);
@@ -530,7 +541,7 @@ void Terminal::end_overlay() {
     m_overlay_active = false;
 
     // 保存当前光标位置，恢复覆盖层内容后还原
-    m_platform->write_output("\x1b[s");
+    m_platform->write_output("\x1b" "7");  // DECSC (VT100 标准，兼容性优于 \x1b[s)
 
     for (int r = m_overlay_top; r <= m_overlay_bottom; ++r) {
         int idx = r - m_overlay_top;
@@ -547,7 +558,7 @@ void Terminal::end_overlay() {
     m_overlay_snapshot.clear();
 
     // 恢复光标到覆盖层恢复前的位置
-    m_platform->write_output("\x1b[u");
+    m_platform->write_output("\x1b" "8");  // DECRC (VT100 标准，兼容性优于 \x1b[u)
     m_platform->flush();
     m_cursor_in_output = false;
 }
@@ -619,4 +630,4 @@ void Terminal::display_welcome() {
     write("\r\n");
 }
 
-} // namespace workx
+} // namespace agent

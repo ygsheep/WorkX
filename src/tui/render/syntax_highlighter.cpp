@@ -23,6 +23,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #ifdef WORKX_HAS_TREE_SITTER
@@ -280,25 +281,38 @@ SyntaxColor classify_by_type(std::string_view type) {
     auto it = kw.find(std::string(type));
     if (it != kw.end()) return it->second;
 
-    // 2. 子串匹配 (tree-sitter 不同 grammar 命名略有差异)
-    auto contains = [&](const char* sub) {
-        return std::string_view::npos != type.find(sub);
+    // E.6：改用精确匹配替代子串匹配
+    // 原 contains("number") 会匹配 "number_statement" 等不相关节点；
+    // 原 contains("string") 会匹配 "string_content" 等内部节点。
+    // 精确匹配覆盖各 grammar 的实际节点 type 命名。
+    static const std::unordered_set<std::string_view> comment_types = {
+        "comment", "line_comment", "block_comment", "documentation_comment",
+        "documentation_comment_prefix", "documentation_comment_suffix"
+    };
+    static const std::unordered_set<std::string_view> string_types = {
+        "string", "string_literal", "char_literal", "raw_string",
+        "raw_string_literal", "string_content", "string_array"
+    };
+    static const std::unordered_set<std::string_view> number_types = {
+        "number", "number_literal", "integer", "float",
+        "integer_literal", "float_literal",
+        "decimal_floating_literal", "hex_literal",
+        "octal_literal", "binary_literal"
+    };
+    static const std::unordered_set<std::string_view> type_types = {
+        "primitive_type", "type_identifier", "type_specifier",
+        "type_argument", "abstract_type", "concrete_type"
+    };
+    static const std::unordered_set<std::string_view> constant_types = {
+        "built_in_constant", "escape_sequence", "escape",
+        "char_escape", "escape_sequence_unicode"
     };
 
-    if (contains("comment"))            return SyntaxColor::Comment;
-    if (contains("string"))             return SyntaxColor::String;
-    if (contains("char_literal"))       return SyntaxColor::String;
-    if (contains("raw_string"))         return SyntaxColor::String;
-    if (contains("escape_sequence"))    return SyntaxColor::Constant;
-    if (contains("number"))             return SyntaxColor::Number;
-    if (contains("integer"))            return SyntaxColor::Number;
-    if (contains("float"))              return SyntaxColor::Number;
-    if (contains("primitive_type"))     return SyntaxColor::Type;
-    if (contains("type_identifier"))    return SyntaxColor::Type;
-    if (contains("type_specifier"))     return SyntaxColor::Type;
-    if (contains("type_argument"))      return SyntaxColor::Type;
-    if (contains("built_in_constant"))  return SyntaxColor::Constant;
-    if (contains("escape"))             return SyntaxColor::Constant;
+    if (comment_types.count(type))      return SyntaxColor::Comment;
+    if (string_types.count(type))       return SyntaxColor::String;
+    if (constant_types.count(type))     return SyntaxColor::Constant;
+    if (number_types.count(type))       return SyntaxColor::Number;
+    if (type_types.count(type))         return SyntaxColor::Type;
 
     return SyntaxColor::Default;
 }
@@ -439,8 +453,17 @@ std::string highlight_diff(std::string_view file_lang, std::string_view diff) {
     constexpr auto RESET    = "\x1b[0m";
 
     // ---- 第 1 步: 解析 diff, 收集代码行 + 行类型 ----
+    // E.5：prefix 改用 enum class，避免 char 类型与 -1 比较时在 UTF-8 字节 0xFF 误判
+    // （char 在某些平台是 unsigned，-1 会变为 255；在 signed 平台 0xFF 会等于 -1）
+    enum class DiffPrefix : int {
+        None    = 0,   // 无前缀（容错行）
+        Add     = 1,   // '+'
+        Del     = 2,   // '-'
+        Context = 3,   // ' '
+        Header  = 4,   // 文件头 / hunk 头，完全跳过
+    };
     struct DiffLine {
-        char prefix;       // '+', '-', ' ', 0 (其他)
+        DiffPrefix prefix;
         std::string content;  // 去掉前缀后的内容
     };
     std::vector<DiffLine> lines;
@@ -452,7 +475,7 @@ std::string highlight_diff(std::string_view file_lang, std::string_view diff) {
                 ? diff.substr(pos)
                 : diff.substr(pos, nl - pos);
 
-            DiffLine dl{0, {}};
+            DiffLine dl{DiffPrefix::None, {}};
             if (!line.empty()) {
                 // 文件头 / hunk 头: 跳过
                 bool is_header = false;
@@ -462,28 +485,34 @@ std::string highlight_diff(std::string_view file_lang, std::string_view diff) {
                     is_header = true;
                 }
                 if (!is_header) {
-                    if (line[0] == '+' || line[0] == '-' || line[0] == ' ') {
-                        dl.prefix = line[0];
+                    if (line[0] == '+') {
+                        dl.prefix = DiffPrefix::Add;
+                        dl.content = std::string(line.substr(1));
+                    } else if (line[0] == '-') {
+                        dl.prefix = DiffPrefix::Del;
+                        dl.content = std::string(line.substr(1));
+                    } else if (line[0] == ' ') {
+                        dl.prefix = DiffPrefix::Context;
                         dl.content = std::string(line.substr(1));
                     } else {
                         // 无前缀行 (理论 diff 不应有, 容错)
-                        dl.prefix = 0;
+                        dl.prefix = DiffPrefix::None;
                         dl.content = std::string(line);
                     }
                 } else {
                     // header 不入 lines (完全跳过)
-                    dl.prefix = -1;  // 标记为 header, 不参与
+                    dl.prefix = DiffPrefix::Header;
                 }
             }
-            if (dl.prefix != -1 && dl.prefix != 0) {
+            if (dl.prefix != DiffPrefix::Header && dl.prefix != DiffPrefix::None) {
                 lines.push_back(std::move(dl));
-            } else if (dl.prefix == 0 && !line.empty()) {
+            } else if (dl.prefix == DiffPrefix::None && !line.empty()) {
                 // 无前缀的非空行也加入 (作为上下文处理)
                 lines.push_back(std::move(dl));
             }
             // 空行: 加入 (作为上下文空行)
             if (line.empty()) {
-                lines.push_back({0, {}});
+                lines.push_back({DiffPrefix::None, {}});
             }
 
             if (nl == std::string_view::npos) break;
@@ -526,13 +555,13 @@ std::string highlight_diff(std::string_view file_lang, std::string_view diff) {
     for (size_t i = 0; i < lines.size(); ++i) {
         if (i > 0) out.push_back('\n');
 
-        const char prefix = lines[i].prefix;
+        const auto prefix = lines[i].prefix;
         const std::string& hl = hl_lines[i];
 
         // 选背景色
         const char* bg = nullptr;
-        if (prefix == '+') bg = BG_GREEN;
-        else if (prefix == '-') bg = BG_RED;
+        if (prefix == DiffPrefix::Add) bg = BG_GREEN;
+        else if (prefix == DiffPrefix::Del) bg = BG_RED;
         // 其他 (上下文 / 无前缀): 无背景色
 
         if (bg == nullptr) {
@@ -585,11 +614,11 @@ std::string highlight_code(std::string_view lang, std::string_view code) {
     TSParser* parser = get_parser_for_lang(it->second);
     if (!parser) return std::string(code);
 
-    // tree-sitter API 接受 const char*
-    std::string buf(code);
+    // C.13：原代码 `std::string buf(code)` 是冗余拷贝
+    // tree-sitter API 接受 const char* + uint32_t length，直接用 string_view 即可
     TSTree* tree = ts_parser_parse_string(parser, nullptr,
-                                          buf.data(),
-                                          static_cast<uint32_t>(buf.size()));
+                                          code.data(),
+                                          static_cast<uint32_t>(code.size()));
     if (!tree) return std::string(code);
 
     Highlighter h;

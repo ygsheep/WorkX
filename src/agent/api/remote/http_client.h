@@ -47,8 +47,6 @@ public:
 
     void cancel_stream(SSEStreamReader *reader);
 
-    void cancel_stream(const SSEStreamReader* reader) const;
-
     void shutdown();
 
     static ParsedUrl parse_url(const std::string& url);

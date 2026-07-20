@@ -51,4 +51,4 @@ public:
     virtual int put_codepoint(const char* utf8_data, size_t length, int expected_width) = 0;
 };
 
-} // namespace workx
+} // namespace agent

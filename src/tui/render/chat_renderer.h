@@ -52,6 +52,9 @@ public:
 private:
     void transition_to(TuiState new_state);
 
+    /// E.9：输入提示列位置常量（流结束/错误时光标复位的列）
+    static constexpr int INPUT_PROMPT_COL = 3;
+
     /// @brief 活跃工具调用上下文 (ToolCallEvent 存, ToolResultEvent 取)
     struct ToolCallInfo {
         std::string tool_name;
@@ -95,4 +98,4 @@ private:
     std::unordered_map<std::string, ToolCallInfo> m_pending_tool_calls;
 };
 
-} // namespace workx
+} // namespace agent

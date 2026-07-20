@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file history.h
  * @brief 输入历史管理
  * @details 支持内存历史 + 文件持久化
@@ -55,4 +55,4 @@ private:
     size_t m_max_entries;
 };
 
-} // namespace workx
+} // namespace agent

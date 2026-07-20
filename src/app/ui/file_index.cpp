@@ -143,6 +143,11 @@ void FileIndex::build(const std::string& cwd, size_t max_files) {
             return a.modified > b.modified;
         });
 
+    // 记录构建元信息（供 refresh_if_needed 判断防抖与复用 cwd）
+    m_cwd_ = cwd;
+    m_last_build_ts = std::chrono::steady_clock::now();
+    m_dirty.store(false, std::memory_order_release);
+
     ready_ = true;
 }
 
@@ -209,6 +214,40 @@ bool FileIndex::is_ready() const {
 size_t FileIndex::size() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return entries_.size();
+}
+
+// ============================================================
+// 按需刷新（方案 E：A + D 组合）
+// ============================================================
+
+void FileIndex::mark_dirty() {
+    // 无锁原子操作，可安全在工具线程频繁调用
+    m_dirty.store(true, std::memory_order_release);
+}
+
+bool FileIndex::refresh_if_needed(int64_t min_interval_ms) {
+    // 加锁读取判断所需状态，释放锁后再调用 build（build 内部会加锁，避免递归死锁）
+    std::string cwd;
+    bool need_refresh = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!ready_) {
+            return false;  // 从未构建过，无法刷新
+        }
+        cwd = m_cwd_;
+
+        const auto now = std::chrono::steady_clock::now();
+        const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now - m_last_build_ts).count();
+        const bool dirty = m_dirty.load(std::memory_order_acquire);
+        need_refresh = dirty || elapsed_ms >= min_interval_ms;
+    }
+
+    if (need_refresh && !cwd.empty()) {
+        build(cwd);  // build 内部会清 m_dirty 并更新 m_last_build_ts
+        return true;
+    }
+    return false;
 }
 
 // ============================================================

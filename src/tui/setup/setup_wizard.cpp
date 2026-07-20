@@ -6,10 +6,42 @@
 #include "tui/setup/setup_wizard.h"
 #include "tui/core/terminal.h"
 #include "tui/core/platform/i_platform.h"
+#include "tui/utils/utf8_utils.h"
 
 #include <filesystem>
 
 namespace agent {
+
+// E.10：UTF-8 编码辅助函数（setup_wizard 内部使用）
+// 将 codepoint 编码为 UTF-8 并追加到 out
+static void append_utf8(char32_t cp, std::string& out) {
+    if (cp <= 0x7F) {
+        out.push_back(static_cast<char>(cp));
+    } else if (cp <= 0x7FF) {
+        out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else if (cp <= 0xFFFF) {
+        out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else {
+        out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+}
+
+// E.10：返回 s 中最后一个完整 UTF-8 字符的起始字节位置
+// 遇到续字节（0x80-0xBF）向前回溯，直到找到起始字节
+static size_t last_utf8_char_start(const std::string& s) {
+    if (s.empty()) return 0;
+    size_t pos = s.size() - 1;
+    while (pos > 0 && (static_cast<unsigned char>(s[pos]) & 0xC0) == 0x80) {
+        --pos;
+    }
+    return pos;
+}
 
 // ============================================================
 // 按键码
@@ -55,7 +87,12 @@ SetupWizard::SetupWizard(IPlatform* platform, Terminal* terminal, Screen* screen
 }
 
 bool SetupWizard::run_wizard() {
-    m_screen->resize(80, 30);
+    // E.10：使用实际终端尺寸替代硬编码 80x30
+    int term_w = m_terminal->get_terminal_width();
+    int term_h = m_terminal->get_terminal_height();
+    if (term_w < 40) term_w = 80;  // 兜底：终端宽度过小时回退到默认
+    if (term_h < 15) term_h = 30;
+    m_screen->resize(term_w, term_h);
 
     // 欢迎文字
     m_screen->write(0, 2, "欢迎使用 Workx！请设置 API 提供商。", ColorRole::System);
@@ -144,8 +181,10 @@ const ProviderPreset* SetupWizard::select_provider() {
         for (int i = 0; i < static_cast<int>(presets.size()); i++) {
             int r = list_start + 1 + i;
             const auto* p = presets[i];
-            bool custom = (std::string(p->name) == "openai-compatible");
-            std::string url = custom ? "(自定义 URL + 协议)" : build_preset_url(p);
+            bool custom = (p->name == "openai-compatible");
+            std::string url = custom
+                ? "(自定义 URL + 协议)"
+                : build_preset_url(p).value_or("(无默认 URL)");
 
             const char* bullet = (i == selected) ? "\xe2\x97\x8f" : "\xe2\x97\x8b";
             std::string text = std::format("{} {:<18} \xe2\x86\x92 {}",
@@ -265,6 +304,8 @@ std::string SetupWizard::prompt_api_key(const std::string& provider_name, bool r
 
 std::string SetupWizard::read_input_line(const std::string& prompt_text, bool mask) {
     std::string input;
+    // E.10：跟踪已输入字符的总显示宽度，用于 CTRL_U 退格
+    int input_display_width = 0;
 
     // 直接在终端输出提示（不走 Screen，需要实时回显）
     m_terminal->set_color(ColorRole::Prompt);
@@ -284,16 +325,58 @@ std::string SetupWizard::read_input_line(const std::string& prompt_text, bool ma
             return "";
         } else if (ch == KEY_BACKSPACE || ch == '\b') {
             if (!input.empty()) {
-                input.pop_back();
-                m_terminal->write("\b \b");
+                // E.10：找到最后一个完整 UTF-8 字符的起始字节
+                size_t last_start = last_utf8_char_start(input);
+                std::string last_char = input.substr(last_start);
+                input.erase(last_start);  // 移除整个 UTF-8 字符（可能 1-4 字节）
+                // 用 char32_width 计算显示宽度，退格对应数量的单元格
+                // 先解码 last_char 为 codepoint
+                char32_t cp = 0;
+                if (last_char.size() == 1) {
+                    cp = static_cast<unsigned char>(last_char[0]);
+                } else if (last_char.size() == 2) {
+                    cp = ((static_cast<unsigned char>(last_char[0]) & 0x1F) << 6)
+                       | (static_cast<unsigned char>(last_char[1]) & 0x3F);
+                } else if (last_char.size() == 3) {
+                    cp = ((static_cast<unsigned char>(last_char[0]) & 0x0F) << 12)
+                       | ((static_cast<unsigned char>(last_char[1]) & 0x3F) << 6)
+                       | (static_cast<unsigned char>(last_char[2]) & 0x3F);
+                } else if (last_char.size() == 4) {
+                    cp = ((static_cast<unsigned char>(last_char[0]) & 0x07) << 18)
+                       | ((static_cast<unsigned char>(last_char[1]) & 0x3F) << 12)
+                       | ((static_cast<unsigned char>(last_char[2]) & 0x3F) << 6)
+                       | (static_cast<unsigned char>(last_char[3]) & 0x3F);
+                }
+                int w = char32_width(cp);
+                if (w < 1) w = 1;
+                input_display_width -= w;
+                for (int i = 0; i < w; ++i) {
+                    m_terminal->write("\b \b");
+                }
             }
         } else if (ch == KEY_CTRL_U) {
-            for (size_t i = 0; i < input.size(); i++)
+            // E.10：用显示宽度退格，而非字节数
+            for (int i = 0; i < input_display_width; ++i) {
                 m_terminal->write("\b \b");
+            }
             input.clear();
-        } else if (ch >= 0x20 && ch < 0x7F) {
-            input += static_cast<char>(ch);
-            m_terminal->write(mask ? "*" : std::string(1, static_cast<char>(ch)));
+            input_display_width = 0;
+        } else if (ch >= 0x20 && ch != 0x7F) {
+            // E.10：接受任意 Unicode 可打印字符（移除上限 0x7F），支持中文 API Key
+            std::string utf8_char;
+            append_utf8(ch, utf8_char);
+            input += utf8_char;
+            int w = char32_width(ch);
+            if (w < 1) w = 1;
+            input_display_width += w;
+            if (mask) {
+                // 密码模式：每个字符显示为 *，按显示宽度补齐
+                for (int i = 0; i < w; ++i) {
+                    m_terminal->write("*");
+                }
+            } else {
+                m_terminal->write(utf8_char);
+            }
         }
     }
 }
@@ -349,4 +432,4 @@ char32_t SetupWizard::read_key() {
     return m_platform->read_char();
 }
 
-} // namespace workx
+} // namespace agent

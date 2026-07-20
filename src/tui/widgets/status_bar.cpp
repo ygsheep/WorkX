@@ -210,4 +210,4 @@ std::string StatusBar::format_bar() const {
     return bar;
 }
 
-} // namespace workx
+} // namespace agent

@@ -1,7 +1,7 @@
 /**
  * @file client.cpp
  * @brief Client 实现 — agent/api 顶层封装
- * @version 1.0.0
+ * @version 1.1.0
  * @date 2026-07
  */
 
@@ -24,9 +24,10 @@ namespace agent {
 // ============================================================
 
 Result<Client, std::string> Client::create(ClientConfig cfg) {
+    const ProviderPreset* preset = nullptr;
     // 1. 若指定了 provider preset，查表填充 backend 默认值
     if (!cfg.provider.empty()) {
-        const auto* preset = find_preset(cfg.provider);
+        preset = find_preset(cfg.provider);
         if (!preset) {
             return Result<Client, std::string>::err(
                 "Unknown provider preset: " + cfg.provider);
@@ -50,6 +51,22 @@ Result<Client, std::string> Client::create(ClientConfig cfg) {
         return Result<Client, std::string>::err("base_url is required");
     }
     cfg.backend.type = BackendConfig::Type::Remote;
+
+    // 3.5 校验 api_key — Remote 后端必须有 api_key，但本地服务（LM Studio /
+    //     openai-compatible）允许为空。
+    if (cfg.backend.api_key.empty()) {
+        bool needs_key = true;
+        if (preset
+            && (preset->name == "lm-studio"
+                || preset->name == "openai-compatible")) {
+            needs_key = false;
+        }
+        if (needs_key) {
+            return Result<Client, std::string>::err(
+                "API key is required for remote backend "
+                "(set via --api-key or config)");
+        }
+    }
 
     // 4. 创建后端
     auto backend = BackendFactory::create(cfg.backend);
@@ -102,6 +119,14 @@ Client::~Client() {
     }
     if (m_backend) {
         m_backend->interrupt();
+    }
+    // 等待后台任务完成，防止 use-after-free
+    // m_generating 会被 on_done/on_error 重置，等待其变 false（最长 30 秒兜底）
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (m_generating.load() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    if (m_backend) {
         m_backend->shutdown();
     }
 }
@@ -133,8 +158,11 @@ Client& Client::operator=(Client&& other) noexcept {
         }
 
         m_backend = std::move(other.m_backend);
-        m_messages = std::move(other.m_messages);
-        m_system_prompt = std::move(other.m_system_prompt);
+        {
+            std::lock_guard<std::mutex> lock(m_messages_mutex);
+            m_messages = std::move(other.m_messages);
+            m_system_prompt = std::move(other.m_system_prompt);
+        }
         m_generating.store(other.m_generating.load());
         m_max_retries = other.m_max_retries;
         m_retry_delay_ms = other.m_retry_delay_ms;
@@ -154,18 +182,24 @@ Client& Client::operator=(Client&& other) noexcept {
 
 CompletionRequest Client::build_request(const std::string& user_text) {
     CompletionRequest req;
-    if (!m_system_prompt.empty()) {
-        req.messages.push_back(ChatMessage::system(m_system_prompt));
+    {
+        std::lock_guard<std::mutex> lock(m_messages_mutex);
+        if (!m_system_prompt.empty()) {
+            req.messages.push_back(ChatMessage::system(m_system_prompt));
+        }
+        req.messages.insert(req.messages.end(), m_messages.begin(), m_messages.end());
     }
-    req.messages.insert(req.messages.end(), m_messages.begin(), m_messages.end());
     req.messages.push_back(ChatMessage::user(user_text));
     return req;
 }
 
 CompletionRequest Client::build_request(const std::vector<ChatMessage>& messages) {
     CompletionRequest req;
-    if (!m_system_prompt.empty()) {
-        req.messages.push_back(ChatMessage::system(m_system_prompt));
+    {
+        std::lock_guard<std::mutex> lock(m_messages_mutex);
+        if (!m_system_prompt.empty()) {
+            req.messages.push_back(ChatMessage::system(m_system_prompt));
+        }
     }
     req.messages.insert(req.messages.end(), messages.begin(), messages.end());
     return req;
@@ -182,53 +216,27 @@ Result<void, std::string> Client::run_stream(
     std::string& content_out,
     std::string& reasoning_out)
 {
-    content_out.clear();
-    reasoning_out.clear();
-
+    // B.3：拆分后的 run_stream 仅做顶层重试调度
+    // 子方法负责：退避延迟计算、submit 失败处理、流错误处理、事件发布
     for (int attempt = 0; attempt <= m_max_retries; ++attempt) {
+        // 每次重试前清空已累积输出，避免新旧内容拼接错乱
+        content_out.clear();
+        reasoning_out.clear();
+
         if (should_stop()) {
             return Result<void, std::string>::ok();
         }
 
         auto reader = m_backend->submit_completion(request);
         if (!reader) {
-            // 提交失败，尝试重试
-            if (attempt < m_max_retries) {
-                int delay = m_retry_delay_ms * (1 << attempt);
-                if (cbs.on_error) {
-                    cbs.on_error(
-                        "Submit failed, retrying in " + std::to_string(delay) + "ms... ("
-                        + std::to_string(attempt + 1) + "/" + std::to_string(m_max_retries) + ")",
-                        true);
-                }
-                if (m_publish_events) {
-                    EventBus::instance().publish_async(StreamErrorEvent{
-                        .session_id = "client",
-                        .message = "Submit failed, retrying...",
-                        .retryable = true
-                    });
-                }
-                // 可中断的退避等待
-                auto wait_until = std::chrono::steady_clock::now() +
-                                  std::chrono::milliseconds(delay);
-                while (std::chrono::steady_clock::now() < wait_until) {
-                    if (should_stop()) {
-                        return Result<void, std::string>::ok();
-                    }
-                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                }
-                continue;
+            // B.3：submit 失败 → 委托给 handle_submit_failure
+            int64_t delay = compute_backoff_delay_ms(attempt);
+            if (handle_submit_failure(attempt, delay, cbs, should_stop)) {
+                continue;  // 已触发重试
             }
-            // 重试耗尽
-            if (cbs.on_error) {
-                cbs.on_error("Failed to submit completion request after retries", false);
-            }
-            if (m_publish_events) {
-                EventBus::instance().publish_async(StreamErrorEvent{
-                    .session_id = "client",
-                    .message = "Failed to submit completion request after retries",
-                    .retryable = false
-                });
+            // 被中断 or 重试耗尽
+            if (should_stop()) {
+                return Result<void, std::string>::ok();  // 被中断 → ok
             }
             return Result<void, std::string>::err(
                 "Failed to submit completion request after retries");
@@ -252,15 +260,7 @@ Result<void, std::string> Client::run_stream(
                     if (cbs.on_token) {
                         cbs.on_token(chunk.content_delta, chunk.reasoning_delta);
                     }
-                    if (m_publish_events) {
-                        EventBus::instance().publish_async(StreamTokenEvent{
-                            .session_id = "client",
-                            .content_delta = chunk.content_delta,
-                            .reasoning_delta = chunk.reasoning_delta,
-                            .is_thinking = !chunk.reasoning_delta.empty(),
-                            .token_count = chunk.token_count
-                        });
-                    }
+                    publish_token_event(chunk);
                 }
             } else if (state == StreamState::Complete) {
                 // 处理可能的最后一块数据
@@ -274,18 +274,7 @@ Result<void, std::string> Client::run_stream(
                 if (cbs.on_done) {
                     cbs.on_done(chunk);
                 }
-                if (m_publish_events) {
-                    EventBus::instance().publish_async(StreamDoneEvent{
-                        .session_id = "client",
-                        .full_content = content_out,
-                        .full_reasoning = reasoning_out,
-                        .was_interrupted = false,
-                        .prompt_tokens = chunk.prompt_tokens,
-                        .generated_tokens = chunk.generated_tokens,
-                        .prompt_ms = chunk.prompt_ms,
-                        .generation_ms = chunk.generation_ms
-                    });
-                }
+                publish_done_event(content_out, reasoning_out, false, chunk);
                 return Result<void, std::string>::ok();
             } else if (state == StreamState::Cancelled) {
                 if (cbs.on_done) {
@@ -293,41 +282,16 @@ Result<void, std::string> Client::run_stream(
                     final_chunk.is_final = true;
                     cbs.on_done(final_chunk);
                 }
-                if (m_publish_events) {
-                    EventBus::instance().publish_async(StreamDoneEvent{
-                        .session_id = "client",
-                        .full_content = content_out,
-                        .full_reasoning = reasoning_out,
-                        .was_interrupted = true
-                    });
-                }
+                publish_done_event(content_out, reasoning_out, true, chunk);
                 return Result<void, std::string>::ok();
             } else if (state == StreamState::Error) {
-                // 流错误，尝试重试
-                if (attempt < m_max_retries) {
-                    int delay = m_retry_delay_ms * (1 << attempt);
-                    if (cbs.on_error) {
-                        cbs.on_error("Stream error, retrying...", true);
-                    }
-                    auto wait_until = std::chrono::steady_clock::now() +
-                                      std::chrono::milliseconds(delay);
-                    while (std::chrono::steady_clock::now() < wait_until) {
-                        if (should_stop()) {
-                            return Result<void, std::string>::ok();
-                        }
-                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                    }
-                    break;  // break inner while, continue retry loop
+                // B.3：流错误 → 委托给 handle_stream_error
+                if (handle_stream_error(attempt, cbs, should_stop)) {
+                    break;  // 已触发重试，break 内层 while 进入下次重试
                 }
-                if (cbs.on_error) {
-                    cbs.on_error("Stream error after retries", false);
-                }
-                if (m_publish_events) {
-                    EventBus::instance().publish_async(StreamErrorEvent{
-                        .session_id = "client",
-                        .message = "Stream error after retries",
-                        .retryable = false
-                    });
+                // 被中断 or 重试耗尽
+                if (should_stop()) {
+                    return Result<void, std::string>::ok();  // 被中断 → ok
                 }
                 return Result<void, std::string>::err("Stream error after retries");
             }
@@ -338,12 +302,135 @@ Result<void, std::string> Client::run_stream(
 }
 
 // ============================================================
+// B.3：拆分出的子方法实现
+// ============================================================
+
+int64_t Client::compute_backoff_delay_ms(int attempt) const {
+    // 用 64 位 + 上限，避免 1 << attempt 在 attempt=30+ 时 int 溢出（UB）
+    int64_t delay = static_cast<int64_t>(m_retry_delay_ms) * (1LL << attempt);
+    constexpr int64_t MAX_DELAY_MS = 60000;  // 上限 60 秒
+    if (delay > MAX_DELAY_MS) delay = MAX_DELAY_MS;
+    return delay;
+}
+
+bool Client::handle_submit_failure(int attempt, int64_t delay_ms, const ChatCallbacks& cbs,
+                                   const std::function<bool()>& should_stop) {
+    // 返回值约定：true = 已触发重试（调用方 continue）；false = 应退出（重试耗尽或被中断）
+    // 被中断时调用方通过 should_stop() 判断后返回 ok（与原逻辑一致）
+    if (attempt >= m_max_retries) {
+        // 重试耗尽
+        if (cbs.on_error) {
+            cbs.on_error("Failed to submit completion request after retries", false);
+        }
+        if (m_publish_events) {
+            EventBus::instance().publish_async(StreamErrorEvent{
+                .session_id = "client",
+                .message = "Failed to submit completion request after retries",
+                .retryable = false
+            });
+        }
+        return false;
+    }
+
+    if (cbs.on_error) {
+        cbs.on_error(
+            "Submit failed, retrying in " + std::to_string(delay_ms) + "ms... ("
+            + std::to_string(attempt + 1) + "/" + std::to_string(m_max_retries) + ")",
+            true);
+    }
+    if (m_publish_events) {
+        EventBus::instance().publish_async(StreamErrorEvent{
+            .session_id = "client",
+            .message = "Submit failed, retrying...",
+            .retryable = true
+        });
+    }
+    // 可中断的退避等待：被中断时返回 false，调用方检查 should_stop 后返回 ok
+    if (interruptible_sleep(std::chrono::milliseconds(delay_ms), should_stop)) {
+        return false;  // 被中断
+    }
+    return true;  // 正常结束，调用方 continue 重试
+}
+
+bool Client::handle_stream_error(int attempt, const ChatCallbacks& cbs,
+                                 const std::function<bool()>& should_stop) {
+    // 返回值约定：true = 已触发重试（调用方 break 内层 while）；false = 应退出
+    if (attempt >= m_max_retries) {
+        if (cbs.on_error) {
+            cbs.on_error("Stream error after retries", false);
+        }
+        if (m_publish_events) {
+            EventBus::instance().publish_async(StreamErrorEvent{
+                .session_id = "client",
+                .message = "Stream error after retries",
+                .retryable = false
+            });
+        }
+        return false;
+    }
+
+    int64_t delay = compute_backoff_delay_ms(attempt);
+    if (cbs.on_error) {
+        cbs.on_error("Stream error, retrying...", true);
+    }
+    if (interruptible_sleep(std::chrono::milliseconds(delay), should_stop)) {
+        return false;  // 被中断
+    }
+    return true;  // 调用方 break 进入下次重试
+}
+
+void Client::publish_token_event(const StreamChunk& chunk) const {
+    if (!m_publish_events) return;
+    EventBus::instance().publish_async(StreamTokenEvent{
+        .session_id = "client",
+        .content_delta = chunk.content_delta,
+        .reasoning_delta = chunk.reasoning_delta,
+        .is_thinking = !chunk.reasoning_delta.empty(),
+        .token_count = chunk.token_count
+    });
+}
+
+void Client::publish_done_event(const std::string& content, const std::string& reasoning,
+                                bool was_interrupted, const StreamChunk& chunk) const {
+    if (!m_publish_events) return;
+    EventBus::instance().publish_async(StreamDoneEvent{
+        .session_id = "client",
+        .full_content = content,
+        .full_reasoning = reasoning,
+        .was_interrupted = was_interrupted,
+        .prompt_tokens = chunk.prompt_tokens,
+        .generated_tokens = chunk.generated_tokens,
+        .prompt_ms = chunk.prompt_ms,
+        .generation_ms = chunk.generation_ms
+    });
+}
+
+// ============================================================
+// interruptible_sleep
+// ============================================================
+
+bool Client::interruptible_sleep(std::chrono::milliseconds duration,
+                                 const std::function<bool()>& should_stop) {
+    auto wait_until = std::chrono::steady_clock::now() + duration;
+    while (std::chrono::steady_clock::now() < wait_until) {
+        if (should_stop()) {
+            return true;  // 被中断
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    return false;  // 正常结束
+}
+
+// ============================================================
 // 阻塞 API
 // ============================================================
 
 Result<std::string, std::string> Client::chat(const std::string& user_text) {
     auto request = build_request(user_text);
-    m_messages.push_back(ChatMessage::user(user_text));
+    {
+        std::lock_guard<std::mutex> lock(m_messages_mutex);
+        m_messages.push_back(ChatMessage::user(user_text));
+    }
 
     m_generating.store(true);
     std::string content, reasoning;
@@ -351,8 +438,18 @@ Result<std::string, std::string> Client::chat(const std::string& user_text) {
     m_generating.store(false);
 
     if (result.isOk()) {
-        m_messages.push_back(ChatMessage::assistant(content));
+        {
+            std::lock_guard<std::mutex> lock(m_messages_mutex);
+            m_messages.push_back(ChatMessage::assistant(content));
+        }
         return Result<std::string, std::string>::ok(std::move(content));
+    }
+    // 失败时回滚 user 消息，避免孤儿消息污染历史
+    {
+        std::lock_guard<std::mutex> lock(m_messages_mutex);
+        if (!m_messages.empty() && m_messages.back().role == ChatMessage::Role::User) {
+            m_messages.pop_back();
+        }
     }
     return Result<std::string, std::string>::err(result.error());
 }
@@ -374,7 +471,10 @@ Result<std::string, std::string> Client::chat(const std::vector<ChatMessage>& me
 Result<void, std::string> Client::stream_chat(const std::string& user_text,
                                                const ChatCallbacks& cbs) {
     auto request = build_request(user_text);
-    m_messages.push_back(ChatMessage::user(user_text));
+    {
+        std::lock_guard<std::mutex> lock(m_messages_mutex);
+        m_messages.push_back(ChatMessage::user(user_text));
+    }
 
     m_generating.store(true);
     std::string content, reasoning;
@@ -382,7 +482,14 @@ Result<void, std::string> Client::stream_chat(const std::string& user_text,
     m_generating.store(false);
 
     if (result.isOk()) {
+        std::lock_guard<std::mutex> lock(m_messages_mutex);
         m_messages.push_back(ChatMessage::assistant(content));
+    } else {
+        // 失败回滚
+        std::lock_guard<std::mutex> lock(m_messages_mutex);
+        if (!m_messages.empty() && m_messages.back().role == ChatMessage::Role::User) {
+            m_messages.pop_back();
+        }
     }
     return result;
 }
@@ -405,46 +512,24 @@ Result<void, std::string> Client::stream_chat(const std::vector<ChatMessage>& me
 
 Result<void, std::string> Client::chat_async(const std::string& user_text,
                                               const ChatCallbacks& cbs) {
-    // 聚合 content 的回调
-    auto aggregated_cbs = cbs;
-    auto content_ptr = std::make_shared<std::string>();
-    auto reasoning_ptr = std::make_shared<std::string>();
-
-    auto original_on_done = cbs.on_done;
-    auto content_ptr_copy = content_ptr;
-    auto reasoning_ptr_copy = reasoning_ptr;
-
-    aggregated_cbs.on_token = [cbs, content_ptr, reasoning_ptr](
-        const std::string& content_delta, const std::string& reasoning_delta) {
-        *content_ptr += content_delta;
-        *reasoning_ptr += reasoning_delta;
-        if (cbs.on_token) {
-            cbs.on_token(content_delta, reasoning_delta);
-        }
-    };
-
-    aggregated_cbs.on_done = [original_on_done, content_ptr_copy, reasoning_ptr_copy, this](
-        const StreamChunk& final_chunk) {
-        // 记录 assistant 消息到 history
-        m_messages.push_back(ChatMessage::assistant(*content_ptr_copy));
-        if (original_on_done) {
-            original_on_done(final_chunk);
-        }
-    };
-
-    return stream_chat_async(user_text, aggregated_cbs);
+    // chat_async 不再包装，直接委托 stream_chat_async
+    // stream_chat_async 已负责累积 content 并 push assistant 消息
+    return stream_chat_async(user_text, cbs);
 }
 
 Result<void, std::string> Client::stream_chat_async(const std::string& user_text,
                                                      const ChatCallbacks& cbs) {
-    if (m_generating.load()) {
+    // 用 compare_exchange_strong 修复 TOCTOU
+    bool expected = false;
+    if (!m_generating.compare_exchange_strong(expected, true)) {
         return Result<void, std::string>::err("Already generating");
     }
 
     auto request = build_request(user_text);
-    m_messages.push_back(ChatMessage::user(user_text));
-
-    m_generating.store(true);
+    {
+        std::lock_guard<std::mutex> lock(m_messages_mutex);
+        m_messages.push_back(ChatMessage::user(user_text));
+    }
 
     // 捕获 content 用于记录 assistant 消息
     auto content_ptr = std::make_shared<std::string>();
@@ -462,7 +547,10 @@ Result<void, std::string> Client::stream_chat_async(const std::string& user_text
     auto original_on_done = cbs.on_done;
     wrapped_cbs.on_done = [original_on_done, content_ptr, this](
         const StreamChunk& final_chunk) {
-        m_messages.push_back(ChatMessage::assistant(*content_ptr));
+        {
+            std::lock_guard<std::mutex> lock(m_messages_mutex);
+            m_messages.push_back(ChatMessage::assistant(*content_ptr));
+        }
         m_generating.store(false);
         if (original_on_done) {
             original_on_done(final_chunk);
@@ -498,21 +586,36 @@ Result<void, std::string> Client::stream_chat_async(const std::string& user_text
 // ============================================================
 
 void Client::set_system_prompt(const std::string& prompt) {
+    std::lock_guard<std::mutex> lock(m_messages_mutex);
     m_system_prompt = prompt;
 }
 
 void Client::clear_history() {
+    std::lock_guard<std::mutex> lock(m_messages_mutex);
     m_messages.clear();
 }
 
 void Client::regenerate() {
+    // 生成中拒绝 regenerate，避免与后台 push_back 竞态
+    if (m_generating.load()) {
+        if (m_publish_events) {
+            EventBus::instance().publish_async(StreamErrorEvent{
+                .session_id = "client",
+                .message = "Still generating, cannot regenerate",
+                .retryable = true
+            });
+        }
+        return;
+    }
+    std::lock_guard<std::mutex> lock(m_messages_mutex);
     // 移除最后一条 assistant 消息
     if (!m_messages.empty() && m_messages.back().role == ChatMessage::Role::Assistant) {
         m_messages.pop_back();
     }
 }
 
-const std::vector<ChatMessage>& Client::history() const {
+std::vector<ChatMessage> Client::history() const {
+    std::lock_guard<std::mutex> lock(m_messages_mutex);
     return m_messages;
 }
 

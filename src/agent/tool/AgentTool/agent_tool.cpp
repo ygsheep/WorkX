@@ -35,7 +35,8 @@ nlohmann::json AgentTool::input_schema() const {
             {"prompt", {{"type", "string"}, {"description", "The task prompt for the sub-agent"}}},
             {"tools", {{"type", "array"}, {"items", {{"type", "string"}}}, {"description", "Allowed tools for the sub-agent"}}}
         }},
-        {"required", {"prompt"}}
+        {"required", {"prompt"}},
+        {"additionalProperties", false}
     };
 }
 

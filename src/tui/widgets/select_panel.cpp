@@ -143,9 +143,16 @@ void SelectPanel::render() {
     int term_w = m_screen->width();
 
     // 面板从底部向上展开（留 3 行给 StatusBar + 输入行 + CommandPanel）
+    // F.7：小屏幕上 panel_h 可能超过 term_h - 3，需要裁剪 panel_h 并从顶部开始
     int panel_h = panel_height();
-    int start_row = term_h - panel_h - 3;
-    if (start_row < 0) start_row = 0;
+    int start_row;
+    if (panel_h + 3 > term_h) {
+        // 面板超出屏幕，从顶部开始，裁剪 panel_h 到可用高度
+        start_row = 0;
+        panel_h = std::max(1, term_h - 3);
+    } else {
+        start_row = term_h - panel_h - 3;
+    }
 
     int row = start_row;
 
@@ -211,4 +218,4 @@ void SelectPanel::dismiss() {
     // 由调用方负责 end_overlay + reset_buffers
 }
 
-} // namespace workx
+} // namespace agent

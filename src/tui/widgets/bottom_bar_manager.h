@@ -95,4 +95,4 @@ private:
     std::string m_current_line;  ///< 当前行内容（用于 Tab 补全时构造替换文本）
 };
 
-} // namespace workx
+} // namespace agent

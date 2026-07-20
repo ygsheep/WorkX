@@ -41,9 +41,6 @@ public:
     /// @return 模型信息列表，或错误信息
     /// @details 默认实现返回 "Not supported"。子类如 RemoteBackend 应覆写。
     virtual Result<std::vector<ModelInfo>, std::string> list_models() {
-
-
-
         return Result<std::vector<ModelInfo>, std::string>::err("Not supported");
     }
 

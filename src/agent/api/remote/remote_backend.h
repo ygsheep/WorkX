@@ -11,24 +11,13 @@
 #include <string>
 #include <memory>
 #include <atomic>
+#include <mutex>
 #include "agent/api/i_backend.h"
 #include "agent/api/remote/sse_stream_reader.h"
 #include "agent/api/remote/http_client.h"
 #include "agent/api/provider/i_provider_adapter.h"
 
 namespace agent {
-
-/// @brief shared_ptr 到 unique_ptr<IStreamReader> 的适配包装
-/// @details RemoteBackend 内部用 shared_ptr 管理 SSEStreamReader 生命周期
-class SharedPtrWrapper : public IStreamReader {
-public:
-    explicit SharedPtrWrapper(std::shared_ptr<SSEStreamReader> ptr);
-    StreamState next(std::function<bool()> should_stop, StreamChunk& out) override;
-    void cancel() override;
-
-private:
-    std::shared_ptr<SSEStreamReader> m_ptr;
-};
 
 /// @brief 远程后端
 /// @details 连接 OpenAI 兼容或 Anthropic API，支持流式推理
@@ -47,7 +36,7 @@ public:
     void set_model_name(const std::string& name) override { m_config.model_name = name; }
 
     // ICompletionProvider 接口
-    std::unique_ptr<IStreamReader> submit_completion(const CompletionRequest& request) override;
+    std::shared_ptr<IStreamReader> submit_completion(const CompletionRequest& request) override;
     void interrupt() override;
     bool is_generating() const override { return m_generating.load(); }
 
@@ -62,11 +51,9 @@ private:
     /// @brief HTTP 客户端
     std::unique_ptr<HttpClient> m_http_client;
 
-    // 重试配置
-    int m_retry_count = 3;
-    int m_retry_delay_ms = 1000;
-
     // 当前活跃的 reader，用于中断
+    // m_active_mutex 保护 m_active_reader 的读写，避免与 interrupt 并发竞态
+    mutable std::mutex m_active_mutex;
     std::shared_ptr<SSEStreamReader> m_active_reader;
 };
 

@@ -10,13 +10,15 @@ namespace agent {
 
 /// @brief 内置预设表
 /// @note openai-compatible 是特殊预设：无默认 URL/Model，用户必须提供 --remote
+/// @note F.9：默认模型版本会随厂商发布过时，定期更新并标注日期。
+///       用户可通过 config.json 的 backend.model_name 覆盖默认值。
 static const ProviderPreset s_presets[] = {
     {
         .name          = "openai",
         .display_name  = "OpenAI",
         .type          = ProviderType::OpenAI,
         .default_url   = "https://api.openai.com",
-        .default_model = "gpt-4o",
+        .default_model = "gpt-4o-2024-11-20",  // F.9: 2025-01 更新，原 gpt-4o
         .api_path      = "/v1/chat/completions"
     },
     {
@@ -24,7 +26,7 @@ static const ProviderPreset s_presets[] = {
         .display_name  = "Anthropic",
         .type          = ProviderType::Anthropic,
         .default_url   = "https://api.anthropic.com",
-        .default_model = "claude-sonnet-4-20250514",
+        .default_model = "claude-sonnet-4-5-20250929",  // F.9: 2025-09 更新，原 claude-sonnet-4-20250514
         .api_path      = "/v1/messages"
     },
     {
@@ -32,7 +34,7 @@ static const ProviderPreset s_presets[] = {
         .display_name  = "DeepSeek",
         .type          = ProviderType::OpenAI,
         .default_url   = "https://api.deepseek.com",
-        .default_model = "deepseek-chat",
+        .default_model = "deepseek-chat",  // DeepSeek 自动指向最新版本，无需日期后缀
         .api_path      = "/v1/chat/completions"
     },
     {
@@ -80,24 +82,27 @@ const ProviderPreset* find_preset(std::string_view name) {
 std::vector<std::string_view> list_preset_names() {
     std::vector<std::string_view> names;
     names.reserve(std::size(s_presets));
+    // 注意：lambda 必须显式返回 string_view，而非 std::string
+    // 若返回 std::string（值拷贝临时对象），string_view 会指向临时对象的内部 buffer，
+    // 临时对象在 push_back 后析构，string_view 悬空 → 读取到无效内容
     std::transform(std::begin(s_presets), std::end(s_presets), std::back_inserter(names),
-        [](const auto& preset) { return preset.name; });
+        [](const auto& preset) -> std::string_view { return preset.name; });
     return names;
 }
 
-std::string build_preset_url(const ProviderPreset* preset) {
+std::optional<std::string> build_preset_url(const ProviderPreset* preset) {
     if (!preset || preset->default_url.empty()) {
-        return "(custom URL required)";
+        return std::nullopt;
     }
 
-    std::string url(preset->default_url);
+    std::string url = preset->default_url;
     // 去重尾部 /
     while (!url.empty() && url.back() == '/') {
         url.pop_back();
     }
 
     if (!preset->api_path.empty()) {
-        url += std::string(preset->api_path);
+        url += preset->api_path;
     }
 
     return url;

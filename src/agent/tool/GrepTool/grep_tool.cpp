@@ -38,7 +38,8 @@ nlohmann::json GrepTool::input_schema() const {
             {"case_insensitive", {{"type", "boolean"}, {"description", "Ignore case"}, {"default", false}}},
             {"regex", {{"type", "boolean"}, {"description", "Treat pattern as regex"}, {"default", true}}}
         }},
-        {"required", {"pattern"}}
+        {"required", {"pattern"}},
+        {"additionalProperties", false}
     };
 }
 

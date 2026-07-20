@@ -28,20 +28,31 @@ namespace fs = std::filesystem;
 // 内部辅助函数
 // ============================================================
 
-/// @brief UTF-16 LE → UTF-8 转换
-static std::string utf16le_to_utf8(const char* data, size_t size) {
+/// @brief UTF-16 → UTF-8 转换（模板化，LE/BE 共享实现）
+/// @tparam LittleEndian true=LE（低字节在前），false=BE（高字节在前）
+template <bool LittleEndian>
+static std::string utf16_to_utf8_impl(const char* data, size_t size) {
     std::string result;
     result.reserve(size);
 
+    // 按 endian 读取 16-bit code unit
+    auto read_cu = [](const char* p) -> uint16_t {
+        const uint8_t b0 = static_cast<uint8_t>(p[0]);
+        const uint8_t b1 = static_cast<uint8_t>(p[1]);
+        if constexpr (LittleEndian) {
+            return static_cast<uint16_t>(b0 | (b1 << 8));
+        } else {
+            return static_cast<uint16_t>((b0 << 8) | b1);
+        }
+    };
+
     for (size_t i = 0; i + 1 < size; i += 2) {
-        const uint16_t cu = static_cast<uint8_t>(data[i])
-                          | (static_cast<uint8_t>(data[i + 1]) << 8);
+        const uint16_t cu = read_cu(data + i);
 
         // 高代理项（surrogate pair）
         if (cu >= 0xD800 && cu <= 0xDBFF) {
             if (i + 3 < size) {
-                const uint16_t lo = static_cast<uint8_t>(data[i + 2])
-                                  | (static_cast<uint8_t>(data[i + 3]) << 8);
+                const uint16_t lo = read_cu(data + i + 2);
                 if (lo >= 0xDC00 && lo <= 0xDFFF) {
                     const uint32_t cp = 0x10000 + ((cu - 0xD800) << 10) + (lo - 0xDC00);
                     result += static_cast<char>(0xF0 | (cp >> 18));
@@ -73,46 +84,14 @@ static std::string utf16le_to_utf8(const char* data, size_t size) {
     return result;
 }
 
+/// @brief UTF-16 LE → UTF-8 转换
+static std::string utf16le_to_utf8(const char* data, size_t size) {
+    return utf16_to_utf8_impl<true>(data, size);
+}
+
 /// @brief UTF-16 BE → UTF-8 转换
 static std::string utf16be_to_utf8(const char* data, size_t size) {
-    std::string result;
-    result.reserve(size);
-
-    for (size_t i = 0; i + 1 < size; i += 2) {
-        const uint16_t cu = (static_cast<uint8_t>(data[i]) << 8)
-                          | static_cast<uint8_t>(data[i + 1]);
-
-        if (cu >= 0xD800 && cu <= 0xDBFF) {
-            if (i + 3 < size) {
-                const uint16_t lo = (static_cast<uint8_t>(data[i + 2]) << 8)
-                                  | static_cast<uint8_t>(data[i + 3]);
-                if (lo >= 0xDC00 && lo <= 0xDFFF) {
-                    const uint32_t cp = 0x10000 + ((cu - 0xD800) << 10) + (lo - 0xDC00);
-                    result += static_cast<char>(0xF0 | (cp >> 18));
-                    result += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
-                    result += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
-                    result += static_cast<char>(0x80 | (cp & 0x3F));
-                    ++i;
-                    continue;
-                }
-            }
-            continue;
-        }
-
-        if (cu >= 0xDC00 && cu <= 0xDFFF) continue;
-
-        if (cu < 0x80) {
-            result += static_cast<char>(cu);
-        } else if (cu < 0x800) {
-            result += static_cast<char>(0xC0 | (cu >> 6));
-            result += static_cast<char>(0x80 | (cu & 0x3F));
-        } else {
-            result += static_cast<char>(0xE0 | (cu >> 12));
-            result += static_cast<char>(0x80 | ((cu >> 6) & 0x3F));
-            result += static_cast<char>(0x80 | (cu & 0x3F));
-        }
-    }
-    return result;
+    return utf16_to_utf8_impl<false>(data, size);
 }
 
 /// @brief GBK → UTF-8 转换（平台相关）
@@ -284,17 +263,8 @@ std::vector<std::string> read_as_utf8_lines(const fs::path& path, Encoding encod
         std::ifstream file(path);
         if (!file.is_open()) return lines;
 
-        // 检测并跳过 UTF-8 BOM
-        char bom[3];
-        file.read(bom, 3);
-        if (file.gcount() == 3
-            && static_cast<unsigned char>(bom[0]) == 0xEF
-            && static_cast<unsigned char>(bom[1]) == 0xBB
-            && static_cast<unsigned char>(bom[2]) == 0xBF) {
-            // BOM 已跳过
-        } else {
-            file.seekg(0); // 无 BOM，回到开头
-        }
+        // 跳过 UTF-8 BOM（若存在）
+        skip_utf8_bom(file);
 
         std::string line;
         while (std::getline(file, line)) {
@@ -358,6 +328,19 @@ void normalize_eol(std::string& line) {
     if (!line.empty() && line.back() == '\r') {
         line.pop_back();
     }
+}
+
+bool skip_utf8_bom(std::ifstream& file) {
+    char bom[3];
+    file.read(bom, 3);
+    if (file.gcount() == 3
+        && static_cast<unsigned char>(bom[0]) == 0xEF
+        && static_cast<unsigned char>(bom[1]) == 0xBB
+        && static_cast<unsigned char>(bom[2]) == 0xBF) {
+        return true;  // BOM 已跳过
+    }
+    file.seekg(0);  // 无 BOM，回到开头
+    return false;
 }
 
 } // namespace agent::tool

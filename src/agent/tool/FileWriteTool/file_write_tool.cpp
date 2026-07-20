@@ -21,12 +21,22 @@
 #include "agent/tool/FileWriteTool/diff.h"
 #include "agent/tool/FileReadState/file_read_state.h"
 #include "agent/tool/types.h"
+#include "app/ui/file_index.h"
 
 #include <fstream>
 #include <iterator>
 #include <sstream>
 #include <system_error>
 #include <algorithm>
+#include <cstdio>
+#include <cstring>
+
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#include <fcntl.h>
+#endif
 
 namespace agent::tool {
 
@@ -34,49 +44,40 @@ namespace fs = std::filesystem;
 
 namespace {
 
-/// @brief 读取文件并 LF 规范化
-/// @details 用于 staleness 内容对比：
+/// @brief 调用 fsync/_commit 把文件数据刷到磁盘
+/// @details 用于原子写入前的持久化保证。失败时通过 ec 返回（非致命）。
+void do_sync(const fs::path& path, std::error_code& ec) {
+    ec.clear();
+#ifdef _WIN32
+    FILE* f = _wfopen(path.c_str(), L"rb+");
+#else
+    FILE* f = std::fopen(path.c_str(), "rb+");
+#endif
+    if (!f) {
+        ec = std::error_code(errno, std::system_category());
+        return;
+    }
+    int fd = fileno(f);
+#ifdef _WIN32
+    if (_commit(fd) != 0) {
+        ec = std::error_code(errno, std::system_category());
+    }
+#else
+    if (::fsync(fd) != 0) {
+        ec = std::error_code(errno, std::system_category());
+    }
+#endif
+    std::fclose(f);
+}
+
+/// @brief 将字符串 LF 规范化
+/// @details 用于 staleness 内容对比与 FileReadState 状态刷新：
 ///          1. CRLF (\r\n) → LF (\n)
 ///          2. 孤立 \r → LF（旧 Mac 风格）
 ///          3. 移除末尾单个 \n（对齐 FileReadTool 的 getline 行为：
 ///             std::getline 剥离 \n 分隔符，最后一行无 \n 时也直接返回）
-/// @param path 文件路径
-/// @return LF 规范化后的内容；读取失败返回空字符串
-std::string read_file_lf_normalized(const fs::path& path) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file.is_open()) return {};
-
-    // 花括号初始化避免 most vexing parse（圆括号会被解析为函数声明）
-    std::string raw{
-        std::istreambuf_iterator<char>(file),
-        std::istreambuf_iterator<char>()
-    };
-
-    std::string normalized;
-    normalized.reserve(raw.size());
-    for (size_t i = 0; i < raw.size(); ++i) {
-        if (raw[i] == '\r') {
-            normalized += '\n';
-            // 跳过 CRLF 的 \n
-            if (i + 1 < raw.size() && raw[i + 1] == '\n') {
-                ++i;
-            }
-        } else {
-            normalized += raw[i];
-        }
-    }
-
-    // 移除末尾单个 \n（对齐 getline 行为）
-    if (!normalized.empty() && normalized.back() == '\n') {
-        normalized.pop_back();
-    }
-    return normalized;
-}
-
-/// @brief 将字符串 LF 规范化（同 read_file_lf_normalized 的规范化逻辑）
-/// @details 用于写入后刷新 FileReadStateTracker 时规范化 LLM 提供的 content，
-///          保证与 read_file_lf_normalized 的输出格式一致，使后续 staleness
-///          内容对比能正确匹配。
+/// @param content 待规范化的内容（按值传递，避免拷贝）
+/// @return LF 规范化后的内容
 std::string lf_normalize(std::string content) {
     std::string normalized;
     normalized.reserve(content.size());
@@ -94,6 +95,23 @@ std::string lf_normalize(std::string content) {
         normalized.pop_back();
     }
     return normalized;
+}
+
+/// @brief 读取文件并 LF 规范化
+/// @details 复用 lf_normalize 的规范化逻辑，保证读取与写入路径行为一致。
+/// @param path 文件路径
+/// @return LF 规范化后的内容；读取失败返回空字符串
+std::string read_file_lf_normalized(const fs::path& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) return {};
+
+    // 花括号初始化避免 most vexing parse（圆括号会被解析为函数声明）
+    std::string raw{
+        std::istreambuf_iterator<char>(file),
+        std::istreambuf_iterator<char>()
+    };
+
+    return lf_normalize(std::move(raw));
 }
 
 } // anonymous namespace
@@ -284,8 +302,14 @@ ToolResult FileWriteTool::call(
         }
     }
 
-    // 4. 判断 create/update
-    const bool is_update = fs::exists(file_path, ec);
+    // 4. 判断 create/update（fs::exists 失败时返回错误，避免绕过 pre-read 检查）
+    bool is_update = fs::exists(file_path, ec);
+    if (ec) {
+        return ToolResult::error(
+            std::format("Failed to check file existence '{}': {}",
+                        file_path.string(), ec.message())
+        );
+    }
 
     // 5. 安全检查（update 模式）：Pre-read + Staleness + .bak 备份
     if (is_update) {
@@ -317,22 +341,68 @@ ToolResult FileWriteTool::call(
         // 读取失败不中断：old_content 为空，diff 会显示全部新增
     }
 
-    // 7. 写入文件（binary 模式，避免平台自动转换行尾；CC 也是直接写入 content）
-    std::ofstream out(file_path, std::ios::binary | std::ios::trunc);
-    if (!out.is_open()) {
-        return ToolResult::error(
-            std::format("Failed to open file for writing: {}", write_input.file_path)
-        );
-    }
-    out << write_input.content;
-    out.flush();
-    out.close();
+    // 7. 原子写入：写临时文件 → fsync → rename
+    //    防止写入失败导致原文件损坏（直接 trunc 写入会破坏原文件）
+    //    Windows rename 跨卷或目标存在时可能失败，失败时回退到直接写入
+    fs::path tmp_path = file_path;
+    tmp_path += ".workx.tmp";
 
-    // 检查写入后流状态
-    if (out.fail()) {
-        return ToolResult::error(
-            std::format("Failed to write file: {}", write_input.file_path)
-        );
+    bool atomic_ok = false;
+    {
+        std::ofstream out(tmp_path, std::ios::binary | std::ios::trunc);
+        if (!out.is_open()) {
+            // 临时文件创建失败，回退到直接写入
+        } else {
+            out << write_input.content;
+            out.flush();
+            out.close();
+
+            if (out.fail()) {
+                // 写入失败，删除临时文件
+                std::error_code rm_ec;
+                fs::remove(tmp_path, rm_ec);
+                return ToolResult::error(
+                    std::format("Failed to write file: {}", write_input.file_path)
+                );
+            }
+            atomic_ok = true;
+        }
+    }
+
+    if (atomic_ok) {
+        // fsync（POSIX 用 fsync，Windows 用 _commit）
+        std::error_code sync_ec;
+        do_sync(tmp_path, sync_ec);
+        // sync 失败不致命，继续 rename
+
+        // 原子 rename 覆盖原文件
+        std::error_code rename_ec;
+        fs::rename(tmp_path, file_path, rename_ec);
+        if (rename_ec) {
+            // rename 失败（如 Windows 跨卷或目标被占用），回退到直接写入
+            std::error_code rm_ec;
+            fs::remove(tmp_path, rm_ec);
+            atomic_ok = false;
+        }
+    }
+
+    if (!atomic_ok) {
+        // 回退路径：直接写入（保留原 .bak 备份兜底）
+        std::ofstream out(file_path, std::ios::binary | std::ios::trunc);
+        if (!out.is_open()) {
+            return ToolResult::error(
+                std::format("Failed to open file for writing: {}", write_input.file_path)
+            );
+        }
+        out << write_input.content;
+        out.flush();
+        out.close();
+
+        if (out.fail()) {
+            return ToolResult::error(
+                std::format("Failed to write file: {}", write_input.file_path)
+            );
+        }
     }
 
     // 8. 刷新 FileReadStateTracker（写后保持状态一致，允许连续写入）
@@ -346,6 +416,10 @@ ToolResult FileWriteTool::call(
             false  // 写后视为完整视图
         );
     }
+
+    // 8b. 标记 FileIndex 为脏（方案 E-D：TUI @ 补全下次触发时会重建索引）
+    //     覆盖 create/update 两种模式，mark_dirty 仅原子置位，不触发立即重建
+    global_file_index().mark_dirty();
 
     // 9. 生成 diff（update 模式）并返回结果
     if (is_update) {

@@ -19,7 +19,7 @@ public:
     int submit_count = 0;
     int interrupt_count = 0;
 
-    std::unique_ptr<IStreamReader> submit_completion(const CompletionRequest& req) override {
+    std::shared_ptr<IStreamReader> submit_completion(const CompletionRequest& req) override {
         (void)req;
         submit_count++;
         return nullptr;
@@ -72,7 +72,6 @@ TEST_CASE("ChatSession load non-existent file", "[session]") {
     cfg.clear_for_test();
 }
 
-#ifdef WORKX_HAS_NLOHMANN_JSON
 TEST_CASE("ChatSession save and load round-trip", "[session]") {
     auto& cfg = ConfigManager::instance();
     cfg.clear_for_test();
@@ -98,4 +97,3 @@ TEST_CASE("ChatSession save and load round-trip", "[session]") {
     std::filesystem::remove(test_path);
     cfg.clear_for_test();
 }
-#endif

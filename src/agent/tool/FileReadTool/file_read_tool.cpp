@@ -209,21 +209,38 @@ ToolResult FileReadTool::call(
     const nlohmann::json& input,
     const ToolContext& ctx
 ) {
-    // 1. 解析输入 JSON 为 FileReadInput 结构
-    FileReadInput read_input = input.get<FileReadInput>();
+    // 1. 解析输入 JSON 为 FileReadInput 结构（try-catch 防止类型不匹配抛异常）
+    FileReadInput read_input;
+    try {
+        read_input = input.get<FileReadInput>();
+    } catch (const nlohmann::json::exception& e) {
+        return ToolResult::error(std::format("Input parse failed: {}", e.what()));
+    }
 
     // 读取可配置参数（回退到 constants.h 编译期默认值）
     // prompt() 仍使用 constants.h 作为文档默认值，实际限制由此处配置决定
-    const size_t max_file_size = static_cast<size_t>(
-        agent::ConfigManager::instance().get_or<int>(
-            agent::keys::FILE_READ_MAX_SIZE,
-            static_cast<int>(constants::MAX_FILE_SIZE_BYTES)
-        )
+    constexpr int64_t MAX_FILE_SIZE_LIMIT = 100LL * 1024 * 1024;  // 100 MB 上限
+    constexpr int MAX_LINES_LIMIT = 100000;  // 10 万行上限
+    constexpr int MAX_LINES_FLOOR = 1;       // 至少 1 行
+
+    int max_size_cfg = agent::ConfigManager::instance().get_or<int>(
+        agent::keys::FILE_READ_MAX_SIZE,
+        static_cast<int>(constants::MAX_FILE_SIZE_BYTES)
     );
-    const int max_lines = agent::ConfigManager::instance().get_or<int>(
+    // 校验范围：负数或超上限时回退到编译期默认值
+    if (max_size_cfg < 0 || max_size_cfg > MAX_FILE_SIZE_LIMIT) {
+        max_size_cfg = static_cast<int>(constants::MAX_FILE_SIZE_BYTES);
+    }
+    const size_t max_file_size = static_cast<size_t>(max_size_cfg);
+
+    int max_lines = agent::ConfigManager::instance().get_or<int>(
         agent::keys::FILE_READ_MAX_LINES,
         constants::MAX_LINES_TO_READ
     );
+    // 校验范围：负数或超上限时回退到编译期默认值；floor 到 1
+    if (max_lines < MAX_LINES_FLOOR || max_lines > MAX_LINES_LIMIT) {
+        max_lines = constants::MAX_LINES_TO_READ;
+    }
 
     // 2. 路径解析：相对路径基于 ctx.cwd 解析，再规范化为绝对路径
     fs::path file_path(read_input.file_path);
@@ -284,16 +301,7 @@ ToolResult FileReadTool::call(
         }
 
         // 跳过 UTF-8 BOM（若存在）
-        char bom[3];
-        file.read(bom, 3);
-        if (file.gcount() == 3
-            && static_cast<unsigned char>(bom[0]) == 0xEF
-            && static_cast<unsigned char>(bom[1]) == 0xBB
-            && static_cast<unsigned char>(bom[2]) == 0xBF) {
-            // BOM 已跳过
-        } else {
-            file.seekg(0); // 无 BOM，回到开头
-        }
+        skip_utf8_bom(file);
 
         target_lines.reserve(static_cast<size_t>(std::min(limit, max_lines)));
         std::string line;

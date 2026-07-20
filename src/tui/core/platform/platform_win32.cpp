@@ -13,6 +13,7 @@
 #include <windows.h>
 #include <fcntl.h>
 #include <io.h>
+#include <iostream>
 #include <memory>
 
 #ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
@@ -51,11 +52,16 @@ public:
             SetConsoleMode(m_h_output, m_original_output_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
         }
 
-        SetConsoleOutputCP(CP_UTF8);
+        // 设置输出 CP 为 UTF-8，失败时记录但不阻塞（旧版 Windows 仍可工作，仅 UTF-8 显示乱码）
+        if (!SetConsoleOutputCP(CP_UTF8)) {
+            std::cerr << "Warning: SetConsoleOutputCP(CP_UTF8) failed, UTF-8 display may be incorrect\n";
+        }
 
         m_h_input = GetStdHandle(STD_INPUT_HANDLE);
         if (m_h_input != INVALID_HANDLE_VALUE && GetConsoleMode(m_h_input, &m_original_input_mode)) {
-            _setmode(_fileno(stdin), _O_WTEXT);
+            // stdin 统一用 UTF-8 模式（_O_U8TEXT），与 disable_raw_mode 一致；
+            // 原来的 _O_WTEXT（UTF-16）与 WriteConsoleA 输出链路不对称，且让 CRT 函数困惑
+            _setmode(_fileno(stdin), _O_U8TEXT);
             DWORD new_mode = m_original_input_mode;
             new_mode &= ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT);
             SetConsoleMode(m_h_input, new_mode);
@@ -172,17 +178,26 @@ public:
     }
 
     void flush() override {
-        // FlushConsoleInputBuffer 清除输入缓冲区，不应在输出 flush 中调用
-        // 仅刷新 stdout 即可
-        fflush(stdout);
+        // G.2：raw mode 启用时（即 VT 处理已启用），stdout 通过 WriteConsoleA 写入，
+        //      fflush(stdout) 在 VT 模式下是 no-op（stdout 未与 Console 句柄关联的
+        //      CRT 缓冲区），导致 printf 与 WriteConsoleA 混用时输出顺序错乱。
+        //      改用 FlushFileBuffers 强制刷新 Console 句柄的内核缓冲区。
+        if (m_raw_mode_enabled && m_h_output && m_h_output != INVALID_HANDLE_VALUE) {
+            FlushFileBuffers(m_h_output);
+        } else {
+            fflush(stdout);
+        }
     }
     int put_codepoint(const char* utf8_data, size_t length, int expected_width) override {
         if (m_h_output) {
             CONSOLE_SCREEN_BUFFER_INFO info;
             if (!GetConsoleScreenBufferInfo(m_h_output, &info)) return expected_width;
 
+            // G.1：initial_pos.X 是 SHORT（16 位），cast 到 int 后再与 viewport_width 比较
+            // 避免在极端宽度（>32767，理论上不会发生但防御性编程）下 SHORT 溢出
             int viewport_width = info.srWindow.Right - info.srWindow.Left + 1;
             COORD initial_pos = info.dwCursorPosition;
+            int initial_pos_x = static_cast<int>(initial_pos.X);
             DWORD written = 0;
             WriteConsoleA(m_h_output, utf8_data, static_cast<DWORD>(length), &written, nullptr);
 
@@ -191,14 +206,17 @@ public:
 
             // 在视窗宽度的最右列写入字符时，控制台会自动换行
             // 此时需要用空格触发延迟换行并回退，让后续光标位置正确
-            if (utf8_data[0] != 0x09 && initial_pos.X == viewport_width - 1) {
+            // G.1：比较前 cast 到 int，并限制 max_x 上限为 SHORT 范围
+            int max_x = std::min(viewport_width - 1, 32767);
+            if (utf8_data[0] != 0x09 && initial_pos_x == max_x) {
                 WriteConsoleA(m_h_output, " \b", 2, &written, nullptr);
                 GetConsoleScreenBufferInfo(m_h_output, &new_info);
             }
 
-            int width = new_info.dwCursorPosition.X - initial_pos.X;
+            int new_pos_x = static_cast<int>(new_info.dwCursorPosition.X);
+            int width = new_pos_x - initial_pos_x;
             if (width < 0) {
-                width += info.dwSize.X;  // 换行时 X 回绕
+                width += static_cast<int>(info.dwSize.X);  // 换行时 X 回绕
             }
             return width;
         } else {
@@ -220,4 +238,4 @@ std::unique_ptr<IPlatform> create_platform() {
     return std::make_unique<Win32Platform>();
 }
 
-} // namespace workx
+} // namespace agent

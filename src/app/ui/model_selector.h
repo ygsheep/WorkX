@@ -26,4 +26,4 @@ std::string select_model_interactive(
     Terminal* term, Screen* scr, IBackend* bk,
     const std::string& current_model);
 
-} // namespace workx
+} // namespace agent

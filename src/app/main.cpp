@@ -128,6 +128,7 @@ static int run(int argc, char* argv[]) {
     auto init_result = terminal.initialize();
     if (init_result.isErr()) {
         std::cerr << "Failed to initialize terminal: " << init_result.error() << "\n";
+        terminal.restore();
         return 1;
     }
 
@@ -449,16 +450,26 @@ static int run(int argc, char* argv[]) {
     terminal.run();
 
     // ---- 清理 ----
+    // 顺序：unsubscribe → cancelAll → waitForAll → clear EventBus → restore
+    // 先取消订阅，避免 cancelAll 触发的事件进入已失效的回调
     EventBus::instance().unsubscribe<UserInputEvent>(input_token);
     EventBus::instance().unsubscribe<ShutdownEvent>(shutdown_token);
 
+    // 先取消并等待所有任务，再恢复终端
+    // 这样任务完成时发的 UI 事件还能正常处理
     TaskManager::instance().cancelAll();
     TaskManager::instance().waitForAll();
+
+    // 清空 EventBus 订阅，防止后续异步事件触发已失效的回调
+    EventBus::instance().clear();
+
+    // 最后恢复终端（幂等，析构时会再次调用）
+    terminal.restore();
 
     return 0;
 }
 
-} // namespace workx
+} // namespace agent
 
 int main(int argc, char* argv[]) {
     return agent::run(argc, argv);

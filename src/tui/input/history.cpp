@@ -71,4 +71,4 @@ bool History::save(const std::filesystem::path& path) const {
     return file.good();
 }
 
-} // namespace workx
+} // namespace agent

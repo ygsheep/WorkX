@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file tui_state.h
  * @brief TUI 状态机
  * @details 定义 TuiState 枚举和状态转换逻辑
@@ -98,4 +98,4 @@ private:
     TuiState m_state = TuiState::IDLE;
 };
 
-} // namespace workx
+} // namespace agent

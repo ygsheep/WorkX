@@ -86,4 +86,4 @@ void StreamingBuffer::flush_loop() {
     }
 }
 
-} // namespace workx
+} // namespace agent

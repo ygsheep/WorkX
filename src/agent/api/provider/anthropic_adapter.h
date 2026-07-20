@@ -29,6 +29,9 @@ public:
     bool parse_sse_event(const std::string& event_type,
                          const std::string& data,
                          StreamChunk& out) const override;
+
+    /// @brief Anthropic 无公开 list_models 端点，返回内置 Claude 模型列表
+    std::vector<ModelInfo> get_builtin_models() const override;
 };
 
 } // namespace agent

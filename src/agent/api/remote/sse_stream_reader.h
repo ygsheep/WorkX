@@ -10,6 +10,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <queue>
 #include <mutex>
 #include <condition_variable>
@@ -44,8 +45,8 @@ public:
     void cancel() override;
 
     /// @brief 喂入原始 HTTP 数据（由 curl 回调调用）
-    /// @param data 原始 SSE 数据块
-    void feed_data(const std::string& data);
+    /// @param data 原始 SSE 数据块（C.10：改 string_view 避免 std::string 拷贝）
+    void feed_data(std::string_view data);
 
     /// @brief 标记 HTTP 响应结束
     /// @param error 错误信息，空表示正常结束
@@ -69,9 +70,9 @@ private:
 
     SSEParser m_sse_parser;
 
-    // 累积内容，用于 is_final 时填充 full_content
-    std::string m_content_buffer;
-    std::string m_reasoning_buffer;
+    // C.8：删除 m_content_buffer / m_reasoning_buffer
+    // 原实现累积所有 delta 但从未被读取，长响应下无限增长占内存
+    // （chat_renderer.h 有独立的 m_reasoning_buffer 用于 ctrl+o 视图，与本类无关）
     int32_t m_token_count = 0;
 };
 

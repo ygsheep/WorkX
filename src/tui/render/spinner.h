@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file spinner.h
  * @brief 思考计时动画
  * @details 替代原 |/-\ 旋转，驱动 StatusBar 的思考帧更新和秒数计时
@@ -64,4 +64,4 @@ private:
     static constexpr int FRAME_INTERVAL_MS = 100;  // 100ms（10帧布莱叶旋转）
 };
 
-} // namespace workx
+} // namespace agent

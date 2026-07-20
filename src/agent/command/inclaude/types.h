@@ -63,9 +63,33 @@ struct CommandResult {
     }
 };
 
+/// 提示词内容块类型 — 对应 ContentBlockParam 的 type 字段
+enum class PromptBlockType {
+    Text,         ///< "text"
+    Image,        ///< "image"
+    ToolResult,   ///< "tool_result"
+};
+
+/// @brief 字符串 → PromptBlockType 映射；未识别值返回 PromptBlockType::Text
+inline PromptBlockType prompt_block_type_from_string(std::string_view s) {
+    if (s == "image") return PromptBlockType::Image;
+    if (s == "tool_result") return PromptBlockType::ToolResult;
+    return PromptBlockType::Text;
+}
+
+/// @brief PromptBlockType → 字符串（与 Anthropic API 字面量一致）
+inline std::string_view to_string_view(PromptBlockType t) {
+    switch (t) {
+        case PromptBlockType::Text:       return "text";
+        case PromptBlockType::Image:      return "image";
+        case PromptBlockType::ToolResult: return "tool_result";
+    }
+    return "text";
+}
+
 /// 提示词内容块 — 对应 ContentBlockParam
 struct PromptBlock {
-    std::string type;           ///< "text" | "image" | "tool_result"
+    PromptBlockType type{PromptBlockType::Text};   ///< 内容块类型
     std::string text;           ///< 文本内容
     nlohmann::json image;       ///< 图片内容（可选）
 };

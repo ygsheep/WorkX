@@ -12,6 +12,8 @@
 #include <vector>
 #include <filesystem>
 #include <mutex>
+#include <atomic>
+#include <chrono>
 
 namespace agent {
 
@@ -69,10 +71,26 @@ public:
     /// @return 文件数量
     size_t size() const;
 
+    /// @brief 标记索引为脏（下次 refresh_if_needed 时重建）
+    /// @details 工具（FileWriteTool 等）写入/删除文件后调用。
+    ///          无锁原子操作，可安全在工具线程频繁调用。
+    void mark_dirty();
+
+    /// @brief 按需刷新索引（脏或超过最小间隔时重建）
+    /// @param min_interval_ms 最小刷新间隔（毫秒），用于防抖避免频繁重建
+    /// @return 实际触发了重建返回 true
+    /// @details 典型场景：TUI `@` 补全面板首次打开或查询变更时调用。
+    ///          若索引从未构建过（ready_=false）则直接返回 false。
+    bool refresh_if_needed(int64_t min_interval_ms);
+
 private:
     std::vector<Entry> entries_;
     bool ready_{false};
     mutable std::mutex mutex_;
+
+    std::atomic<bool> m_dirty{true};                              ///< 脏标记：工具写入后置 true，build 后清 false
+    std::chrono::steady_clock::time_point m_last_build_ts;        ///< 上次构建时间（用于防抖）
+    std::string m_cwd_;                                           ///< 上次构建的工作目录（refresh 复用）
 
     /// @brief 判断目录是否应跳过
     /// @param dir_name 目录名

@@ -37,7 +37,8 @@ nlohmann::json BashTool::input_schema() const {
             {"cwd", {{"type", "string"}, {"description", "Working directory for the command"}}},
             {"timeout", {{"type", "integer"}, {"description", "Timeout in milliseconds"}}}
         }},
-        {"required", {"command"}}
+        {"required", {"command"}},
+        {"additionalProperties", false}
     };
 }
 

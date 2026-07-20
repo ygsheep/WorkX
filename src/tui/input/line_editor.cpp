@@ -6,6 +6,7 @@
 
 #include "tui/input/line_editor.h"
 #include "tui/core/platform/i_platform.h"
+#include "tui/utils/utf8_utils.h"
 #include <cassert>
 #include <cstdio>
 #include <cwctype>
@@ -134,10 +135,9 @@ size_t LineEditor::next_utf8_char_pos(const std::string& line, size_t pos) {
 }
 
 int LineEditor::estimate_width(char32_t codepoint) {
-    // Win32 Console 下宽度由 put_codepoint 实测决定，这里返回 1 作为默认
-    // CJK 字符和 emoji 通常为 2 宽度，但具体取决于终端和字体
-    (void)codepoint;
-    return 1;
+    // 调用统一的 utf8_utils 宽度判定，保证 LineEditor 与渲染层一致
+    // 注：Tab 在 LineEditor 上下文中由 handle_input 单独处理，此处返回 0 不影响
+    return char32_width(codepoint);
 }
 
 bool LineEditor::is_space_codepoint(char32_t cp) {
@@ -335,6 +335,11 @@ void LineEditor::history_next() {
 }
 
 LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
+    // 重置历史浏览状态，避免上次浏览到历史中间项后新输入从中间项开始
+    // m_history_idx = SIZE_MAX 表示未在浏览历史
+    m_history_idx = SIZE_MAX;
+    m_backup_line.clear();
+
     // 通知 Terminal：read_line() 开始运行
     if (m_editing_changed_cb) {
         m_editing_changed_cb(true);
@@ -559,13 +564,25 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
             }
 
             // 反斜杠续行 / 斜杠命令 标记
-            if (!m_line.empty() && (m_line.back() == '\\' || m_line.back() == '/')) {
-                // 在末尾显示高亮替换
-                m_platform->move_cursor(-1);
-                m_platform->write_output("\x1b[7m");  // 反色
-                m_platform->write_output(m_line.substr(m_line.size() - 1));
-                m_platform->write_output("\x1b[0m");  // 重置
-                is_special_char = true;
+            // E.8：使用 prev_utf8_char_pos 定位末尾完整字符的起始字节，
+            // 确保 multi-byte UTF-8 字符不会被 m_line.back() 取到的末尾字节
+            // 误判（虽然 UTF-8 续字节 0x80-0xBF 不包含 '\\' 或 '/'，但显式
+            // 检查字符长度更稳健，也为未来扩展留余地）
+            if (!m_line.empty()) {
+                size_t last_start = prev_utf8_char_pos(m_line, m_line.size());
+                size_t char_len = m_line.size() - last_start;
+                // 仅对单字节 ASCII backslash/slash 触发特殊标记
+                if (char_len == 1) {
+                    char last_ch = m_line[last_start];
+                    if (last_ch == '\\' || last_ch == '/') {
+                        // 在末尾显示高亮替换
+                        m_platform->move_cursor(-1);
+                        m_platform->write_output("\x1b[7m");  // 反色
+                        m_platform->write_output(m_line.substr(last_start, 1));
+                        m_platform->write_output("\x1b[0m");  // 重置
+                        is_special_char = true;
+                    }
+                }
             }
 
             // 通知输入变化（用于命令面板过滤更新）
@@ -622,4 +639,4 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
     }
 }
 
-} // namespace workx
+} // namespace agent

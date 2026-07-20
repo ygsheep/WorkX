@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file line_editor.h
  * @brief 行编辑器
  * @details UTF-8/CJK 宽度计算、历史、基础编辑操作、Tab 补全回调
@@ -133,4 +133,4 @@ private:
     EditingChangedCallback m_editing_changed_cb;
 };
 
-} // namespace workx
+} // namespace agent

@@ -1,7 +1,9 @@
 /**
- * @file events.h
- * @brief 所有事件类型定义
- * @details TUI/Session/Agent 层间通信事件
+ * @file types.h
+ * @brief 消息与事件类型定义
+ * @details 包含 ChatMessage / ToolUse 等消息类型，以及 UserInputEvent /
+ *          StreamTokenEvent / StreamDoneEvent / StreamErrorEvent / ToolCallEvent
+ *          等跨层通信事件类型。历史原因事件与消息类型同文件，本次保守保留不拆分。
  * @version 1.0.0
  */
 

@@ -11,6 +11,7 @@
 #include "tui/widgets/status_bar.h"
 #include "tui/render/spinner.h"
 #include "tui/render/output_formatter.h"
+#include "tui/render/markdown_renderer.h"
 #include "tui/render/streaming_buffer.h"
 #include "tui/render/syntax_highlighter.h"
 #include "core/events/event_bus.h"
@@ -447,8 +448,10 @@ void ChatRenderer::start() {
                 }
             }
 
-            // 更新 token 计数
-            m_total_tokens += e.token_count;
+            // 更新 token 计数（防御负数）
+            if (e.token_count > 0) {
+                m_total_tokens += e.token_count;
+            }
             m_status_bar->set_token_count(m_total_tokens);
         })
     );
@@ -488,7 +491,9 @@ void ChatRenderer::start() {
                     e.generation_ms / 1000.0);
                 m_terminal->write(stats);
                 m_terminal->reset_color();
-                m_total_tokens += e.generated_tokens;
+                if (e.generated_tokens > 0) {
+                    m_total_tokens += e.generated_tokens;
+                }
             }
 
             m_message_count++;
@@ -502,7 +507,7 @@ void ChatRenderer::start() {
                 int h = m_terminal->get_terminal_height();
                 int input_row = h - 1;
                 if (input_row < 1) input_row = 1;
-                m_terminal->cursor_to_pos(input_row, 3);
+                m_terminal->cursor_to_pos(input_row, INPUT_PROMPT_COL);
             }
         })
     );
@@ -538,7 +543,7 @@ void ChatRenderer::start() {
                 int h = m_terminal->get_terminal_height();
                 int input_row = h - 1;
                 if (input_row < 1) input_row = 1;
-                m_terminal->cursor_to_pos(input_row, 3);
+                m_terminal->cursor_to_pos(input_row, INPUT_PROMPT_COL);
             }
             transition_to(TuiState::ERROR);
             m_status_bar->set_state(TuiState::ERROR);
@@ -711,15 +716,10 @@ void ChatRenderer::toggle_thinking_view() {
         m_terminal->write("\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x90\n");
         m_terminal->reset_color();
 
-        // 打字机效果渲染思考内容
+        // 渲染思考内容（走 markdown 块级渲染，支持代码块/列表/标题等）
         m_terminal->set_color(ColorRole::Reasoning);
-        for (size_t i = 0; i < m_reasoning_buffer.size(); ++i) {
-            char c = m_reasoning_buffer[i];
-            m_terminal->write(std::string(1, c));
-            if (c != ' ' && c != '\n' && c != '\r') {
-                std::this_thread::sleep_for(std::chrono::milliseconds(15));
-            }
-        }
+        std::string rendered = render_markdown_block(m_reasoning_buffer);
+        m_terminal->write(rendered);
         m_terminal->reset_color();
 
         // 底部边框
@@ -750,4 +750,4 @@ void ChatRenderer::toggle_thinking_view() {
     }
 }
 
-} // namespace workx
+} // namespace agent

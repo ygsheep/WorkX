@@ -10,6 +10,8 @@
 
 #include <string>
 #include <string_view>
+#include <algorithm>
+#include <cctype>
 #include "core/utils/result.h"
 
 namespace agent {
@@ -31,11 +33,15 @@ constexpr std::string_view to_string(ProviderType type) {
 }
 
 /// @brief 从字符串解析（大小写不敏感）
+/// @details 统一转小写后比较，支持任意大小写组合（如 "OpenAI"、"OPENAI"、"openai"）
 inline Result<ProviderType, std::string> provider_type_from_string(std::string_view str) {
-    if (str == "openai" || str == "OpenAI" || str == "OPENAI") {
+    std::string lower{str};
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (lower == "openai") {
         return Result<ProviderType, std::string>::ok(ProviderType::OpenAI);
     }
-    if (str == "anthropic" || str == "Anthropic" || str == "ANTHROPIC") {
+    if (lower == "anthropic") {
         return Result<ProviderType, std::string>::ok(ProviderType::Anthropic);
     }
     return Result<ProviderType, std::string>::err(

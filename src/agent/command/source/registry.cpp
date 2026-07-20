@@ -6,7 +6,7 @@
  * @date 2026-07
  */
 
-#include "../inclaude/registry.h"
+#include "agent/command/inclaude/registry.h"
 
 #include <algorithm>
 

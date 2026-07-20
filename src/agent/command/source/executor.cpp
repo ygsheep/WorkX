@@ -6,7 +6,7 @@
  * @date 2026-07
  */
 
-#include "../inclaude/executor.h"
+#include "agent/command/inclaude/executor.h"
 
 namespace agent::command {
 
@@ -35,6 +35,9 @@ ExecutorResult CommandExecutor::execute(const std::string& input, const CommandC
 
     CommandResult result;
     bool should_query = false;
+    // TODO: CommandResult::Type::Compact not yet handled (depends on agent/compact/ stub).
+    //       When a local command returns Compact, the result is currently passed through
+    //       unchanged; add explicit Compact dispatch here once compact/ is implemented.
 
     if (auto* local_cmd = dynamic_cast<LocalCommand*>(cmd.get())) {
         result = local_cmd->call(args, ctx);

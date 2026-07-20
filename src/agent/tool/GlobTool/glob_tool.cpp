@@ -9,7 +9,6 @@
 #include "agent/tool/GlobTool/glob_tool.h"
 
 #include <filesystem>
-#include <regex>
 #include <algorithm>
 #include <vector>
 
@@ -47,7 +46,8 @@ nlohmann::json GlobTool::input_schema() const {
             {"pattern", {{"type", "string"}, {"description", "The glob pattern to match files against"}}},
             {"cwd", {{"type", "string"}, {"description", "The directory to search in (defaults to context cwd)"}}}
         }},
-        {"required", {"pattern"}}
+        {"required", {"pattern"}},
+        {"additionalProperties", false}
     };
 }
 
@@ -78,42 +78,104 @@ std::string GlobTool::normalize_path(const std::string& path) {
     return result;
 }
 
-std::string GlobTool::glob_to_regex(const std::string& glob) {
-    std::string regex;
-    regex.reserve(glob.size() * 2);
-    regex += '^';
+/// @internal
+/// @brief 递归下降 glob 匹配核心
+/// @details 经典的 `*`/`**` 通配匹配算法（参考 rsync wildmatch.c 思路）：
+///          - `**`  匹配任意层级（含 `/`），尝试贪婪/非贪婪两种路径
+///          - `*`   匹配单层文件名（不含 `/`）
+///          - `?`   匹配单个非 `/` 字符
+///          - 其他字符按字面匹配
+///          算法复杂度：最坏 O(P*T) 但常数极小，远优于 std::regex 编译开销。
+/// @param p    模式指针
+/// @param p_len 模式剩余长度
+/// @param t    文本指针
+/// @param t_len 文本剩余长度
+/// @return true 匹配成功
+static bool glob_match_impl(const char* p, size_t p_len,
+                            const char* t, size_t t_len) {
+    size_t pi = 0, ti = 0;
+    // star_p / star_t：记录最近一个 `*`（非 `**`）的位置，用于回溯
+    size_t star_p = SIZE_MAX;
+    size_t star_t = 0;
+    // gstar_p：记录 `**` 跨越的位置（贪婪匹配，不回溯——因为 `**` 可吃任意字符）
+    size_t gstar_p = SIZE_MAX;
+    size_t gstar_t = 0;
 
-    for (size_t i = 0; i < glob.size(); ++i) {
-        char c = glob[i];
-
-        if (c == '*') {
-            if (i + 1 < glob.size() && glob[i + 1] == '*') {
-                // ** — 匹配任意层级（含路径分隔符）
-                regex += ".*";
-                ++i;
-                // 跳过 ** 后的 /
-                if (i + 1 < glob.size() && glob[i + 1] == '/') {
-                    ++i;
+    while (ti < t_len) {
+        if (pi < p_len) {
+            // `**` 匹配任意层级（含 `/`）
+            if (p[pi] == '*' && pi + 1 < p_len && p[pi + 1] == '*') {
+                gstar_p = pi + 2;
+                gstar_t = ti;
+                // 跳过 ** 后的 /（如果有）
+                if (gstar_p < p_len && p[gstar_p] == '/') {
+                    ++gstar_p;
                 }
-            } else {
-                // * — 匹配单层文件名（不含路径分隔符）
-                regex += "[^/]*";
+                pi = gstar_p;
+                continue;
             }
-        } else if (c == '?') {
-            // ? — 匹配单个字符（不含路径分隔符）
-            regex += "[^/]";
-        } else if (c == '.' || c == '+' || c == '(' || c == ')' ||
-                   c == '^' || c == '$' || c == '|' || c == '\\') {
-            // 转义正则特殊字符
-            regex += '\\';
-            regex += c;
-        } else {
-            regex += c;
+            // `*` 匹配单层文件名（不含 `/`）
+            if (p[pi] == '*') {
+                star_p = pi + 1;
+                star_t = ti;
+                ++pi;
+                continue;
+            }
+            // `?` 匹配单个非 `/` 字符
+            if (p[pi] == '?') {
+                if (t[ti] == '/') {
+                    // ? 不匹配 /，回溯到 star
+                    goto backtrack;
+                }
+                ++pi;
+                ++ti;
+                continue;
+            }
+            // 字面匹配
+            if (p[pi] == t[ti]) {
+                ++pi;
+                ++ti;
+                continue;
+            }
         }
+
+    backtrack:
+        // 回溯：优先回溯单层 `*`（吃一个字符），再回溯 `**`（吃任意字符）
+        if (star_p != SIZE_MAX && star_t < t_len && t[star_t] != '/') {
+            // 单层 * 回溯：吃一个字符（必须非 /）
+            ++star_t;
+            ti = star_t;
+            pi = star_p;
+            continue;
+        }
+        if (gstar_p != SIZE_MAX) {
+            // ** 回溯：吃任意字符（含 /）
+            ++gstar_t;
+            ti = gstar_t;
+            pi = gstar_p;
+            continue;
+        }
+        return false;
     }
 
-    regex += '$';
-    return regex;
+    // 文本已耗尽，检查模式剩余是否全为 `*`（`*` 可匹配空，`**` 也可匹配空）
+    while (pi < p_len) {
+        if (p[pi] == '*') {
+            ++pi;
+            continue;
+        }
+        if (p[pi] == '*' && pi + 1 < p_len && p[pi + 1] == '*') {
+            pi += 2;
+            continue;
+        }
+        return false;
+    }
+    return true;
+}
+
+bool GlobTool::glob_match(std::string_view pattern, std::string_view text) {
+    return glob_match_impl(pattern.data(), pattern.size(),
+                           text.data(), text.size());
 }
 
 // ============================================================
@@ -124,8 +186,13 @@ ToolResult GlobTool::call(
     const nlohmann::json& input,
     const ToolContext& ctx
 ) {
-    // 1. 解析输入
-    GlobInput glob_input = input.get<GlobInput>();
+    // 1. 解析输入（try-catch 防止类型不匹配抛异常）
+    GlobInput glob_input;
+    try {
+        glob_input = input.get<GlobInput>();
+    } catch (const nlohmann::json::exception& e) {
+        return ToolResult::error(std::format("Input parse failed: {}", e.what()));
+    }
 
     // 2. 确定搜索目录
     std::string cwd = glob_input.cwd.empty() ? ctx.cwd : glob_input.cwd;
@@ -142,16 +209,8 @@ ToolResult GlobTool::call(
         return ToolResult::error("Path is not a directory: " + cwd);
     }
 
-    // 3. 构建 glob 正则
+    // 3. 规范化 pattern（手写 glob matcher，避免 std::regex 编译开销）
     std::string normalized_pattern = normalize_path(glob_input.pattern);
-    std::string regex_str = glob_to_regex(normalized_pattern);
-
-    std::regex glob_re;
-    try {
-        glob_re = std::regex(regex_str);
-    } catch (const std::regex_error& e) {
-        return ToolResult::error(std::string("Invalid glob pattern: ") + e.what());
-    }
 
     // 4. 递归遍历目录，收集匹配项
     struct MatchEntry {
@@ -184,8 +243,8 @@ ToolResult GlobTool::call(
             continue;
         }
 
-        // 匹配 glob 正则
-        if (std::regex_match(rel_path, glob_re)) {
+        // 手写 glob 匹配（O(P*T) 但常数极小，无编译开销）
+        if (glob_match(normalized_pattern, rel_path)) {
             auto lwt = entry.last_write_time(ec);
             if (ec) {
                 ec.clear();

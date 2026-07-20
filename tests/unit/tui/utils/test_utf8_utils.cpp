@@ -13,7 +13,7 @@ TEST_CASE("display_width ASCII", "[utf8]") {
     REQUIRE(display_width("") == 0);
     REQUIRE(display_width("a") == 1);
     REQUIRE(display_width(" ") == 1);
-    REQUIRE(display_width("\t") == 1);  // tab counts as 1 (control exception)
+    REQUIRE(display_width("\t") == 4);  // tab 宽度 4（保守值，与多数编辑器一致）
 }
 
 TEST_CASE("display_width CJK", "[utf8]") {
@@ -27,6 +27,18 @@ TEST_CASE("display_width emoji", "[utf8]") {
     REQUIRE(display_width("\xf0\x9f\x8e\x89") == 2);
     // "a🎉b" = 1+2+1 = 4
     REQUIRE(display_width("a\xf0\x9f\x8e\x89" "b") == 4);
+
+    // 3 字节 BMP 内 emoji（原 bug：误放在 4 字节分支，导致宽度被当作 1）
+    // ❌ = U+274C = E2 9D 8C (3 bytes, width 2)
+    REQUIRE(display_width("\xe2\x9d\x8c") == 2);
+    // ✅ = U+2705 = E2 9C 85 (3 bytes, width 2)
+    REQUIRE(display_width("\xe2\x9c\x85") == 2);
+    // ⭐ = U+2B50 = E2 AD 90 (3 bytes, width 2)
+    REQUIRE(display_width("\xe2\xad\x90") == 2);
+    // "⭐⭐⭐" = 6
+    REQUIRE(display_width("\xe2\xad\x90\xe2\xad\x90\xe2\xad\x90") == 6);
+    // "❌✅" = 4
+    REQUIRE(display_width("\xe2\x9d\x8c\xe2\x9c\x85") == 4);
 }
 
 TEST_CASE("display_width control characters", "[utf8]") {

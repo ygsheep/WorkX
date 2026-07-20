@@ -21,7 +21,7 @@ namespace {
 /// @brief Mock ICompletionProvider 用于测试
 class MockProvider : public ICompletionProvider {
 public:
-    std::unique_ptr<IStreamReader> submit_completion(const CompletionRequest&) override {
+    std::shared_ptr<IStreamReader> submit_completion(const CompletionRequest&) override {
         return nullptr;
     }
     void interrupt() override {}
@@ -177,7 +177,7 @@ TEST_CASE("CommandExecutor execute prompt command", "[command]") {
 
     auto cmd = make_prompt_command("ask", "ask command");
     cmd->set_prompt_generator([](const std::string& args, const CommandContext&) -> std::vector<PromptBlock> {
-        return {{"text", "Please answer: " + args, {}}};
+        return {{PromptBlockType::Text, "Please answer: " + args, {}}};
     });
     registry->register_command(cmd);
 

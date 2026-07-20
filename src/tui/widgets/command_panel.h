@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file command_panel.h
  * @brief 命令面板
  * @details 当用户输入 / 时，Status Bar 区域切换为命令面板，
@@ -81,4 +81,4 @@ private:
     std::string m_last_rendered;      ///< 上次渲染内容（差分比较）
 };
 
-} // namespace workx
+} // namespace agent

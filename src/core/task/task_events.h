@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file task_events.h
  * @brief 任务生命周期事件定义
  * @version 1.0.0
@@ -44,4 +44,4 @@ struct TaskCancelledEvent {
     float duration_ms;
 };
 
-} // namespace workx
+} // namespace agent

@@ -48,6 +48,23 @@ public:
     virtual bool parse_sse_event(const std::string& event_type,
                                  const std::string& data,
                                  StreamChunk& out) const = 0;
+
+    /// @brief 是否支持 list_models HTTP 端点
+    /// @details Anthropic 无公开 list models 端点，返回 {false, ""}
+    ///          OpenAI 等兼容 API 返回 {true, "/v1/models"}
+    struct ModelEndpointResult {
+        bool supported = false;       ///< 是否支持 list_models 端点
+        std::string url_suffix;       ///< URL 后缀（如 "/v1/models"）
+    };
+    virtual ModelEndpointResult get_models_endpoint() const {
+        return {false, ""};  // 默认不支持
+    }
+
+    /// @brief 内置模型列表（当 get_models_endpoint().supported=false 时使用）
+    /// @details Anthropic 等无 list models 端点的 provider 覆盖此方法返回内置列表
+    virtual std::vector<ModelInfo> get_builtin_models() const {
+        return {};  // 默认空
+    }
 };
 
 } // namespace agent

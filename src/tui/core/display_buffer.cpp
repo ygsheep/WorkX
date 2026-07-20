@@ -160,4 +160,4 @@ std::vector<std::string> DisplayBuffer::snapshot(int top_row, int bottom_row) co
     return result;
 }
 
-} // namespace workx
+} // namespace agent

@@ -9,7 +9,7 @@
 
 #include <format>
 
-#include "../../agent/command/inclaude/command.h"
+#include "agent/command/inclaude/command.h"
 #include "agent/core/chat_session.h"
 #include "app/command/builtin_commands.h"
 
@@ -81,4 +81,4 @@ void register_system_commands(CommandRegistry& registry, const SystemCommandCont
     registry.register_command(model_cmd);
 }
 
-} // namespace workx::command
+} // namespace agent::command

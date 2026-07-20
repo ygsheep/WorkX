@@ -170,9 +170,14 @@ public:
     }
 
     template<typename T>
-    [[nodiscard]] Result<T, std::string> get(const std::string& key, T default_value = T{}) const {
-        return ConfigManager::instance().get<T>(make_key(key), default_value);
+    [[nodiscard]] Result<T, std::string> get(const std::string& key) const {
+        return ConfigManager::instance().get<T>(make_key(key));
     }
+
+    // F.4：原 get(key, default_value) 调用 ConfigManager::get<T>(key, default_value)，
+    // 但 ConfigManager 只有单参数 get<T>(key) 和 get_or<T>(key, default)。
+    // 修正：提供独立的 get_or 委托（已在下方），get 不再带默认值参数避免编译错误。
+    // 若调用方需要默认值，应使用 get_or。
 
     template<typename T>
     [[nodiscard]] T get_or(const std::string& key, T default_value) const {
@@ -183,4 +188,4 @@ private:
     std::string m_prefix;
 };
 
-} // namespace workx
+} // namespace agent

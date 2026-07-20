@@ -42,6 +42,13 @@ private:
     void end_table();
     void flush_table_as_text();
 
+    /// 对完整文本行做 markdown 检测（heading / hr / list / inline）并写入终端。
+    /// 在 \n 处理时调用，避免流式 chunk 边界把行首 `-`/`#` 等标记字符单独到达时
+    /// 误判为普通文本（line-start 阶段 is_list_item("-") 会返回 false）。
+    /// @return true 表示已输出末尾换行符（heading/hr/list 内部含 \n）；
+    ///         false 表示未输出（普通文本行），调用方需自行 write("\n")。
+    bool render_text_line(const std::string& line);
+
     Terminal* m_terminal;
 
     bool m_in_code_block = false;
@@ -51,6 +58,8 @@ private:
 
     // collected code-block lines (rendered at close via render_code_block)
     std::vector<std::string> m_code_lines;
+    // 当前代码行累积 buffer（流式 feed 跨片段拼接，遇 \n 才 push_back 到 m_code_lines）
+    std::string m_code_line_buf;
 
     // normal text line buffer (processed at newline via render_inline / render_heading / render_hr)
     std::string m_text_line;
@@ -62,4 +71,4 @@ private:
     bool m_buffering_table_line = false;
 };
 
-} // namespace workx
+} // namespace agent

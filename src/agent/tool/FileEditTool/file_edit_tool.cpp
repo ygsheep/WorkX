@@ -37,7 +37,8 @@ nlohmann::json FileEditTool::input_schema() const {
             {"new_string", {{"type", "string"}, {"description", "The replacement text"}}},
             {"replace_all", {{"type", "boolean"}, {"description", "Replace all occurrences"}, {"default", false}}}
         }},
-        {"required", {"file_path", "old_string", "new_string"}}
+        {"required", {"file_path", "old_string", "new_string"}},
+        {"additionalProperties", false}
     };
 }
 

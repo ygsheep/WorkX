@@ -61,8 +61,9 @@ void Screen::write(int row, int col, const std::string& text, ColorRole color) {
         c++;
         if (w == 2 && c < m_width) {
             auto& next = m_lines[row].cells[c];
-            if (next.ch != "\0" || next.color != color || next.width != 0) {
-                next.ch = "\0";  // 标记为宽字符的延续
+            // 用空字符串作为宽字符延续标记（width=0 + ch=""）
+            if (!next.ch.empty() || next.color != color || next.width != 0) {
+                next.ch = "";  // 标记为宽字符的延续
                 next.color = color;
                 next.width = 0;
                 m_lines[row].dirty = true;
@@ -89,10 +90,12 @@ void Screen::fill(int row, int col, int width, char c) {
     }
 }
 
-void Screen::draw_box(int row, int col, int width, const std::string& title) {
-    if (width < 4 || row + 2 >= m_height) return;
+void Screen::draw_box(int row, int col, int width, int height, const std::string& title) {
+    // 参数校验：宽度 >=4，高度 >=3，且不超出缓冲区
+    if (width < 4 || height < 3 || row + height > m_height || col + width > m_width) return;
 
-    int inner_w = width - 2;  // 内部宽度（不含左右边框）
+    int inner_w = width - 2;   // 内部宽度（不含左右边框）
+    int inner_h = height - 2;  // 内部高度（不含上下边框）
 
     // 顶行: ╔═ title ═╗
     write(row, col, "\xe2\x95\x94", ColorRole::StatusBar);  // ╔
@@ -103,14 +106,14 @@ void Screen::draw_box(int row, int col, int width, const std::string& title) {
     }
     write(row, col + inner_w, "\xe2\x95\x97", ColorRole::StatusBar);  // ╗
 
-    // 中间行
-    for (int r = row + 1; r < row + 1 + inner_w - 2; r++) {
-        write(r, col, "\xe2\x95\x91", ColorRole::StatusBar);  // ║
-        write(r, col + inner_w, "\xe2\x95\x91", ColorRole::StatusBar);  // ║
+    // 中间行：用 inner_h（高度）控制垂直循环，修复原代码用 inner_w 的 bug
+    for (int r = row + 1; r < row + 1 + inner_h; r++) {
+        write(r, col, "\xe2\x95\x91", ColorRole::StatusBar);           // ║
+        write(r, col + inner_w, "\xe2\x95\x91", ColorRole::StatusBar); // ║
     }
 
     // 底行
-    int bottom = row + inner_w - 1;
+    int bottom = row + height - 1;
     write(bottom, col, "\xe2\x95\x9a", ColorRole::StatusBar);  // ╚
     for (int i = col + 1; i < col + inner_w; i++) {
         write(bottom, i, "\xe2\x95\x90", ColorRole::StatusBar);  // ═
@@ -225,8 +228,9 @@ void Screen::render_line(int row, const ScreenLine& line) {
     for (int c = 0; c < m_width; c++) {
         const auto& cell = line.cells[c];
 
-        // 宽字符延续标记：跳过（由前一个 cell 的字符覆盖显示）
-        if (cell.width == 0 && cell.ch == "\0") {
+        // 宽字符延续位：width==0 表示由前一个 cell 的宽字符覆盖显示，跳过
+        // 仅用 width==0 判定，ch 不参与（避免与 "\0"/" " 比较的语义歧义）
+        if (cell.width == 0) {
             // 颜色变化仍需 flush
             if (cell.color != current_color) {
                 flush_segment();
@@ -255,4 +259,4 @@ void Screen::ensure_lines(int row) {
     resize(m_width, new_h);
 }
 
-} // namespace workx
+} // namespace agent

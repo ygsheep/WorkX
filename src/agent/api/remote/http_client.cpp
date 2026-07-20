@@ -7,6 +7,7 @@
 #include <atomic>
 #include <thread>
 #include <mutex>
+#include <algorithm>
 
 namespace agent {
 
@@ -102,6 +103,10 @@ HttpResponse HttpClient::get(const std::string& url,
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, static_cast<long>(timeout_ms));
+    // C.7：补连接超时，防止 DNS/TCP 阶段挂死耗尽总超时
+    // 默认 10s 连接超时（若 timeout_ms < 10s 则跟随总超时）
+    long connect_to = (std::min)(10000L, static_cast<long>(timeout_ms));
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, connect_to);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
@@ -159,7 +164,16 @@ public:
         curl_easy_setopt(m_curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(m_body.size()));
         curl_easy_setopt(m_curl, CURLOPT_WRITEFUNCTION, &StreamSession::stream_write_cb);
         curl_easy_setopt(m_curl, CURLOPT_WRITEDATA, this);
-        curl_easy_setopt(m_curl, CURLOPT_TIMEOUT_MS, static_cast<long>(timeout_ms));
+        // 流式传输用空闲超时（无数据传输 N 秒则断开），不用总时长超时
+        // 长响应（如 reasoning model 60s+）正常，但断网 N 秒会触发断开
+        // CURLOPT_LOW_SPEED_LIMIT + CURLOPT_LOW_SPEED_TIME:
+        //   若传输速度低于 LOW_SPEED_LIMIT bytes/s 持续 LOW_SPEED_TIME 秒，则断开
+        // 用括号包裹 std::max 防止 windows.h 的 max 宏展开
+        const long idle_seconds = (std::max)(1L, static_cast<long>(timeout_ms / 1000));
+        curl_easy_setopt(m_curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
+        curl_easy_setopt(m_curl, CURLOPT_LOW_SPEED_TIME, idle_seconds);
+        // 保留连接超时（10 秒）
+        curl_easy_setopt(m_curl, CURLOPT_CONNECTTIMEOUT_MS, 10000L);
         curl_easy_setopt(m_curl, CURLOPT_FOLLOWLOCATION, 0L);
         curl_easy_setopt(m_curl, CURLOPT_SSL_VERIFYPEER, 1L);
         curl_easy_setopt(m_curl, CURLOPT_SSL_VERIFYHOST, 2L);
@@ -173,7 +187,11 @@ public:
 
     ~StreamSession() {
         if (m_curl) {
-            if (m_added_to_multi) curl_multi_remove_handle(m_multi, m_curl);
+            // 防御：m_multi 可能已被 HttpClient 析构清理为 nullptr
+            // （shutdown 路径会先 curl_multi_cleanup 再触发 StreamSession 析构）
+            if (m_added_to_multi.load() && m_multi) {
+                curl_multi_remove_handle(m_multi, m_curl);
+            }
             curl_easy_cleanup(m_curl);
         }
         if (m_header_list) curl_slist_free_all(m_header_list);
@@ -182,11 +200,21 @@ public:
     void run(CURLM* multi) {
         if (!m_curl) { finish("curl init failed"); return; }
         m_multi = multi;
-        m_added_to_multi = true;
+        m_added_to_multi.store(true);
         curl_multi_add_handle(m_multi, m_curl);
     }
 
-    void cancel() { m_cancelled.store(true); }
+    /// @brief 立即取消会话：设置标志 + 从 multi 移除 handle，避免依赖下一次 write 回调
+    /// @details 原实现只设原子标志，需等下次 write 回调返回 0 才真正停止；
+    ///          若网络已断开 write 回调不再触发，cancel 不生效。
+    ///          现在直接 remove_handle 让 libcurl 立即停止传输。
+    void cancel() {
+        m_cancelled.store(true);
+        if (m_added_to_multi.load() && m_multi) {
+            curl_multi_remove_handle(m_multi, m_curl);
+            m_added_to_multi.store(false);
+        }
+    }
 
     void on_transfer_done(const CURLcode code) {
         if (m_cancelled.load()) { finish(""); return; }
@@ -196,13 +224,23 @@ public:
         long http_code = 0;
         curl_easy_getinfo(m_curl, CURLINFO_RESPONSE_CODE, &http_code);
         if (http_code >= 400) {
-            finish(std::string("HTTP error: ") + std::to_string(http_code));
+            // 4xx/5xx：附加已累积的响应体作为错误信息一部分
+            // （stream_write_cb 在 http_code >= 400 时累积到 m_error_body 而非喂给 reader）
+            std::string err_msg = std::string("HTTP error: ") + std::to_string(http_code);
+            if (!m_error_body.empty()) {
+                // 截断防止过长（最多 500 字符）
+                err_msg += " - " + m_error_body.substr(0, 500);
+            }
+            finish(err_msg);
             return;
         }
         if (m_reader && !m_reader->is_finished())
             m_reader->finish();
         if (m_on_complete) m_on_complete();
     }
+
+    // 主动以错误完成会话（供 HttpClient::async_post_stream 在 curl 初始化失败时调用）
+    void finish_with_error(const std::string& err) { finish(err); }
 
 private:
     void finish(const std::string& err) const {
@@ -214,16 +252,29 @@ private:
     static size_t stream_write_cb(void* ptr, size_t size, size_t nmemb, void* userdata) {
         auto* self = static_cast<StreamSession*>(userdata);
         if (self->m_cancelled.load()) return 0;
+
+        // HTTP 错误响应（4xx/5xx）：累积 body 到 m_error_body 作为错误信息
+        // 正常响应（2xx）：喂给 reader 进行 SSE 解析
+        long http_code = 0;
+        curl_easy_getinfo(self->m_curl, CURLINFO_RESPONSE_CODE, &http_code);
+        if (http_code >= 400) {
+            self->m_error_body.append(static_cast<const char*>(ptr), size * nmemb);
+            return size * nmemb;
+        }
+
         if (self->m_reader)
-            self->m_reader->feed_data(std::string(static_cast<const char*>(ptr), size * nmemb));
+            // C.10：直接传 string_view，避免每个 SSE chunk 都构造 std::string 拷贝
+            self->m_reader->feed_data(std::string_view(
+                static_cast<const char*>(ptr), size * nmemb));
         return size * nmemb;
     }
 
     CURL* m_curl = nullptr;
     CURLM* m_multi = nullptr;
-    bool m_added_to_multi = false;
+    std::atomic<bool> m_added_to_multi{false};
     struct curl_slist* m_header_list = nullptr;
     std::string m_body;
+    std::string m_error_body;  // 4xx/5xx 响应体累积
     std::shared_ptr<SSEStreamReader> m_reader;
     std::function<void()> m_on_complete;
     std::atomic<bool> m_cancelled{false};
@@ -263,7 +314,8 @@ struct HttpClient::Impl {
                             session = it->second;
                             sessions_by_handle.erase(it);
                         }
-                        // 也从 reader map 清理
+                        // 也从 reader map 清理（C.4：完善 sessions_by_reader 清理路径）
+                        // expired 的 weak_ptr 在此统一回收，避免长生命周期下 map 无限增长
                         for (auto rit = sessions_by_reader.begin(); rit != sessions_by_reader.end(); ) {
                             if (rit->second.expired()) rit = sessions_by_reader.erase(rit);
                             else ++rit;
@@ -274,10 +326,11 @@ struct HttpClient::Impl {
                 }
             }
 
-            if (still_running > 0)
-                curl_multi_wait(multi, nullptr, 0, 100, nullptr);
-            else
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            // C.3：用 curl_multi_wait 替代 sleep_for(10ms) 忙等
+            // curl_multi_wait 内部用 select/poll，无传输时阻塞等待（最多 100ms），
+            // CPU 占用近零；有数据时立即返回。libcurl 官方推荐 API。
+            // 即便 still_running == 0 也用 curl_multi_wait 短轮询，避免空转
+            curl_multi_wait(multi, nullptr, 0, 100, nullptr);
         }
     }
 
@@ -317,7 +370,13 @@ void HttpClient::async_post_stream(
     const auto session = std::make_shared<StreamSession>(
         parsed, headers, body, reader, std::move(on_complete), timeout_ms);
 
-    if (!session->easy_handle()) return;
+    if (!session->easy_handle()) {
+        // curl 初始化失败：主动 finish reader 让上层能收到错误，避免 next() 无限阻塞
+        // （调用方已把 reader 存入 m_active_reader，若不 finish 会永远等数据）
+        // finish_with_error 会同时触发 reader->finish 和 on_complete 回调
+        session->finish_with_error("Failed to initialize curl session");
+        return;
+    }
 
     {
         std::lock_guard<std::mutex> lock(m_impl->sessions_mutex);

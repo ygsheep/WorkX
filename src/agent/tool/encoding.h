@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 #include <filesystem>
+#include <fstream>
 
 namespace agent::tool {
 
@@ -61,5 +62,13 @@ const char* encoding_name(Encoding encoding);
 ///          避免输出混入 '\r' 导致 TUI 显示异常。
 /// @param line 待处理的行（原地修改）
 void normalize_eol(std::string& line);
+
+/// @brief 跳过 UTF-8 BOM（若存在）
+/// @details 读取 ifstream 前 3 字节检测 BOM (EF BB BF)。
+///          - 若存在 BOM：流位置跳过 BOM，返回 true
+///          - 若不存在：流位置重置到开头，返回 false
+/// @param file 已打开的输入流（文本模式）
+/// @return true 表示 BOM 已跳过；false 表示无 BOM
+bool skip_utf8_bom(std::ifstream& file);
 
 } // namespace agent::tool

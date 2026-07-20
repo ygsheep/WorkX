@@ -59,4 +59,4 @@ std::filesystem::path default_config_path();
 /// @brief 默认日志文件路径（平台相关）
 std::filesystem::path default_log_path();
 
-} // namespace workx
+} // namespace agent

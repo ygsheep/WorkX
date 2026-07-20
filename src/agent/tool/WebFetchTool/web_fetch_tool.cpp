@@ -35,7 +35,8 @@ nlohmann::json WebFetchTool::input_schema() const {
             {"url", {{"type", "string"}, {"description", "The URL to fetch"}}},
             {"prompt", {{"type", "string"}, {"description", "Optional prompt to extract specific information"}}}
         }},
-        {"required", {"url"}}
+        {"required", {"url"}},
+        {"additionalProperties", false}
     };
 }
 

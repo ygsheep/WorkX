@@ -77,7 +77,7 @@ void SSEStreamReader::cancel() {
     m_queue_cv.notify_all();
 }
 
-void SSEStreamReader::feed_data(const std::string& data) {
+void SSEStreamReader::feed_data(std::string_view data) {
     if (m_cancelled.load() || m_finished.load()) return;
     m_sse_parser.parse(data);
 }
@@ -94,13 +94,8 @@ void SSEStreamReader::on_sse_event(const SSEEvent& event) {
     // 委托 Provider 特定解析回调
     StreamChunk chunk;
     if (m_parse_cb && m_parse_cb(event.event, event.data, chunk)) {
-        // 累积 content/reasoning（用于完整消息追踪，虽然目前未使用）
-        if (!chunk.content_delta.empty()) {
-            m_content_buffer += chunk.content_delta;
-        }
-        if (!chunk.reasoning_delta.empty()) {
-            m_reasoning_buffer += chunk.reasoning_delta;
-        }
+        // C.8：删除 m_content_buffer / m_reasoning_buffer 累积
+        // 原实现累积所有 delta 但从未被读取，长响应下无限增长占内存
         m_token_count += chunk.token_count;
 
         {

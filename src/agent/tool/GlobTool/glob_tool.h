@@ -41,10 +41,16 @@ public:
     ) override;
 
 private:
-    /// @brief 将 glob 模式转换为正则表达式字符串
-    /// @param glob glob 模式
-    /// @return 正则表达式字符串
-    static std::string glob_to_regex(const std::string& glob);
+    /// @brief 手写 glob 匹配（递归下降，避免 std::regex 编译开销）
+    /// @details 支持：
+    ///          - `*`   匹配单层文件名（不含 `/`）
+    ///          - `**`  匹配任意层级（含 `/`）
+    ///          - `?`   匹配单个字符（不含 `/`）
+    ///          - 其他字符按字面匹配
+    /// @param pattern glob 模式
+    /// @param text 待匹配文本（路径已规范化为正斜杠）
+    /// @return true 匹配成功
+    static bool glob_match(std::string_view pattern, std::string_view text);
 
     /// @brief 规范化路径分隔符为正斜杠
     /// @param path 原始路径

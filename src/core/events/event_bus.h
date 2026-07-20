@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file event_bus.h
  * @brief 类型安全的事件总线 + RAII 事件守卫
  * @details Header-only，无外部依赖
@@ -66,7 +66,7 @@ public:
 
     template<typename T>
     [[nodiscard]] EventToken subscribe(std::function<void(const T&)> callback) {
-        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        std::lock_guard<std::mutex> lock(m_mutex);
 
         auto token = EventToken(m_next_token_id++);
 
@@ -85,7 +85,7 @@ public:
     void unsubscribe(const EventToken& token) {
         if (!token.is_valid()) return;
 
-        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        std::lock_guard<std::mutex> lock(m_mutex);
 
         auto it = m_callbacks.find(typeid(T));
         if (it != m_callbacks.end()) {
@@ -102,15 +102,22 @@ public:
 
     template<typename T>
     void publish(const T& event) {
-        std::lock_guard<std::recursive_mutex> lock(m_mutex);
-        auto it = m_callbacks.find(typeid(T));
-        if (it == m_callbacks.end()) return;
+        // 拷贝回调列表，避免持锁调用用户代码（防止死锁与重入问题）
+        std::vector<CallbackWrapper> callbacks_copy;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            auto it = m_callbacks.find(typeid(T));
+            if (it == m_callbacks.end()) return;
+            callbacks_copy = it->second;
+        }
 
-        for (const auto& wrapper : it->second) {
+        for (const auto& wrapper : callbacks_copy) {
             try {
                 wrapper.callback(&event);
             } catch (const std::exception&) {
-                // 吞掉异常，不中断其他回调
+                // 吞掉标准异常，不中断其他回调
+            } catch (...) {
+                // 兜底：吞掉所有异常，防止 terminate
             }
         }
     }
@@ -118,8 +125,9 @@ public:
     template<typename T>
     void publish_async(const T& event) {
         std::lock_guard<std::mutex> lock(m_async_mutex);
-        m_async_queue.push_back([this, event]() {
-            this->publish(event);
+        // 不捕获 this，通过 instance() 访问单例
+        m_async_queue.push_back([event]() {
+            EventBus::instance().publish(event);
         });
     }
 
@@ -136,8 +144,12 @@ public:
     }
 
     void clear() {
-        std::lock_guard<std::recursive_mutex> lock(m_mutex);
-        m_callbacks.clear();
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_callbacks.clear();
+        }
+        std::lock_guard<std::mutex> lock(m_async_mutex);
+        m_async_queue.clear();
     }
 
 private:
@@ -149,7 +161,7 @@ private:
         EventToken::ID token_id;
     };
 
-    std::recursive_mutex m_mutex;
+    std::mutex m_mutex;
     EventToken::ID m_next_token_id = 1;
     std::unordered_map<std::type_index, std::vector<CallbackWrapper>> m_callbacks;
 
@@ -197,4 +209,4 @@ template<typename T>
     return EventGuard<T>(std::move(callback));
 }
 
-} // namespace workx
+} // namespace agent

@@ -10,6 +10,7 @@
 
 #include <string>
 #include <memory>
+#include <filesystem>
 #include <nlohmann/json.hpp>
 #include "itool.h"
 #include "registry.h"
@@ -83,9 +84,31 @@ public:
             return exec_result;
         }
 
-        // 5. 执行工具
-        exec_result.result = tool->call(input, ctx);
-        exec_result.is_error = exec_result.result.is_error;
+        // 5. 执行工具（try-catch 防止异常逃逸致 Agent 崩溃）
+        try {
+            exec_result.result = tool->call(input, ctx);
+            exec_result.is_error = exec_result.result.is_error;
+        } catch (const nlohmann::json::exception& e) {
+            exec_result.result = ToolResult::error(
+                std::string{"JSON error in tool '"} + tool_name + "': " + e.what());
+            exec_result.is_error = true;
+        } catch (const std::filesystem::filesystem_error& e) {
+            exec_result.result = ToolResult::error(
+                std::string{"Filesystem error in tool '"} + tool_name + "': " + e.what());
+            exec_result.is_error = true;
+        } catch (const std::bad_alloc& e) {
+            exec_result.result = ToolResult::error(
+                std::string{"Out of memory in tool '"} + tool_name + "': " + e.what());
+            exec_result.is_error = true;
+        } catch (const std::exception& e) {
+            exec_result.result = ToolResult::error(
+                std::string{"Error in tool '"} + tool_name + "': " + e.what());
+            exec_result.is_error = true;
+        } catch (...) {
+            exec_result.result = ToolResult::error(
+                std::string{"Unknown exception in tool '"} + tool_name + "'");
+            exec_result.is_error = true;
+        }
         return exec_result;
     }
 

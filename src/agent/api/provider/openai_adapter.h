@@ -29,6 +29,9 @@ public:
     bool parse_sse_event(const std::string& event_type,
                          const std::string& data,
                          StreamChunk& out) const override;
+
+    /// @brief OpenAI 支持 /v1/models 端点
+    ModelEndpointResult get_models_endpoint() const override;
 };
 
 } // namespace agent

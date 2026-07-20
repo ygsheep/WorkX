@@ -15,6 +15,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <mutex>
 
 #include "core/utils/result.h"
 #include "core/events/event_bus.h"
@@ -99,7 +100,7 @@ public:
     void set_system_prompt(const std::string& prompt);
     void clear_history();
     void regenerate();
-    [[nodiscard]] const std::vector<ChatMessage>& history() const;
+    [[nodiscard]] std::vector<ChatMessage> history() const;
 
     // ---- 阻塞 API（脚本/CLI 场景）----
     // 在调用线程同步执行，回调在该线程触发。调用期间线程被阻塞。
@@ -156,6 +157,31 @@ private:
                                          std::string& content_out,
                                          std::string& reasoning_out);
 
+    /// @brief 可中断的睡眠（用于重试退避等待）
+    /// @return true 表示睡眠期间 should_stop() 变为 true（应退出）
+    bool interruptible_sleep(std::chrono::milliseconds duration,
+                             const std::function<bool()>& should_stop);
+
+    /// @brief B.3：计算指数退避延迟（含 60s 上限保护）
+    int64_t compute_backoff_delay_ms(int attempt) const;
+
+    /// @brief B.3：处理 submit 失败的错误回调与事件发布
+    /// @return true 表示已触发重试（调用方应 continue 重试循环）；false 表示重试耗尽（调用方应返回 err）
+    bool handle_submit_failure(int attempt, int64_t delay_ms, const ChatCallbacks& cbs,
+                               const std::function<bool()>& should_stop);
+
+    /// @brief B.3：处理流式错误的回调与事件发布
+    /// @return true 表示已触发重试（调用方应 break 内层循环进入下次重试）；false 表示重试耗尽
+    bool handle_stream_error(int attempt, const ChatCallbacks& cbs,
+                             const std::function<bool()>& should_stop);
+
+    /// @brief B.3：发布 StreamTokenEvent（仅 m_publish_events=true 时）
+    void publish_token_event(const StreamChunk& chunk) const;
+
+    /// @brief B.3：发布流式完成事件（仅 m_publish_events=true 时）
+    void publish_done_event(const std::string& content, const std::string& reasoning,
+                            bool was_interrupted, const StreamChunk& chunk) const;
+
     std::unique_ptr<IBackend> m_backend;
     std::vector<ChatMessage> m_messages;
     std::string m_system_prompt;
@@ -163,6 +189,9 @@ private:
     int m_max_retries = 3;
     int m_retry_delay_ms = 1000;
     bool m_publish_events = false;
+
+    /// 保护 m_messages 和 m_system_prompt 的互斥量
+    mutable std::mutex m_messages_mutex;
 
     /// EventBus 订阅 token（仅 m_publish_events=true 时有效）
     EventToken m_interrupt_token;

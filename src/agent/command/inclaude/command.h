@@ -13,6 +13,7 @@
 #include <optional>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include "types.h"
 
@@ -31,12 +32,22 @@ public:
     virtual const std::string& description() const { return description_; }
 
     /// 是否启用（动态控制）
+    /// @note setter 可能跨线程修改，getter 内加锁拷贝 std::function 后锁外调用，
+    ///       避免在持锁状态下回调用户代码导致死锁。
     virtual bool is_enabled() const {
-        return is_enabled_ ? is_enabled_() : true;
+        std::function<bool()> fn_copy;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            fn_copy = is_enabled_;
+        }
+        return fn_copy ? fn_copy() : true;
     }
 
     /// 是否隐藏（不在命令面板显示）
-    virtual bool is_hidden() const { return is_hidden_; }
+    virtual bool is_hidden() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return is_hidden_;
+    }
 
     /// 是否为用户可调用
     virtual bool is_user_invocable() const { return user_invocable_; }
@@ -76,15 +87,26 @@ public:
     /// 获取命令类型标识
     virtual const std::string& type() const = 0;
 
-    // --- setters ---
-    void set_is_enabled(std::function<bool()> fn) { is_enabled_ = std::move(fn); }
-    void set_is_hidden(bool hidden) { is_hidden_ = hidden; }
-    void set_argument_hint(std::string hint) { argument_hint_ = std::move(hint); }
+    // --- setters（线程安全：跨线程修改时加锁） ---
+    void set_is_enabled(std::function<bool()> fn) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        is_enabled_ = std::move(fn);
+    }
+    void set_is_hidden(bool hidden) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        is_hidden_ = hidden;
+    }
+    void set_argument_hint(std::string hint) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        argument_hint_ = std::move(hint);
+    }
 
 protected:
     CommandBase() = default;
     CommandBase(std::string name, std::string description)
         : name_(std::move(name)), description_(std::move(description)) {}
+
+    mutable std::mutex m_mutex;     ///< 保护跨线程修改的字段
 
     std::string name_;
     std::string description_;
@@ -121,13 +143,19 @@ public:
     }
 
     void set_prompt_generator(PromptGenerator gen) {
+        std::lock_guard<std::mutex> lock(m_mutex);
         prompt_generator_ = std::move(gen);
     }
 
     /// 生成提示词内容
     std::vector<PromptBlock> generate_prompt(const std::string& args, const CommandContext& ctx) const {
-        if (!prompt_generator_) return {};
-        return prompt_generator_(args, ctx);
+        PromptGenerator gen_copy;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            gen_copy = prompt_generator_;
+        }
+        if (!gen_copy) return {};
+        return gen_copy(args, ctx);
     }
 
 private:
@@ -151,12 +179,20 @@ public:
         return t;
     }
 
-    void set_call(CommandCall call) { call_ = std::move(call); }
+    void set_call(CommandCall call) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        call_ = std::move(call);
+    }
 
     /// 执行命令
     CommandResult call(const std::string& args, const CommandContext& ctx) const {
-        if (!call_) return CommandResult::error("Command not implemented");
-        return call_(args, ctx);
+        CommandCall call_copy;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            call_copy = call_;
+        }
+        if (!call_copy) return CommandResult::error("Command not implemented");
+        return call_copy(args, ctx);
     }
 
 private:

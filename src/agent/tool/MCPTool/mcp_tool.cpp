@@ -36,7 +36,8 @@ nlohmann::json MCPTool::input_schema() const {
             {"tool", {{"type", "string"}, {"description", "Tool name on the MCP server"}}},
             {"input", {{"type", "object"}, {"description", "Tool input parameters"}}}
         }},
-        {"required", {"server", "tool"}}
+        {"required", {"server", "tool"}},
+        {"additionalProperties", false}
     };
 }
 

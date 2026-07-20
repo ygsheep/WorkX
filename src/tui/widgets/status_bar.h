@@ -71,4 +71,4 @@ private:
     static constexpr int SPINNER_FRAME_COUNT = 10;
 };
 
-} // namespace workx
+} // namespace agent
