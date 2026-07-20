@@ -155,10 +155,11 @@ std::string render_list_item(std::string_view line);
 
 /**
  * @brief 渲染代码块
- * @param lang 语言标签（可空）
+ * @param lang 语言标签（可空，当前未使用）
  * @param lines 代码行
+ * @param max_width 最大宽度（终端宽度），>0 时用空格填充背景色到行尾；0 不填充
  */
-std::string render_code_block(std::string_view lang, const std::vector<std::string>& lines);
+std::string render_code_block(std::string_view lang, const std::vector<std::string>& lines, int max_width = 0);
 
 /**
  * @brief 渲染整段 Markdown 文本（块级渲染）

@@ -23,6 +23,7 @@
 #include "agent/core/chat_session.h"
 #include "agent/message/types.h"
 #include "agent/model/provider_preset.h"
+#include "agent/tool/FileEditTool/file_edit_tool.h"
 #include "agent/tool/FileReadTool/file_read_tool.h"
 #include "agent/tool/FileWriteTool/file_write_tool.h"
 #include "agent/tool/registry.h"
@@ -226,6 +227,7 @@ static int run(int argc, char* argv[]) {
         auto tool_registry = std::make_shared<agent::tool::ToolRegistry>();
         tool_registry->register_tool(std::make_shared<agent::tool::FileReadTool>());
         tool_registry->register_tool(std::make_shared<agent::tool::FileWriteTool>());
+        tool_registry->register_tool(std::make_shared<agent::tool::FileEditTool>());
         session->set_tool_registry(tool_registry);
 
         // 设置系统提示词（拼接工具 prompt，让 LLM 知道如何使用工具）
@@ -234,6 +236,13 @@ static int run(int argc, char* argv[]) {
             sys_prompt += "\n\n";
             sys_prompt += t->prompt();
         }
+        // @file 引用说明：用户消息中的 <file path="..."> 标签由前端预处理注入，
+        // 已包含文件完整内容。LLM 不应再对其中路径调用 Read 工具，避免重复读取。
+        sys_prompt +=
+            "\n\n"
+            "用户消息中可能出现 <file path=\"...\">...</file> 标签，这是用户通过 "
+            "@path 语法引用的文件内容，已由前端读取并注入。对此类标签内的路径，"
+            "禁止再次调用 Read 工具读取；直接基于标签内已有内容回答用户问题。";
         if (!sys_prompt.empty()) {
             session->set_system_prompt(sys_prompt);
         }
@@ -419,7 +428,17 @@ static int run(int argc, char* argv[]) {
             // 需要调 LLM
             if (result.should_query) {
                 if (session) {
-                    session->send_message(e.text);
+                    // 使用处理后的文本（已展开 @file 引用为文件内容）
+                    std::string query_text;
+                    if (!result.messages.empty()) {
+                        for (size_t i = 0; i < result.messages.size(); ++i) {
+                            if (i > 0) query_text += "\n\n";
+                            query_text += result.messages[i];
+                        }
+                    } else {
+                        query_text = e.text;
+                    }
+                    session->send_message(query_text);
                 } else {
                     // 无后端时回显
                     EventBus::instance().publish_async(StreamTokenEvent{

@@ -119,6 +119,17 @@ void register_config_defaults() {
             return Result<void, std::string>::ok();
         }
     });
+
+    // Tool — FileEditTool
+    cfg.register_meta(keys::EDIT_DENY_PATTERNS, {
+        .description = "Newline-separated glob patterns for paths denied by Edit tool "
+                       "(e.g. \"~/.ssh/**\\n**/.env\\n**/.git/**\")",
+        .default_value = std::string("")
+    });
+    cfg.register_meta(keys::EDIT_SCAN_SECRETS, {
+        .description = "Scan new_string for potential secrets before editing (default false)",
+        .default_value = false
+    });
 }
 
 void load_from_env() {

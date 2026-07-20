@@ -247,7 +247,8 @@ void OutputFormatter::end_code_block() {
         m_code_line_buf.clear();
     }
     if (!m_code_lines.empty() || !m_code_lang.empty()) {
-        m_terminal->write(render_code_block(m_code_lang, m_code_lines));
+        int w = m_terminal->get_terminal_width();
+        m_terminal->write(render_code_block(m_code_lang, m_code_lines, w));
     }
     m_in_code_block = false;
     m_code_lang.clear();

@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 #include <optional>
+#include <fstream>
+#include <format>
 
 #include "parser.h"
 #include "types.h"
@@ -66,15 +68,15 @@ private:
     ProcessResult process_text_prompt(const ParsedInput& parsed) {
         std::vector<std::string> messages;
 
-        // 添加文本内容
-        if (!parsed.text.empty()) {
-            messages.push_back(parsed.text);
-        }
-
-        // 添加文件内容
+        // 添加文件内容（放在前面，作为上下文）
         for (const auto& path : parsed.attachments) {
             std::string content = read_file_content(path);
             messages.push_back(content);
+        }
+
+        // 添加文本内容
+        if (!parsed.text.empty()) {
+            messages.push_back(parsed.text);
         }
 
         return {
@@ -88,9 +90,14 @@ private:
         return "[bash] " + cmd;
     }
 
-    std::string  read_file_content(const std::string& path){
-        // 实际实现应读取文件
-        return "[file content: " + path + "]";
+    std::string read_file_content(const std::string& path) {
+        std::ifstream file(path, std::ios::binary);
+        if (!file.is_open()) {
+            return std::format("[Could not read file: {}]", path);
+        }
+        std::string content((std::istreambuf_iterator<char>(file)),
+                             std::istreambuf_iterator<char>());
+        return std::format("<file path=\"{}\">\n{}\n</file>", path, content);
     }
 
     InputParser m_parser;

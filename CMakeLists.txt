@@ -171,6 +171,7 @@ set(WORKX_SOURCES
     src/tui/input/line_editor.cpp
     src/tui/core/color_scheme.cpp
     src/tui/render/chat_renderer.cpp
+    src/tui/render/session_log.cpp
     src/tui/render/output_formatter.cpp
     src/tui/render/streaming_buffer.cpp
     src/tui/widgets/status_bar.cpp
@@ -187,6 +188,7 @@ set(WORKX_SOURCES
     src/tui/render/syntax_highlighter.cpp
     src/tui/input/history.cpp
     src/agent/core/chat_session.cpp
+    src/agent/core/react_loop.cpp
     src/agent/api/backend_factory.cpp
     src/agent/api/client.cpp
     src/agent/api/remote/remote_backend.cpp
@@ -198,6 +200,11 @@ set(WORKX_SOURCES
     src/agent/command/source/registry.cpp
     src/agent/command/source/executor.cpp
     src/agent/tool/encoding.cpp
+    src/agent/tool/path_matcher.cpp
+    src/agent/tool/secret_scanner.cpp
+    src/agent/tool/line_endings.cpp
+    src/agent/tool/quote_normalizer.cpp
+    src/agent/tool/file_history.cpp
     src/agent/tool/FileReadTool/file_read_tool.cpp
     src/agent/tool/FileEditTool/file_edit_tool.cpp
     src/agent/tool/FileWriteTool/file_write_tool.cpp

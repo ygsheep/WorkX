@@ -489,6 +489,7 @@ void Terminal::set_ctrl_o_callback(CtrlOCallback cb) {
     m_ctrl_o_callback = std::move(cb);
 }
 
+
 void Terminal::set_status_refresh_callback(StatusRefreshCallback cb) {
     m_status_refresh_callback = std::move(cb);
 }

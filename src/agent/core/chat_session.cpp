@@ -1,17 +1,18 @@
-/**
+﻿/**
  * @file chat_session.cpp
  * @brief 对话状态机实现
- * @details 编排用户输入、推理、流式事件发布、自动重试、会话持久化
+ * @details 编排用户输入、ReAct 循环、流式事件发布、自动重试、会话持久化
  * @version 3.1.0
  * @date 2026-07
  */
 
 #include "agent/core/chat_session.h"
+#include "agent/core/react_loop.h"
 #include "agent/message/types.h"
-#include "agent/api/i_stream_reader.h"
 #include "core/task/task_manager.h"
 #include "core/config/config_manager.h"
 
+#include <algorithm>
 #include <nlohmann/json.hpp>
 
 #include <chrono>
@@ -20,16 +21,44 @@
 
 namespace agent {
 
+// ============================================================
+// 内部辅助
+// ============================================================
+
+namespace {
+
+/// @brief 根据工具名推断 ToolType（用于 ToolCallEvent）
+ToolType infer_tool_type(const std::string& name) {
+    if (name == "Read")  return ToolType::ReadFile;
+    if (name == "Write") return ToolType::WriteFile;
+    if (name == "Edit")  return ToolType::EditFile;
+    if (name == "Bash")  return ToolType::Execute;
+    if (name == "Grep" || name == "Glob") return ToolType::Search;
+    if (name == "Agent") return ToolType::Agent;
+    return ToolType::Other;
+}
+
+} // anonymous namespace
+
+// ============================================================
+// 构造与析构
+// ============================================================
+
 ChatSession::ChatSession(std::unique_ptr<ICompletionProvider> provider,
                          int retry_delay_ms,
                          std::string session_id)
     : m_provider(std::move(provider))
     , m_session_id(std::move(session_id))
 {
-    // 从 ConfigManager 读取重试配置，预设值作为 fallback
+    // 从 ConfigManager 读取重试配置
+    // 注意：仅当配置中显式设置时才覆盖，否则使用 preset 传入的值（可为不同 provider 设置不同延迟）
     auto& cfg = ConfigManager::instance();
-    m_max_retries = cfg.get_or<int>("backend.retry_count", 3);
-    m_retry_delay_ms = cfg.get_or<int>("backend.retry_delay_ms", retry_delay_ms);
+    m_max_retries = cfg.has("backend.retry_count")
+        ? cfg.get_or<int>("backend.retry_count", 3)
+        : 3;
+    m_retry_delay_ms = cfg.has("backend.retry_delay_ms")
+        ? cfg.get_or<int>("backend.retry_delay_ms", retry_delay_ms)
+        : retry_delay_ms;
 
     subscribe_interrupt();
 }
@@ -63,34 +92,7 @@ void ChatSession::set_system_prompt(const std::string& prompt) {
 void ChatSession::set_tool_registry(std::shared_ptr<tool::ToolRegistry> registry) {
     std::lock_guard<std::mutex> lock(m_state_mutex);
     m_tool_registry = std::move(registry);
-    if (m_tool_registry) {
-        m_tool_executor = std::make_unique<tool::ToolExecutor>(m_tool_registry);
-    } else {
-        m_tool_executor.reset();
-    }
-}
-
-CompletionRequest ChatSession::build_request() const {
-    CompletionRequest request;
-    request.stream = true;
-
-    std::shared_ptr<tool::ToolRegistry> registry_copy;
-    {
-        std::lock_guard<std::mutex> lock(m_state_mutex);
-        if (!m_system_prompt.empty()) {
-            request.messages.push_back(ChatMessage::system(m_system_prompt));
-        }
-        // 拷贝消息列表，避免持锁调用 provider
-        request.messages.insert(request.messages.end(), m_messages.begin(), m_messages.end());
-        registry_copy = m_tool_registry;
-    }
-
-    // 注入工具 schema（启用 function calling）
-    if (registry_copy && registry_copy->size() > 0) {
-        request.tools = registry_copy->get_all_schemas();
-    }
-
-    return request;
+    // executor 由 ReActLoop 内部创建，此处仅保存 registry
 }
 
 void ChatSession::clear_history() {
@@ -168,136 +170,200 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
     auto task = TaskManager::instance().launch("completion",
         [this, retry_attempt, max_retries, retry_delay_ms, user_text]
         (const std::atomic<bool>& should_cancel) {
-            bool resumed_new_task = false;  // 标记是否已启动递归重试新 Task
-
+            // 顶层异常安全网：确保任何未捕获异常都能重置 m_generating 并通知 UI
             try {
-                // ---- agent 循环（LLM → tool_use → execute → tool_result → LLM）----
-                const int max_iterations = 25;
-                int iteration = 0;
+            // ---- 构建 tools_schema ----
+            nlohmann::json tools_schema = nlohmann::json::array();
+            if (m_tool_registry && m_tool_registry->size() > 0) {
+                tools_schema = m_tool_registry->get_all_schemas();
+            }
 
-                while (iteration < max_iterations) {
-                    ++iteration;
+            // ---- 创建 ReActLoop ----
+            ReActLoop loop(m_provider.get(), m_tool_registry, ReActLoop::Config{});
 
-                    // 每次 iteration 重建 request（messages 可能因 tool_result 增长）
-                    CompletionRequest request = build_request();
+            // ---- on_token 回调：发布 StreamTokenEvent ----
+            // 注意：捕获 m_session_id 而非硬编码 "default"，支持多会话区分
+            const std::string session_id = m_session_id;
+            ReActLoop::TokenCallback on_token =
+                [session_id](const std::string& content_delta,
+                   const std::string& reasoning_delta) {
+                    EventBus::instance().publish_async(StreamTokenEvent{
+                        .session_id = session_id,
+                        .content_delta = content_delta,
+                        .reasoning_delta = reasoning_delta,
+                        .is_thinking = !reasoning_delta.empty(),
+                        .token_count = 0
+                    });
+                };
 
-                    auto reader = m_provider->submit_completion(request);
-                    if (!reader) {
-                        // B.1：submit 失败 → 委托给 handle_submit_failure
-                        auto r = handle_submit_failure(user_text, retry_attempt,
-                                                       max_retries, retry_delay_ms,
-                                                       should_cancel, resumed_new_task);
-                        if (r == AgentStepResult::RetryNewTask) break;
-                        // Cancelled 或 ErrorExit：直接退出
-                        break;
-                    }
-
-                    // ---- 流式读取（本轮 LLM 响应）----
-                    std::vector<PendingToolUse> pending_tools;
-                    StreamChunk chunk;
-                    std::string full_content;
-                    std::string full_reasoning;
-                    auto start_time = std::chrono::steady_clock::now();
-                    bool stream_error = false;
-
-                    auto stream_r = read_stream_response(
-                        *reader, should_cancel,
-                        full_content, full_reasoning,
-                        chunk, stream_error, pending_tools);
-
-                    if (stream_r == AgentStepResult::Cancelled) {
-                        // 处理取消：保存部分内容，发布 interrupted done
-                        if (!full_content.empty()) {
-                            std::lock_guard<std::mutex> lock(m_state_mutex);
-                            m_messages.push_back(ChatMessage::assistant(full_content));
-                        }
-                        EventBus::instance().publish_async(StreamDoneEvent{
-                            .session_id = m_session_id,
-                            .full_content = full_content,
-                            .full_reasoning = full_reasoning,
-                            .was_interrupted = true,
-                            .prompt_tokens = 0,
-                            .generated_tokens = 0,
-                            .prompt_ms = 0.0,
-                            .generation_ms = 0.0
-                        });
-                        break;
-                    }
-
-                    if (stream_r == AgentStepResult::ErrorExit) {
-                        // B.1：流错误 → 委托给 handle_stream_error
-                        auto r = handle_stream_error(user_text, retry_attempt,
-                                                     max_retries, retry_delay_ms,
-                                                     should_cancel, resumed_new_task);
-                        if (r == AgentStepResult::RetryNewTask) break;
-                        // Cancelled 或 ErrorExit：直接退出
-                        break;
-                    }
-
-                    // ---- 流式完成 ----
-                    auto end_time = std::chrono::steady_clock::now();
-                    double elapsed_ms = std::chrono::duration<double, std::milli>(
-                        end_time - start_time).count();
-
-                    // 没有 tool_use：正常完成，发布 done 事件并退出 agent 循环
-                    if (pending_tools.empty()) {
-                        {
-                            std::lock_guard<std::mutex> lock(m_state_mutex);
-                            m_messages.push_back(ChatMessage::assistant(full_content));
-                            if (!full_reasoning.empty()) {
-                                m_messages.back().reasoning_content = full_reasoning;
+            // ---- on_step 回调：发布 Agent 事件 ----
+            ReActLoop::StepCallback on_step =
+                [session_id](const ReActStep& step) {
+                    switch (step.type) {
+                        case ReActStepType::Thought:
+                            // 发布 AgentStepEvent
+                            // 注意：description 只用简短占位。流式期间 on_token 已通过
+                            // StreamTokenEvent 把 thought_text 完整渲染到终端，这里若再
+                            // 写完整文本会导致 UI 重复显示同一份内容。
+                            EventBus::instance().publish_async(AgentStepEvent{
+                                .step_id = std::format("thought-{}", step.step_number),
+                                .step_number = step.step_number,
+                                .description = "(thinking)"
+                            });
+                            // 有 tool_use 时发布中间 StreamDoneEvent，
+                            // 让 UI 知道本轮 LLM 流式输出结束
+                            if (!step.tool_uses.empty()) {
+                                EventBus::instance().publish_async(StreamDoneEvent{
+                                    .session_id = session_id,
+                                    .full_content = step.thought_text,
+                                    .full_reasoning = step.reasoning,
+                                    .was_interrupted = false,
+                                    .prompt_tokens = 0,
+                                    .generated_tokens = 0,
+                                    .prompt_ms = 0.0,
+                                    .generation_ms = step.duration_ms
+                                });
                             }
-                        }
+                            break;
 
-                        EventBus::instance().publish_async(StreamDoneEvent{
-                            .session_id = m_session_id,
-                            .full_content = full_content,
-                            .full_reasoning = full_reasoning,
-                            .was_interrupted = false,
-                            .prompt_tokens = chunk.prompt_tokens,
-                            .generated_tokens = chunk.generated_tokens,
-                            .prompt_ms = chunk.prompt_ms,
-                            .generation_ms = elapsed_ms
-                        });
-                        break;
+                        case ReActStepType::Action:
+                            EventBus::instance().publish_async(ToolCallEvent{
+                                .tool_name = step.tool_name,
+                                .arguments = step.tool_input.dump(),
+                                .call_id = "",
+                                .tool_type = infer_tool_type(step.tool_name)
+                            });
+                            break;
+
+                        case ReActStepType::Observation:
+                            EventBus::instance().publish_async(ToolResultEvent{
+                                .call_id = "",
+                                .result = step.observation,
+                                .is_error = step.is_error
+                            });
+                            break;
+
+                        case ReActStepType::FinalAnswer:
+                            // 不在此发布事件，循环结束后统一处理
+                            break;
+                    }
+                };
+
+            // ---- 执行 ReAct 循环 ----
+            ReActResult react_result = loop.run(
+                m_messages, m_system_prompt, tools_schema,
+                should_cancel, on_step, on_token
+            );
+
+            // ============================================================
+            // 结果处理
+            // ============================================================
+
+            // ---- 用户中断 ----
+            if (react_result.was_interrupted) {
+                if (!react_result.partial_content.empty()) {
+                    m_messages.push_back(ChatMessage::assistant(react_result.partial_content));
+                    if (!react_result.partial_reasoning.empty()) {
+                        m_messages.back().reasoning_content = react_result.partial_reasoning;
+                    }
+                }
+                EventBus::instance().publish_async(StreamDoneEvent{
+                    .session_id = session_id,
+                    .full_content = react_result.partial_content,
+                    .full_reasoning = react_result.partial_reasoning,
+                    .was_interrupted = true,
+                    .prompt_tokens = react_result.prompt_tokens,
+                    .generated_tokens = react_result.generated_tokens,
+                    .prompt_ms = react_result.prompt_ms,
+                    .generation_ms = react_result.generation_ms
+                });
+                m_generating.store(false);
+                return;
+            }
+
+            // ---- 错误处理 ----
+            if (react_result.was_error) {
+                // max iterations 错误不可重试
+                bool is_max_iter = react_result.error_message.find("max iterations")
+                                   != std::string::npos;
+
+                if (!is_max_iter && retry_attempt < max_retries) {
+                    // 指数退避，但限制上限为 60s
+                    int delay = std::min(retry_delay_ms * (1 << retry_attempt), 60000);
+                    EventBus::instance().publish_async(StreamErrorEvent{
+                        .session_id = session_id,
+                        .message = std::format(
+                            "Error: {}, retrying in {}ms... ({}/{})",
+                            react_result.error_message, delay,
+                            retry_attempt + 1, max_retries),
+                        .retryable = true
+                    });
+
+                    // 可中断的等待
+                    auto wait_until = std::chrono::steady_clock::now() +
+                                      std::chrono::milliseconds(delay);
+                    while (std::chrono::steady_clock::now() < wait_until) {
+                        if (should_cancel) {
+                            m_generating.store(false);
+                            return;
+                        }
+                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
                     }
 
-                    // ---- 有 tool_use：执行工具并继续 agent 循环 ----
-                    execute_tool_uses(pending_tools, full_content, full_reasoning, chunk, elapsed_ms);
-                    // 继续下一轮 agent 循环
-                }
-
-                // ---- 超过最大迭代数 ----
-                if (iteration >= max_iterations && !resumed_new_task) {
+                    if (!should_cancel) {
+                        // 保留工具调用上下文：不删除已成功的 tool call/result 消息
+                        // ReAct loop 在流式失败时不会添加 partial assistant 消息，
+                        // 所以 m_messages 中只有成功的 round，直接重试即可
+                        run_completion(user_text, retry_attempt + 1);
+                    }
+                } else {
                     EventBus::instance().publish_async(StreamErrorEvent{
-                        .session_id = m_session_id,
-                        .message = std::format("Agent loop reached max iterations ({})", max_iterations),
+                        .session_id = session_id,
+                        .message = react_result.error_message,
                         .retryable = false
                     });
                 }
-            } catch (const std::exception& e) {
+                m_generating.store(false);
+                return;
+            }
+
+            // ---- 成功完成 ----
+            EventBus::instance().publish_async(StreamDoneEvent{
+                .session_id = session_id,
+                .full_content = react_result.final_answer,
+                .full_reasoning = react_result.final_reasoning,
+                .was_interrupted = false,
+                .prompt_tokens = react_result.prompt_tokens,
+                .generated_tokens = react_result.generated_tokens,
+                .prompt_ms = react_result.prompt_ms,
+                .generation_ms = react_result.generation_ms
+            });
+
+            EventBus::instance().publish_async(AgentDoneEvent{
+                .final_response = react_result.final_answer,
+                .total_steps = static_cast<int32_t>(react_result.steps.size()),
+                .total_tool_calls = react_result.total_tool_calls,
+                .total_duration_ms = react_result.total_duration_ms
+            });
+
+            m_generating.store(false);
+
+            } // end try
+            catch (const std::exception& e) {
                 EventBus::instance().publish_async(StreamErrorEvent{
                     .session_id = m_session_id,
-                    .message = std::format("Agent loop exception: {}", e.what()),
+                    .message = std::format("Fatal error in completion task: {}", e.what()),
                     .retryable = false
                 });
+                m_generating.store(false);
             } catch (...) {
                 EventBus::instance().publish_async(StreamErrorEvent{
                     .session_id = m_session_id,
-                    .message = "Agent loop unknown exception",
+                    .message = "Fatal unknown error in completion task",
                     .retryable = false
                 });
-            }
-
-            // completion_done 等价点：仅当未启动递归重试新 Task 时才复位
-            if (!resumed_new_task) {
                 m_generating.store(false);
-                {
-                    std::lock_guard<std::mutex> lock(m_state_mutex);
-                    m_current_task.reset();
-                }
             }
-            m_task_cv.notify_all();
         },
         TaskType::Normal
     );
@@ -306,246 +372,6 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
     {
         std::lock_guard<std::mutex> lock(m_state_mutex);
         m_current_task = task;
-    }
-}
-
-// ============================================================
-// B.1：拆分出的子方法实现
-// ============================================================
-
-bool ChatSession::interruptible_wait(const std::atomic<bool>& should_cancel,
-                                     std::chrono::milliseconds duration) {
-    auto wait_until = std::chrono::steady_clock::now() + duration;
-    while (std::chrono::steady_clock::now() < wait_until) {
-        if (should_cancel) return true;
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-    return false;
-}
-
-ChatSession::AgentStepResult ChatSession::handle_submit_failure(
-    const std::string& user_text, int retry_attempt,
-    int max_retries, int retry_delay_ms,
-    const std::atomic<bool>& should_cancel, bool& resumed_new_task_out) {
-
-    if (retry_attempt >= max_retries) {
-        EventBus::instance().publish_async(StreamErrorEvent{
-            .session_id = m_session_id,
-            .message = "Failed to submit completion request after retries",
-            .retryable = false
-        });
-        return AgentStepResult::ErrorExit;
-    }
-
-    int delay = retry_delay_ms * (1 << retry_attempt);
-    EventBus::instance().publish_async(StreamErrorEvent{
-        .session_id = m_session_id,
-        .message = std::format("Submit failed, retrying in {}ms... ({}/{})",
-                               delay, retry_attempt + 1, max_retries),
-        .retryable = true
-    });
-
-    // 可中断的等待
-    if (interruptible_wait(should_cancel, std::chrono::milliseconds(delay))) {
-        return AgentStepResult::Cancelled;
-    }
-
-    // 递归重试：清除当前 task 引用，让新 task 接管
-    {
-        std::lock_guard<std::mutex> lock(m_state_mutex);
-        m_current_task.reset();
-    }
-    resumed_new_task_out = true;
-    run_completion(user_text, retry_attempt + 1);
-    return AgentStepResult::RetryNewTask;
-}
-
-ChatSession::AgentStepResult ChatSession::handle_stream_error(
-    const std::string& user_text, int retry_attempt,
-    int max_retries, int retry_delay_ms,
-    const std::atomic<bool>& should_cancel, bool& resumed_new_task_out) {
-
-    if (retry_attempt >= max_retries) {
-        EventBus::instance().publish_async(StreamErrorEvent{
-            .session_id = m_session_id,
-            .message = "Stream error occurred after retries",
-            .retryable = false
-        });
-        return AgentStepResult::ErrorExit;
-    }
-
-    int delay = retry_delay_ms * (1 << retry_attempt);
-    EventBus::instance().publish_async(StreamErrorEvent{
-        .session_id = m_session_id,
-        .message = std::format("Stream error, retrying in {}ms... ({}/{})",
-                               delay, retry_attempt + 1, max_retries),
-        .retryable = true
-    });
-
-    if (interruptible_wait(should_cancel, std::chrono::milliseconds(delay))) {
-        return AgentStepResult::Cancelled;
-    }
-
-    // 移除可能部分添加的 assistant 消息，然后递归重试
-    {
-        std::lock_guard<std::mutex> lock(m_state_mutex);
-        while (!m_messages.empty() &&
-               m_messages.back().role == ChatMessage::Role::Assistant) {
-            m_messages.pop_back();
-        }
-    }
-    {
-        std::lock_guard<std::mutex> lock(m_state_mutex);
-        m_current_task.reset();
-    }
-    resumed_new_task_out = true;
-    run_completion(user_text, retry_attempt + 1);
-    return AgentStepResult::RetryNewTask;
-}
-
-ChatSession::AgentStepResult ChatSession::read_stream_response(
-    IStreamReader& reader,
-    const std::atomic<bool>& should_cancel,
-    std::string& content_out, std::string& reasoning_out,
-    StreamChunk& last_chunk_out, bool& stream_error_out,
-    std::vector<PendingToolUse>& pending_tools_out) {
-
-    while (true) {
-        if (should_cancel) {
-            reader.cancel();
-            return AgentStepResult::Cancelled;
-        }
-
-        StreamChunk chunk;
-        auto state = reader.next(
-            [&should_cancel]() { return should_cancel.load(); },
-            chunk
-        );
-
-        if (state == StreamState::HasData) {
-            // 文本/推理增量
-            if (!chunk.content_delta.empty() || !chunk.reasoning_delta.empty()) {
-                content_out += chunk.content_delta;
-                reasoning_out += chunk.reasoning_delta;
-
-                EventBus::instance().publish_async(StreamTokenEvent{
-                    .session_id = m_session_id,
-                    .content_delta = chunk.content_delta,
-                    .reasoning_delta = chunk.reasoning_delta,
-                    .is_thinking = !chunk.reasoning_delta.empty(),
-                    .token_count = chunk.token_count
-                });
-            }
-
-            // tool_use content_block 开始
-            if (chunk.is_tool_use_start) {
-                pending_tools_out.push_back({
-                    chunk.tool_use_id,
-                    chunk.tool_name,
-                    ""
-                });
-            }
-
-            // tool_use input JSON 增量（流式拼接）
-            if (chunk.is_tool_use_delta && !pending_tools_out.empty()) {
-                pending_tools_out.back().input_json += chunk.tool_input_delta;
-            }
-            last_chunk_out = chunk;
-        } else if (state == StreamState::Complete) {
-            if (!chunk.content_delta.empty() || !chunk.reasoning_delta.empty()) {
-                content_out += chunk.content_delta;
-                reasoning_out += chunk.reasoning_delta;
-            }
-            last_chunk_out = chunk;
-            return AgentStepResult::Done;
-        } else if (state == StreamState::Error) {
-            stream_error_out = true;
-            return AgentStepResult::ErrorExit;
-        } else if (state == StreamState::Cancelled) {
-            return AgentStepResult::Cancelled;
-        }
-    }
-}
-
-void ChatSession::execute_tool_uses(
-    const std::vector<PendingToolUse>& pending_tools,
-    const std::string& content, const std::string& reasoning,
-    const StreamChunk& last_chunk, double elapsed_ms) {
-
-    // 1. 构建 assistant 消息（包含 text + tool_uses）
-    ChatMessage assistant_msg = ChatMessage::assistant(content);
-    if (!reasoning.empty()) {
-        assistant_msg.reasoning_content = reasoning;
-    }
-    for (const auto& ptu : pending_tools) {
-        ToolUse tu;
-        tu.id = ptu.id;
-        tu.name = ptu.name;
-        tu.input = parse_tool_input(ptu.input_json);
-        assistant_msg.tool_uses.push_back(std::move(tu));
-    }
-    {
-        std::lock_guard<std::mutex> lock(m_state_mutex);
-        m_messages.push_back(std::move(assistant_msg));
-    }
-
-    // 2. 发布本轮流式 done 事件（让 UI 知道本轮 LLM 输出结束）
-    EventBus::instance().publish_async(StreamDoneEvent{
-        .session_id = m_session_id,
-        .full_content = content,
-        .full_reasoning = reasoning,
-        .was_interrupted = false,
-        .prompt_tokens = last_chunk.prompt_tokens,
-        .generated_tokens = last_chunk.generated_tokens,
-        .prompt_ms = last_chunk.prompt_ms,
-        .generation_ms = elapsed_ms
-    });
-
-    // 3. 执行每个 tool_use
-    {
-        std::lock_guard<std::mutex> lock(m_state_mutex);
-        if (!m_tool_executor) {
-            // 未配置 executor：以错误作为 tool_result 回传
-            for (const auto& ptu : pending_tools) {
-                m_messages.push_back(ChatMessage::tool_result(
-                    ptu.id, ptu.name, "Error: tool executor not configured"));
-            }
-            return;  // 调用方继续下一轮 agent 循环
-        }
-    }
-
-    tool::ToolContext ctx;
-    ctx.cwd = std::filesystem::current_path().string();
-    ctx.session_id = m_session_id;
-
-    for (const auto& ptu : pending_tools) {
-        nlohmann::json input_json = parse_tool_input(ptu.input_json);
-
-        // UI 反馈：工具调用开始
-        EventBus::instance().publish_async(StreamTokenEvent{
-            .session_id = m_session_id,
-            .content_delta = std::format("\n[Tool: {}]\n", ptu.name),
-            .reasoning_delta = "",
-            .is_thinking = false,
-            .token_count = 0
-        });
-
-        auto exec_result = m_tool_executor->execute(ptu.name, input_json, ctx);
-        std::string result_text = exec_result.result.to_string();
-
-        // UI 反馈：工具结果
-        EventBus::instance().publish_async(StreamTokenEvent{
-            .session_id = m_session_id,
-            .content_delta = std::format("[Result]: {}\n", result_text),
-            .reasoning_delta = "",
-            .is_thinking = false,
-            .token_count = 0
-        });
-
-        // 添加 tool_result 消息（下一轮 LLM 会读取）
-        std::lock_guard<std::mutex> lock(m_state_mutex);
-        m_messages.push_back(ChatMessage::tool_result(
-            ptu.id, ptu.name, result_text));
     }
 }
 
@@ -684,21 +510,6 @@ Result<void, std::string> ChatSession::load_session(const std::string& path) {
 }
 
 // ============================================================
-// parse_tool_input — 工具输入 JSON 解析（空串或解析失败返回空 object）
-// ============================================================
-
-nlohmann::json ChatSession::parse_tool_input(const std::string& json_str) {
-    if (json_str.empty()) {
-        return nlohmann::json::object();
-    }
-    try {
-        return nlohmann::json::parse(json_str);
-    } catch (const nlohmann::json::parse_error&) {
-        return nlohmann::json::object();
-    }
-}
-
-// ============================================================
 // 事件订阅
 // ============================================================
 
@@ -717,3 +528,4 @@ void ChatSession::unsubscribe_interrupt() {
 }
 
 } // namespace agent
+

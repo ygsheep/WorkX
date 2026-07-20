@@ -42,6 +42,12 @@ namespace keys {
     // Tool — FileReadTool
     constexpr const char* FILE_READ_MAX_SIZE  = "tool.file_read.max_file_size_bytes";
     constexpr const char* FILE_READ_MAX_LINES = "tool.file_read.max_lines_to_read";
+
+    // Tool — FileEditTool
+    /// 拒绝编辑的路径模式列表（换行分隔的 glob，如 "~/.ssh/**\n**/.env\n**/.git/**"）
+    constexpr const char* EDIT_DENY_PATTERNS  = "tool.edit.deny_patterns";
+    /// 是否启用密钥扫描（写入内容包含疑似密钥时拒绝）
+    constexpr const char* EDIT_SCAN_SECRETS   = "tool.edit.scan_secrets";
 }
 
 /// @brief 注册所有配置项的元数据（描述、默认值、验证函数）

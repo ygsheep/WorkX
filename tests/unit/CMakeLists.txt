@@ -9,6 +9,7 @@ set(UNIT_TEST_SOURCES
     agent/core/test_chat_session.cpp
     agent/command/test_command_system.cpp
     agent/model/test_provider_preset.cpp
+    agent/tool/test_file_edit_tool.cpp
     core/config/test_config_manager.cpp
     tui/core/test_display_buffer.cpp
     tui/render/test_markdown_renderer.cpp
