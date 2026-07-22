@@ -195,6 +195,7 @@ set(WORKX_SOURCES
     src/agent/api/remote/sse_stream_reader.cpp
     src/agent/api/remote/http_client.cpp
     src/agent/model/provider_preset.cpp
+    src/agent/model/config.cpp
     src/agent/api/provider/openai_adapter.cpp
     src/agent/api/provider/anthropic_adapter.cpp
     src/agent/command/source/registry.cpp
@@ -205,6 +206,7 @@ set(WORKX_SOURCES
     src/agent/tool/line_endings.cpp
     src/agent/tool/quote_normalizer.cpp
     src/agent/tool/file_history.cpp
+    src/agent/compact/token_count.cpp
     src/agent/tool/FileReadTool/file_read_tool.cpp
     src/agent/tool/FileEditTool/file_edit_tool.cpp
     src/agent/tool/FileWriteTool/file_write_tool.cpp

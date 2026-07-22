@@ -109,6 +109,12 @@ struct StreamChunk {
     double prompt_ms = 0.0;
     double generation_ms = 0.0;
 
+    // 上下文管理：Anthropic cache usage（OpenAI adapter 留 0）
+    // 用于精确计算当前上下文 token 总量（与 claude-code tokenCountWithEstimation 对齐）
+    int32_t cache_creation_input_tokens = 0;  ///< Anthropic cache_creation_input_tokens
+    int32_t cache_read_input_tokens = 0;      ///< Anthropic cache_read_input_tokens
+    std::string response_id;                  ///< Anthropic message.id（并行 tool_use 拆分识别）
+
     // tool_use 流式事件（Anthropic content_block_start/delta）
     bool is_tool_use_start = false;     ///< tool_use content_block 开始
     bool is_tool_use_delta = false;     ///< tool_use input JSON 增量
