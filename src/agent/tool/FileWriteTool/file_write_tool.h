@@ -94,7 +94,7 @@ public:
     ToolResult call(
         const nlohmann::json& input,
         const ToolContext& ctx
-    ) override;
+    ) const override;
 
 private:
     /// @brief Pre-read 强制检查 + Staleness 检测

@@ -40,7 +40,7 @@ namespace {
 class EchoTool : public ITool {
 public:
     mutable int call_count = 0;
-    std::string last_input;
+    mutable std::string last_input;
 
     const std::string& name() const override {
         static const std::string n = "Echo";
@@ -63,7 +63,7 @@ public:
             {"required", {"text"}}
         };
     }
-    ToolResult call(const nlohmann::json& input, const ToolContext& /*ctx*/) override {
+    ToolResult call(const nlohmann::json& input, const ToolContext& /*ctx*/) const override {
         call_count++;
         last_input = input.value("text", "");
         return ToolResult::ok(std::string("echo: ") + last_input);
@@ -91,7 +91,7 @@ public:
     nlohmann::json input_schema() const override {
         return {{"type", "object"}, {"properties", {}}};
     }
-    ToolResult call(const nlohmann::json&, const ToolContext&) override {
+    ToolResult call(const nlohmann::json&, const ToolContext&) const override {
         throw std::runtime_error("intentional tool failure");
     }
 };
@@ -120,7 +120,7 @@ public:
     PermissionResult check_permissions(const nlohmann::json&, const ToolContext&) const override {
         return PermissionResult::err("access denied by policy");
     }
-    ToolResult call(const nlohmann::json&, const ToolContext&) override {
+    ToolResult call(const nlohmann::json&, const ToolContext&) const override {
         return ToolResult::ok(std::string("should not reach here"));
     }
 };

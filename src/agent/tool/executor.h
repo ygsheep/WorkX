@@ -12,6 +12,7 @@
 #include <memory>
 #include <filesystem>
 #include <nlohmann/json.hpp>
+#include "liblogger/logger.h"
 #include "itool.h"
 #include "registry.h"
 #include "result.h"
@@ -53,9 +54,13 @@ public:
         ExecutionResult exec_result;
         exec_result.tool_name = tool_name;
 
+        LOG_DEBUG("[tool_executor] begin, tool={}, input_size={}",
+                  tool_name, input.dump().size());
+
         // 1. 查找工具
         auto tool = registry_->find_by_name(tool_name);
         if (!tool) {
+            LOG_WARN("[tool_executor] tool not found: {}", tool_name);
             exec_result.result = ToolResult::error("Tool not found: " + tool_name);
             exec_result.is_error = true;
             return exec_result;
@@ -63,6 +68,7 @@ public:
 
         // 2. 检查取消
         if (ctx.is_cancelled()) {
+            LOG_INFO("[tool_executor] tool={} cancelled before execution", tool_name);
             exec_result.result = ToolResult::error("Tool execution cancelled");
             exec_result.is_error = true;
             return exec_result;
@@ -71,6 +77,8 @@ public:
         // 3. 权限检查
         auto perm = tool->check_permissions(input, ctx);
         if (perm.isErr()) {
+            LOG_WARN("[tool_executor] tool={} permission denied: {}",
+                     tool_name, perm.error());
             exec_result.result = ToolResult::error("Permission denied: " + perm.error());
             exec_result.is_error = true;
             return exec_result;
@@ -79,32 +87,47 @@ public:
         // 4. 输入验证
         auto validation = tool->validate_input(input, ctx);
         if (validation.isErr()) {
+            LOG_WARN("[tool_executor] tool={} invalid input: {}",
+                     tool_name, validation.error());
             exec_result.result = ToolResult::error("Invalid input: " + validation.error());
             exec_result.is_error = true;
             return exec_result;
         }
 
         // 5. 执行工具（try-catch 防止异常逃逸致 Agent 崩溃）
+        auto t0 = std::chrono::steady_clock::now();
         try {
             exec_result.result = tool->call(input, ctx);
             exec_result.is_error = exec_result.result.is_error;
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count();
+            LOG_INFO("[tool_executor] tool={} end, is_error={}, duration={}ms",
+                     tool_name, exec_result.is_error, ms);
         } catch (const nlohmann::json::exception& e) {
+            LOG_ERROR("[tool_executor] tool={} JSON exception: {}",
+                      tool_name, e.what());
             exec_result.result = ToolResult::error(
                 std::string{"JSON error in tool '"} + tool_name + "': " + e.what());
             exec_result.is_error = true;
         } catch (const std::filesystem::filesystem_error& e) {
+            LOG_ERROR("[tool_executor] tool={} filesystem exception: {}",
+                      tool_name, e.what());
             exec_result.result = ToolResult::error(
                 std::string{"Filesystem error in tool '"} + tool_name + "': " + e.what());
             exec_result.is_error = true;
         } catch (const std::bad_alloc& e) {
+            LOG_ERROR("[tool_executor] tool={} bad_alloc: {}", tool_name, e.what());
             exec_result.result = ToolResult::error(
                 std::string{"Out of memory in tool '"} + tool_name + "': " + e.what());
             exec_result.is_error = true;
         } catch (const std::exception& e) {
+            LOG_ERROR("[tool_executor] tool={} std::exception: {}",
+                      tool_name, e.what());
             exec_result.result = ToolResult::error(
                 std::string{"Error in tool '"} + tool_name + "': " + e.what());
             exec_result.is_error = true;
         } catch (...) {
+            LOG_ERROR("[tool_executor] tool={} unknown exception", tool_name);
             exec_result.result = ToolResult::error(
                 std::string{"Unknown exception in tool '"} + tool_name + "'");
             exec_result.is_error = true;

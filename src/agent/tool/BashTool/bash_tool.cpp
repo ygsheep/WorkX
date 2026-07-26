@@ -45,7 +45,7 @@ nlohmann::json BashTool::input_schema() const {
 ToolResult BashTool::call(
     const nlohmann::json& input,
     const ToolContext& ctx
-) {
+) const {
     // TODO: 实现 shell 执行逻辑
     return ToolResult::error("BashTool not implemented");
 }

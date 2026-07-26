@@ -68,7 +68,7 @@ public:
     ToolResult call(
         const nlohmann::json& input,
         const ToolContext& ctx
-    ) override;
+    ) const override;
 
 private:
     /// @brief 将文本行格式化为带行号的输出
