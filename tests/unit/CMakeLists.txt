@@ -3,6 +3,7 @@
 
 set(UNIT_TEST_SOURCES
     ../test_main.cpp
+    helpers/test_mock_helpers.cpp
     agent/api/test_anthropic_adapter.cpp
     agent/api/test_openai_adapter.cpp
     agent/api/test_sse_parser.cpp
