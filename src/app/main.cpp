@@ -2,8 +2,14 @@
  * @file main.cpp
  * @brief Workx TUI 入口
  * @details 解析参数，组装各层，运行
- * @version 3.1.0
+ * @version 4.0.0
  * @date 2026-07
+ *
+ * v4.0.0 变更（D-2/D-3）：
+ *   - 依赖组装逻辑提取到 app/factory.h（init_logger / make_terminal_config /
+ *     create_session / register_builtin_tools / build_system_prompt）
+ *   - IBackend 拆分为 ICompletionProvider + IBackendAdmin（D-3 接口隔离）
+ *   - main.cpp 仅保留 TUI 接线与事件订阅
  */
 
 #include <algorithm>
@@ -15,7 +21,6 @@
 
 #include <liblogger/logger.h>
 
-#include "agent/api/backend_factory.h"
 #include "agent/api/chat_types.h"
 #include "agent/api/i_backend.h"
 #include "agent/command/inclaude/registry.h"
@@ -24,13 +29,11 @@
 #include "agent/message/types.h"
 #include "agent/model/provider_preset.h"
 #include "agent/model/context_resolver.h"
-#include "agent/tool/FileEditTool/file_edit_tool.h"
-#include "agent/tool/FileReadTool/file_read_tool.h"
-#include "agent/tool/FileWriteTool/file_write_tool.h"
 #include "agent/tool/registry.h"
 #include "app/command/builtin_commands.h"
 #include "app/config/app_config.h"
 #include "app/config/cli_args.h"
+#include "app/factory.h"
 #include "app/ui/model_selector.h"
 #include "app/ui/path_completer.h"
 #include "app/ui/file_index.h"
@@ -86,28 +89,8 @@ static int run(int argc, char* argv[]) {
     // ---- 从 ConfigManager 读取配置 ----
     auto& cfg = ConfigManager::instance();
 
-    // ---- 初始化日志系统 ----
-    {
-        // G-3/G-4：使用 agent::log::Logger 全限定名 + 引用调用
-        auto& logger = agent::log::Logger::get_instance();
-
-        // 设置日志级别
-        std::string level_str = cfg.get_or<std::string>(keys::LOG_LEVEL, "info");
-        std::transform(level_str.begin(), level_str.end(), level_str.begin(), ::tolower);
-        if (level_str == "trace")       logger.set_level(agent::log::LogLevel::TRACE);
-        else if (level_str == "debug")  logger.set_level(agent::log::LogLevel::DEBUG);
-        else if (level_str == "warn")   logger.set_level(agent::log::LogLevel::WARN);
-        else if (level_str == "error")  logger.set_level(agent::log::LogLevel::ERROR);
-        else if (level_str == "fatal")  logger.set_level(agent::log::LogLevel::FATAL);
-        else                            logger.set_level(agent::log::LogLevel::INFO);
-
-        // 启用文件输出（默认写入 %APPDATA%/workx/logs/workx.log）
-        std::string log_file = cfg.get_or<std::string>(keys::LOG_FILE, "");
-        if (log_file.empty()) {
-            log_file = default_log_path().string();
-        }
-        logger.enable_file_output(log_file, true);
-    }
+    // ---- 初始化日志系统（D-2：委托工厂）----
+    init_logger(cfg, default_log_path());
 
     // ---- Debug 启动信息 ----
     bool verbose = cfg.get_or<bool>(keys::VERBOSE, false);
@@ -120,13 +103,8 @@ static int run(int argc, char* argv[]) {
         std::cerr << "[debug]   simple_io: " << (cfg.get_or<bool>(keys::SIMPLE_IO, false) ? "true" : "false") << "\n";
     }
 
-    // ---- Terminal ----
-    TerminalConfig config;
-    config.simple_io = cfg.get_or<bool>(keys::SIMPLE_IO, false);
-    config.use_color = !cfg.get_or<bool>(keys::NO_COLOR, false);
-    config.prompt_string = cfg.get_or<std::string>(keys::PROMPT, "> ");
-
-    Terminal terminal(config);
+    // ---- Terminal（D-2：委托工厂构建 config）----
+    Terminal terminal(make_terminal_config(cfg));
 
     auto init_result = terminal.initialize();
     if (init_result.isErr()) {
@@ -164,95 +142,25 @@ static int run(int argc, char* argv[]) {
         // Screen 内部已通过 clear() + flush() 清空虚拟屏幕
     }
 
-    // ---- Backend (可选) ----
-    std::unique_ptr<ChatSession> session;
-    std::shared_ptr<command::CommandRegistry> registry;
-    std::unique_ptr<agent::input::InputProcessor> input_processor;
-
-    // 检查 Provider Preset（--provider 时自动填充 URL/Model）
+    // ---- 检查 Provider Preset ----
     std::string provider_name = cfg.get_or<std::string>(keys::PROVIDER, "");
     const ProviderPreset* preset = provider_name.empty() ? nullptr : find_preset(provider_name);
 
-    // URL: --remote(显式设置) > preset > ""
-    std::string remote_url;
-    if (cfg.has(keys::REMOTE_URL)) {
-        remote_url = cfg.get_or<std::string>(keys::REMOTE_URL, "");
-    } else if (preset && !preset->default_url.empty()) {
-        remote_url = std::string(preset->default_url);
+    // ---- Backend + Session（D-2：委托工厂）----
+    auto session_result = create_session(cfg, preset);
+    auto session = std::move(session_result.session);
+    std::string remote_url = std::move(session_result.remote_url);
+    std::string model_name = std::move(session_result.model_name);
+
+    if (session && verbose) {
+        std::cerr << "[debug] Backend ready\n";
+        std::cerr << "[debug]   provider: " << (preset ? preset->name : "openai") << "\n";
+        std::cerr << "[debug]   url:      " << remote_url << "\n";
+        std::cerr << "[debug]   model:    " << model_name << "\n";
     }
 
-    // Model: --model(显式设置) > preset > ""
-    std::string model_name;
-    if (cfg.has(keys::MODEL_NAME)) {
-        model_name = cfg.get_or<std::string>(keys::MODEL_NAME, "");
-    } else if (preset && !preset->default_model.empty()) {
-        model_name = std::string(preset->default_model);
-    }
-
-    if (!remote_url.empty()) {
-        BackendConfig backend_config;
-        backend_config.type = BackendConfig::Type::Remote;
-        backend_config.provider = preset ? preset->type : ProviderType::OpenAI;
-        backend_config.base_url = remote_url;
-        backend_config.model_name = model_name;
-        backend_config.api_key = cfg.get_or<std::string>(keys::API_KEY, "");
-        int default_timeout = preset && preset->timeout_ms > 0 ? preset->timeout_ms : 30000;
-        backend_config.timeout_ms = cfg.get_or<int>(keys::TIMEOUT_MS, default_timeout);
-
-        auto backend = BackendFactory::create(backend_config);
-        if (!backend) {
-            std::cerr << "Failed to create backend\n";
-            terminal.restore();
-            return 1;
-        }
-
-        auto backend_init_result = backend->initialize(backend_config);
-        if (backend_init_result.isErr()) {
-            std::cerr << "Failed to initialize backend: " << backend_init_result.error() << "\n";
-            terminal.restore();
-            return 1;
-        }
-
-        int default_retry_delay = preset && preset->retry_delay_ms > 0 ? preset->retry_delay_ms : 1000;
-        // D-1：显式组装依赖 — 三大核心组件均通过单例注入，
-        // 未来切换 Mock 时只需修改这三处引用
-        session = std::make_unique<ChatSession>(
-            std::move(backend), default_retry_delay, "default",
-            TaskManager::instance(),
-            EventBus::instance(),
-            ConfigManager::instance());
-
-        if (verbose) {
-            std::cerr << "[debug] Backend ready\n";
-            std::cerr << "[debug]   provider: " << (preset ? preset->name : "openai") << "\n";
-            std::cerr << "[debug]   url:      " << remote_url << "\n";
-            std::cerr << "[debug]   model:    " << model_name << "\n";
-        }
-
-        // 注册工具到 ToolRegistry（启用 function calling）
-        auto tool_registry = std::make_shared<agent::tool::ToolRegistry>();
-        tool_registry->register_tool(std::make_shared<agent::tool::FileReadTool>());
-        tool_registry->register_tool(std::make_shared<agent::tool::FileWriteTool>());
-        tool_registry->register_tool(std::make_shared<agent::tool::FileEditTool>());
-        session->set_tool_registry(tool_registry);
-
-        // 设置系统提示词（拼接工具 prompt，让 LLM 知道如何使用工具）
-        std::string sys_prompt = cfg.get_or<std::string>(keys::SYSTEM_PROMPT, "");
-        for (const auto& t : tool_registry->get_all_tools()) {
-            sys_prompt += "\n\n";
-            sys_prompt += t->prompt();
-        }
-        // @file 引用说明：用户消息中的 <file path="..."> 标签由前端预处理注入，
-        // 已包含文件完整内容。LLM 不应再对其中路径调用 Read 工具，避免重复读取。
-        sys_prompt +=
-            "\n\n"
-            "用户消息中可能出现 <file path=\"...\">...</file> 标签，这是用户通过 "
-            "@path 语法引用的文件内容，已由前端读取并注入。对此类标签内的路径，"
-            "禁止再次调用 Read 工具读取；直接基于标签内已有内容回答用户问题。";
-        if (!sys_prompt.empty()) {
-            session->set_system_prompt(sys_prompt);
-        }
-    }
+    std::shared_ptr<command::CommandRegistry> registry;
+    std::unique_ptr<agent::input::InputProcessor> input_processor;
 
     // ---- 命令系统 ----
     registry = std::make_shared<command::CommandRegistry>();

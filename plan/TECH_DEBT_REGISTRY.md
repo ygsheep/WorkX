@@ -2,13 +2,13 @@
 
 > 本文档整合 `PHASE3_LONG_TERM_REFACTOR.md`（详细方案）与历史登记，作为技术债的唯一索引。
 > 详细重构方案请参考 `plan/PHASE3_LONG_TERM_REFACTOR.md`。
-> 最后更新：2026-07-27（P2 C-2/C-3/C-4 配置系统 Schema 化完成）
+> 最后更新：2026-07-27（P3 D-2/D-3 main.cpp 工厂化 + IBackend 接口隔离完成）
 
 ## 状态总览
 
-- 已修复：16 项（L-1 / L-2 / L-3 / L-6 / T-4 / T-6 / G-2 / G-3 / G-4 / D-4 / D-5 / D-6 / Q-1 / C-2 / C-3 / C-4）
+- 已修复：18 项（L-1 / L-2 / L-3 / L-6 / T-4 / T-6 / G-2 / G-3 / G-4 / D-2 / D-3 / D-4 / D-5 / D-6 / Q-1 / C-2 / C-3 / C-4）
 - 已安全：1 项（T-5 PHASE3 判定无需修复）
-- 待修复：13 项（L-5 / H-1 / H-2 / H-3 / H-4 / D-2 / D-3 / E-1 / E-5 / E-6 / Q-2 / Q-3 / Q-4）
+- 待修复：11 项（L-5 / H-1 / H-2 / H-3 / H-4 / E-1 / E-5 / E-6 / Q-2 / Q-3 / Q-4）
 - 文档化即可：1 项（Q-5）
 - 详细方案：见 `PHASE3_LONG_TERM_REFACTOR.md`
 
@@ -85,8 +85,8 @@
 
 | 编号 | 现象 | 文件:行号 | 影响 | 状态 |
 |------|------|-----------|------|------|
-| D-2 | `main.cpp` 530 行手动组装，无工厂函数 | `src/app/main.cpp` | 中（维护成本） | ⬜ 未修复 |
-| D-3 | `IBackend` 胖接口未拆分 `IBackendAdmin` | `i_backend.h:22-50` | 中（接口隔离原则） | ⬜ 未修复 |
+| D-2 | `main.cpp` 530 行手动组装，无工厂函数 | ~~`src/app/main.cpp`~~ | — | ✅ 已修复（提取 `app/factory.h/.cpp`，提供 init_logger / make_terminal_config / create_session / register_builtin_tools / build_system_prompt 五个工厂函数；main.cpp 仅保留 TUI 接线与事件订阅；新增 `tests/unit/app/test_factory.cpp` 验证） |
+| D-3 | `IBackend` 胖接口未拆分 `IBackendAdmin` | ~~`i_backend.h:22-50`~~ | — | ✅ 已修复（拆分为 `ICompletionProvider`（推理）+ `IBackendAdmin`（管理），IBackend 继承两者；RemoteBackend 同步更新接口签名） |
 | D-4 | Terminal/ChatRenderer/Client 依赖 `EventBus::instance()` | ~~`tui/core/terminal.cpp` 等 8 处~~ | — | ✅ 已修复（Terminal DI 三件套 + Client IEventBus* 注入 + ChatRenderer 复用 Terminal 路径） |
 | D-5 | 工具内部直接读 `ConfigManager::instance()` | ~~`file_edit_tool.cpp` / `file_read_tool.cpp` 4 处~~ | — | ✅ 已修复（ToolContext 添加 config_manager_ptr + helper，ReActLoop 注入 IConfigManager*） |
 | D-6 | `Terminal` 残留 `TaskManager::instance()` | ~~`terminal.cpp:98`~~ | — | ✅ 已修复（Terminal DI 三件套含 ITaskManager*，与 D-4 一并完成） |
@@ -132,7 +132,7 @@
 | ~~**P2**~~ | ~~C-2 + C-3 + C-4~~ | ~~配置系统 Schema 化~~ | ✅ 已完成 |
 | ~~**P2**~~ | ~~G-3 + G-4~~ | ~~日志命名空间统一~~ | ✅ 已完成 |
 | **P3** | H-1 + H-2 + H-3 + H-4 | HTTP 客户端演进 | 4 天 |
-| **P3** | D-2 + D-3 | main.cpp 工厂 + IBackendAdmin 拆分 | 2 天 |
+| ~~**P3**~~ | ~~D-2 + D-3~~ | ~~main.cpp 工厂 + IBackendAdmin 拆分~~ | ✅ 已完成 |
 | **P3** | E-5 + E-6 | 错误处理类型安全 | 2 天 |
 | **P3** | Q-2 + Q-5 | 性能基准 + 文档 | 2 天 |
 | **V2** | E-1 | 错误处理统一（独立立项） | — |
