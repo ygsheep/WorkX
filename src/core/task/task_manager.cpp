@@ -1,6 +1,7 @@
 /**
  * @file task_manager.cpp
  * @brief 异步任务管理器实现
+ * @details 基于 ThreadPool 替代裸 std::thread，限制并发线程数
  */
 
 #include "core/task/task_manager.h"
@@ -8,7 +9,6 @@
 #include "core/task/task_events.h"
 #include "liblogger/logger.h"
 #include <algorithm>
-#include <thread>
 
 namespace agent {
 
@@ -66,6 +66,10 @@ void Task::execute() {
         LOG_ERROR("[task name={}] unhandled unknown exception", m_name);
         markFailed("Unknown exception");
     }
+
+    // 2.2：通过 TaskManager 单例通知 cv，让 waitForAll 能感知任务结束
+    // （线程池模式下任务在 worker 线程执行，无 thread 可 join）
+    TaskManager::instance().m_tasks_cv.notify_all();
 }
 
 void Task::markCompleted() {
@@ -114,16 +118,10 @@ void Task::markFailed(const std::string& error_message) {
 }
 
 TaskManager::~TaskManager() {
+    // 先取消所有任务，再等待排空，最后 ThreadPool 析构时 shutdown 会 join 工作线程
     cancelAll();
     waitForAll();
-    // join 所有线程，防止 detach 导致 use-after-free
-    std::lock_guard<std::mutex> lock(m_tasks_mutex);
-    for (auto& entry : m_entries) {
-        if (entry.thread.joinable()) {
-            entry.thread.join();
-        }
-    }
-    m_entries.clear();
+    // ThreadPool m_pool 析构自动 shutdown
 }
 
 std::shared_ptr<Task> TaskManager::create(
@@ -155,15 +153,18 @@ void TaskManager::start(std::shared_ptr<Task> task) {
         return;
     }
 
-    std::lock_guard<std::mutex> lock(m_tasks_mutex);
-    auto& entry = m_entries.emplace_back();
-    entry.task = task;
-    LOG_INFO("[task name={}] started (async), total tasks={}",
-             task->getName(), m_entries.size());
-    entry.thread = std::thread([task]() {
+    {
+        std::lock_guard<std::mutex> lock(m_tasks_mutex);
+        m_entries.push_back(task);
+    }
+
+    LOG_INFO("[task name={}] enqueued, pool_workers={}, pending={}",
+             task->getName(), m_pool.worker_count(), m_pool.pending_count() + 1);
+
+    // 2.2：投递到线程池，由 worker 线程消费
+    // 捕获 task 保持引用计数，防止任务执行前 task 被销毁
+    m_pool.enqueue([task]() {
         task->execute();
-        // 通知 waitForAll 检查 predicate
-        TaskManager::instance().m_tasks_cv.notify_all();
     });
 }
 
@@ -175,21 +176,15 @@ void TaskManager::cancel(std::shared_ptr<Task> task) {
 
 std::vector<std::shared_ptr<Task>> TaskManager::getTasks() const {
     std::lock_guard<std::mutex> lock(m_tasks_mutex);
-    std::vector<std::shared_ptr<Task>> tasks;
-    tasks.reserve(m_entries.size());
-    for (const auto& entry : m_entries) {
-        tasks.push_back(entry.task);
-    }
-    return tasks;
+    return m_entries;
 }
 
 std::vector<std::shared_ptr<Task>> TaskManager::getRunningTasks() const {
     std::lock_guard<std::mutex> lock(m_tasks_mutex);
-
     std::vector<std::shared_ptr<Task>> running;
-    for (const auto& entry : m_entries) {
-        if (entry.task->isRunning()) {
-            running.push_back(entry.task);
+    for (const auto& task : m_entries) {
+        if (task->isRunning()) {
+            running.push_back(task);
         }
     }
     return running;
@@ -201,11 +196,7 @@ void TaskManager::update() {
     size_t cleaned = 0;
     for (auto it = m_entries.begin(); it != m_entries.end(); ) {
         // Critical 类型不清理（持久任务）
-        // 仅清理已 finished 的 entry，join 其线程
-        if (it->task->isFinished() && it->task->getType() != TaskType::Critical) {
-            if (it->thread.joinable()) {
-                it->thread.join();
-            }
+        if ((*it)->isFinished() && (*it)->getType() != TaskType::Critical) {
             it = m_entries.erase(it);
             ++cleaned;
         } else {
@@ -213,7 +204,8 @@ void TaskManager::update() {
         }
     }
     if (cleaned > 0) {
-        LOG_DEBUG("cleanup {} finished tasks, remaining={}", cleaned, m_entries.size());
+        LOG_DEBUG("cleanup {} finished tasks, remaining={}, pool_pending={}",
+                  cleaned, m_entries.size(), m_pool.pending_count());
     }
 }
 
@@ -223,15 +215,15 @@ void TaskManager::waitForAll() {
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     m_tasks_cv.wait_until(lock, deadline, [this]() {
         return m_entries.empty() || std::all_of(m_entries.begin(), m_entries.end(),
-            [](const TaskEntry& e) { return e.task->isFinished(); });
+            [](const std::shared_ptr<Task>& t) { return t->isFinished(); });
     });
 }
 
 void TaskManager::cancelAll() {
     std::lock_guard<std::mutex> lock(m_tasks_mutex);
-    for (auto& entry : m_entries) {
-        if (entry.task->isRunning()) {
-            entry.task->cancel();
+    for (auto& task : m_entries) {
+        if (task->isRunning()) {
+            task->cancel();
         }
     }
 }
@@ -239,9 +231,7 @@ void TaskManager::cancelAll() {
 size_t TaskManager::getRunningTaskCount() const {
     std::lock_guard<std::mutex> lock(m_tasks_mutex);
     return std::count_if(m_entries.begin(), m_entries.end(),
-        [](const TaskEntry& entry) {
-            return entry.task->isRunning();
-        });
+        [](const std::shared_ptr<Task>& t) { return t->isRunning(); });
 }
 
 } // namespace agent

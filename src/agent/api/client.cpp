@@ -94,12 +94,14 @@ Client::Client(std::unique_ptr<IBackend> backend,
                std::string system_prompt,
                int retry_count,
                int retry_delay_ms,
-               bool publish_events)
+               bool publish_events,
+               ITaskManager& task_manager)
     : m_backend(std::move(backend))
     , m_system_prompt(std::move(system_prompt))
     , m_max_retries(retry_count)
     , m_retry_delay_ms(retry_delay_ms)
     , m_publish_events(publish_events)
+    , m_task_manager(&task_manager)
 {
     if (m_publish_events) {
         // 订阅 InterruptEvent → 自动中断
@@ -139,11 +141,13 @@ Client::Client(Client&& other) noexcept
     , m_max_retries(other.m_max_retries)
     , m_retry_delay_ms(other.m_retry_delay_ms)
     , m_publish_events(other.m_publish_events)
+    , m_task_manager(other.m_task_manager)
     , m_interrupt_token(std::move(other.m_interrupt_token))
     , m_subscribed(other.m_subscribed)
 {
     other.m_subscribed = false;
     other.m_generating.store(false);
+    other.m_task_manager = nullptr;
 }
 
 Client& Client::operator=(Client&& other) noexcept {
@@ -167,11 +171,13 @@ Client& Client::operator=(Client&& other) noexcept {
         m_max_retries = other.m_max_retries;
         m_retry_delay_ms = other.m_retry_delay_ms;
         m_publish_events = other.m_publish_events;
+        m_task_manager = other.m_task_manager;
         m_interrupt_token = std::move(other.m_interrupt_token);
         m_subscribed = other.m_subscribed;
 
         other.m_subscribed = false;
         other.m_generating.store(false);
+        other.m_task_manager = nullptr;
     }
     return *this;
 }
@@ -256,7 +262,7 @@ Result<void, std::string> Client::run_stream(
             // 消费异步事件并清理已完成任务，避免事件滞留 / TaskManager 内存累积
             if (m_publish_events) {
                 EventBus::instance().process_async_events();
-                TaskManager::instance().update();
+                m_task_manager->update();
             }
 
             if (state == StreamState::HasData) {
@@ -573,7 +579,7 @@ Result<void, std::string> Client::stream_chat_async(const std::string& user_text
     };
 
     // 启动后台任务
-    TaskManager::instance().launch("client_completion",
+    m_task_manager->launch("client_completion",
         [this, request = std::move(request), cbs = std::move(wrapped_cbs),
          content_ptr, reasoning_ptr]
         (const std::atomic<bool>& should_cancel) {

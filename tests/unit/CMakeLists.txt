@@ -18,6 +18,7 @@ set(UNIT_TEST_SOURCES
     core/config/test_config_manager.cpp
     core/events/test_event_bus.cpp
     core/task/test_task_manager.cpp
+    core/task/test_thread_pool.cpp
     tui/core/test_display_buffer.cpp
     tui/core/test_tui_state.cpp
     tui/render/test_markdown_renderer.cpp

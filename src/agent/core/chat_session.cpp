@@ -46,9 +46,11 @@ ToolType infer_tool_type(const std::string& name) {
 
 ChatSession::ChatSession(std::unique_ptr<ICompletionProvider> provider,
                          int retry_delay_ms,
-                         std::string session_id)
+                         std::string session_id,
+                         ITaskManager& task_manager)
     : m_provider(std::move(provider))
     , m_session_id(std::move(session_id))
+    , m_task_manager(task_manager)
 {
     // 从 ConfigManager 读取重试配置
     // 注意：仅当配置中显式设置时才覆盖，否则使用 preset 传入的值（可为不同 provider 设置不同延迟）
@@ -167,7 +169,7 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
     int max_retries = m_max_retries;
     int retry_delay_ms = m_retry_delay_ms;
 
-    auto task = TaskManager::instance().launch("completion",
+    auto task = m_task_manager.get().launch("completion",
         [this, retry_attempt, max_retries, retry_delay_ms, user_text]
         (const std::atomic<bool>& should_cancel) {
             // 顶层异常安全网：确保任何未捕获异常都能重置 m_generating 并通知 UI

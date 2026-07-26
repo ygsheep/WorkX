@@ -35,9 +35,12 @@ public:
     /// @param provider 推理提供者（IBackend 或 IAgentCore）
     /// @param retry_delay_ms 重试初始延迟（毫秒），会被 backend.retry_delay_ms 覆盖
     /// @param session_id 会话标识（用于事件流区分多会话，默认 "default"）
+    /// @param task_manager 任务管理器（D-1 DI 注入，默认全局单例；
+    ///                     测试可传入 MockTaskManager）
     explicit ChatSession(std::unique_ptr<ICompletionProvider> provider,
                          int retry_delay_ms = 1000,
-                         std::string session_id = "default");
+                         std::string session_id = "default",
+                         ITaskManager& task_manager = TaskManager::instance());
 
     ~ChatSession();
 
@@ -89,6 +92,9 @@ private:
     std::string m_system_prompt;
     std::string m_session_id;           ///< 会话标识（构造后不变，无需加锁）
     std::atomic<bool> m_generating{false};
+
+    // D-1：任务管理器引用（非拥有，构造注入；ChatSession 不可移动，引用安全）
+    std::reference_wrapper<ITaskManager> m_task_manager;
 
     // 工具注册表（可选，为空时不启用 function calling）
     std::shared_ptr<tool::ToolRegistry> m_tool_registry;

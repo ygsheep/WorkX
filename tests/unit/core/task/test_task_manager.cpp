@@ -413,3 +413,84 @@ TEST_CASE_METHOD(TaskManagerFixture, "Task onCompleted callback fires on complet
     REQUIRE(task->getStatus() == TaskStatus::Completed);
     REQUIRE(callback_fired.load());
 }
+
+// ============================================================================
+// 压力测试：并发启动大量 Task，验证线程数受 ThreadPool 限制
+// ============================================================================
+
+TEST_CASE_METHOD(TaskManagerFixture, "TaskManager stress test: 50 concurrent tasks limited by thread pool",
+                 "[task_manager][stress]") {
+    // TaskManager 单例的线程池大小 = hardware_concurrency（测试环境通常 4-16）
+    const size_t pool_workers = TaskManager::instance().worker_count();
+    REQUIRE(pool_workers >= 1);
+
+    std::atomic<int> concurrent{0};
+    std::atomic<int> max_concurrent{0};
+    std::atomic<int> completed_count{0};
+
+    constexpr int TASK_COUNT = 50;
+    std::atomic<bool> release{false};
+
+    for (int i = 0; i < TASK_COUNT; ++i) {
+        auto task = std::make_shared<Task>(
+            "stress_" + std::to_string(i),
+            [&](const std::atomic<bool>&) {
+                int c = concurrent.fetch_add(1, std::memory_order_relaxed) + 1;
+                // CAS 更新 max_concurrent
+                int prev = max_concurrent.load(std::memory_order_relaxed);
+                while (c > prev) {
+                    if (max_concurrent.compare_exchange_weak(prev, c,
+                        std::memory_order_relaxed, std::memory_order_relaxed)) break;
+                }
+                // 阻塞直到 release
+                while (!release.load(std::memory_order_relaxed)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                }
+                concurrent.fetch_sub(1, std::memory_order_relaxed);
+                completed_count.fetch_add(1, std::memory_order_relaxed);
+            },
+            100.0f
+        );
+        TaskManager::instance().start(task);
+    }
+
+    // 等待一段时间让任务排满线程池
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    // 核心断言：并发数不超过线程池大小
+    REQUIRE(max_concurrent.load() <= static_cast<int>(pool_workers));
+    REQUIRE(max_concurrent.load() >= 1);  // 至少有一个在运行
+
+    // 释放所有任务
+    release.store(true);
+
+    TaskManager::instance().waitForAll();
+    REQUIRE(completed_count.load() == TASK_COUNT);
+
+    // update 清理后应无残留
+    TaskManager::instance().update();
+    REQUIRE(TaskManager::instance().getTasks().empty());
+}
+
+TEST_CASE_METHOD(TaskManagerFixture, "TaskManager pool rejects unbounded thread growth",
+                 "[task_manager][stress]") {
+    // 验证：即使投递 100 个任务，工作线程数仍固定为初始值
+    const size_t initial_workers = TaskManager::instance().worker_count();
+
+    std::atomic<int> done{0};
+    for (int i = 0; i < 100; ++i) {
+        TaskManager::instance().launch(
+            "burst_" + std::to_string(i),
+            [&done](const std::atomic<bool>&) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                done.fetch_add(1, std::memory_order_relaxed);
+            }
+        );
+    }
+
+    // 工作线程数不应增长
+    REQUIRE(TaskManager::instance().worker_count() == initial_workers);
+
+    TaskManager::instance().waitForAll();
+    REQUIRE(done.load() == 100);
+}

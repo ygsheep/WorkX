@@ -2,7 +2,9 @@
  * @file task_manager.h
  * @brief 异步任务管理器
  * @details 管理任务执行、进度跟踪和协作式取消
- * @version 1.0.0
+ *          - 使用 ThreadPool 替代裸 std::thread（2.2）
+ *          - 抽取 ITaskManager 接口支持 DI（D-1）
+ * @version 2.0.0
  */
 
 #pragma once
@@ -16,6 +18,8 @@
 #include <condition_variable>
 #include <chrono>
 #include <thread>
+
+#include "core/task/thread_pool.h"
 
 namespace agent {
 
@@ -136,8 +140,46 @@ private:
     friend class TaskManager;
 };
 
-class TaskManager final {
+// ============================================================
+// ITaskManager 接口（D-1 DI 化）
+// ============================================================
+
+/// @brief 任务管理器抽象接口
+/// @details 允许测试注入 MockTaskManager，解除对单例的硬依赖。
+///          生产代码用 TaskManager（继承 ITaskManager）。
+class ITaskManager {
 public:
+    virtual ~ITaskManager() = default;
+
+    virtual std::shared_ptr<Task> create(
+        const std::string& name,
+        Task::TaskFunc func,
+        TaskType type = TaskType::Normal) = 0;
+
+    virtual std::shared_ptr<Task> launch(
+        const std::string& name,
+        Task::TaskFunc func,
+        TaskType type = TaskType::Normal) = 0;
+
+    virtual void start(std::shared_ptr<Task> task) = 0;
+    virtual void cancel(std::shared_ptr<Task> task) = 0;
+
+    [[nodiscard]] virtual std::vector<std::shared_ptr<Task>> getTasks() const = 0;
+    [[nodiscard]] virtual std::vector<std::shared_ptr<Task>> getRunningTasks() const = 0;
+    [[nodiscard]] virtual size_t getRunningTaskCount() const = 0;
+
+    virtual void update() = 0;
+    virtual void waitForAll() = 0;
+    virtual void cancelAll() = 0;
+};
+
+// ============================================================
+// TaskManager 默认实现（基于 ThreadPool）
+// ============================================================
+
+class TaskManager final : public ITaskManager {
+public:
+    /// @brief 单例访问（向后兼容，新代码应优先 DI 注入）
     static TaskManager& instance() noexcept {
         static TaskManager inst;
         return inst;
@@ -152,37 +194,41 @@ public:
         const std::string& name,
         Task::TaskFunc func,
         TaskType type = TaskType::Normal
-    );
+    ) override;
 
     std::shared_ptr<Task> launch(
         const std::string& name,
         Task::TaskFunc func,
         TaskType type = TaskType::Normal
-    );
+    ) override;
 
-    void start(std::shared_ptr<Task> task);
-    void cancel(std::shared_ptr<Task> task);
+    void start(std::shared_ptr<Task> task) override;
+    void cancel(std::shared_ptr<Task> task) override;
 
-    [[nodiscard]] std::vector<std::shared_ptr<Task>> getTasks() const;
+    [[nodiscard]] std::vector<std::shared_ptr<Task>> getTasks() const override;
+    [[nodiscard]] std::vector<std::shared_ptr<Task>> getRunningTasks() const override;
+    [[nodiscard]] size_t getRunningTaskCount() const override;
 
-    [[nodiscard]] std::vector<std::shared_ptr<Task>> getRunningTasks() const;
-    void update();
-    void waitForAll();
-    void cancelAll();
-    [[nodiscard]] size_t getRunningTaskCount() const;
+    void update() override;
+    void waitForAll() override;
+    void cancelAll() override;
+
+    /// @brief 工作线程数（诊断 / 测试用）
+    [[nodiscard]] size_t worker_count() const noexcept { return m_pool.worker_count(); }
+    /// @brief 队列积压数（诊断用）
+    [[nodiscard]] size_t pending_count() const { return m_pool.pending_count(); }
 
 private:
-    TaskManager() = default;
-    ~TaskManager();
+    /// @brief 默认构造：使用 hardware_concurrency 大小的线程池
+    TaskManager() : m_pool(0) {}
+    ~TaskManager() override;
 
-    struct TaskEntry {
-        std::shared_ptr<Task> task;
-        std::thread thread;
-    };
-
-    std::vector<TaskEntry> m_entries;
+    std::vector<std::shared_ptr<Task>> m_entries;
     mutable std::mutex m_tasks_mutex;
     std::condition_variable m_tasks_cv;
+    ThreadPool m_pool;
+
+    friend class Task;  // Task::execute 结束时通知 m_tasks_cv
 };
 
 } // namespace agent
