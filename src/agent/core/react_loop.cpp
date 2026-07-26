@@ -7,12 +7,16 @@
  */
 
 #include "agent/core/react_loop.h"
+#include "agent/core/react_observer.h"
 #include "agent/api/i_stream_reader.h"
+#include "liblogger/logger.h"
 
 #include <cctype>
 #include <filesystem>
 #include <format>
+#include <future>
 #include <thread>
+#include <utility>
 
 namespace agent {
 
@@ -26,6 +30,7 @@ ReActLoop::ReActLoop(ICompletionProvider* provider,
     : m_provider(provider)
     , m_registry(std::move(registry))
     , m_config(config)
+    , m_compressor(m_config.compressor_cfg)
 {
     if (m_registry) {
         m_executor = std::make_unique<tool::ToolExecutor>(m_registry);
@@ -292,6 +297,48 @@ ReActResult ReActLoop::run(
     const std::string& system_prompt,
     const nlohmann::json& tools_schema,
     const std::atomic<bool>& should_cancel,
+    IReActObserver* observer
+) {
+    // 3.2：将 IReActObserver 适配为 StepCallback + TokenCallback
+    StepCallback on_step = nullptr;
+    TokenCallback on_token = nullptr;
+
+    if (observer) {
+        on_step = [observer](const ReActStep& step) {
+            switch (step.type) {
+                case ReActStepType::Thought:
+                    observer->on_thought(step);
+                    break;
+                case ReActStepType::Action:
+                    observer->on_action(step);
+                    break;
+                case ReActStepType::Observation:
+                    observer->on_observation(step);
+                    break;
+                case ReActStepType::FinalAnswer:
+                    observer->on_final_answer(step);
+                    break;
+            }
+        };
+        on_token = [observer](const std::string& content_delta,
+                              const std::string& reasoning_delta) {
+            observer->on_token(content_delta, reasoning_delta);
+        };
+    }
+
+    return run(messages, system_prompt, tools_schema, should_cancel,
+               std::move(on_step), std::move(on_token));
+}
+
+// ============================================================
+// run — ReAct 主循环（回调版本）
+// ============================================================
+
+ReActResult ReActLoop::run(
+    std::vector<ChatMessage>& messages,
+    const std::string& system_prompt,
+    const nlohmann::json& tools_schema,
+    const std::atomic<bool>& should_cancel,
     StepCallback on_step,
     TokenCallback on_token
 ) {
@@ -308,6 +355,10 @@ ReActResult ReActLoop::run(
 
         auto thought_start = std::chrono::steady_clock::now();
 
+        LOG_INFO("[react_loop] iteration={} thought_begin, messages={}, has_tools={}",
+                 iteration, messages.size(),
+                 (!tools_schema.is_null() && tools_schema.is_array() && !tools_schema.empty()));
+
         CompletionRequest request = build_request(messages, system_prompt, tools_schema);
         ThoughtResult thought = execute_thought(request, should_cancel, on_token);
 
@@ -315,9 +366,21 @@ ReActResult ReActLoop::run(
         double thought_ms = std::chrono::duration<double, std::milli>(
             thought_end - thought_start).count();
 
+        LOG_INFO("[react_loop] iteration={} thought_end, status={}, content_len={}, "
+                 "reasoning_len={}, tool_uses={}, prompt_tokens={}, generated_tokens={}, "
+                 "cache_creation={}, cache_read={}, prompt_ms={:.1f}, generation_ms={:.1f}, "
+                 "thought_ms={:.1f}",
+                 iteration, static_cast<int>(thought.status),
+                 thought.content.size(), thought.reasoning.size(),
+                 thought.tool_uses.size(),
+                 thought.prompt_tokens, thought.generated_tokens,
+                 thought.cache_creation_input_tokens, thought.cache_read_input_tokens,
+                 thought.prompt_ms, thought.generation_ms, thought_ms);
+
         // --- 处理 Thought 异常状态 ---
 
         if (thought.status == ThoughtResult::Cancelled) {
+            LOG_WARN("[react_loop] iteration={} thought cancelled by user", iteration);
             result.was_interrupted = true;
             result.partial_content = thought.content;
             result.partial_reasoning = thought.reasoning;
@@ -325,6 +388,7 @@ ReActResult ReActLoop::run(
         }
 
         if (thought.status == ThoughtResult::Error) {
+            LOG_ERROR("[react_loop] iteration={} thought stream error", iteration);
             result.was_error = true;
             result.error_message = "Stream error during Thought phase";
             result.partial_content = thought.content;
@@ -362,6 +426,8 @@ ReActResult ReActLoop::run(
 
         if (thought.tool_uses.empty()) {
             // LLM 给出最终回复，无需工具调用
+            LOG_INFO("[react_loop] iteration={} final_answer, content_len={}",
+                     iteration, thought.content.size());
             messages.push_back(ChatMessage::assistant(thought.content));
             if (!thought.reasoning.empty()) {
                 messages.back().reasoning_content = thought.reasoning;
@@ -434,46 +500,67 @@ ReActResult ReActLoop::run(
             continue;  // 继续下一轮 Thought
         }
 
-        // 有 executor：执行每个 tool_use
+        // 有 executor：3.1 并行执行所有 tool_use
+        // Phase 3 已审计：所有工具 call() const，无实例可变状态，可安全并行
+        LOG_INFO("[react_loop] iteration={} action_begin, parallel_tools={}",
+                 iteration, thought.tool_uses.size());
+
         tool::ToolContext ctx;
         ctx.cwd = std::filesystem::current_path().string();
         ctx.session_id = "default";
         // 2.3 修复：将外部取消信号绑定到 ToolContext，工具可即时感知中断
         ctx.cancel_flag = &should_cancel;
 
+        // 1. 同步发布所有 Action 步骤（UI 即时反馈工具调用开始）
         for (const auto& tu : thought.tool_uses) {
-            // --- Action 阶段 ---
+            ReActStep step;
+            step.type = ReActStepType::Action;
+            step.step_number = ++step_counter;
+            step.tool_name = tu.name;
+            step.tool_input = tu.input;
+            result.steps.push_back(step);
 
+            if (on_step) {
+                on_step(step);
+            }
+        }
+
+        // 2. 异步并行执行所有 tool_use
+        struct ToolExecution {
+            std::string tool_use_id;
+            std::string tool_name;
+            std::future<std::pair<std::string, bool>> future;  // {result_text, is_error}
+        };
+
+        std::vector<ToolExecution> executions;
+        executions.reserve(thought.tool_uses.size());
+
+        for (const auto& tu : thought.tool_uses) {
+            LOG_DEBUG("[react_loop] launching async tool_use, id={}, name={}",
+                      tu.id, tu.name);
+            auto future = std::async(std::launch::async,
+                [this, &ctx, &tu]() -> std::pair<std::string, bool> {
+                    try {
+                        auto exec_result = m_executor->execute(tu.name, tu.input, ctx);
+                        return {exec_result.result.to_string(), exec_result.is_error};
+                    } catch (const std::exception& e) {
+                        return {std::format("Error: tool '{}' threw exception: {}",
+                                            tu.name, e.what()), true};
+                    } catch (...) {
+                        return {std::format("Error: tool '{}' threw unknown exception",
+                                            tu.name), true};
+                    }
+                });
+
+            executions.push_back({tu.id, tu.name, std::move(future)});
+            result.total_tool_calls++;
+        }
+
+        // 3. 等待所有工具完成，按原始顺序生成 Observation
+        for (auto& exec : executions) {
             auto action_start = std::chrono::steady_clock::now();
 
-            // 记录 Action 步骤（on_step 回调发布 ToolCallEvent，UI 显示工具图标）
-            {
-                ReActStep step;
-                step.type = ReActStepType::Action;
-                step.step_number = ++step_counter;
-                step.tool_name = tu.name;
-                step.tool_input = tu.input;
-                result.steps.push_back(step);
-
-                if (on_step) {
-                    on_step(step);
-                }
-            }
-
-            // 执行工具（异常安全：工具抛出异常时转为错误 Observation，不让循环崩溃）
-            std::string result_text;
-            bool tool_error = false;
-            try {
-                auto exec_result = m_executor->execute(tu.name, tu.input, ctx);
-                result_text = exec_result.result.to_string();
-                tool_error = exec_result.is_error;
-            } catch (const std::exception& e) {
-                result_text = std::format("Error: tool '{}' threw exception: {}", tu.name, e.what());
-                tool_error = true;
-            } catch (...) {
-                result_text = std::format("Error: tool '{}' threw unknown exception", tu.name);
-                tool_error = true;
-            }
+            auto [result_text, tool_error] = exec.future.get();
 
             auto action_end = std::chrono::steady_clock::now();
             double action_ms = std::chrono::duration<double, std::milli>(
@@ -482,7 +569,8 @@ ReActResult ReActLoop::run(
             // --- Observation 阶段 ---
 
             // 添加 tool_result 消息到对话历史
-            messages.push_back(ChatMessage::tool_result(tu.id, tu.name, result_text));
+            messages.push_back(ChatMessage::tool_result(
+                exec.tool_use_id, exec.tool_name, result_text));
 
             // 记录 Observation 步骤
             {
@@ -499,7 +587,8 @@ ReActResult ReActLoop::run(
                 }
             }
 
-            result.total_tool_calls++;
+            LOG_INFO("[react_loop] tool={} completed, is_error={}, duration={}ms",
+                     exec.tool_name, tool_error, action_ms);
         }
 
         // 继续下一轮 Thought（LLM 根据 tool_result 决定下一步）
@@ -518,6 +607,15 @@ ReActResult ReActLoop::run(
         result.was_error = true;
         result.error_message = std::format("Agent loop reached max iterations ({})",
                                            m_config.max_iterations);
+        LOG_WARN("[react_loop] max iterations reached={}, total_duration_ms={:.1f}, "
+                 "total_tool_calls={}",
+                 m_config.max_iterations, result.total_duration_ms,
+                 result.total_tool_calls);
+    } else {
+        LOG_INFO("[react_loop] loop end, iterations={}, total_duration_ms={:.1f}, "
+                 "total_tool_calls={}, was_interrupted={}, was_error={}",
+                 result.total_iterations, result.total_duration_ms,
+                 result.total_tool_calls, result.was_interrupted, result.was_error);
     }
 
     return result;

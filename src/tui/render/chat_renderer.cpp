@@ -365,21 +365,21 @@ void ChatRenderer::start() {
         bus.subscribe<BackendStatusEvent>([this](const BackendStatusEvent& e) {
             if (e.status == BackendStatusEvent::Connecting) {
                 if (m_state_machine.current() == TuiState::IDLE) {
-                    m_streaming_started = false;
+                    m_streaming_started.store(false);
                     transition_to(TuiState::THINKING);
                     m_thinking_start_time = std::chrono::steady_clock::now();
-                    m_thinking_seconds = 0;
+                    m_thinking_seconds.store(0);
                     m_reasoning_buffer.clear();
 
                     // 启动 Spinner（思考计时）
                     m_terminal->spinner_start("Thinking");
-                    m_spinner_active = true;
+                    m_spinner_active.store(true);
 
                     // 设置 Spinner 回调，只更新 StatusBar（差分渲染）
                     auto* spinner = m_terminal->get_spinner();
                     if (spinner) {
                         spinner->set_update_callback([this](int32_t seconds) {
-                            m_thinking_seconds = seconds;
+                            m_thinking_seconds.store(seconds);
                             m_status_bar->set_thinking_seconds(seconds);
                             // 推进动画帧
                             m_status_bar->advance_frame();
@@ -392,9 +392,9 @@ void ChatRenderer::start() {
                     m_status_bar->render();
                 }
             } else if (e.status == BackendStatusEvent::Connected) {
-                if (m_spinner_active) {
+                if (m_spinner_active.load()) {
                     m_terminal->spinner_stop();
-                    m_spinner_active = false;
+                    m_spinner_active.store(false);
                 }
             }
         })
@@ -411,8 +411,8 @@ void ChatRenderer::start() {
                 // 用 compact::estimate_messages_tokens 统一估算（对齐 claude-code 启发式）
                 ChatMessage tmp = ChatMessage::user(e.text);
                 int32_t estimated = compact::estimate_messages_tokens({tmp});
-                m_total_tokens += estimated;
-                m_status_bar->set_token_count(m_total_tokens);
+                m_total_tokens.fetch_add(estimated);
+                m_status_bar->set_token_count(m_total_tokens.load());
             }
         })
     );
@@ -435,7 +435,7 @@ void ChatRenderer::start() {
 
                 m_reasoning_buffer += e.reasoning_delta;
 
-                if (m_viewing_thinking) {
+                if (m_viewing_thinking.load()) {
                     m_terminal->set_color(ColorRole::Reasoning);
                     m_terminal->write(e.reasoning_delta);
                     m_terminal->reset_color();
@@ -449,7 +449,7 @@ void ChatRenderer::start() {
                     if (!m_reasoning_buffer.empty()) {
                         m_terminal->set_color(ColorRole::Success);
                         m_terminal->write(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83 ");
-                        m_terminal->write(std::to_string(m_thinking_seconds));
+                        m_terminal->write(std::to_string(m_thinking_seconds.load()));
                         m_terminal->write("s (ctrl+o \xe6\x9f\xa5\xe7\x9c\x8b)\n");
                         m_terminal->reset_color();
                     }
@@ -460,7 +460,7 @@ void ChatRenderer::start() {
                     m_formatter->reset();
                 }
 
-                if (!m_viewing_thinking) {
+                if (!m_viewing_thinking.load()) {
                     m_formatter->feed(e.content_delta);
                 }
             }
@@ -473,9 +473,9 @@ void ChatRenderer::start() {
     // ---- StreamDoneEvent → 完成 ----
     m_token_done = std::make_unique<EventToken>(
         bus.subscribe<StreamDoneEvent>([this](const StreamDoneEvent& e) {
-            if (m_spinner_active) {
+            if (m_spinner_active.load()) {
                 m_terminal->spinner_stop();
-                m_spinner_active = false;
+                m_spinner_active.store(false);
             }
 
             // 刷新 StreamingBuffer 和 OutputFormatter
@@ -486,7 +486,7 @@ void ChatRenderer::start() {
             if (m_state_machine.current() == TuiState::THINKING && !m_reasoning_buffer.empty()) {
                 m_terminal->set_color(ColorRole::Success);
                 m_terminal->write(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83 ");  // ● (绿色)
-                m_terminal->write(std::to_string(m_thinking_seconds));
+                m_terminal->write(std::to_string(m_thinking_seconds.load()));
                 m_terminal->write("s (ctrl+o \xe6\x9f\xa5\xe7\x9c\x8b)\n");
                 m_terminal->reset_color();
             }
@@ -512,10 +512,10 @@ void ChatRenderer::start() {
             //   Anthropic 命中 prompt cache 时 prompt_tokens 不含 cache 部分，需单独累加
             // - provider 不返回 usage 时：用 compact::estimate_messages_tokens 估算响应内容
             if (e.prompt_tokens > 0 || e.generated_tokens > 0) {
-                m_total_tokens = e.prompt_tokens
-                               + e.cache_creation_input_tokens
-                               + e.cache_read_input_tokens
-                               + e.generated_tokens;
+                m_total_tokens.store(e.prompt_tokens
+                                    + e.cache_creation_input_tokens
+                                    + e.cache_read_input_tokens
+                                    + e.generated_tokens);
                 // 同步 cache 命中信息到 StatusBar（仅 cache_read 表示命中）
                 m_status_bar->set_cache_read_tokens(e.cache_read_input_tokens);
             } else {
@@ -523,16 +523,16 @@ void ChatRenderer::start() {
                 ChatMessage tmp = ChatMessage::assistant(e.full_content);
                 tmp.reasoning_content = e.full_reasoning;
                 int32_t estimated = compact::estimate_message_tokens(tmp);
-                m_total_tokens += estimated;
+                m_total_tokens.fetch_add(estimated);
                 // provider 未返回 usage，清除 cache 显示
                 m_status_bar->set_cache_read_tokens(0);
             }
 
-            m_message_count++;
+            m_message_count.fetch_add(1);
             m_terminal->mark_cursor_left_output();
             transition_to(TuiState::IDLE);
             m_status_bar->set_state(TuiState::IDLE);
-            m_status_bar->set_token_count(m_total_tokens);
+            m_status_bar->set_token_count(m_total_tokens.load());
             m_status_bar->render();
             // 流结束，光标复位到输入行
             {
@@ -547,9 +547,9 @@ void ChatRenderer::start() {
     // ---- StreamErrorEvent → 错误 ----
     m_token_error = std::make_unique<EventToken>(
         bus.subscribe<StreamErrorEvent>([this](const StreamErrorEvent& e) {
-            if (m_spinner_active) {
+            if (m_spinner_active.load()) {
                 m_terminal->spinner_stop();
-                m_spinner_active = false;
+                m_spinner_active.store(false);
             }
             m_stream_buf->stop();
             m_formatter->reset();
@@ -595,7 +595,8 @@ void ChatRenderer::start() {
     m_token_tool_call = std::make_unique<EventToken>(
         bus.subscribe<ToolCallEvent>([this](const ToolCallEvent& e) {
             auto icon = get_tool_icon(e.tool_name);
-            std::string indent(m_tool_indent * 2, ' ');
+            const int indent_level = m_tool_indent.load();
+            std::string indent(indent_level * 2, ' ');
 
             m_terminal->set_color(ColorRole::ToolName);
             m_terminal->write(std::format("{}{} {} (ctrl+o to view)\n",
@@ -611,15 +612,21 @@ void ChatRenderer::start() {
             m_status_bar->set_state(TuiState::TOOL_RUNNING);
             m_status_bar->render();
 
-            m_tool_indent++;
+            m_tool_indent.fetch_add(1);
         })
     );
 
     // ---- ToolResultEvent ----
     m_token_tool_result = std::make_unique<EventToken>(
         bus.subscribe<ToolResultEvent>([this](const ToolResultEvent& e) {
-            m_tool_indent = m_tool_indent > 0 ? m_tool_indent - 1 : 0;
-            std::string indent(m_tool_indent * 2, ' ');
+            int prev = m_tool_indent.fetch_sub(1);
+            int new_indent = prev > 0 ? prev - 1 : 0;
+            if (prev <= 0) {
+                // 防御性：不允许变为负数，回滚
+                m_tool_indent.store(0);
+                new_indent = 0;
+            }
+            std::string indent(new_indent * 2, ' ');
 
             // 成功/失败标记
             const char* marker = e.is_error
@@ -680,7 +687,7 @@ void ChatRenderer::start() {
     // 用户反馈完成提示多余，已移除文本输出；保留 m_tool_indent 重置
     m_token_agent_done = std::make_unique<EventToken>(
         bus.subscribe<AgentDoneEvent>([this](const AgentDoneEvent& /*e*/) {
-            m_tool_indent = 0;
+            m_tool_indent.store(0);
         })
     );
 }
@@ -688,9 +695,9 @@ void ChatRenderer::start() {
 void ChatRenderer::stop() {
     auto& bus = EventBus::instance();
 
-    if (m_spinner_active) {
+    if (m_spinner_active.load()) {
         m_terminal->spinner_stop();
-        m_spinner_active = false;
+        m_spinner_active.store(false);
     }
     m_stream_buf->stop();
     m_status_bar->unsubscribe_events();
@@ -734,15 +741,15 @@ void ChatRenderer::transition_to(TuiState new_state) {
 void ChatRenderer::toggle_thinking_view() {
     if (m_reasoning_buffer.empty()) return;
 
-    if (!m_viewing_thinking) {
+    if (!m_viewing_thinking.load()) {
         // ---- 展开思考视图：清屏 + 打字机效果渲染 ----
-        m_viewing_thinking = true;
+        m_viewing_thinking.store(true);
         m_terminal->write("\x1b[2J\x1b[H");
 
         // 渲染思考标题框
         m_terminal->set_color(ColorRole::ThinkingBlock);
         m_terminal->write("\xe2\x94\x8c\xe2\x94\x80 \xe6\x80\x9d\xe8\x80\x83 ");
-        m_terminal->write(std::to_string(m_thinking_seconds));
+        m_terminal->write(std::to_string(m_thinking_seconds.load()));
         m_terminal->write("s (ctrl+o \xe8\xbf\x94\xe5\x9b\x9e) ");
         m_terminal->write("\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x90\n");
         m_terminal->reset_color();
@@ -764,11 +771,11 @@ void ChatRenderer::toggle_thinking_view() {
         m_terminal->reset_color();
     } else {
         // ---- 收起思考视图：清屏 + 重新渲染对话摘要 ----
-        m_viewing_thinking = false;
+        m_viewing_thinking.store(false);
         m_terminal->write("\x1b[2J\x1b[H");
 
         m_terminal->set_color(ColorRole::Success);
-        m_terminal->write(std::format(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83 {}s (ctrl+o \xe6\x9f\xa5\xe7\x9c\x8b)\n", m_thinking_seconds));
+        m_terminal->write(std::format(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83 {}s (ctrl+o \xe6\x9f\xa5\xe7\x9c\x8b)\n", m_thinking_seconds.load()));
         m_terminal->reset_color();
 
         if (m_state_machine.current() == TuiState::STREAMING) {

@@ -16,6 +16,7 @@
 #include <condition_variable>
 #include "agent/api/i_completion_provider.h"
 #include "agent/api/chat_types.h"
+#include "agent/core/react_observer.h"
 #include "core/events/event_bus.h"
 #include "core/utils/result.h"
 #include "agent/message/types.h"
@@ -31,6 +32,24 @@ namespace agent {
 ///          支持工具调用（function calling）：LLM 返回 tool_use → 执行工具 → tool_result → 继续推理
 class ChatSession {
 public:
+    /// @brief ReAct 循环事件发布器（3.2 IReActObserver 实现）
+    /// @details 将 ReActLoop 步骤事件转换为 EventBus 异步事件，
+    ///          使 ReActLoop 可脱离 EventBus 体系独立使用与测试。
+    class ReActEventPublisher : public IReActObserver {
+    public:
+        explicit ReActEventPublisher(std::string session_id);
+        ~ReActEventPublisher() override = default;
+
+        void on_thought(const ReActStep& step) override;
+        void on_action(const ReActStep& step) override;
+        void on_observation(const ReActStep& step) override;
+        void on_final_answer(const ReActStep& step) override;
+        void on_token(const std::string& content_delta,
+                      const std::string& reasoning_delta) override;
+
+    private:
+        std::string m_session_id;
+    };
     /// @brief 构造
     /// @param provider 推理提供者（IBackend 或 IAgentCore）
     /// @param retry_delay_ms 重试初始延迟（毫秒），会被 backend.retry_delay_ms 覆盖

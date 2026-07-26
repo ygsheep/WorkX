@@ -20,12 +20,34 @@
 
 namespace agent::tool {
 
+/// @brief 工具结果最大长度（超出时截断保留头尾）
+/// @details 3.4：防止 grep 大仓库 / bash 长日志撑爆上下文。
+///          截断策略：保留头部和尾部（通常包含错误信息和总结），省略中间。
+constexpr size_t MAX_TOOL_RESULT_LENGTH = 8000;
+
 /// @brief 工具执行结果
 struct ExecutionResult {
     std::string tool_name;                  ///< 工具名称
     ToolResult result;                      ///< 工具返回结果
     bool is_error{false};                   ///< 是否出错
+    bool was_truncated{false};              ///< 3.4：结果是否被截断
 };
+
+/// @brief 截断工具结果文本（保留头尾，省略中间）
+/// @param text 待截断文本（in-out）
+/// @param max_length 最大保留长度
+/// @return 是否发生了截断
+inline bool truncate_result(std::string& text, size_t max_length = MAX_TOOL_RESULT_LENGTH) {
+    if (text.length() <= max_length) return false;
+    const size_t half = max_length / 2;
+    const size_t omitted = text.length() - max_length;
+    text = text.substr(0, half)
+         + "\n\n... [output truncated, "
+         + std::to_string(omitted)
+         + " characters omitted] ...\n\n"
+         + text.substr(text.length() - half);
+    return true;
+}
 
 /// @brief ToolExecutor — 工具执行器
 ///
@@ -131,6 +153,14 @@ public:
             exec_result.result = ToolResult::error(
                 std::string{"Unknown exception in tool '"} + tool_name + "'");
             exec_result.is_error = true;
+        }
+
+        // 3.4：结果截断（防止 grep/bash 长输出撑爆上下文）
+        if (!exec_result.result.text.empty() &&
+            exec_result.result.text.length() > MAX_TOOL_RESULT_LENGTH) {
+            exec_result.was_truncated = truncate_result(exec_result.result.text);
+            LOG_INFO("[tool_executor] tool={} result truncated, new_len={}",
+                     tool_name, exec_result.result.text.length());
         }
         return exec_result;
     }
