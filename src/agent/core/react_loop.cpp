@@ -140,6 +140,8 @@ ReActLoop::ThoughtResult ReActLoop::execute_thought(
             }
             result.prompt_tokens = chunk.prompt_tokens;
             result.generated_tokens = chunk.generated_tokens;
+            result.cache_creation_input_tokens = chunk.cache_creation_input_tokens;
+            result.cache_read_input_tokens = chunk.cache_read_input_tokens;
             result.prompt_ms = chunk.prompt_ms;
             result.generation_ms = chunk.generation_ms;
             result.status = ThoughtResult::Completed;
@@ -349,6 +351,8 @@ ReActResult ReActLoop::run(
         // 保存 token 统计（每次 Thought 更新，最终保留最后一次）
         result.prompt_tokens = thought.prompt_tokens;
         result.generated_tokens = thought.generated_tokens;
+        result.cache_creation_input_tokens = thought.cache_creation_input_tokens;
+        result.cache_read_input_tokens = thought.cache_read_input_tokens;
         result.prompt_ms = thought.prompt_ms;
         result.generation_ms = thought.generation_ms;
 

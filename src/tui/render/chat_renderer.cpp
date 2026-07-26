@@ -401,15 +401,16 @@ void ChatRenderer::start() {
     );
 
     // ---- UserInputEvent → 本地估算用户输入 token ----
-    // 当 provider 不返回 usage 时，用于累加用户输入字符数到 token 估算
+    // 当 provider 不返回 usage 时，用于累加用户输入 token 到上下文估算
     // 注意：此处只更新数据，不调用 render()。StatusBar 在用户输入行下方，
     // 立即 render 会把光标拉到 status_row 导致光标错位。
     // StreamDoneEvent / AgentDoneEvent 后会自然触发 render 刷新显示。
     m_token_user_input = std::make_unique<EventToken>(
         bus.subscribe<UserInputEvent>([this](const UserInputEvent& e) {
             if (!e.text.empty()) {
-                // 估算：1 token ≈ 3 字符（中英混合）
-                int32_t estimated = static_cast<int32_t>(e.text.size() / 3);
+                // 用 compact::estimate_messages_tokens 统一估算（对齐 claude-code 启发式）
+                ChatMessage tmp = ChatMessage::user(e.text);
+                int32_t estimated = compact::estimate_messages_tokens({tmp});
                 m_total_tokens += estimated;
                 m_status_bar->set_token_count(m_total_tokens);
             }
@@ -507,15 +508,24 @@ void ChatRenderer::start() {
             }
 
             // Context 上下文占用：
-            // - provider 返回 usage 时：用 prompt + generated 覆盖（最准确）
-            // - provider 不返回 usage 时：只累加本次 generated 估算（用户输入已在 UserInputEvent 时累加）
+            // - provider 返回 usage 时：用 prompt + cache 部分 + generated 覆盖（最准确）
+            //   Anthropic 命中 prompt cache 时 prompt_tokens 不含 cache 部分，需单独累加
+            // - provider 不返回 usage 时：用 compact::estimate_messages_tokens 估算响应内容
             if (e.prompt_tokens > 0 || e.generated_tokens > 0) {
-                m_total_tokens = e.prompt_tokens + e.generated_tokens;
+                m_total_tokens = e.prompt_tokens
+                               + e.cache_creation_input_tokens
+                               + e.cache_read_input_tokens
+                               + e.generated_tokens;
+                // 同步 cache 命中信息到 StatusBar（仅 cache_read 表示命中）
+                m_status_bar->set_cache_read_tokens(e.cache_read_input_tokens);
             } else {
-                // 基于响应内容字符数粗略估算（1 token ≈ 3 字符）
-                int32_t estimated = static_cast<int32_t>(
-                    (e.full_content.size() + e.full_reasoning.size()) / 3);
+                // 估算本次响应内容（content + reasoning）
+                ChatMessage tmp = ChatMessage::assistant(e.full_content);
+                tmp.reasoning_content = e.full_reasoning;
+                int32_t estimated = compact::estimate_message_tokens(tmp);
                 m_total_tokens += estimated;
+                // provider 未返回 usage，清除 cache 显示
+                m_status_bar->set_cache_read_tokens(0);
             }
 
             m_message_count++;

@@ -196,6 +196,7 @@ set(WORKX_SOURCES
     src/agent/api/remote/http_client.cpp
     src/agent/model/provider_preset.cpp
     src/agent/model/config.cpp
+    src/agent/model/context_resolver.cpp
     src/agent/api/provider/openai_adapter.cpp
     src/agent/api/provider/anthropic_adapter.cpp
     src/agent/command/source/registry.cpp

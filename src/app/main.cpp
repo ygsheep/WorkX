@@ -23,6 +23,7 @@
 #include "agent/core/chat_session.h"
 #include "agent/message/types.h"
 #include "agent/model/provider_preset.h"
+#include "agent/model/context_resolver.h"
 #include "agent/tool/FileEditTool/file_edit_tool.h"
 #include "agent/tool/FileReadTool/file_read_tool.h"
 #include "agent/tool/FileWriteTool/file_write_tool.h"
@@ -321,14 +322,16 @@ static int run(int argc, char* argv[]) {
         namespace fs = std::filesystem;
         sb->set_project_name(fs::current_path().filename().string());
 
-        // 上下文窗口：用户配置 backend.context_length 优先，否则用 preset 默认值
-        int32_t ctx_len = cfg.get_or<int>(keys::CONTEXT_LENGTH, 0);
-        if (ctx_len <= 0 && preset && preset->default_context_length > 0) {
-            ctx_len = preset->default_context_length;
-        }
-        if (ctx_len > 0) {
-            sb->set_context_limit(ctx_len);
-        }
+        // 上下文窗口：统一通过 resolver 解析（优先级：provider→user cfg→capability→preset→default）
+        // 启动初始化时无 selector 返回值，sel_context_length 传 0；
+        // 若启动时已通过 select_model_interactive 选择模型并持久化了 context_length，
+        // 这里读 cfg 即可拿到（来源为 ProviderList 的值已 save_to_file）
+        auto resolution = resolve_context_length(
+            model_name,
+            /*sel_context_length=*/0,
+            cfg.get_or<int>(keys::CONTEXT_LENGTH, 0),
+            preset);
+        sb->set_context_limit(resolution.value);
     }
 
     // 注册内置系统命令（help/exit/quit/clear/regen/model）
@@ -352,14 +355,16 @@ static int run(int argc, char* argv[]) {
             if (g_backend) g_backend->set_model_name(sel.name);
             if (auto* sb = renderer.status_bar()) {
                 sb->set_model_name(sel.name);
-                // 上下文窗口：selector 返回值优先，否则回退到 preset 默认值
-                int32_t ctx_len = sel.context_length;
-                if (ctx_len <= 0 && preset && preset->default_context_length > 0) {
-                    ctx_len = preset->default_context_length;
-                }
-                if (ctx_len > 0) {
-                    sb->set_context_limit(ctx_len);
-                    cfg.set(keys::CONTEXT_LENGTH, static_cast<int>(ctx_len));
+                // 上下文窗口：统一通过 resolver 解析（优先级：provider→user cfg→capability→preset→default）
+                auto resolution = resolve_context_length(
+                    sel.name,
+                    sel.context_length,
+                    cfg.get_or<int>(keys::CONTEXT_LENGTH, 0),
+                    preset);
+                sb->set_context_limit(resolution.value);
+                // 仅当来源是 ProviderList 时持久化（避免用兜底值覆盖用户配置）
+                if (resolution.source == ContextLengthResolution::Source::ProviderList) {
+                    cfg.set(keys::CONTEXT_LENGTH, static_cast<int>(resolution.value));
                 }
             }
             cfg.save_to_file(default_config_path());

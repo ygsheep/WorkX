@@ -58,6 +58,12 @@ void StatusBar::set_context_limit(int32_t limit) {
     m_context_limit = limit;
 }
 
+void StatusBar::set_cache_read_tokens(int32_t count) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (count < 0) count = 0;
+    m_cache_read_tokens = count;
+}
+
 void StatusBar::start_session_timer() {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_session_start = std::chrono::steady_clock::now();
@@ -233,6 +239,12 @@ std::string StatusBar::format_bar() const {
         ? (fmt_k(m_token_count) + "/" + fmt_k(ctx_limit))
         : ("~" + fmt_k(m_token_count));
 
+    // cache 命中信息：仅 cache_read > 0 时追加显示（如 "(12k/200k · cache 8k)"）
+    std::string cache_str;
+    if (m_cache_read_tokens > 0) {
+        cache_str = " \xc2\xb7 cache " + fmt_k(m_cache_read_tokens);
+    }
+
     std::string bar = " "
         + green + "[" + m_model_name + "]" + reset
         + " \xe2\x94\x82 " + m_project_name
@@ -242,7 +254,7 @@ std::string StatusBar::format_bar() const {
     } else {
         bar += " \xe2\x80\x94";  // em dash，表示未知窗口
     }
-    bar += gray + " (" + ctx_abs + ")" + reset
+    bar += gray + " (" + ctx_abs + cache_str + ")" + reset
         + gray + " (" + time_str + ")" + reset;
 
     return bar;

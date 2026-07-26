@@ -12,6 +12,7 @@
 
 #include "agent/api/chat_types.h"
 #include "agent/api/i_backend.h"
+#include "agent/model/config.h"
 #include "agent/model/provider_preset.h"
 #include "app/config/app_config.h"
 #include "app/ui/model_selector.h"
@@ -213,6 +214,9 @@ ModelSelection select_model_interactive(
                         auto map_it = ctx_len_map.find(chosen);
                         if (map_it != ctx_len_map.end()) {
                             ctx_len = map_it->second;
+                        } else {
+                            // provider 未返回 context_length 时，用静态能力表兜底
+                            ctx_len = get_context_window_for_model(chosen);
                         }
                         return ModelSelection{.name = std::move(chosen), .context_length = ctx_len};
                     }

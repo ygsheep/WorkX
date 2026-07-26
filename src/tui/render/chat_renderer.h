@@ -14,6 +14,8 @@
 #include <atomic>
 #include <unordered_map>
 
+#include "agent/api/chat_types.h"
+#include "agent/compact/token_count.h"
 #include "tui/core/tui_state.h"
 
 namespace agent {

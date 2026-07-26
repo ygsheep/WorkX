@@ -90,6 +90,10 @@ struct ReActResult {
     // --- token 统计（最后一次 LLM 响应）---
     int32_t prompt_tokens = 0;
     int32_t generated_tokens = 0;
+    // 上下文管理：Anthropic cache usage（OpenAI adapter 留 0）
+    // 用于精确计算当前上下文 token 总量（命中 cache 时 prompt_tokens 不含 cache 部分）
+    int32_t cache_creation_input_tokens = 0;
+    int32_t cache_read_input_tokens = 0;
     double prompt_ms = 0.0;
     double generation_ms = 0.0;
 
@@ -217,6 +221,8 @@ private:
         std::vector<ToolUse> tool_uses;           ///< LLM 决定调用的工具
         int32_t prompt_tokens = 0;
         int32_t generated_tokens = 0;
+        int32_t cache_creation_input_tokens = 0;  ///< Anthropic cache_creation_input_tokens
+        int32_t cache_read_input_tokens = 0;      ///< Anthropic cache_read_input_tokens
         double prompt_ms = 0.0;
         double generation_ms = 0.0;
 

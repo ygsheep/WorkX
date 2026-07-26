@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file chat_session.cpp
  * @brief 对话状态机实现
  * @details 编排用户输入、ReAct 循环、流式事件发布、自动重试、会话持久化
@@ -274,6 +274,8 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
                     .was_interrupted = true,
                     .prompt_tokens = react_result.prompt_tokens,
                     .generated_tokens = react_result.generated_tokens,
+                    .cache_creation_input_tokens = react_result.cache_creation_input_tokens,
+                    .cache_read_input_tokens = react_result.cache_read_input_tokens,
                     .prompt_ms = react_result.prompt_ms,
                     .generation_ms = react_result.generation_ms
                 });
@@ -335,6 +337,8 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
                 .was_interrupted = false,
                 .prompt_tokens = react_result.prompt_tokens,
                 .generated_tokens = react_result.generated_tokens,
+                .cache_creation_input_tokens = react_result.cache_creation_input_tokens,
+                .cache_read_input_tokens = react_result.cache_read_input_tokens,
                 .prompt_ms = react_result.prompt_ms,
                 .generation_ms = react_result.generation_ms
             });

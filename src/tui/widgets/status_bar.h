@@ -37,6 +37,7 @@ public:
     void set_project_name(const std::string& name);
     void set_token_count(int32_t count);
     void set_context_limit(int32_t limit);  // 模型上下文窗口（token），用于进度条分母
+    void set_cache_read_tokens(int32_t count);  // Anthropic prompt cache 命中 token 数（0 表示无命中）
     void set_thinking_seconds(int32_t) {}
     void set_tool_name(const std::string&) {}
     void start_session_timer();
@@ -66,6 +67,7 @@ private:
     std::string m_project_name = "workx";
     int32_t m_token_count = 0;
     int32_t m_context_limit = 0;  // 0 表示未知，进度条按 8192 兜底
+    int32_t m_cache_read_tokens = 0;  // Anthropic prompt cache 命中 token 数（0 表示无命中）
     std::chrono::steady_clock::time_point m_session_start;
     mutable std::string m_last_bar;
     std::atomic<int> m_frame{0};
