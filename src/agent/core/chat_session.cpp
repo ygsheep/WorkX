@@ -12,7 +12,12 @@
 #include "core/task/task_manager.h"
 #include "core/config/config_manager.h"
 
-#include <algorithm>
+#include "agent/core/chat_session.h"
+#include "agent/core/react_loop.h"
+#include "agent/api/i_backend.h"
+#include "agent/message/types.h"
+#include "core/task/task_manager.h"
+#include "core/config/config_manager.h"
 #include <nlohmann/json.hpp>
 
 #include <chrono>
@@ -41,18 +46,89 @@ ToolType infer_tool_type(const std::string& name) {
 } // anonymous namespace
 
 // ============================================================
+// ChatSession::ReActEventPublisher — 3.2 IReActObserver 实现
+// ============================================================
+
+ChatSession::ReActEventPublisher::ReActEventPublisher(IEventBus& bus, std::string session_id)
+    : m_bus(bus), m_session_id(std::move(session_id)) {}
+
+void ChatSession::ReActEventPublisher::on_thought(const ReActStep& step) {
+    // 发布 AgentStepEvent
+    // 注意：description 只用简短占位。流式期间 on_token 已通过
+    // StreamTokenEvent 把 thought_text 完整渲染到终端，这里若再
+    // 写完整文本会导致 UI 重复显示同一份内容。
+    m_bus.publish_async(AgentStepEvent{
+        .step_id = std::format("thought-{}", step.step_number),
+        .step_number = step.step_number,
+        .description = "(thinking)"
+    });
+    // 有 tool_use 时发布中间 StreamDoneEvent，
+    // 让 UI 知道本轮 LLM 流式输出结束
+    if (!step.tool_uses.empty()) {
+        m_bus.publish_async(StreamDoneEvent{
+            .session_id = m_session_id,
+            .full_content = step.thought_text,
+            .full_reasoning = step.reasoning,
+            .was_interrupted = false,
+            .prompt_tokens = 0,
+            .generated_tokens = 0,
+            .prompt_ms = 0.0,
+            .generation_ms = step.duration_ms
+        });
+    }
+}
+
+void ChatSession::ReActEventPublisher::on_action(const ReActStep& step) {
+    m_bus.publish_async(ToolCallEvent{
+        .tool_name = step.tool_name,
+        .arguments = step.tool_input.dump(),
+        .call_id = "",
+        .tool_type = infer_tool_type(step.tool_name)
+    });
+}
+
+void ChatSession::ReActEventPublisher::on_observation(const ReActStep& step) {
+    m_bus.publish_async(ToolResultEvent{
+        .call_id = "",
+        .result = step.observation,
+        .is_error = step.is_error
+    });
+}
+
+void ChatSession::ReActEventPublisher::on_final_answer(const ReActStep& /*step*/) {
+    // 不在此发布事件，循环结束后由 run_completion 统一处理
+}
+
+void ChatSession::ReActEventPublisher::on_token(const std::string& content_delta,
+                                                const std::string& reasoning_delta) {
+    m_bus.publish_async(StreamTokenEvent{
+        .session_id = m_session_id,
+        .content_delta = content_delta,
+        .reasoning_delta = reasoning_delta,
+        .is_thinking = !reasoning_delta.empty(),
+        .token_count = 0
+    });
+}
+
+// ============================================================
 // 构造与析构
 // ============================================================
 
 ChatSession::ChatSession(std::unique_ptr<ICompletionProvider> provider,
                          int retry_delay_ms,
-                         std::string session_id)
+                         std::string session_id,
+                         ITaskManager& task_manager,
+                         IEventBus& event_bus,
+                         IConfigManager& config_manager)
     : m_provider(std::move(provider))
     , m_session_id(std::move(session_id))
+    , m_task_manager(task_manager)
+    , m_event_bus(event_bus)
+    , m_config_manager(config_manager)
 {
-    // 从 ConfigManager 读取重试配置
+    // 从配置管理器读取重试配置
     // 注意：仅当配置中显式设置时才覆盖，否则使用 preset 传入的值（可为不同 provider 设置不同延迟）
-    auto& cfg = ConfigManager::instance();
+    auto& cfg = m_config_manager.get();
     m_max_retries = cfg.has("backend.retry_count")
         ? cfg.get_or<int>("backend.retry_count", 3)
         : 3;
@@ -103,7 +179,7 @@ void ChatSession::clear_history() {
 void ChatSession::regenerate() {
     // 检查是否正在生成
     if (m_generating.load()) {
-        EventBus::instance().publish_async(StreamErrorEvent{
+        m_event_bus.get().publish_async(StreamErrorEvent{
             .session_id = m_session_id,
             .message = "Still generating, cannot regenerate",
             .retryable = true
@@ -131,7 +207,7 @@ void ChatSession::regenerate() {
 
 void ChatSession::send_message(const std::string& text) {
     if (m_generating.load()) {
-        EventBus::instance().publish_async(StreamErrorEvent{
+        m_event_bus.get().publish_async(StreamErrorEvent{
             .session_id = m_session_id,
             .message = "Still generating, please wait or press Ctrl+C to interrupt",
             .retryable = true
@@ -157,7 +233,7 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
         m_messages.push_back(ChatMessage::user(user_text));
     }
 
-    EventBus::instance().publish_async(BackendStatusEvent{
+    m_event_bus.get().publish_async(BackendStatusEvent{
         .status = BackendStatusEvent::Connecting,
         .backend_name = "session"
     });
@@ -167,7 +243,7 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
     int max_retries = m_max_retries;
     int retry_delay_ms = m_retry_delay_ms;
 
-    auto task = TaskManager::instance().launch("completion",
+    auto task = m_task_manager.get().launch("completion",
         [this, retry_attempt, max_retries, retry_delay_ms, user_text]
         (const std::atomic<bool>& should_cancel) {
             // 顶层异常安全网：确保任何未捕获异常都能重置 m_generating 并通知 UI
@@ -181,78 +257,14 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
             // ---- 创建 ReActLoop ----
             ReActLoop loop(m_provider.get(), m_tool_registry, ReActLoop::Config{});
 
-            // ---- on_token 回调：发布 StreamTokenEvent ----
-            // 注意：捕获 m_session_id 而非硬编码 "default"，支持多会话区分
-            const std::string session_id = m_session_id;
-            ReActLoop::TokenCallback on_token =
-                [session_id](const std::string& content_delta,
-                   const std::string& reasoning_delta) {
-                    EventBus::instance().publish_async(StreamTokenEvent{
-                        .session_id = session_id,
-                        .content_delta = content_delta,
-                        .reasoning_delta = reasoning_delta,
-                        .is_thinking = !reasoning_delta.empty(),
-                        .token_count = 0
-                    });
-                };
-
-            // ---- on_step 回调：发布 Agent 事件 ----
-            ReActLoop::StepCallback on_step =
-                [session_id](const ReActStep& step) {
-                    switch (step.type) {
-                        case ReActStepType::Thought:
-                            // 发布 AgentStepEvent
-                            // 注意：description 只用简短占位。流式期间 on_token 已通过
-                            // StreamTokenEvent 把 thought_text 完整渲染到终端，这里若再
-                            // 写完整文本会导致 UI 重复显示同一份内容。
-                            EventBus::instance().publish_async(AgentStepEvent{
-                                .step_id = std::format("thought-{}", step.step_number),
-                                .step_number = step.step_number,
-                                .description = "(thinking)"
-                            });
-                            // 有 tool_use 时发布中间 StreamDoneEvent，
-                            // 让 UI 知道本轮 LLM 流式输出结束
-                            if (!step.tool_uses.empty()) {
-                                EventBus::instance().publish_async(StreamDoneEvent{
-                                    .session_id = session_id,
-                                    .full_content = step.thought_text,
-                                    .full_reasoning = step.reasoning,
-                                    .was_interrupted = false,
-                                    .prompt_tokens = 0,
-                                    .generated_tokens = 0,
-                                    .prompt_ms = 0.0,
-                                    .generation_ms = step.duration_ms
-                                });
-                            }
-                            break;
-
-                        case ReActStepType::Action:
-                            EventBus::instance().publish_async(ToolCallEvent{
-                                .tool_name = step.tool_name,
-                                .arguments = step.tool_input.dump(),
-                                .call_id = "",
-                                .tool_type = infer_tool_type(step.tool_name)
-                            });
-                            break;
-
-                        case ReActStepType::Observation:
-                            EventBus::instance().publish_async(ToolResultEvent{
-                                .call_id = "",
-                                .result = step.observation,
-                                .is_error = step.is_error
-                            });
-                            break;
-
-                        case ReActStepType::FinalAnswer:
-                            // 不在此发布事件，循环结束后统一处理
-                            break;
-                    }
-                };
+            // 3.2：使用 IReActObserver 接口替代 lambda 回调
+            // ReActEventPublisher 内部完成 ReActStep → IEventBus 事件转换
+            ReActEventPublisher publisher(m_event_bus, m_session_id);
 
             // ---- 执行 ReAct 循环 ----
             ReActResult react_result = loop.run(
                 m_messages, m_system_prompt, tools_schema,
-                should_cancel, on_step, on_token
+                should_cancel, &publisher
             );
 
             // ============================================================
@@ -267,8 +279,8 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
                         m_messages.back().reasoning_content = react_result.partial_reasoning;
                     }
                 }
-                EventBus::instance().publish_async(StreamDoneEvent{
-                    .session_id = session_id,
+                m_event_bus.get().publish_async(StreamDoneEvent{
+                    .session_id = m_session_id,
                     .full_content = react_result.partial_content,
                     .full_reasoning = react_result.partial_reasoning,
                     .was_interrupted = true,
@@ -292,8 +304,8 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
                 if (!is_max_iter && retry_attempt < max_retries) {
                     // 指数退避，但限制上限为 60s
                     int delay = std::min(retry_delay_ms * (1 << retry_attempt), 60000);
-                    EventBus::instance().publish_async(StreamErrorEvent{
-                        .session_id = session_id,
+                    m_event_bus.get().publish_async(StreamErrorEvent{
+                        .session_id = m_session_id,
                         .message = std::format(
                             "Error: {}, retrying in {}ms... ({}/{})",
                             react_result.error_message, delay,
@@ -319,8 +331,8 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
                         run_completion(user_text, retry_attempt + 1);
                     }
                 } else {
-                    EventBus::instance().publish_async(StreamErrorEvent{
-                        .session_id = session_id,
+                    m_event_bus.get().publish_async(StreamErrorEvent{
+                        .session_id = m_session_id,
                         .message = react_result.error_message,
                         .retryable = false
                     });
@@ -330,8 +342,8 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
             }
 
             // ---- 成功完成 ----
-            EventBus::instance().publish_async(StreamDoneEvent{
-                .session_id = session_id,
+            m_event_bus.get().publish_async(StreamDoneEvent{
+                .session_id = m_session_id,
                 .full_content = react_result.final_answer,
                 .full_reasoning = react_result.final_reasoning,
                 .was_interrupted = false,
@@ -343,7 +355,7 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
                 .generation_ms = react_result.generation_ms
             });
 
-            EventBus::instance().publish_async(AgentDoneEvent{
+            m_event_bus.get().publish_async(AgentDoneEvent{
                 .final_response = react_result.final_answer,
                 .total_steps = static_cast<int32_t>(react_result.steps.size()),
                 .total_tool_calls = react_result.total_tool_calls,
@@ -354,14 +366,14 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
 
             } // end try
             catch (const std::exception& e) {
-                EventBus::instance().publish_async(StreamErrorEvent{
+                m_event_bus.get().publish_async(StreamErrorEvent{
                     .session_id = m_session_id,
                     .message = std::format("Fatal error in completion task: {}", e.what()),
                     .retryable = false
                 });
                 m_generating.store(false);
             } catch (...) {
-                EventBus::instance().publish_async(StreamErrorEvent{
+                m_event_bus.get().publish_async(StreamErrorEvent{
                     .session_id = m_session_id,
                     .message = "Fatal unknown error in completion task",
                     .retryable = false
@@ -513,12 +525,18 @@ Result<void, std::string> ChatSession::load_session(const std::string& path) {
     }
 }
 
+IBackend* ChatSession::backend() const {
+    // L-1：通过 dynamic_cast 安全获取 IBackend 指针
+    // 若 provider 不是 IBackend（如本地推理核心），返回 nullptr
+    return dynamic_cast<IBackend*>(m_provider.get());
+}
+
 // ============================================================
 // 事件订阅
 // ============================================================
 
 void ChatSession::subscribe_interrupt() {
-    m_interrupt_token = EventBus::instance().subscribe<InterruptEvent>(
+    m_interrupt_token = m_event_bus.get().subscribe<InterruptEvent>(
         [this](const InterruptEvent& /*e*/) {
             if (m_provider) {
                 m_provider->interrupt();
@@ -528,7 +546,7 @@ void ChatSession::subscribe_interrupt() {
 }
 
 void ChatSession::unsubscribe_interrupt() {
-    EventBus::instance().unsubscribe<InterruptEvent>(m_interrupt_token);
+    m_event_bus.get().unsubscribe<InterruptEvent>(m_interrupt_token);
 }
 
 } // namespace agent

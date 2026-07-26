@@ -167,7 +167,6 @@ static int run(int argc, char* argv[]) {
     std::unique_ptr<ChatSession> session;
     std::shared_ptr<command::CommandRegistry> registry;
     std::unique_ptr<agent::input::InputProcessor> input_processor;
-    IBackend* g_backend = nullptr;  // raw ptr, owned by ChatSession
 
     // 检查 Provider Preset（--provider 时自动填充 URL/Model）
     std::string provider_name = cfg.get_or<std::string>(keys::PROVIDER, "");
@@ -213,9 +212,14 @@ static int run(int argc, char* argv[]) {
             return 1;
         }
 
-        g_backend = backend.get();
         int default_retry_delay = preset && preset->retry_delay_ms > 0 ? preset->retry_delay_ms : 1000;
-        session = std::make_unique<ChatSession>(std::move(backend), default_retry_delay);
+        // D-1：显式组装依赖 — 三大核心组件均通过单例注入，
+        // 未来切换 Mock 时只需修改这三处引用
+        session = std::make_unique<ChatSession>(
+            std::move(backend), default_retry_delay, "default",
+            TaskManager::instance(),
+            EventBus::instance(),
+            ConfigManager::instance());
 
         if (verbose) {
             std::cerr << "[debug] Backend ready\n";
@@ -254,12 +258,12 @@ static int run(int argc, char* argv[]) {
     input_processor = std::make_unique<agent::input::InputProcessor>(registry);
 
     // ---- 启动时模型选择（model_name 为空时触发） ----
-    if (g_backend && model_name.empty()) {
+    if (session && session->backend() && model_name.empty()) {
         ModelSelection sel = select_model_interactive(
-            &terminal, &screen, g_backend, model_name);
+            &terminal, &screen, session->backend(), model_name);
         if (!sel.name.empty()) {
             cfg.set(keys::MODEL_NAME, sel.name);
-            g_backend->set_model_name(sel.name);
+            session->backend()->set_model_name(sel.name);
             model_name = sel.name;
             // 持久化用户选择的 context_length（若 selector 返回了有效值）
             if (sel.context_length > 0) {
@@ -340,19 +344,19 @@ static int run(int argc, char* argv[]) {
     sys_ctx.on_exit = []() {
         EventBus::instance().publish(ShutdownEvent{.force = false});
     };
-    sys_ctx.on_model_select = [&terminal, &screen, &g_backend, &cfg, &renderer, &preset]() {
-        if (!g_backend) {
+    sys_ctx.on_model_select = [&terminal, &screen, &session, &cfg, &renderer, &preset]() {
+        if (!session || !session->backend()) {
             terminal.set_color(ColorRole::Error);
             terminal.write("No backend configured. Use --provider first.\n");
             terminal.reset_color();
             return;
         }
         ModelSelection sel = select_model_interactive(
-            &terminal, &screen, g_backend,
+            &terminal, &screen, session->backend(),
             cfg.get_or<std::string>(keys::MODEL_NAME, ""));
         if (!sel.name.empty()) {
             cfg.set(keys::MODEL_NAME, sel.name);
-            if (g_backend) g_backend->set_model_name(sel.name);
+            if (session->backend()) session->backend()->set_model_name(sel.name);
             if (auto* sb = renderer.status_bar()) {
                 sb->set_model_name(sel.name);
                 // 上下文窗口：统一通过 resolver 解析（优先级：provider→user cfg→capability→preset→default）

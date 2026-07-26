@@ -8,36 +8,16 @@
 #include "core/events/event_bus.h"
 #include "agent/message/types.h"
 #include "core/config/config_manager.h"
+#include "helpers/mock_provider.h"
 
 using namespace agent;
 
 namespace {
 
-/// @brief Mock ICompletionProvider
-class MockProvider : public ICompletionProvider {
-public:
-    int submit_count = 0;
-    int interrupt_count = 0;
-
-    std::shared_ptr<IStreamReader> submit_completion(const CompletionRequest& req) override {
-        (void)req;
-        submit_count++;
-        return nullptr;
-    }
-
-    void interrupt() override {
-        interrupt_count++;
-    }
-
-    bool is_generating() const override {
-        return false;
-    }
-};
-
-/// @brief 创建测试用 ChatSession
+/// @brief 创建测试用 ChatSession（使用共享 MockCompletionProvider）
 std::unique_ptr<ChatSession> make_test_session() {
     return std::make_unique<ChatSession>(
-        std::unique_ptr<ICompletionProvider>(new MockProvider())
+        std::unique_ptr<ICompletionProvider>(new test::MockCompletionProvider())
     );
 }
 

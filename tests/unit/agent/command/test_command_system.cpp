@@ -12,26 +12,17 @@
 #include "agent/core/chat_session.h"
 #include "agent/api/i_backend.h"
 #include "core/config/config_manager.h"
+#include "helpers/mock_provider.h"
 
 using namespace agent;
 using namespace agent::command;
 
 namespace {
 
-/// @brief Mock ICompletionProvider 用于测试
-class MockProvider : public ICompletionProvider {
-public:
-    std::shared_ptr<IStreamReader> submit_completion(const CompletionRequest&) override {
-        return nullptr;
-    }
-    void interrupt() override {}
-    bool is_generating() const override { return false; }
-};
-
-/// @brief 创建测试用 ChatSession
+/// @brief 创建测试用 ChatSession（使用共享 MockCompletionProvider）
 std::unique_ptr<ChatSession> make_test_session() {
     return std::make_unique<ChatSession>(
-        std::unique_ptr<ICompletionProvider>(new MockProvider())
+        std::unique_ptr<ICompletionProvider>(new test::MockCompletionProvider())
     );
 }
 

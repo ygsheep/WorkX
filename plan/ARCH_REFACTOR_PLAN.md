@@ -785,45 +785,72 @@ target_sources(workx_agent INTERFACE ${AGENT_SOURCES})
 
 ### Phase 3.5：ReAct Agent 增强（3 天）— 原 Phase 3
 > **前置条件**：Phase 3 工具线程安全审计完成
-- [ ] **3.1** 实现并行工具执行（`std::async`）— 仅对 Phase 3 审计通过的工具并行
-- [ ] **3.2** 实现 `IReActObserver`，重构 `ChatSession` 回调
-- [ ] **3.3** 实现 `ContextCompressor`（基础版：保留最近 N 轮 + 截断旧 tool_result）
-- [ ] **3.4** 实现 `ToolExecutor` 结果截断（`was_truncated` 字段）
-- [ ] **T-3 扩展**：`ChatRenderer` 跨线程字段原子化（`m_spinner_active`/`m_viewing_thinking`/`m_total_tokens` 等）
-- [ ] 编译验证 + Agent 端到端测试
-- [ ] **日志（G-1）**：ReActLoop 每轮 Thought/Action/Observation；ContextCompressor 压缩决策；工具截断事件
+- [x] **3.1** 实现并行工具执行（`std::async`）— 仅对 Phase 3 审计通过的工具并行
+- [x] **3.2** 实现 `IReActObserver`，重构 `ChatSession` 回调
+- [x] **3.3** 实现 `ContextCompressor`（基础版：保留最近 N 轮 + 截断旧 tool_result）
+- [x] **3.4** 实现 `ToolExecutor` 结果截断（`was_truncated` 字段）
+- [x] **T-3 扩展**：`ChatRenderer` 跨线程字段原子化（`m_spinner_active`/`m_viewing_thinking`/`m_total_tokens` 等）
+- [x] 编译验证 + Agent 端到端测试（336 test cases / 1142 assertions 全部通过）
+- [x] **日志（G-1）**：ReActLoop 每轮 Thought/Action/Observation；ContextCompressor 压缩决策；工具截断事件
 
 ### Phase 4：事件系统重构（2 天）
-- [ ] **1.1** 新增 `IEventBus` 接口
-- [ ] `EventBus` 继承 `IEventBus`
-- [ ] `ChatSession` 构造函数注入 `IEventBus&`
-- [ ] `TaskManager` 注入 `IEventBus&`
-- [ ] `main.cpp` 组装时显式注入
-- [ ] **1.3** 新建 `core/events/events.h`，迁移事件类型
-- [ ] **C-1 扩展**：`ConfigManager` 单例 DI 化（同 EventBus 模式）
-  - 抽取 `IConfigManager` 接口
-  - `ChatSession` / `Terminal` / `SetupWizard` / `ModelSelector` 等接收 `IConfigManager&`
-  - 测试用 `MockConfigManager` 注入
-- [ ] **T-1 扩展**：修复 `EventBus::publish()` 持锁调回调的重入死锁风险
-  - 方案：回调执行移出锁外（拷贝订阅者列表后释放锁再调用）
-- [ ] **日志（G-1）**：subscribe/unsubscribe、publish 同步/异步、队列积压告警
+- [x] **1.1** 新增 `IEventBus` 接口（类型擦除虚函数 + 模板包装，_raw 后缀避免 MSVC 解析歧义）
+- [x] `EventBus` 继承 `IEventBus`
+- [x] `ChatSession` 构造函数注入 `IEventBus&`（同时注入 `IConfigManager&`）
+- [x] `TaskManager` 注入 `IEventBus&`（Task 构造也接收 IEventBus&，消除单例依赖）
+- [x] `main.cpp` 组装时显式注入（TaskManager::instance / EventBus::instance / ConfigManager::instance 三处显式组装）
+- [ ] **1.3** 新建 `core/events/events.h`，迁移事件类型（暂缓，事件类型已分散在 `task_events.h`/`message/types.h`，迁移收益较小）
+- [x] **C-1 扩展**：`ConfigManager` 单例 DI 化（同 EventBus 模式）
+  - [x] 抽取 `IConfigManager` 接口
+  - [x] `ChatSession` 接收 `IConfigManager&`（使用 `std::reference_wrapper` 成员）
+  - [ ] `Terminal` / `SetupWizard` / `ModelSelector` 接收 `IConfigManager&`（暂缓，后续按需迁移）
+  - [ ] 测试用 `MockConfigManager` 注入（暂缓，待 Phase 6 补 Mock 测试）
+- [x] **T-1 扩展**：修复 `EventBus::publish()` 持锁调回调的重入死锁风险
+  - 方案：回调执行移出锁外（拷贝 `callbacks_copy` 后释放锁再调用）
+- [x] **日志（G-1）**：subscribe/unsubscribe、publish 同步/异步、队列积压告警（>100 触发 WARN）
+- [x] 编译验证 + 全量单元测试通过（336 test cases / 1142 assertions）
 
 ### Phase 5：CMake 模块化（1 天）
-- [ ] **4.1** 按模块拆分 `CMakeLists.txt`
-- [ ] 验证所有平台可编译
-- [ ] **日志（G-1）**：无（构建系统无运行时日志需求）
+- [x] **4.1** 按模块拆分 `CMakeLists.txt`
+  - 根 `CMakeLists.txt` 仅保留项目设置、find_package、tree-sitter、liblogger、add_subdirectory
+  - 新增 `src/CMakeLists.txt`：创建空 `libworkx` 静态库 + `workx` exe，add_subdirectory 引入子模块
+  - 新增 `src/core/CMakeLists.txt`：core 源文件（config/task）
+  - 新增 `src/agent/CMakeLists.txt`：agent 源文件（api/command/compact/core/model/tool）
+  - 新增 `src/tui/CMakeLists.txt`：tui 源文件（core/input/render/setup/utils/widgets）+ 平台特定源
+  - 新增 `src/app/CMakeLists.txt`：app 源文件（command/config/ui），main.cpp 由 src/CMakeLists.txt 加入 workx exe
+  - 各子模块通过 `target_sources(libworkx PRIVATE ...)` 追加源文件，归属清晰
+- [x] 验证 Windows 平台可编译（Linux 平台待 CI 验证）
+- [x] 全量单元测试通过（336 test cases / 1142 assertions）
+- [x] example 工程构建通过（example_markdown / example_code_highlight）
+- [x] **日志（G-1）**：无（构建系统无运行时日志需求）
 
 ### Phase 6：回归测试与长期技术债（3 天）
-- [ ] 全量单元测试通过
-- [ ] **X-2 修复**：集成测试 Python server 自动化启动（CMake fixture 或 test 启动脚本）
-- [ ] 集成测试通过（需 LLM backend）
-- [ ] 性能基准：对比重构前后 token 吞吐、工具调用延迟、并行 vs 串行工具执行
-- [ ] 内存检查：无泄漏、无越界
-- [ ] **长期技术债登记**（不在本方案实施，登记到 PLAN_PHASE4 或新文档）：
-  - L-1/L-2/L-3：raw pointer 系统性替换为 `std::reference_wrapper` 或 `not_null<T*>`
-  - H-1/H-2/H-3：HTTP 客户端连接池、总时长超时、重试逻辑统一
-  - E-5/E-6：ExecutionResult 字段语义、HttpResponse 错误码（移交 v2）
-- [ ] **日志（G-1）**：补齐遗漏模块（PermissionChecker / SSEStreamReader 等）
+- [x] 全量单元测试通过（336 cases / 1142 assertions）
+- [x] **X-2 修复**：集成测试 Python server 自动化启动
+  - 新增 `tests/integration/test_server_fixture.h`：`AutoTestServer` RAII 类，跨平台（Win32 + POSIX）
+  - `LM_STUDIO_BASE_URL` 未设置时自动启动 Python 服务器（6/6 通过）
+  - `LM_STUDIO_BASE_URL` 设置时切换为 LM Studio（9 个 LLM 推理测试 SKIP）
+  - 修改 `test_server.py`：`/v1/models` 添加 `object` 字段、SSE 响应改为 `Connection: close`
+  - 修复 `test_client.cpp` 现有 bug（`auto&` 绑定临时对象）
+- [x] 集成测试通过（Python server 路径 6/6 通过；LLM 推理测试需手动启动 LM Studio）
+- [ ] 性能基准：暂缓（已登记为 T-5 技术债，需在 DI 化完成后做以避免基准失效）
+- [ ] 内存检查：Windows 平台无 ASan 集成，暂缓（已登记为 T-6 技术债）
+- [x] **长期技术债登记**：新建 `plan/TECH_DEBT_REGISTRY.md`，登记 4 大类 13 项技术债
+  - L 类（生命周期）：L-1/L-2/L-3 raw pointer 与生命周期安全
+  - H 类（HTTP）：H-1 连接池 / H-2 总时长超时 / H-3 重试逻辑统一
+  - E 类（错误码）：E-5 ExecutionResult / E-6 HttpResponse 语义
+  - D 类（DI 未完成）：D-2/D-3/D-4 Terminal/Client/工具内部单例依赖
+  - T 类（测试）：T-4 Mock 实现 / T-5 性能基准 / T-6 Linux CI
+  - I 类（集成测试）：I-1 LM Studio 手动 / I-2 Linux 实测
+  - 含优先级矩阵：P0 Linux CI / P1 DI 补全 / P2 HTTP 健壮性 / P3 类型安全
+- [x] **日志（G-1）**：补齐 HttpClient（GET 错误/状态码、StreamSession 完成/取消/错误、async_post_stream/cancel_stream 入口）和 SSEStreamReader（cancel/finish 含 token 统计）日志埋点；PermissionChecker 仅空壳头文件无实现，跳过
+- [x] 修复 chat_session.cpp/h 重复声明与 main.cpp Phase 4 残留重复行（3 处）
+
+#### 架构验收 7.2 现状（未达理想标准，已登记为 D-2/D-3/D-4 技术债）
+- `EventBus::instance()` 在 8 处文件使用（理想：仅 core/events/ + main.cpp）
+- `ConfigManager::instance()` 在 9 处文件使用（理想：仅 core/config/ + main.cpp）
+- `TaskManager::instance()` 在 5 处文件使用（理想：仅 core/task/ + main.cpp）
+- 三个单例均有对应接口（IEventBus / IConfigManager / ITaskManager），核心组件（ChatSession/TaskManager）已支持 DI 注入
 
 ---
 

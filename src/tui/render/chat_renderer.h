@@ -83,19 +83,21 @@ private:
     TuiStateMachine m_state_machine;
 
     // 思考内容管理
-    bool m_spinner_active = false;
-    std::string m_reasoning_buffer;          ///< 缓存的思考内容
+    // T-3：跨线程字段原子化（事件回调在 main loop，toggle_thinking_view 在键盘中断，
+    //      Spinner 回调在 spinner 线程，需保证可见性与原子性）
+    std::atomic<bool> m_spinner_active{false};
+    std::string m_reasoning_buffer;          ///< 缓存的思考内容（仅在 main loop 访问，单线程）
     std::chrono::steady_clock::time_point m_thinking_start_time;
-    bool m_viewing_thinking = false;         ///< 是否在思考视图
-    int32_t m_thinking_seconds = 0;          ///< 思考持续秒数
+    std::atomic<bool> m_viewing_thinking{false};         ///< 是否在思考视图
+    std::atomic<int32_t> m_thinking_seconds{0};          ///< 思考持续秒数（Spinner 线程写）
 
     // 会话统计
-    int32_t m_message_count = 0;
-    int32_t m_total_tokens = 0;
+    std::atomic<int32_t> m_message_count{0};
+    std::atomic<int32_t> m_total_tokens{0};
     std::atomic<bool> m_streaming_started{false};  ///< 是否已输出 "● Thought for"（防重复）
 
     // 工具调用嵌套层级
-    int m_tool_indent = 0;
+    std::atomic<int> m_tool_indent{0};
 
     // 活跃工具调用上下文 (call_id → info), 用于 ToolResultEvent 时推断语言/路径
     std::unordered_map<std::string, ToolCallInfo> m_pending_tool_calls;

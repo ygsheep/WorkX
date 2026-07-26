@@ -19,11 +19,15 @@
 
 #include "agent/api/chat_types.h"
 #include "agent/api/i_completion_provider.h"
+#include "agent/compact/context_compressor.h"
 #include "agent/tool/registry.h"
 #include "agent/tool/executor.h"
 #include "agent/tool/context.h"
 
 namespace agent {
+
+// 前向声明（3.2 IReActObserver）
+class IReActObserver;
 
 // ============================================================
 // ReAct 步骤类型
@@ -152,6 +156,7 @@ public:
     /// @brief 循环配置
     struct Config {
         int max_iterations = 25;                  ///< 最大迭代轮数
+        ContextCompressor::Config compressor_cfg; ///< 3.3 上下文压缩配置
     };
 
     /// @brief 步骤回调（每完成一个步骤时调用）
@@ -207,6 +212,20 @@ public:
         const std::atomic<bool>& should_cancel,
         StepCallback on_step = nullptr,
         TokenCallback on_token = nullptr
+    );
+
+    /// @brief 执行 ReAct 循环（观察者版本，3.2）
+    ///
+    /// @details 与上述 run() 等价，但通过 IReActObserver 接口发布事件，
+    ///          替代 StepCallback + TokenCallback 两个 std::function。
+    ///          新代码应优先使用此版本；旧版本保留向后兼容。
+    /// @param observer 观察者指针（nullptr 表示无观察者）
+    ReActResult run(
+        std::vector<ChatMessage>& messages,
+        const std::string& system_prompt,
+        const nlohmann::json& tools_schema,
+        const std::atomic<bool>& should_cancel,
+        IReActObserver* observer
     );
 
 private:
@@ -278,6 +297,7 @@ private:
     std::shared_ptr<tool::ToolRegistry> m_registry; ///< 工具注册表
     std::unique_ptr<tool::ToolExecutor> m_executor; ///< 工具执行器
     Config m_config;                              ///< 循环配置
+    ContextCompressor m_compressor;               ///< 3.3 上下文压缩器
 };
 
 } // namespace agent

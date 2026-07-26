@@ -9,6 +9,8 @@
 #include <mutex>
 #include <algorithm>
 
+#include "liblogger/logger.h"
+
 namespace agent {
 
 // ============================================================
@@ -95,8 +97,13 @@ HttpResponse HttpClient::get(const std::string& url,
                              const std::vector<std::pair<std::string, std::string>>& headers,
                              int timeout_ms) {
     HttpResponse resp;
+    LOG_DEBUG("[http] GET {} timeout={}ms", url, timeout_ms);
     CURL* curl = curl_easy_init();
-    if (!curl) { resp.error = "curl init failed"; return resp; }
+    if (!curl) {
+        resp.error = "curl init failed";
+        LOG_ERROR("[http] GET {} curl_easy_init failed", url);
+        return resp;
+    }
 
     std::string body;
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
@@ -120,11 +127,17 @@ HttpResponse HttpClient::get(const std::string& url,
     CURLcode rc = curl_easy_perform(curl);
     if (rc != CURLE_OK) {
         resp.error = curl_easy_strerror(rc);
+        LOG_ERROR("[http] GET {} failed: {} (rc={})", url, resp.error, static_cast<int>(rc));
     } else {
         long code = 0;
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
         resp.status_code = static_cast<unsigned int>(code);
         resp.body = std::move(body);
+        if (code >= 400) {
+            LOG_WARN("[http] GET {} returned HTTP {} body_len={}", url, code, resp.body.size());
+        } else {
+            LOG_DEBUG("[http] GET {} -> {} bytes={}", url, code, resp.body.size());
+        }
     }
     if (hl) curl_slist_free_all(hl);
     curl_easy_cleanup(curl);
@@ -217,8 +230,17 @@ public:
     }
 
     void on_transfer_done(const CURLcode code) {
-        if (m_cancelled.load()) { finish(""); return; }
-        if (code != CURLE_OK) { finish(curl_easy_strerror(code)); return; }
+        if (m_cancelled.load()) {
+            LOG_DEBUG("[http][stream] transfer cancelled");
+            finish("");
+            return;
+        }
+        if (code != CURLE_OK) {
+            std::string err = curl_easy_strerror(code);
+            LOG_ERROR("[http][stream] transfer failed: {} (rc={})", err, static_cast<int>(code));
+            finish(err);
+            return;
+        }
 
         // 检查 HTTP 状态码
         long http_code = 0;
@@ -231,9 +253,11 @@ public:
                 // 截断防止过长（最多 500 字符）
                 err_msg += " - " + m_error_body.substr(0, 500);
             }
+            LOG_WARN("[http][stream] HTTP {} error_body_len={}", http_code, m_error_body.size());
             finish(err_msg);
             return;
         }
+        LOG_DEBUG("[http][stream] transfer done HTTP {}", http_code);
         if (m_reader && !m_reader->is_finished())
             m_reader->finish();
         if (m_on_complete) m_on_complete();
@@ -364,6 +388,7 @@ void HttpClient::async_post_stream(
         std::shared_ptr<SSEStreamReader> reader,
         std::function<void()> on_complete,
         int timeout_ms) const {
+    LOG_DEBUG("[http][stream] POST {} body_len={} timeout={}ms", url, body.size(), timeout_ms);
     auto parsed = parse_url(url);
     auto* key = reader.get();
 
@@ -374,6 +399,7 @@ void HttpClient::async_post_stream(
         // curl 初始化失败：主动 finish reader 让上层能收到错误，避免 next() 无限阻塞
         // （调用方已把 reader 存入 m_active_reader，若不 finish 会永远等数据）
         // finish_with_error 会同时触发 reader->finish 和 on_complete 回调
+        LOG_ERROR("[http][stream] POST {} curl_easy_init failed", url);
         session->finish_with_error("Failed to initialize curl session");
         return;
     }
@@ -388,6 +414,7 @@ void HttpClient::async_post_stream(
 }
 
 void HttpClient::cancel_stream(SSEStreamReader* reader) {
+    LOG_DEBUG("[http][stream] cancel_stream requested");
     std::shared_ptr<StreamSession> session;
     {
         std::lock_guard<std::mutex> lock(m_impl->sessions_mutex);

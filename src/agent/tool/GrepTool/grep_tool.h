@@ -30,7 +30,7 @@ public:
     ToolResult call(
         const nlohmann::json& input,
         const ToolContext& ctx
-    ) override;
+    ) const override;
 };
 
 } // namespace agent::tool

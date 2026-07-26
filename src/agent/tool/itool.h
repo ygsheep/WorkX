@@ -74,10 +74,15 @@ public:
     /// @param input 工具输入参数
     /// @param ctx 工具执行上下文
     /// @return 工具执行结果
+    /// @par 线程安全保证（K-1 / Phase 3）
+    /// `call()` 标注为 `const`：工具实例本身无可观察副作用，可被多个线程
+    /// 并行调用同一实例。需要缓存可变状态的工具用 `mutable` + mutex 保护。
+    /// 跨工具共享状态通过单例（如 FileHistory / FileReadStateTracker）访问，
+    /// 这些单例内部已用 mutex 保护。
     virtual ToolResult call(
         const nlohmann::json& input,
         const ToolContext& ctx
-    ) = 0;
+    ) const = 0;
 };
 
 } // namespace agent::tool

@@ -185,7 +185,7 @@ bool GlobTool::glob_match(std::string_view pattern, std::string_view text) {
 ToolResult GlobTool::call(
     const nlohmann::json& input,
     const ToolContext& ctx
-) {
+) const {
     // 1. 解析输入（try-catch 防止类型不匹配抛异常）
     GlobInput glob_input;
     try {

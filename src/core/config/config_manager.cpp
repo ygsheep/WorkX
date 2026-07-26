@@ -90,6 +90,76 @@ Result<ConfigMeta, std::string> ConfigManager::get_meta(const std::string& key) 
     return Result<ConfigMeta, std::string>::ok(it->second);
 }
 
+// === IConfigManager 类型擦除接口实现 ===
+
+Result<ConfigValue, std::string> ConfigManager::get_value(const std::string& key) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    auto it = m_values.find(key);
+    if (it == m_values.end()) {
+        // 尝试 meta 的默认值
+        auto meta_it = m_metas.find(key);
+        if (meta_it != m_metas.end()) {
+            return Result<ConfigValue, std::string>::ok(meta_it->second.default_value);
+        }
+        return Result<ConfigValue, std::string>::err(
+            std::format("Config key '{}' not found", key));
+    }
+    return Result<ConfigValue, std::string>::ok(it->second);
+}
+
+Result<void, std::string> ConfigManager::set_value(const std::string& key, ConfigValue config_value) {
+    auto meta_it = m_metas.end();
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        meta_it = m_metas.find(key);
+    }
+
+    if (meta_it != m_metas.end()) {
+        auto& meta = meta_it->second;
+        if (meta.validate_callback) {
+            auto result = meta.validate_callback(config_value);
+            if (result.isErr()) {
+                return Result<void, std::string>::err(
+                    std::format("Validation failed for '{}': {}", key, result.error())
+                );
+            }
+        }
+    }
+
+    ConfigValue old_value;
+    bool has_old_value = false;
+    ConfigMeta::ChangeCallback change_callback;
+    bool has_change_callback = false;
+    std::vector<std::function<void()>> pending_callbacks;
+
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+
+        auto old_value_it = m_values.find(key);
+        has_old_value = (old_value_it != m_values.end());
+        old_value = has_old_value ? old_value_it->second : config_value;
+
+        m_values[key] = config_value;
+
+        if (meta_it != m_metas.end() && meta_it->second.change_callback) {
+            has_change_callback = true;
+            change_callback = meta_it->second.change_callback;
+        }
+
+        for (const auto& callback : m_global_change_callbacks) {
+            pending_callbacks.push_back([callback, key, old_value, config_value]() {
+                callback(key, old_value, config_value);
+            });
+        }
+    }
+
+    for (const auto& cb : pending_callbacks) { cb(); }
+    if (has_change_callback) { change_callback(config_value); }
+
+    return Result<void, std::string>::ok();
+}
+
 Result<void, std::string> ConfigManager::load_from_file(const std::filesystem::path& path) {
     if (!std::filesystem::exists(path)) {
         return Result<void, std::string>::err(

@@ -10,6 +10,8 @@
 
 #include <iostream>
 
+#include "liblogger/logger.h"
+
 namespace agent {
 
 SSEStreamReader::SSEStreamReader(ParseSSECallback parse_cb)
@@ -73,7 +75,8 @@ StreamState SSEStreamReader::next(std::function<bool()> should_stop, StreamChunk
 }
 
 void SSEStreamReader::cancel() {
-    m_cancelled.store(true);
+    if (m_cancelled.exchange(true)) return;  // 已取消则不重复日志
+    LOG_DEBUG("[sse] reader cancelled, tokens_received={}", m_token_count);
     m_queue_cv.notify_all();
 }
 
@@ -83,8 +86,14 @@ void SSEStreamReader::feed_data(std::string_view data) {
 }
 
 void SSEStreamReader::finish(const std::string& error) {
+    if (m_finished.exchange(true)) return;  // 已 finish 则不重复
     m_finish_error = error;
-    m_finished.store(true);
+    if (error.empty()) {
+        LOG_DEBUG("[sse] reader finished, tokens_received={}", m_token_count);
+    } else {
+        LOG_WARN("[sse] reader finished with error: {} tokens_received={}",
+                 error, m_token_count);
+    }
     m_queue_cv.notify_all();
 }
 

@@ -453,7 +453,7 @@ ValidationResult FileEditTool::create_backup(const fs::path& file_path) {
 ToolResult FileEditTool::call(
     const nlohmann::json& input,
     const ToolContext& ctx
-) {
+) const {
     // 1. 解析输入（已在 validate_input 中校验，此处安全访问）
     FileEditInput edit_input;
     try {

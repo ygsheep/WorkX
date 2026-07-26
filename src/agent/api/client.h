@@ -21,6 +21,7 @@
 #include "core/events/event_bus.h"
 #include "agent/api/chat_types.h"
 #include "agent/model/provider_type.h"
+#include "core/task/task_manager.h"  // ITaskManager + TaskManager::instance() 默认实参
 
 namespace agent {
 
@@ -143,7 +144,8 @@ private:
            std::string system_prompt,
            int retry_count,
            int retry_delay_ms,
-           bool publish_events);
+           bool publish_events,
+           ITaskManager& task_manager = TaskManager::instance());
 
     /// 构造 CompletionRequest（含 system_prompt + history + 新消息）
     CompletionRequest build_request(const std::string& user_text);
@@ -189,6 +191,9 @@ private:
     int m_max_retries = 3;
     int m_retry_delay_ms = 1000;
     bool m_publish_events = false;
+
+    // D-1：任务管理器指针（非拥有；Client 可移动，用指针避免引用无法重新绑定）
+    ITaskManager* m_task_manager = nullptr;
 
     /// 保护 m_messages 和 m_system_prompt 的互斥量
     mutable std::mutex m_messages_mutex;

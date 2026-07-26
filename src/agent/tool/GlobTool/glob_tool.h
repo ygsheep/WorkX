@@ -38,7 +38,7 @@ public:
     ToolResult call(
         const nlohmann::json& input,
         const ToolContext& ctx
-    ) override;
+    ) const override;
 
 private:
     /// @brief 手写 glob 匹配（递归下降，避免 std::regex 编译开销）

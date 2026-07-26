@@ -1,10 +1,10 @@
 # 集成测试构建
-# @details 依赖外部服务 (LM Studio OpenAI 兼容服务器)
-#          通过 -DWORKX_BUILD_INTEGRATION_TESTS=ON 启用
-#          fixture/test_server.py 是 mock HTTP 服务器 (Python), 由测试方手动启动
+# @details X-2 修复：自动启停 tests/integration/fixtures/test_server.py
+#          无需手动启动 LM Studio，测试运行时自动拉起 Python 服务器
+#          若设置环境变量 LM_STUDIO_BASE_URL，则切换为使用 LM Studio（向后兼容）
 #
-# 运行环境变量:
-#   LM_STUDIO_BASE_URL=http://127.0.0.1:1234/v1  (LM Studio 默认端口)
+# 运行环境变量（可选）:
+#   LM_STUDIO_BASE_URL=http://127.0.0.1:1234  (覆盖默认，使用 LM Studio)
 
 set(INTEGRATION_TEST_SOURCES
     ../test_main.cpp
@@ -13,7 +13,11 @@ set(INTEGRATION_TEST_SOURCES
 )
 
 add_executable(workx_integration_tests ${INTEGRATION_TEST_SOURCES})
-target_compile_definitions(workx_integration_tests PRIVATE SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_compile_definitions(workx_integration_tests PRIVATE
+    SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    WORKX_TEST_SERVER_SCRIPT="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/test_server.py"
+)
+target_include_directories(workx_integration_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(workx_integration_tests PRIVATE libworkx Catch2::Catch2WithMain)
 
 include(Catch)

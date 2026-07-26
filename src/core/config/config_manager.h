@@ -1,13 +1,15 @@
 /**
  * @file config_manager.h
  * @brief 配置管理器
- * @details 类型安全、分层配置、验证回调、JSON 持久化
- * @version 1.0.0
+ * @details 类型安全、分层配置、验证回调、JSON 持久化。
+ *          继承 IConfigManager 支持 DI 注入（C-1）。
+ * @version 2.0.0
  */
 
 #pragma once
 
 #include "core/utils/result.h"
+#include "core/config/i_config_manager.h"
 #include <string>
 #include <variant>
 #include <unordered_map>
@@ -17,8 +19,6 @@
 #include <vector>
 
 namespace agent {
-
-using ConfigValue = std::variant<bool, int, double, std::string>;
 
 struct ConfigMeta {
     std::string description;
@@ -32,7 +32,7 @@ struct ConfigMeta {
     ChangeCallback change_callback;
 };
 
-class ConfigManager final {
+class ConfigManager final : public IConfigManager {
 public:
     static ConfigManager& instance() noexcept {
         static ConfigManager inst;
@@ -44,96 +44,31 @@ public:
     ConfigManager(ConfigManager&&) = delete;
     ConfigManager& operator=(ConfigManager&&) = delete;
 
-    template<typename T>
-    Result<void, std::string> set(const std::string& key, T value) {
-        ConfigValue config_value = value;
+    // === IConfigManager 类型擦除接口实现 ===
 
-        auto meta_it = m_metas.end();
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            meta_it = m_metas.find(key);
-        }
+    [[nodiscard]] bool has(const std::string& key) const override;
 
-        if (meta_it != m_metas.end()) {
-            auto& meta = meta_it->second;
-            if (meta.validate_callback) {
-                auto result = meta.validate_callback(config_value);
-                if (result.isErr()) {
-                    return Result<void, std::string>::err(
-                        std::format("Validation failed for '{}': {}", key, result.error())
-                    );
-                }
-            }
-        }
+    [[nodiscard]] Result<ConfigValue, std::string> get_value(
+        const std::string& key) const override;
 
-        ConfigValue old_value;
-        bool has_old_value = false;
-        ConfigMeta::ChangeCallback change_callback;
-        bool has_change_callback = false;
-        std::vector<std::function<void()>> pending_callbacks;
+    Result<void, std::string> set_value(
+        const std::string& key, ConfigValue value) override;
 
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
+    Result<void, std::string> load_from_file(
+        const std::filesystem::path& path) override;
+    Result<void, std::string> save_to_file(
+        const std::filesystem::path& path) override;
 
-            auto old_value_it = m_values.find(key);
-            has_old_value = (old_value_it != m_values.end());
-            old_value = has_old_value ? old_value_it->second : config_value;
+    [[nodiscard]] std::vector<std::string> get_all_keys() const override;
 
-            m_values[key] = config_value;
+    // === 保留的 template 方法（与基类模板包装功能相同，供已存在调用方使用）===
+    // 注意：基类 IConfigManager 已提供 set/get/get_or 模板包装，这里不再重复声明，
+    //       调用方通过 IConfigManager& 接口即可使用。下方 register_meta 等
+    //       非模板扩展方法仍保留为 ConfigManager 专属。
 
-            if (meta_it != m_metas.end() && meta_it->second.change_callback) {
-                has_change_callback = true;
-                change_callback = meta_it->second.change_callback;
-            }
-
-            for (const auto& callback : m_global_change_callbacks) {
-                pending_callbacks.push_back([callback, key, old_value, config_value]() {
-                    callback(key, old_value, config_value);
-                });
-            }
-        }
-
-        for (const auto& cb : pending_callbacks) { cb(); }
-        if (has_change_callback) { change_callback(config_value); }
-
-        return Result<void, std::string>::ok();
-    }
-
-    template<typename T>
-    [[nodiscard]] Result<T, std::string> get(const std::string& key) const {
-        std::lock_guard<std::mutex> lock(m_mutex);
-
-        auto it = m_values.find(key);
-        if (it == m_values.end()) {
-            auto meta_it = m_metas.find(key);
-            if (meta_it != m_metas.end()) {
-                if (std::holds_alternative<T>(meta_it->second.default_value)) {
-                    return Result<T, std::string>::ok(std::get<T>(meta_it->second.default_value));
-                }
-            }
-            return Result<T, std::string>::err(std::format("Config key '{}' not found", key));
-        }
-
-        if (std::holds_alternative<T>(it->second)) {
-            return Result<T, std::string>::ok(std::get<T>(it->second));
-        }
-
-        return Result<T, std::string>::err(std::format("Type mismatch for config key '{}'", key));
-    }
-
-    template<typename T>
-    [[nodiscard]] T get_or(const std::string& key, T default_value) const {
-        auto result = get<T>(key);
-        return result.isOk() ? result.unwrap() : default_value;
-    }
-
-    [[nodiscard]] bool has(const std::string& key) const;
     void remove(const std::string& key);
     void register_meta(const std::string& key, ConfigMeta meta);
     [[nodiscard]] Result<ConfigMeta, std::string> get_meta(const std::string& key) const;
-
-    Result<void, std::string> load_from_file(const std::filesystem::path& path);
-    Result<void, std::string> save_to_file(const std::filesystem::path& path);
 
     void add_change_callback(
         std::function<void(const std::string&, const ConfigValue&, const ConfigValue&)> callback
@@ -141,11 +76,10 @@ public:
     void clear_change_callbacks();
     void clear();
     void clear_for_test();
-    [[nodiscard]] std::vector<std::string> get_all_keys() const;
 
 private:
     ConfigManager() = default;
-    ~ConfigManager() = default;
+    ~ConfigManager() override = default;
 
     mutable std::mutex m_mutex;
     std::unordered_map<std::string, ConfigValue> m_values;

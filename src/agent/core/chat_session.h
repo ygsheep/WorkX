@@ -14,9 +14,12 @@
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
+#include <functional>
 #include "agent/api/i_completion_provider.h"
 #include "agent/api/chat_types.h"
+#include "agent/core/react_observer.h"
 #include "core/events/event_bus.h"
+#include "core/config/config_manager.h"
 #include "core/utils/result.h"
 #include "agent/message/types.h"
 #include "agent/tool/registry.h"
@@ -25,19 +28,50 @@
 
 namespace agent {
 
+/// @brief 后端接口前向声明（供 ChatSession::backend() 返回类型使用）
+class IBackend;
+
 /// @brief 对话会话
 /// @details 由外部驱动（main.cpp），通过 send_message() 提交文本，
 ///          后台 Task 调用 ICompletionProvider，发布 StreamTokenEvent/StreamDoneEvent。
 ///          支持工具调用（function calling）：LLM 返回 tool_use → 执行工具 → tool_result → 继续推理
 class ChatSession {
 public:
+    /// @brief ReAct 循环事件发布器（3.2 IReActObserver 实现）
+    /// @details 将 ReActLoop 步骤事件转换为 IEventBus 异步事件，
+    ///          使 ReActLoop 可脱离 EventBus 体系独立使用与测试。
+    class ReActEventPublisher : public IReActObserver {
+    public:
+        explicit ReActEventPublisher(IEventBus& bus, std::string session_id);
+        ~ReActEventPublisher() override = default;
+
+        void on_thought(const ReActStep& step) override;
+        void on_action(const ReActStep& step) override;
+        void on_observation(const ReActStep& step) override;
+        void on_final_answer(const ReActStep& step) override;
+        void on_token(const std::string& content_delta,
+                      const std::string& reasoning_delta) override;
+
+    private:
+        IEventBus& m_bus;
+        std::string m_session_id;
+    };
     /// @brief 构造
     /// @param provider 推理提供者（IBackend 或 IAgentCore）
     /// @param retry_delay_ms 重试初始延迟（毫秒），会被 backend.retry_delay_ms 覆盖
     /// @param session_id 会话标识（用于事件流区分多会话，默认 "default"）
+    /// @param task_manager 任务管理器（D-1 DI 注入，默认全局单例；
+    ///                     测试可传入 MockTaskManager）
+    /// @param event_bus 事件总线（D-1 DI 注入，默认全局单例；
+    ///                  测试可传入 MockEventBus）
+    /// @param config_manager 配置管理器（C-1 DI 注入，默认全局单例；
+    ///                       测试可传入 MockConfigManager）
     explicit ChatSession(std::unique_ptr<ICompletionProvider> provider,
                          int retry_delay_ms = 1000,
-                         std::string session_id = "default");
+                         std::string session_id = "default",
+                         ITaskManager& task_manager = TaskManager::instance(),
+                         IEventBus& event_bus = EventBus::instance(),
+                         IConfigManager& config_manager = ConfigManager::instance());
 
     ~ChatSession();
 
@@ -72,6 +106,10 @@ public:
     /// @brief 从文件加载对话历史
     Result<void, std::string> load_session(const std::string& path);
 
+    /// @brief 获取底层 backend（供 UI 层获取模型列表等）
+    /// @return IBackend 指针，若 provider 不是 IBackend 则返回 nullptr
+    IBackend* backend() const;
+
 private:
     /// @brief 执行推理（在后台线程中运行，含 agent 循环）
     /// @param user_text 用户输入文本
@@ -89,6 +127,15 @@ private:
     std::string m_system_prompt;
     std::string m_session_id;           ///< 会话标识（构造后不变，无需加锁）
     std::atomic<bool> m_generating{false};
+
+    // D-1：任务管理器引用（非拥有，构造注入；ChatSession 不可移动，引用安全）
+    std::reference_wrapper<ITaskManager> m_task_manager;
+
+    // D-1：事件总线引用（非拥有，构造注入）
+    std::reference_wrapper<IEventBus> m_event_bus;
+
+    // C-1：配置管理器引用（非拥有，构造注入）
+    std::reference_wrapper<IConfigManager> m_config_manager;
 
     // 工具注册表（可选，为空时不启用 function calling）
     std::shared_ptr<tool::ToolRegistry> m_tool_registry;

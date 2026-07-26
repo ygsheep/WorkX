@@ -208,7 +208,7 @@ ToolResult FileReadTool::read_directory(const fs::path& dir_path) {
 ToolResult FileReadTool::call(
     const nlohmann::json& input,
     const ToolContext& ctx
-) {
+) const {
     // 1. 解析输入 JSON 为 FileReadInput 结构（try-catch 防止类型不匹配抛异常）
     FileReadInput read_input;
     try {
