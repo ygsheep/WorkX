@@ -1,206 +1,144 @@
-# 长期技术债登记
+# 长期技术债登记（统一索引）
 
-> 本文档记录架构重构（Phase 1-6）完成后遗留的技术债，按优先级与影响范围分类。
-> 每项包含：现象、影响、建议方案、参考代码位置。
+> 本文档整合 `PHASE3_LONG_TERM_REFACTOR.md`（详细方案）与历史登记，作为技术债的唯一索引。
+> 详细重构方案请参考 `plan/PHASE3_LONG_TERM_REFACTOR.md`。
+> 最后更新：2026-07-27（基于源码核查）
+
+## 状态总览
+
+- 已修复：1 项（L-1）
+- 待修复：19 项
+- 详细方案：见 `PHASE3_LONG_TERM_REFACTOR.md`
 
 ---
 
-## L 类：生命周期与指针安全
+## L 类：生命周期与裸指针
 
-### L-1：raw pointer 系统性替换为 `std::reference_wrapper` 或 `not_null<T*>`
+| 编号 | 现象 | 文件:行号 | 影响 | 状态 |
+|------|------|-----------|------|------|
+| L-1 | `IBackend* g_backend` 全局裸指针跨函数传递 | ~~main.cpp:170~~ | — | ✅ 已修复（改用 `session->backend()`） |
+| L-2 | `ReActLoop::m_provider` 裸指针 + 默认移动构造 | `react_loop.h:296, :192` | 中（移动后悬空） | ⬜ 未修复 |
+| L-3 | `ChatRenderer::m_terminal` 裸指针无契约 | `chat_renderer.h:66` | 低（依赖调用顺序） | ⬜ 未修复 |
+| L-5 | `StreamSession::m_multi` 裸 CURLM 跨析构依赖 | `http_client.cpp:297, :201-211` | 低（防御已加） | ⬜ 未修复 |
+| L-6 | `Client::m_task_manager` 裸指针移动后无 assert | `client.h:196, client.cpp:136-151` | 低 | ⬜ 未修复（PHASE3 判定维持现状） |
 
-**现象**：`ChatSession::backend()` 返回 `IBackend*` 裸指针，调用方需自行判空；`ToolExecutor` 持有 `ToolRegistry*` 裸指针等。
-
-**影响**：低。当前所有裸指针生命周期由 owner 保证，无悬挂风险，但 API 表达力弱。
-
-**建议方案**：
-- 引入 `gsl::not_null<T*>`（或自实现）标注非空契约
-- 返回 `std::reference_wrapper<T>` 替代 `T&` 返回值
-- 真正可空指针用 `std::optional<std::reference_wrapper<T>>` 或 `T*` 保留
-
-**参考位置**：
-- `src/agent/core/chat_session.h:108` `IBackend* backend() const`
-- `src/agent/tool/executor.h` ToolRegistry 持有方式
-
-### L-2：`m_provider.get()` 在多线程下访问 `unique_ptr` 内部指针
-
-**现象**：`ChatSession::subscribe_interrupt` 捕获 `this`，回调中访问 `m_provider`；析构与回调并发时可能 race。
-
-**影响**：中。当前 interrupt 事件触发频率低，实际未崩溃，但 TSan 会报告。
-
-**建议方案**：
-- `m_provider` 改为 `std::shared_ptr<ICompletionProvider>`，回调捕获 `weak_ptr` 后 `lock()` 校验存活
-- 或在 ChatSession 析构前先 `unsubscribe_interrupt()` 确保回调不再触发
-
-### L-3：`StreamSession::m_multi` 裸指针跨线程访问
-
-**现象**：`StreamSession` 持有 `CURLM* m_multi`（来自 `HttpClient::Impl`），析构时若 `m_multi` 已被 `Impl::shutdown` 置空则跳过 remove_handle。代码已加防御注释，但仍是裸指针 + 原子标志的弱约定。
-
-**影响**：低。当前代码路径已用 `m_added_to_multi.load() && m_multi` 双重判断，无实际崩溃。
-
-**建议方案**：
-- 让 `StreamSession` 持有 `std::shared_ptr<Impl>` 或弱引用，避免裸指针生命周期依赖
-- 或将 StreamSession 完全移入 Impl 内部类，访问控制更清晰
+**说明**：
+- L-1 采用 PHASE3 方案 A 已修复，`_scripts/fix_gbackend.py` 留存重构痕迹
+- L-5 PHASE3 描述有偏差：`StreamSession` 类实际只在 `http_client.cpp` 内部定义（非 `sse_stream_reader.h`）
+- L-6 PHASE3 本就判定"维持现状"，但建议的析构 assert 也未加
 
 ---
 
 ## H 类：HTTP 客户端健壮性
 
-### H-1：连接池缺失
-
-**现象**：`HttpClient::get` 每次调用 `curl_easy_init` + `curl_easy_cleanup`，无连接复用。
-
-**影响**：中。HTTPS 握手开销大，高频请求场景延迟显著。
-
-**建议方案**：
-- `HttpClient` 内部维护 `curl_easy_handle` 池（按 host 复用）
-- `curl_multi` 已有连接复用，但同步 `get` 路径未利用
-
-**参考位置**：`src/agent/api/remote/http_client.cpp:96` `HttpClient::get`
-
-### H-2：流式传输无总时长超时
-
-**现象**：`async_post_stream` 仅设 `CURLOPT_LOW_SPEED_LIMIT/TIME`（空闲超时），无总时长上限。长响应（reasoning model 60s+）正常，但若 LLM 持续缓慢吐字则永不超时。
-
-**影响**：中。理论可被恶意服务器耗尽客户端资源。
-
-**建议方案**：
-- 添加可选的 `total_timeout_ms` 参数，默认 5 分钟
-- 通过 `CURLOPT_TIMEOUT_MS` 设置（注意：会覆盖流式语义，需用 `CURLOPT_MAX_RECV_SPEED_*` 配合）
-
-### H-3：重试逻辑分散，无统一策略
-
-**现象**：`ChatSession::run_completion` 有重试逻辑，`HttpClient` 无重试，`RemoteBackend` 无重试。各层重试策略不一致，可能叠加导致超长延迟。
-
-**影响**：中。重试风暴时延迟不可控。
-
-**建议方案**：
-- 抽取 `RetryPolicy` 类型（最大次数 / 退避策略 / 可重试错误码白名单）
-- 在 HttpClient 层统一执行（仅对幂等 GET / 网络错误重试，4xx 不重试）
-- 上层 ChatSession 只在 LLM 应用层错误时重试
+| 编号 | 现象 | 文件:行号 | 影响 | 状态 |
+|------|------|-----------|------|------|
+| H-1 | 无连接池（无 CURLSH 共享） | `http_client.cpp:311-322` | 中（HTTPS 握手开销） | ⬜ 未修复 |
+| H-2 | 流式传输无总时长超时 | `http_client.cpp:180-189` | 中（异常慢响应无上限） | ⬜ 未修复 |
+| H-3 | 重试逻辑分散（Client/ChatSession 两层） | `client.cpp:218-315, chat_session.cpp:226-342` | 中（策略不一致） | ⬜ 未修复 |
+| H-4 | URL 解析双套逻辑（CURLU + fallback） | `http_client.cpp:29-80` | 低（维护成本） | ⬜ 未修复 |
 
 ---
 
-## E 类：错误码与执行结果语义
+## C 类：配置系统完善
 
-### E-5：`ExecutionResult` 字段语义模糊
+| 编号 | 现象 | 文件:行号 | 影响 | 状态 |
+|------|------|-----------|------|------|
+| C-2 | 无结构化 Schema（无类型/范围/枚举） | `config_manager.h:23-33` | 中（无统一校验） | ⬜ 未修复 |
+| C-3 | `ConfigScope` 内部仍用单例 | `config_manager.h:91-123` | 中（无法注入 Mock） | ⬜ 未修复 |
+| C-4 | 环境变量硬编码分散，无 schema 绑定 | `app_config.cpp:135-161` | 低（无集中文档） | ⬜ 未修复 |
 
-**现象**：`ExecutionResult` 同时承载成功/失败状态，字段 `success`、`error_message`、`output` 语义重叠（成功时 output 有效，失败时 error_message 有效，但无类型保护）。
-
-**影响**：低。当前调用方手动判断 `success`，无 bug 但易出错。
-
-**建议方案**：
-- 改用 `Result<Output, Error>` 模板（已有 `core/utils/result.h`）
-- 或 `std::variant<SuccessData, ErrorData>` 强制模式匹配
-
-### E-6：`HttpResponse` 错误码与 HTTP 状态码混淆
-
-**现象**：`HttpResponse::error` 是 curl 错误字符串，`status_code` 是 HTTP 状态码。两者独立，但调用方常误以为 `error.empty()` 等价于 HTTP 2xx。
-
-**影响**：低。当前代码已分两步检查，但语义可改进。
-
-**建议方案**：
-- 拆分为 `CurlError` + `HttpStatusCode` 两个明确概念
-- 或提供 `is_success()` 便捷方法（`error.empty() && 200 <= status_code < 300`）
+**说明**：C-4 的 `load_from_env` 实际位于 `src/app/config/app_config.cpp` 而非 `config_manager.cpp`，读取 7 个环境变量：`WORKX_API_KEY/BASE_URL/MODEL/TIMEOUT/NO_COLOR/LOG_LEVEL/LOG_FILE`
 
 ---
 
-## D 类：DI 化未完成项（Phase 4 暂缓）
+## G 类：日志系统治理
 
-### D-2：Terminal/ChatRenderer/Client 仍依赖 `EventBus::instance()`
+| 编号 | 现象 | 文件:行号 | 影响 | 状态 |
+|------|------|-----------|------|------|
+| G-2 | `~Logger()` detach 写线程，use-after-free 风险 | `lib/liblogger/logger.h:141` | 中（崩溃风险） | ⬜ 未修复 |
+| G-3 | 命名空间混乱（`Agent` vs `agent`） | `logger.h:46, :344, :360-365` | 低（混淆） | ⬜ 未修复 |
+| G-4 | `get_instance()` 返回 `shared_ptr` 语义错误 | `logger.h:162-168` | 低 | ⬜ 未修复 |
 
-**现象**：架构验收 7.2 标准要求 `EventBus::instance()` 仅在 `core/events/` 和 `main.cpp` 出现，实际仍有 8 处文件使用：`tui/core/terminal.cpp`、`tui/render/chat_renderer.cpp`、`agent/api/client.cpp`、`agent/api/remote/remote_backend.cpp`。
-
-**影响**：中。这些组件无法注入 Mock EventBus，单元测试覆盖率受限。
-
-**建议方案**：
-- Terminal 构造函数注入 `IEventBus&`，main.cpp 传入
-- ChatRenderer 改为 `publish` 通过 Terminal 代理，或直接注入
-- Client / RemoteBackend 注入 `IEventBus&`（与 ChatSession 同模式）
-
-### D-3：Terminal/SetupWizard/ModelSelector/工具内部仍依赖 `ConfigManager::instance()`
-
-**现象**：`ConfigManager::instance()` 在 9 处文件使用，包括 `tui/setup/setup_wizard.cpp`、`app/ui/model_selector.cpp`、`agent/tool/FileReadTool/file_read_tool.cpp` 等。
-
-**影响**：中。工具内部直接读全局配置，无法在测试中注入 Mock 配置。
-
-**建议方案**：
-- SetupWizard / ModelSelector 构造函数注入 `IConfigManager&`
-- 工具内部配置读取改为通过 ToolContext 传递（避免每次调用都访问单例）
-
-### D-4：`TaskManager::instance()` 在 Terminal 中残留
-
-**现象**：`tui/core/terminal.cpp:98` 调用 `TaskManager::instance().update()` 每帧清理任务。
-
-**影响**：低。Terminal 是 TUI 顶层组件，DI 化收益有限。
-
-**建议方案**：Terminal 构造函数注入 `ITaskManager&`，main.cpp 传入。
+**额外发现**：`logger.h:344` 闭合花括号注释 `} // namespace DearTs` 与 `namespace Agent` 声明不匹配，是命名空间历史改名的旁证
 
 ---
 
-## T 类：测试覆盖与质量
+## T 类：残余线程安全问题
 
-### T-4：MockConfigManager / MockEventBus / MockTaskManager 缺失
+| 编号 | 现象 | 文件:行号 | 影响 | 状态 |
+|------|------|-----------|------|------|
+| T-4 | `Terminal::m_running/m_initialized` 非 atomic | `terminal.h:184-185` | 低（实际同线程） | ⬜ 未修复 |
+| T-5 | `StreamingBuffer::stop()` flush 竞争 | `streaming_buffer.cpp:57-71` | — | ✅ 已安全（PHASE3 判定无需修复） |
+| T-6 | `Task::m_start_time` 非 atomic + 无 static_assert | `task_manager.h:146` | 低（单线程访问） | ⬜ 未修复 |
 
-**现象**：Phase 4 已完成接口抽取（IEventBus / IConfigManager / ITaskManager），但单元测试中无 Mock 实现，仍依赖单例。
-
-**影响**：中。无法隔离测试 ChatSession / TaskManager 的事件发布行为。
-
-**建议方案**：在 `tests/unit/helpers/` 下新增 `mock_event_bus.h` / `mock_config_manager.h` / `mock_task_manager.h`，使用 GoogleMock 或手写记录式 Mock。
-
-### T-5：性能基准测试缺失
-
-**现象**：Phase 6 计划补 token 吞吐 / 工具调用延迟 / 并行 vs 串行基准，但 Catch2 单元测试框架不适合微基准。
-
-**影响**：低。当前无回归检测手段，但功能正确。
-
-**建议方案**：
-- 引入 `Catch2 benchmark` 宏（`BENCHMARK`）做基础微基准
-- 或单独的 `tests/benchmark/` 目录用 google-benchmark
-- 关键场景：10 并发 BashTool / 1000 token 流式吞吐 / ReAct 5 轮循环
-
-### T-6：Linux 平台编译未验证
-
-**现象**：Phase 5 CMake 模块化仅在 Windows 验证，Linux 路径（`start_python_server_posix` 等）逻辑写了但未实测。
-
-**影响**：中。CI Linux 节点可能因路径或 fork 行为差异失败。
-
-**建议方案**：CI 添加 Linux 构建任务（Ubuntu 22.04 + gcc 11 + Catch2 v3）。
+**说明**：T-5 实现细节与 PHASE3 伪代码略有差异（用 `std::lock_guard` 而非 `atomic store`），但 PHASE3 §6.1 本就判定"当前实现安全"
 
 ---
 
-## I 类：集成测试覆盖
+## D 类：依赖注入深化
 
-### I-1：LM Studio LLM 推理测试需手动启动
+| 编号 | 现象 | 文件:行号 | 影响 | 状态 |
+|------|------|-----------|------|------|
+| D-2 | `main.cpp` 530 行手动组装，无工厂函数 | `src/app/main.cpp` | 中（维护成本） | ⬜ 未修复 |
+| D-3 | `IBackend` 胖接口未拆分 `IBackendAdmin` | `i_backend.h:22-50` | 中（接口隔离原则） | ⬜ 未修复 |
+| D-4 | Terminal/ChatRenderer/Client 依赖 `EventBus::instance()` | `tui/core/terminal.cpp` 等 8 处 | 中（无法 Mock） | ⬜ 未修复 |
+| D-5 | 工具内部直接读 `ConfigManager::instance()` | `setup_wizard.cpp` 等 9 处 | 中（无法 Mock） | ⬜ 未修复 |
+| D-6 | `Terminal` 残留 `TaskManager::instance()` | `terminal.cpp:98` | 低 | ⬜ 未修复 |
 
-**现象**：`test_client.cpp` 9 个 LLM 推理测试用例需手动启动 LM Studio 才能跑。
-
-**影响**：低。这些测试本质需要真实 LLM，无法在 CI 自动化。
-
-**建议方案**：
-- CI 跳过 `[integration]` 标签的 LLM 测试
-- 文档说明本地运行方式：`set LM_STUDIO_BASE_URL=http://127.0.0.1:1234 && workx_integration_tests.exe`
-
-### I-2：AutoTestServer 在 Linux 上未实测
-
-**现象**：`start_python_server_posix` 用 fork + pipe 实现，逻辑正确但未在 Linux 实测。
-
-**影响**：中。Linux CI 可能因 pipe 缓冲或信号处理差异失败。
-
-**建议方案**：见 T-6。
+**说明**：D-4/D-5/D-6 是 Phase 4 暂缓项，与 PHASE3 §7 D-2/D-3 编号有差异，本索引展开为独立项
 
 ---
 
-## 优先级建议
+## E 类：错误处理统一（V2 前置）
 
-| 优先级 | 项 | 理由 |
-|--------|-----|------|
-| P0 | T-6 + I-2 | Linux CI 是后续所有验证的基础 |
-| P1 | D-2 + D-3 + D-4 | 完成 DI 化才能解锁 T-4（Mock 测试） |
-| P1 | T-4 | Mock 测试是质量护栏 |
-| P2 | H-2 + H-3 | HTTP 客户端健壮性，影响生产稳定性 |
-| P2 | T-5 | 性能基准用于检测回归 |
-| P3 | L-1 + L-2 + L-3 | 代码质量改进，无紧迫性 |
-| P3 | E-5 + E-6 | 类型安全改进 |
-| P3 | H-1 | 连接池优化，性能提升 |
-| P3 | I-1 | 文档完善 |
+| 编号 | 现象 | 影响 | 状态 |
+|------|------|------|------|
+| E-1 | 4 种错误风格并存（异常/Result/optional/bool） | 中（V2 前置） | ⬜ 暂不实施（独立立项 V2） |
+| E-5 | `ExecutionResult` 字段语义模糊 | 低 | ⬜ 未修复 |
+| E-6 | `HttpResponse` 错误码与 HTTP 状态码混淆 | 低 | ⬜ 未修复 |
+
+---
+
+## Q 类：测试与 CI 质量
+
+| 编号 | 现象 | 影响 | 状态 |
+|------|------|------|------|
+| Q-1 | MockConfigManager/MockEventBus/MockTaskManager 缺失 | 中（无法隔离测试） | ⬜ 未修复 |
+| Q-2 | 性能基准测试缺失 | 低 | ⬜ 未修复 |
+| Q-3 | Linux 平台编译未验证 | 中（CI 风险） | ⬜ 未修复 |
+| Q-4 | AutoTestServer 在 Linux 上未实测 | 中 | ⬜ 未修复 |
+| Q-5 | LM Studio LLM 推理测试需手动启动 | 低 | ⬜ 文档化即可 |
+
+**说明**：Q 类整合了旧 TECH_DEBT_REGISTRY.md 的 T-4/T-5/T-6/I-1/I-2，避免与 PHASE3 的 T 类（线程安全）编号冲突
+
+---
+
+## 优先级矩阵
+
+| 优先级 | 项 | 理由 | 预估工期 |
+|--------|-----|------|----------|
+| **P0** | Q-3 + Q-4 | Linux CI 是后续所有验证的基础 | 2-3 天 |
+| **P1** | L-2 + L-3 + L-6 | 裸指针修复（低风险快速收益） | 2 天 |
+| **P1** | T-4 + T-6 | 防御性原子化 + static_assert | 0.5 天 |
+| **P1** | G-2 | Logger 析构 join（崩溃风险） | 0.5 天 |
+| **P2** | D-4 + D-5 + D-6 | DI 化补全（解锁 Mock 测试） | 3 天 |
+| **P2** | Q-1 | Mock 实现（依赖 D-4/D-5/D-6） | 2 天 |
+| **P2** | C-2 + C-3 + C-4 | 配置系统 Schema 化 | 3 天 |
+| **P2** | G-3 + G-4 | 日志命名空间统一 | 1 天 |
+| **P3** | H-1 + H-2 + H-3 + H-4 | HTTP 客户端演进 | 4 天 |
+| **P3** | D-2 + D-3 | main.cpp 工厂 + IBackendAdmin 拆分 | 2 天 |
+| **P3** | E-5 + E-6 | 错误处理类型安全 | 2 天 |
+| **P3** | Q-2 + Q-5 | 性能基准 + 文档 | 2 天 |
+| **V2** | E-1 | 错误处理统一（独立立项） | — |
+
+**总预估**：约 4-6 周（与 PHASE3 §9 路线图一致），可与业务需求并行推进
+
+---
+
+## 关联文档
+
+- `plan/PHASE3_LONG_TERM_REFACTOR.md` — 详细重构方案（6 周路线图）
+- `plan/ARCH_ANALYSIS_REPORT.md` — 架构分析报告（债务诊断依据）
+- `plan/ARCH_REFACTOR_PLAN.md` — Phase 1-6 已完成的重构记录
+- `plan/TASKS.md` — 可执行任务清单（按优先级排序）
