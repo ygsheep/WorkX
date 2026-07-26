@@ -9,15 +9,11 @@
 #include "agent/core/chat_session.h"
 #include "agent/core/react_loop.h"
 #include "agent/message/types.h"
+#include "agent/tool/tool_kind.h"
 #include "core/task/task_manager.h"
 #include "core/config/config_manager.h"
 
-#include "agent/core/chat_session.h"
-#include "agent/core/react_loop.h"
 #include "agent/api/i_backend.h"
-#include "agent/message/types.h"
-#include "core/task/task_manager.h"
-#include "core/config/config_manager.h"
 #include <nlohmann/json.hpp>
 
 #include <chrono>
@@ -33,7 +29,8 @@ namespace agent {
 namespace {
 
 /// @brief 根据工具名推断 ToolType（用于 ToolCallEvent）
-ToolType infer_tool_type(const std::string& name) {
+agent::tool::ToolType infer_tool_type(const std::string& name) {
+    using namespace agent::tool;
     if (name == "Read")  return ToolType::ReadFile;
     if (name == "Write") return ToolType::WriteFile;
     if (name == "Edit")  return ToolType::EditFile;

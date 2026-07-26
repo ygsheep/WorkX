@@ -1,16 +1,22 @@
 /**
  * @file types.h
- * @brief 消息与事件类型定义
- * @details 包含 ChatMessage / ToolUse 等消息类型，以及 UserInputEvent /
- *          StreamTokenEvent / StreamDoneEvent / StreamErrorEvent / ToolCallEvent
- *          等跨层通信事件类型。历史原因事件与消息类型同文件，本次保守保留不拆分。
- * @version 1.0.0
+ * @brief 跨层通信事件类型定义
+ * @details 包含 UserInputEvent / InterruptEvent / StreamTokenEvent /
+ *          StreamDoneEvent / StreamErrorEvent / ToolCallEvent /
+ *          ToolResultEvent / AgentStepEvent / AgentDoneEvent 等跨层事件。
+ *
+ *          注：ChatMessage / ToolUse / CompletionRequest / StreamChunk 等
+ *          消息与 DTO 类型位于 agent/api/chat_types.h；ToolType 枚举位于
+ *          agent/tool/tool_kind.h。本文件仅含事件类型。
+ * @version 1.1.0
  */
 
 #pragma once
 
 #include <string>
 #include <vector>
+
+#include "agent/tool/tool_kind.h"
 
 namespace agent {
 
@@ -81,23 +87,12 @@ struct AgentStepEvent {
     std::string description;
 };
 
-/// @brief 工具类型
-enum class ToolType {
-    ReadFile,       ///< 文件读取
-    WriteFile,      ///< 文件写入
-    EditFile,       ///< 文件编辑
-    Execute,        ///< Shell 命令
-    Search,         ///< 搜索（grep/find）
-    Agent,          ///< 子代理
-    Other           ///< 其他/未知
-};
-
 /// @brief Agent 调用工具
 struct ToolCallEvent {
     std::string tool_name;
     std::string arguments;
     std::string call_id;
-    ToolType tool_type = ToolType::Other;
+    agent::tool::ToolType tool_type = agent::tool::ToolType::Other;
 };
 
 /// @brief 工具返回结果
