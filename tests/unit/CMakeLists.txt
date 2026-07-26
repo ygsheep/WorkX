@@ -7,6 +7,7 @@ set(UNIT_TEST_SOURCES
     agent/api/test_openai_adapter.cpp
     agent/api/test_sse_parser.cpp
     agent/core/test_chat_session.cpp
+    agent/core/test_react_loop.cpp
     agent/command/test_command_system.cpp
     agent/model/test_provider_preset.cpp
     agent/model/test_model_config.cpp
