@@ -201,9 +201,16 @@ bool AnthropicAdapter::parse_sse_event(const std::string& event_type,
             // message_start：携带 input_tokens 初始值（Anthropic 用 input_tokens 而非 prompt_tokens）
             if (json_obj.contains("message") && !json_obj["message"].is_null()) {
                 const auto& message = json_obj.value("message", nlohmann::json::object());
+                // 记录 response_id（用于并行 tool_use 拆分识别）
+                if (message.contains("id") && !message["id"].is_null()) {
+                    out.response_id = message["id"].get<std::string>();
+                }
                 if (message.contains("usage") && !message["usage"].is_null()) {
                     const auto& usage = message.value("usage", nlohmann::json::object());
                     out.prompt_tokens = usage.value("input_tokens", 0);
+                    // 上下文管理：cache usage（prompt cache 命中时 input_tokens 不含 cache 部分）
+                    out.cache_creation_input_tokens = usage.value("cache_creation_input_tokens", 0);
+                    out.cache_read_input_tokens = usage.value("cache_read_input_tokens", 0);
                 }
             }
             return false;  // 不算有效 chunk，仅记录 input_tokens
@@ -221,6 +228,14 @@ bool AnthropicAdapter::parse_sse_event(const std::string& event_type,
                         out.generated_tokens = usage.value("output_tokens", 0);
                         // 新增：input_tokens（Anthropic 用 input_tokens 而非 prompt_tokens）
                         out.prompt_tokens = usage.value("input_tokens", 0);
+                        // 上下文管理：message_delta 的 usage 可能携带最终 cache 字段
+                        //（Anthropic 在 message_delta 中重新发布完整 usage）
+                        if (usage.contains("cache_creation_input_tokens")) {
+                            out.cache_creation_input_tokens = usage.value("cache_creation_input_tokens", 0);
+                        }
+                        if (usage.contains("cache_read_input_tokens")) {
+                            out.cache_read_input_tokens = usage.value("cache_read_input_tokens", 0);
+                        }
                     }
                     return true;
                 }
