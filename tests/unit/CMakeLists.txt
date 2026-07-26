@@ -13,6 +13,7 @@ set(UNIT_TEST_SOURCES
     agent/compact/test_token_count.cpp
     agent/tool/test_file_edit_tool.cpp
     core/config/test_config_manager.cpp
+    core/events/test_event_bus.cpp
     tui/core/test_display_buffer.cpp
     tui/render/test_markdown_renderer.cpp
     tui/utils/test_utf8_utils.cpp
