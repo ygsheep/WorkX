@@ -205,21 +205,22 @@ Result<std::vector<ModelInfo>, std::string> RemoteBackend::list_models() {
     }
 
     // 同步 GET 请求
-    auto [status_code, body, error] = m_http_client->get(url, header_pairs, 15000);
+    auto response = m_http_client->get(url, header_pairs, 15000);
 
-    if (!error.empty()) {
+    // E-6：用便捷方法判断错误类型，语义清晰
+    if (response.is_network_error()) {
         return Result<std::vector<ModelInfo>, std::string>::err(
-            std::format("HTTP request failed: {}", error));
+            std::format("HTTP request failed: {}", response.error));
     }
 
-    if (status_code >= 400) {
+    if (response.is_http_error()) {
         return Result<std::vector<ModelInfo>, std::string>::err(
-            std::format("HTTP error: {} ({})", status_code, body));
+            std::format("HTTP error: {} ({})", response.status_code, response.body));
     }
 
     // 解析 JSON 响应
     try {
-        auto json = nlohmann::json::parse(body);
+        auto json = nlohmann::json::parse(response.body);
         std::vector<ModelInfo> models;
 
         if (json.contains("data") && json["data"].is_array()) {

@@ -25,12 +25,44 @@ namespace agent::tool {
 ///          截断策略：保留头部和尾部（通常包含错误信息和总结），省略中间。
 constexpr size_t MAX_TOOL_RESULT_LENGTH = 8000;
 
-/// @brief 工具执行结果
+/// @brief 工具执行结果（E-5：字段语义清晰化）
+/// @details
+/// 字段语义说明（消除原 E-5 字段重叠歧义）：
+/// - `tool_name`：上下文信息，标识本次执行调用的工具（用于日志/UI 展示）
+/// - `result`：工具实际返回结果（含 ToolResult.is_error 字段）
+/// - `is_error`：**冗余缓存**，始终等于 `result.is_error`。
+///                保留是为了 UI 渲染层（chat_renderer/session_log）无需深入访问
+///                `result.is_error`，但调用方应优先使用 `is_ok()` / `is_error()` 便捷方法。
+/// - `was_truncated`：结果元信息，标记 `result.text` 是否被截断过。
+///                    ARCH_REFACTOR_PLAN.md V2 计划将其并入 ToolResult，
+///                    当前保留独立字段以维持向后兼容。
+///
+/// 推荐用法：
+/// @code
+///   auto r = executor.execute(name, input, ctx);
+///   if (r.is_ok()) {
+///       // 使用 r.result
+///   } else {
+///       // 错误处理，r.result.text 包含错误信息
+///   }
+///   if (r.is_truncated()) {
+///       LOG_WARN("result was truncated");
+///   }
+/// @endcode
 struct ExecutionResult {
-    std::string tool_name;                  ///< 工具名称
-    ToolResult result;                      ///< 工具返回结果
-    bool is_error{false};                   ///< 是否出错
-    bool was_truncated{false};              ///< 3.4：结果是否被截断
+    std::string tool_name;                  ///< 上下文：工具名称
+    ToolResult result;                      ///< 工具返回结果（权威错误状态来源）
+    bool is_error{false};                   ///< 冗余缓存：= result.is_error
+    bool was_truncated{false};              ///< 元信息：result.text 是否被截断
+
+    /// @brief 是否成功（与 `!is_error` 等价）
+    bool is_ok() const noexcept { return !is_error; }
+
+    /// @brief 结果是否被截断
+    bool is_truncated() const noexcept { return was_truncated; }
+
+    /// @brief 转换为 LLM 可读的文本（委托给 ToolResult::to_string）
+    std::string to_string() const { return result.to_string(); }
 };
 
 /// @brief 截断工具结果文本（保留头尾，省略中间）

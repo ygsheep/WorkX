@@ -7,6 +7,7 @@ set(UNIT_TEST_SOURCES
     app/test_factory.cpp
     agent/api/test_anthropic_adapter.cpp
     agent/api/test_openai_adapter.cpp
+    agent/api/test_http_response.cpp
     agent/api/test_retry_policy.cpp
     agent/api/test_sse_parser.cpp
     agent/core/test_chat_session.cpp
