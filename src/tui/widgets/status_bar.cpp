@@ -53,6 +53,11 @@ void StatusBar::set_token_count(int32_t count) {
     m_token_count = count;
 }
 
+void StatusBar::set_context_limit(int32_t limit) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_context_limit = limit;
+}
+
 void StatusBar::start_session_timer() {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_session_start = std::chrono::steady_clock::now();
@@ -192,7 +197,14 @@ std::string StatusBar::format_bar() const {
         now - m_session_start).count();
     std::string time_str = format_duration(elapsed);
 
-    int ctx_pct = std::min(m_token_count * 100 / 4096, 100);
+    // 上下文窗口：m_context_limit > 0 用配置值，否则按估算模式显示（不显示百分比/分母）
+    bool has_limit = m_context_limit > 0;
+    int32_t ctx_limit = has_limit ? m_context_limit : 0;
+    // 浮点百分比，避免小数据时整数除法得 0
+    double ctx_pct_d = has_limit
+        ? std::min(static_cast<double>(m_token_count) * 100.0 / ctx_limit, 100.0)
+        : 0.0;
+    int ctx_pct = static_cast<int>(ctx_pct_d);
     int filled = ctx_pct / 10;
 
     std::string bar_str;
@@ -200,11 +212,37 @@ std::string StatusBar::format_bar() const {
         bar_str += (i < filled) ? "\xe2\x96\x88" : "\xe2\x96\x91";
     }
 
+    // 百分比字符串：< 1% 时显示 1 位小数，否则显示整数
+    char pct_buf[16];
+    if (has_limit) {
+        if (ctx_pct_d < 1.0 && m_token_count > 0) {
+            snprintf(pct_buf, sizeof(pct_buf), "%.1f%%", ctx_pct_d);
+        } else {
+            snprintf(pct_buf, sizeof(pct_buf), "%d%%", ctx_pct);
+        }
+    }
+
+    // 绝对值显示：12k/200k 格式；未知窗口时只显示 ~12k
+    auto fmt_k = [](int32_t n) {
+        char buf[16];
+        if (n >= 1000) snprintf(buf, sizeof(buf), "%.0fk", n / 1000.0);
+        else snprintf(buf, sizeof(buf), "%d", n);
+        return std::string(buf);
+    };
+    std::string ctx_abs = has_limit
+        ? (fmt_k(m_token_count) + "/" + fmt_k(ctx_limit))
+        : ("~" + fmt_k(m_token_count));
+
     std::string bar = " "
         + green + "[" + m_model_name + "]" + reset
         + " \xe2\x94\x82 " + m_project_name
-        + " |Context " + bar_str
-        + " " + std::to_string(ctx_pct) + "%"
+        + " | Context " + bar_str;
+    if (has_limit) {
+        bar += " " + std::string(pct_buf);
+    } else {
+        bar += " \xe2\x80\x94";  // em dash，表示未知窗口
+    }
+    bar += gray + " (" + ctx_abs + ")" + reset
         + gray + " (" + time_str + ")" + reset;
 
     return bar;

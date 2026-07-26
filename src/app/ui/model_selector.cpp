@@ -7,6 +7,7 @@
  */
 
 #include <algorithm>
+#include <unordered_map>
 #include <vector>
 
 #include "agent/api/chat_types.h"
@@ -25,7 +26,7 @@ namespace agent {
 /// "Custom Model..." 选项的 sentinel id
 static constexpr const char* CUSTOM_MODEL_ID = "__custom__";
 
-std::string select_model_interactive(
+ModelSelection select_model_interactive(
     Terminal* term, Screen* scr, IBackend* bk,
     const std::string& current_model)
 {
@@ -55,7 +56,7 @@ std::string select_model_interactive(
         term->set_color(ColorRole::Error);
         term->write("No API URL configured. Use --provider or --remote first.\n");
         term->reset_color();
-        return "";
+        return {};
     }
 
     int scroll_bottom = term->get_terminal_height() - 3;
@@ -65,15 +66,20 @@ std::string select_model_interactive(
     scr->write(0, 2, "Fetching models...", ColorRole::StatusBar);
     scr->flush();
 
-    // 获取模型列表
+    // 获取模型列表，同时保留 context_length（如有）
     std::vector<std::string> model_names;
+    std::unordered_map<std::string, int32_t> ctx_len_map;
     auto result = bk ? bk->list_models() : Result<std::vector<ModelInfo>, std::string>::err("No backend");
 
     if (result.isOk()) {
         auto models = result.unwrap();
         model_names.reserve(models.size());
-        std::transform(models.begin(), models.end(), std::back_inserter(model_names),
-            [](auto& m) { return std::move(m.name); });
+        for (auto& m : models) {
+            if (m.context_length > 0) {
+                ctx_len_map[m.name] = m.context_length;
+            }
+            model_names.push_back(std::move(m.name));
+        }
     }
 
     if (model_names.empty()) {
@@ -103,43 +109,85 @@ std::string select_model_interactive(
     }
 
     // 交互循环
+    // 两阶段输入：phase=0 输入模型名，phase=1 输入 context_length（可选）
+    int input_phase = 0;
+    std::string custom_name;
     while (true) {
         select_panel.render();
         char32_t key = term->platform()->read_char();
 
         if (select_panel.is_input_mode()) {
-            // ---- 输入模式 ----
+            // ---- 输入模式（Custom Model...）----
             switch (key) {
                 case KEY_ENTER: {
                     std::string text = select_panel.get_input_text();
-                    if (!text.empty()) {
+                    if (input_phase == 0) {
+                        // 阶段 0：模型名
+                        if (!text.empty()) {
+                            custom_name = std::move(text);
+                            input_phase = 1;
+                            // 切换到 context_length 输入
+                            select_panel.set_title("Context Length (tokens, Enter to skip)");
+                            select_panel.activate_input_mode();  // 清空 buffer
+                        }
+                    } else {
+                        // 阶段 1：context_length（可选，Enter 跳过=0）
+                        int32_t ctx_len = 0;
+                        if (!text.empty()) {
+                            try {
+                                ctx_len = static_cast<int32_t>(std::stoi(text));
+                                if (ctx_len < 0) ctx_len = 0;
+                            } catch (...) {
+                                ctx_len = 0;
+                            }
+                        }
                         select_panel.dismiss();
                         term->end_overlay();
                         scr->reset_buffers();
-                        return text;
+                        return ModelSelection{
+                            .name = std::move(custom_name),
+                            .context_length = ctx_len
+                        };
                     }
                     break;
                 }
                 case KEY_ESC:
                 case KEY_CTRL_C:
+                    if (input_phase == 1) {
+                        // 阶段 1 按 Esc：跳过 context_length，直接返回（仅模型名）
+                        select_panel.dismiss();
+                        term->end_overlay();
+                        scr->reset_buffers();
+                        return ModelSelection{
+                            .name = std::move(custom_name),
+                            .context_length = 0
+                        };
+                    }
                     select_panel.deactivate_input_mode();
                     break;
                 case 0x08: case 0x7F:  // Backspace
                     select_panel.input_backspace();
                     break;
                 default:
-                    if (key >= 0x20 && key <= 0x7E) {
+                    // 阶段 1 只允许输入数字
+                    if (input_phase == 1) {
+                        if (key >= '0' && key <= '9') {
+                            select_panel.input_char(key);
+                        }
+                    } else if (key >= 0x20 && key <= 0x7E) {
                         select_panel.input_char(key);
                     }
                     break;
             }
         } else {
             // ---- 选择模式 ----
+            // 单 tab 场景下 Tab 无意义，降级为向下导航；
+            // Space 直接确认（fall-through 到 Enter 逻辑），与提示语义一致
             switch (key) {
                 case KEY_UP:    select_panel.move_up(); break;
                 case KEY_DOWN:  select_panel.move_down(); break;
-                case KEY_TAB:   select_panel.next_tab(); break;
-                case KEY_SPACE: select_panel.toggle_current(); break;
+                case KEY_TAB:   select_panel.move_down(); break;
+                case KEY_SPACE:
                 case KEY_ENTER: {
                     std::string chosen;
                     auto selected_ids = select_panel.get_selected_ids();
@@ -151,6 +199,9 @@ std::string select_model_interactive(
                         }
                     }
                     if (chosen == CUSTOM_MODEL_ID) {
+                        input_phase = 0;
+                        custom_name.clear();
+                        select_panel.set_title("Enter Model Name");
                         select_panel.activate_input_mode();
                         break;
                     }
@@ -158,7 +209,12 @@ std::string select_model_interactive(
                         select_panel.dismiss();
                         term->end_overlay();
                         scr->reset_buffers();
-                        return chosen;
+                        int32_t ctx_len = 0;
+                        auto map_it = ctx_len_map.find(chosen);
+                        if (map_it != ctx_len_map.end()) {
+                            ctx_len = map_it->second;
+                        }
+                        return ModelSelection{.name = std::move(chosen), .context_length = ctx_len};
                     }
                     break;
                 }
@@ -166,7 +222,7 @@ std::string select_model_interactive(
                     select_panel.dismiss();
                     term->end_overlay();
                     scr->reset_buffers();
-                    return "";
+                    return {};
                 default: break;
             }
         }

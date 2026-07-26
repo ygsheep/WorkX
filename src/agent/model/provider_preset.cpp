@@ -18,40 +18,54 @@ static const ProviderPreset s_presets[] = {
         .display_name  = "OpenAI",
         .type          = ProviderType::OpenAI,
         .default_url   = "https://api.openai.com",
-        .default_model = "gpt-4o-2024-11-20",  // F.9: 2025-01 更新，原 gpt-4o
-        .api_path      = "/v1/chat/completions"
+        .default_model = "gpt-5",  // 2025-08 发布，400K 上下文
+        .api_path      = "/v1/chat/completions",
+        .default_context_length = 400000  // GPT-5 系列
     },
     {
         .name          = "anthropic",
         .display_name  = "Anthropic",
         .type          = ProviderType::Anthropic,
         .default_url   = "https://api.anthropic.com",
-        .default_model = "claude-sonnet-4-5-20250929",  // F.9: 2025-09 更新，原 claude-sonnet-4-20250514
-        .api_path      = "/v1/messages"
+        .default_model = "claude-opus-4-5-20251101",  // 2025-11-25 发布，旗舰编码模型
+        .api_path      = "/v1/messages",
+        .default_context_length = 200000  // Claude 4.5 系列（1M 需 beta 申请）
     },
     {
         .name          = "deepseek",
         .display_name  = "DeepSeek",
         .type          = ProviderType::OpenAI,
         .default_url   = "https://api.deepseek.com",
-        .default_model = "deepseek-chat",  // DeepSeek 自动指向最新版本，无需日期后缀
-        .api_path      = "/v1/chat/completions"
+        .default_model = "deepseek-v4-flash",  // DeepSeek V4-Flash (2026-04-24) 非思考模式，1M context
+        .api_path      = "/v1/chat/completions",
+        .default_context_length = 1000000  // DeepSeek V4 系列 1M
     },
     {
         .name          = "groq",
         .display_name  = "Groq",
         .type          = ProviderType::OpenAI,
         .default_url   = "https://api.groq.com/openai",
-        .default_model = "llama-3.3-70b-versatile",
-        .api_path      = "/v1/chat/completions"
+        .default_model = "llama-4-maverick-17b-128e-instruct",  // Llama 4 Maverick，1M 上下文
+        .api_path      = "/v1/chat/completions",
+        .default_context_length = 1000000  // Llama 4 Maverick 1M
     },
     {
         .name          = "together",
         .display_name  = "Together AI",
         .type          = ProviderType::OpenAI,
         .default_url   = "https://api.together.xyz",
-        .default_model = "mistralai/Mixtral-8x22B-Instruct-v0.1",
-        .api_path      = "/v1/chat/completions"
+        .default_model = "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
+        .api_path      = "/v1/chat/completions",
+        .default_context_length = 1000000  // Llama 4 Maverick 1M
+    },
+    {
+        .name          = "glm",
+        .display_name  = "智谱 GLM (Z.ai)",
+        .type          = ProviderType::OpenAI,
+        .default_url   = "https://open.bigmodel.cn/api/paas/v4",
+        .default_model = "glm-5.2",  // GLM-5.2 (2026-06-13) 旗舰编码模型，1M context
+        .api_path      = "/chat/completions",
+        .default_context_length = 1000000  // GLM-5.2 系列 1M
     },
     {
         .name          = "lm-studio",

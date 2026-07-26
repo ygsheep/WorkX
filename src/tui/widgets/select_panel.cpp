@@ -203,11 +203,12 @@ void SelectPanel::render() {
 
     // 提示行
     if (m_input_mode) {
-        m_screen->write(row, 1, "Type model ID  Enter confirm  Esc back",
-                        ColorRole::Dim);
+        m_screen->write(row, 1,
+            "\xe8\xbe\x93\xe5\x85\xa5\xe6\xa8\xa1\xe5\x9e\x8b ID  \xe5\x9b\x9e\xe8\xbd\xa6 \xe7\xa1\xae\xe8\xae\xa4  Esc \xe8\xbf\x94\xe5\x9b\x9e",
+            ColorRole::Dim);
     } else {
         m_screen->write(row, 1,
-            "\xe2\x86\x91\xe2\x86\x93 navigate  Tab switch  Space select  Enter confirm  Esc cancel",
+            "\xe2\x86\x91\xe2\x86\x93 \xe5\xaf\xbc\xe8\x88\xaa  Tab \xe5\x90\x91\xe4\xb8\x8b  \xe7\xa9\xba\xe6\xa0\xbc/\xe5\x9b\x9e\xe8\xbd\xa6 \xe7\xa1\xae\xe8\xae\xa4  Esc \xe5\x8f\x96\xe6\xb6\x88",
             ColorRole::Dim);
     }
 

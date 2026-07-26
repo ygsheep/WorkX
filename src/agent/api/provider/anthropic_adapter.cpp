@@ -244,10 +244,16 @@ bool AnthropicAdapter::parse_sse_event(const std::string& event_type,
 std::vector<ModelInfo> AnthropicAdapter::get_builtin_models() const {
     // Anthropic 无公开 list_models 端点，返回内置 Claude 模型列表
     // 注意：Anthropic 发布新模型时需手动更新此列表
+    // 最后更新：2026-07-21
     return {
-        {.name = "claude-sonnet-4-5-20250929", .description = "Anthropic Claude Sonnet 4.5", .context_length = 200000},
-        {.name = "claude-opus-4-1-20250805",   .description = "Anthropic Claude Opus 4.1",   .context_length = 200000},
-        {.name = "claude-haiku-4-5-20251001",  .description = "Anthropic Claude Haiku 4.5",  .context_length = 200000},
+        // 2025-11 旗舰编码模型
+        {.name = "claude-opus-4-5-20251101",   .description = "Anthropic Claude Opus 4.5 (旗舰编码/Agent)",   .context_length = 200000},
+        // 2025-09 Sonnet 4.5（1M 上下文需 beta 头申请）
+        {.name = "claude-sonnet-4-5-20250929", .description = "Anthropic Claude Sonnet 4.5 (1M beta)",         .context_length = 200000},
+        // 2025-10 Haiku 4.5 轻量快速
+        {.name = "claude-haiku-4-5-20251001",  .description = "Anthropic Claude Haiku 4.5 (轻量快速)",         .context_length = 200000},
+        // 2025-08 Opus 4.1 上一代旗舰
+        {.name = "claude-opus-4-1-20250805",   .description = "Anthropic Claude Opus 4.1 (上一代旗舰)",         .context_length = 200000},
     };
 }
 

@@ -26,6 +26,7 @@ namespace keys {
     constexpr const char* API_KEY      = "backend.api_key";
     constexpr const char* PROVIDER     = "backend.provider";
     constexpr const char* TIMEOUT_MS   = "backend.timeout_ms";
+    constexpr const char* CONTEXT_LENGTH = "backend.context_length";  // 模型上下文窗口（token），覆盖 preset 默认值
 
     // Retry
     constexpr const char* RETRY_COUNT    = "backend.retry_count";

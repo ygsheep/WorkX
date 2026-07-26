@@ -254,12 +254,16 @@ static int run(int argc, char* argv[]) {
 
     // ---- 启动时模型选择（model_name 为空时触发） ----
     if (g_backend && model_name.empty()) {
-        std::string chosen = select_model_interactive(
+        ModelSelection sel = select_model_interactive(
             &terminal, &screen, g_backend, model_name);
-        if (!chosen.empty()) {
-            cfg.set(keys::MODEL_NAME, chosen);
-            g_backend->set_model_name(chosen);
-            model_name = chosen;
+        if (!sel.name.empty()) {
+            cfg.set(keys::MODEL_NAME, sel.name);
+            g_backend->set_model_name(sel.name);
+            model_name = sel.name;
+            // 持久化用户选择的 context_length（若 selector 返回了有效值）
+            if (sel.context_length > 0) {
+                cfg.set(keys::CONTEXT_LENGTH, static_cast<int>(sel.context_length));
+            }
             cfg.save_to_file(default_config_path());
         }
     }
@@ -316,6 +320,15 @@ static int run(int argc, char* argv[]) {
         sb->set_model_name(model_name.empty() ? "unknown" : model_name);
         namespace fs = std::filesystem;
         sb->set_project_name(fs::current_path().filename().string());
+
+        // 上下文窗口：用户配置 backend.context_length 优先，否则用 preset 默认值
+        int32_t ctx_len = cfg.get_or<int>(keys::CONTEXT_LENGTH, 0);
+        if (ctx_len <= 0 && preset && preset->default_context_length > 0) {
+            ctx_len = preset->default_context_length;
+        }
+        if (ctx_len > 0) {
+            sb->set_context_limit(ctx_len);
+        }
     }
 
     // 注册内置系统命令（help/exit/quit/clear/regen/model）
@@ -324,25 +337,34 @@ static int run(int argc, char* argv[]) {
     sys_ctx.on_exit = []() {
         EventBus::instance().publish(ShutdownEvent{.force = false});
     };
-    sys_ctx.on_model_select = [&terminal, &screen, &g_backend, &cfg, &renderer]() {
+    sys_ctx.on_model_select = [&terminal, &screen, &g_backend, &cfg, &renderer, &preset]() {
         if (!g_backend) {
             terminal.set_color(ColorRole::Error);
             terminal.write("No backend configured. Use --provider first.\n");
             terminal.reset_color();
             return;
         }
-        std::string chosen = select_model_interactive(
+        ModelSelection sel = select_model_interactive(
             &terminal, &screen, g_backend,
             cfg.get_or<std::string>(keys::MODEL_NAME, ""));
-        if (!chosen.empty()) {
-            cfg.set(keys::MODEL_NAME, chosen);
-            if (g_backend) g_backend->set_model_name(chosen);
+        if (!sel.name.empty()) {
+            cfg.set(keys::MODEL_NAME, sel.name);
+            if (g_backend) g_backend->set_model_name(sel.name);
             if (auto* sb = renderer.status_bar()) {
-                sb->set_model_name(chosen);
+                sb->set_model_name(sel.name);
+                // 上下文窗口：selector 返回值优先，否则回退到 preset 默认值
+                int32_t ctx_len = sel.context_length;
+                if (ctx_len <= 0 && preset && preset->default_context_length > 0) {
+                    ctx_len = preset->default_context_length;
+                }
+                if (ctx_len > 0) {
+                    sb->set_context_limit(ctx_len);
+                    cfg.set(keys::CONTEXT_LENGTH, static_cast<int>(ctx_len));
+                }
             }
             cfg.save_to_file(default_config_path());
             terminal.set_color(ColorRole::System);
-            terminal.write(std::format("Model set to: {}\n", chosen));
+            terminal.write(std::format("Model set to: {}\n", sel.name));
             terminal.reset_color();
         }
     };
@@ -469,7 +491,7 @@ static int run(int argc, char* argv[]) {
     terminal.run();
 
     // ---- 清理 ----
-    // 顺序：unsubscribe → cancelAll → waitForAll → clear EventBus → restore
+    // 顺序：unsubscribe → cancelAll → waitForAll → renderer.stop → clear EventBus → restore
     // 先取消订阅，避免 cancelAll 触发的事件进入已失效的回调
     EventBus::instance().unsubscribe<UserInputEvent>(input_token);
     EventBus::instance().unsubscribe<ShutdownEvent>(shutdown_token);
@@ -478,6 +500,10 @@ static int run(int argc, char* argv[]) {
     // 这样任务完成时发的 UI 事件还能正常处理
     TaskManager::instance().cancelAll();
     TaskManager::instance().waitForAll();
+
+    // 显式停止 ChatRenderer，确保 StreamingBuffer/Spinner 线程在 EventBus
+    // 和 Terminal 仍可用时完成 join + flush，避免栈析构时触发 CRT 断点
+    renderer.stop();
 
     // 清空 EventBus 订阅，防止后续异步事件触发已失效的回调
     EventBus::instance().clear();

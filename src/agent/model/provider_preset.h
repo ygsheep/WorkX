@@ -28,6 +28,7 @@ struct ProviderPreset {
     std::string api_path;           ///< API 路径，如 "/v1/chat/completions"
     int timeout_ms = 0;             ///< 预设超时（毫秒），0 表示使用全局默认
     int retry_delay_ms = 0;         ///< 预设重试延迟（毫秒），0 表示使用全局默认
+    int32_t default_context_length = 0;  ///< 默认模型上下文窗口（token），0 表示未知
 };
 
 /// @brief 构建完整的 Preset URL（base_url + api_path，去重尾部 /）

@@ -254,6 +254,16 @@ private:
         TokenCallback on_token
     );
 
+    /// @brief Fallback：从 content 文本中扫描内嵌的 JSON 工具调用
+    /// @details 当本地推理后端未走标准 delta.tool_calls 协议时，模型可能在
+    ///          content 中输出 JSON 形式的工具调用。本函数扫描 content 中的
+    ///          JSON 对象，识别 {"name":"...","arguments":{...}} 或
+    ///          {"tool":"...","input":{...}} 形式的块并转为 ToolUse
+    /// @param content LLM 文本输出
+    /// @param out_tools [out] 解析到的 ToolUse 列表
+    static void parse_embedded_tool_calls(const std::string& content,
+                                          std::vector<ToolUse>& out_tools);
+
     // ============================================================
     // 成员
     // ============================================================

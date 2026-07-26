@@ -100,6 +100,9 @@ std::string OpenAIAdapter::build_request_body(const CompletionRequest& request,
             });
         }
         j["tools"] = std::move(tools_arr);
+        // 显式声明 tool_choice=auto：部分本地推理后端（lm-studio / llama.cpp）
+        // 在未显式声明时会倾向于用文字描述工具调用而非走标准 function calling 协议
+        j["tool_choice"] = "auto";
     }
 
     if (request.max_tokens > 0) {

@@ -9,6 +9,7 @@
 #include "agent/core/react_loop.h"
 #include "agent/api/i_stream_reader.h"
 
+#include <cctype>
 #include <filesystem>
 #include <format>
 #include <thread>
@@ -167,7 +168,117 @@ ReActLoop::ThoughtResult ReActLoop::execute_thought(
         result.tool_uses.push_back(std::move(tu));
     }
 
+    // Fallback：若模型未走标准 tool_calls 协议（部分本地推理后端如 lm-studio /
+    // llama.cpp 在 auto 模式下会用文本内嵌 JSON 描述工具调用），从 content 中
+    // 扫描形如 {"name":"Write","arguments":{...}} 或 {"tool":"Write","input":{...}}
+    // 的 JSON 块解析为 ToolUse
+    if (result.tool_uses.empty() && !result.content.empty()) {
+        parse_embedded_tool_calls(result.content, result.tool_uses);
+    }
+
     return result;
+}
+
+// ============================================================
+// parse_embedded_tool_calls — 文本内嵌工具调用 fallback 解析
+// ============================================================
+
+void ReActLoop::parse_embedded_tool_calls(const std::string& content,
+                                          std::vector<ToolUse>& out_tools) {
+    out_tools.clear();
+
+    // 扫描 content 中的每个 '{' 尝试解析为 JSON 对象
+    // 识别 { "name": "Write", "arguments": {...} } 或 { "tool": "Write", "input": {...} }
+    // 兼容 GLM / Qwen / Llama 等 GGUF 模型常见内嵌格式
+    for (size_t i = 0; i < content.size(); ++i) {
+        if (content[i] != '{') continue;
+
+        // 尝试从此处解析 JSON，需要找到匹配的 '}'
+        int depth = 0;
+        size_t j = i;
+        bool in_string = false;
+        bool escape = false;
+        for (; j < content.size(); ++j) {
+            char c = content[j];
+            if (escape) { escape = false; continue; }
+            if (c == '\\') { escape = true; continue; }
+            if (c == '"') { in_string = !in_string; continue; }
+            if (in_string) continue;
+            if (c == '{') depth++;
+            else if (c == '}') {
+                depth--;
+                if (depth == 0) break;  // 闭合
+            }
+        }
+        if (depth != 0) continue;  // 未配对，跳过
+
+        std::string json_str = content.substr(i, j - i + 1);
+        nlohmann::json obj;
+        try {
+            obj = nlohmann::json::parse(json_str);
+        } catch (...) {
+            continue;  // 不是合法 JSON，跳过
+        }
+        if (!obj.is_object()) continue;
+
+        // 识别工具名字段：name / tool / function
+        std::string tool_name = obj.value("name", "");
+        if (tool_name.empty()) tool_name = obj.value("tool", "");
+        if (tool_name.empty()) {
+            // OpenAI 风格：{"type":"function","function":{"name":"...","arguments":"..."}}
+            if (obj.contains("function") && obj["function"].is_object()) {
+                tool_name = obj["function"].value("name", "");
+            }
+        }
+        if (tool_name.empty()) {
+            // 可能有 reasoning text 中的 JSON，但不是 tool 调用，跳过
+            continue;
+        }
+
+        // 识别参数字段：arguments / input / parameters
+        nlohmann::json tool_input;
+        if (obj.contains("arguments")) {
+            const auto& args = obj["arguments"];
+            if (args.is_string()) {
+                // arguments 可能是 JSON 字符串
+                try { tool_input = nlohmann::json::parse(args.get<std::string>()); }
+                catch (...) { tool_input = nlohmann::json::object(); }
+            } else if (args.is_object()) {
+                tool_input = args;
+            }
+        } else if (obj.contains("input") && obj["input"].is_object()) {
+            tool_input = obj["input"];
+        } else if (obj.contains("parameters") && obj["parameters"].is_object()) {
+            tool_input = obj["parameters"];
+        } else if (obj.contains("function") && obj["function"].is_object()) {
+            const auto& func = obj["function"];
+            if (func.contains("arguments")) {
+                const auto& args = func["arguments"];
+                if (args.is_string()) {
+                    try { tool_input = nlohmann::json::parse(args.get<std::string>()); }
+                    catch (...) { tool_input = nlohmann::json::object(); }
+                } else if (args.is_object()) {
+                    tool_input = args;
+                }
+            }
+        } else {
+            tool_input = nlohmann::json::object();
+        }
+
+        if (!tool_input.is_object()) tool_input = nlohmann::json::object();
+
+        // 排除明显不是工具调用的误识别（如 tool_name 为 "type" 等保留字）
+        // 要求工具名至少 2 个字符且首字符为字母
+        if (tool_name.size() < 2 || !std::isalpha(static_cast<unsigned char>(tool_name[0]))) {
+            continue;
+        }
+
+        ToolUse tu;
+        tu.id = "embedded_" + std::to_string(out_tools.size());
+        tu.name = std::move(tool_name);
+        tu.input = std::move(tool_input);
+        out_tools.push_back(std::move(tu));
+    }
 }
 
 // ============================================================

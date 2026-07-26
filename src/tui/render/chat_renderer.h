@@ -75,6 +75,7 @@ private:
     std::unique_ptr<EventToken> m_token_tool_call;
     std::unique_ptr<EventToken> m_token_tool_result;
     std::unique_ptr<EventToken> m_token_agent_done;
+    std::unique_ptr<EventToken> m_token_user_input;  ///< 用户输入事件（用于本地 token 估算）
 
     // 状态机
     TuiStateMachine m_state_machine;
