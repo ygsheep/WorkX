@@ -152,6 +152,33 @@ public:
         m_async_queue.clear();
     }
 
+    // === 调试 / 诊断接口（G-1）===
+    // 用于测试失败时输出 EventBus 内部状态，便于定位问题
+
+    /// @brief 异步事件队列当前积压数量
+    [[nodiscard]] size_t async_queue_size() const {
+        std::lock_guard<std::mutex> lock(m_async_mutex);
+        return m_async_queue.size();
+    }
+
+    /// @brief 指定事件类型的订阅者数量
+    template<typename T>
+    [[nodiscard]] size_t subscriber_count() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_callbacks.find(typeid(T));
+        return it != m_callbacks.end() ? it->second.size() : 0;
+    }
+
+    /// @brief 全部事件类型的订阅者总数
+    [[nodiscard]] size_t total_subscriber_count() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        size_t total = 0;
+        for (const auto& [_, callbacks] : m_callbacks) {
+            total += callbacks.size();
+        }
+        return total;
+    }
+
 private:
     EventBus() = default;
     ~EventBus() = default;
@@ -161,11 +188,11 @@ private:
         EventToken::ID token_id;
     };
 
-    std::mutex m_mutex;
+    mutable std::mutex m_mutex;
     EventToken::ID m_next_token_id = 1;
     std::unordered_map<std::type_index, std::vector<CallbackWrapper>> m_callbacks;
 
-    std::mutex m_async_mutex;
+    mutable std::mutex m_async_mutex;
     std::vector<std::function<void()>> m_async_queue;
 };
 

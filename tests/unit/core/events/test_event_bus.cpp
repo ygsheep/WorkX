@@ -387,3 +387,63 @@ TEST_CASE("EventToken move transfers ownership", "[event_bus][token]") {
     REQUIRE(token_b.get_id() == 42);
     REQUIRE_FALSE(token_a.is_valid());  // moved-from
 }
+
+// ============================================================================
+// 诊断接口（G-1）：测试失败时可用于输出 EventBus 内部状态
+// ============================================================================
+
+TEST_CASE_METHOD(EventBusFixture, "EventBus async_queue_size reflects queue backlog", "[event_bus][debug]") {
+    // 初始队列为空
+    REQUIRE(EventBus::instance().async_queue_size() == 0);
+
+    // 入队 3 个异步事件，未消费
+    EventBus::instance().publish_async(TestEvent{.value = 1});
+    EventBus::instance().publish_async(TestEvent{.value = 2});
+    EventBus::instance().publish_async(TestEvent{.value = 3});
+    REQUIRE(EventBus::instance().async_queue_size() == 3);
+
+    // 消费后队列清空
+    EventBus::instance().process_async_events();
+    REQUIRE(EventBus::instance().async_queue_size() == 0);
+}
+
+TEST_CASE_METHOD(EventBusFixture, "EventBus subscriber_count tracks subscribe/unsubscribe", "[event_bus][debug]") {
+    REQUIRE(EventBus::instance().subscriber_count<TestEvent>() == 0);
+    REQUIRE(EventBus::instance().subscriber_count<AnotherEvent>() == 0);
+    REQUIRE(EventBus::instance().total_subscriber_count() == 0);
+
+    auto t1 = EventBus::instance().subscribe<TestEvent>([](const TestEvent&) {});
+    REQUIRE(EventBus::instance().subscriber_count<TestEvent>() == 1);
+    REQUIRE(EventBus::instance().total_subscriber_count() == 1);
+
+    auto t2 = EventBus::instance().subscribe<TestEvent>([](const TestEvent&) {});
+    auto t3 = EventBus::instance().subscribe<AnotherEvent>([](const AnotherEvent&) {});
+    REQUIRE(EventBus::instance().subscriber_count<TestEvent>() == 2);
+    REQUIRE(EventBus::instance().subscriber_count<AnotherEvent>() == 1);
+    REQUIRE(EventBus::instance().total_subscriber_count() == 3);
+
+    EventBus::instance().unsubscribe<TestEvent>(t1);
+    REQUIRE(EventBus::instance().subscriber_count<TestEvent>() == 1);
+    REQUIRE(EventBus::instance().total_subscriber_count() == 2);
+
+    EventBus::instance().unsubscribe<TestEvent>(t2);
+    EventBus::instance().unsubscribe<AnotherEvent>(t3);
+    REQUIRE(EventBus::instance().subscriber_count<TestEvent>() == 0);
+    REQUIRE(EventBus::instance().subscriber_count<AnotherEvent>() == 0);
+    REQUIRE(EventBus::instance().total_subscriber_count() == 0);
+}
+
+TEST_CASE_METHOD(EventBusFixture, "EventBus clear resets all debug counters", "[event_bus][debug]") {
+    auto t = EventBus::instance().subscribe<TestEvent>([](const TestEvent&) {});
+    EventBus::instance().publish_async(TestEvent{});
+    EventBus::instance().publish_async(TestEvent{});
+
+    REQUIRE(EventBus::instance().subscriber_count<TestEvent>() == 1);
+    REQUIRE(EventBus::instance().async_queue_size() == 2);
+
+    EventBus::instance().clear();
+
+    REQUIRE(EventBus::instance().subscriber_count<TestEvent>() == 0);
+    REQUIRE(EventBus::instance().async_queue_size() == 0);
+    REQUIRE(EventBus::instance().total_subscriber_count() == 0);
+}
