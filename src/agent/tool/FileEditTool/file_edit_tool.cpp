@@ -45,19 +45,6 @@ namespace {
 /// @details 防止 OOM；C++ 虽无 V8 字符串长度限制，但为对齐源码行为保留。
 constexpr size_t MAX_EDIT_FILE_SIZE_BYTES = 1ull * 1024 * 1024 * 1024;
 
-/// @brief 读取文件原始字节流
-/// @details 用于行尾检测与 LF 规范化的输入。binary 模式避免平台转换。
-/// @param path 文件路径
-/// @return 原始字节流；读取失败返回空字符串
-std::string read_file_raw(const fs::path& path) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file.is_open()) return {};
-    return std::string{
-        std::istreambuf_iterator<char>(file),
-        std::istreambuf_iterator<char>()
-    };
-}
-
 /// @brief 读取文件并 LF 规范化（保留末尾换行）
 /// @details 用于 old_string 匹配与写回内容生成：
 ///          1. 检测文件编码（UTF-8/UTF-16LE/BE/GBK），解码为 UTF-8

@@ -68,12 +68,14 @@ TEST_CASE("ConfigManager validation", "[config]") {
     cfg.register_meta("test.validated", {
         .description = "Test validated key",
         .default_value = 10,
+        .is_required = false,
         .validate_callback = [](const ConfigValue& v) -> Result<void, std::string> {
             if (std::holds_alternative<int>(v) && std::get<int>(v) < 0) {
                 return Result<void, std::string>::err("must be >= 0");
             }
             return Result<void, std::string>::ok();
-        }
+        },
+        .change_callback = {}
     });
 
     SECTION("valid value accepted") {

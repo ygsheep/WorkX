@@ -8,6 +8,7 @@
 #include "tui/utils/utf8_utils.h"
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <format>
 #include <numeric>
 #include <sstream>
@@ -650,7 +651,8 @@ std::string render_list_item(std::string_view line) {
 std::string render_code_block(std::string_view lang,
                                const std::vector<std::string>& lines,
                                int max_width) {
-    (void)lang;  // 不显示语言标签
+    (void)lang;       // 不显示语言标签
+    (void)max_width;  // 当前实现未按宽度截断
     std::ostringstream os;
 
     // 1. 整块交给语法高亮器（按 lang 选 grammar，未知 lang 原样返回）

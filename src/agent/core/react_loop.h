@@ -182,7 +182,12 @@ public:
     /// @param config 循环配置
     ReActLoop(ICompletionProvider* provider,
               std::shared_ptr<tool::ToolRegistry> registry,
-              Config config = {});
+              Config config);
+
+    /// @brief 构造（使用默认配置）
+    ReActLoop(ICompletionProvider* provider,
+              std::shared_ptr<tool::ToolRegistry> registry)
+        : ReActLoop(provider, std::move(registry), Config{}) {}
 
     ~ReActLoop() = default;
 

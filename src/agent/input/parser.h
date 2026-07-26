@@ -20,7 +20,7 @@ public:
         std::string trimmed = trim(input);
 
         if (trimmed.empty()) {
-            return {.type = InputType::Empty};
+            return {.type = InputType::Empty, .text = {}, .command = {}, .attachments = {}, .image_paths = {}};
         }
 
         // 检查是否为斜杠命令
@@ -28,7 +28,10 @@ public:
             if (auto cmd = parse_slash_command(trimmed)) {
                 return {
                     .type = InputType::SlashCommand,
+                    .text = {},
                     .command = std::move(cmd),
+                    .attachments = {},
+                    .image_paths = {},
                 };
             }
         }
@@ -38,6 +41,9 @@ public:
             return {
                 .type = InputType::BashCommand,
                 .text = trimmed.substr(1),
+                .command = {},
+                .attachments = {},
+                .image_paths = {},
             };
         }
 
@@ -46,6 +52,7 @@ public:
         return {
             .type = InputType::Text,
             .text = std::move(text),
+            .command = {},
             .attachments = std::move(attachments),
             .image_paths = std::move(images),
         };

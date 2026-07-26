@@ -235,7 +235,8 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
 
     m_event_bus.get().publish_async(BackendStatusEvent{
         .status = BackendStatusEvent::Connecting,
-        .backend_name = "session"
+        .backend_name = "session",
+        .error = {}
     });
 
     m_generating.store(true);

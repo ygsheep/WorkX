@@ -36,21 +36,21 @@ struct ToolResult {
     /// @param text 文本内容
     /// @return 文本结果
     static ToolResult ok(std::string text) {
-        return {.type = Type::Text, .text = std::move(text)};
+        return {.type = Type::Text, .text = std::move(text), .data = {}, .is_error = false};
     }
 
     /// @brief 创建结构化数据结果
     /// @param data JSON 数据
     /// @return 结构化结果
     static ToolResult ok(nlohmann::json data) {
-        return {.type = Type::Json, .data = std::move(data)};
+        return {.type = Type::Json, .text = {}, .data = std::move(data), .is_error = false};
     }
 
     /// @brief 创建错误结果
     /// @param msg 错误信息
     /// @return 错误结果
     static ToolResult error(std::string msg) {
-        return {.type = Type::Error, .text = std::move(msg), .is_error = true};
+        return {.type = Type::Error, .text = std::move(msg), .data = {}, .is_error = true};
     }
 
     /// @brief 检查是否成功

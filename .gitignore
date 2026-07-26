@@ -1,5 +1,6 @@
 # Build output directories
 build/
+build-wsl/
 _build/
 vcpkg_installed/
 .vcpkg/

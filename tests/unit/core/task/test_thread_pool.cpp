@@ -140,7 +140,7 @@ TEST_CASE("ThreadPool limits concurrency to worker count", "[thread_pool][concur
     }
 
     // 并发峰值不应超过 worker 数（允许瞬时统计偏差，加 1 容差）
-    REQUIRE(max_concurrent.load() <= pool.worker_count() + 1);
+    REQUIRE(static_cast<size_t>(max_concurrent.load()) <= pool.worker_count() + 1);
     REQUIRE(max_concurrent.load() >= 2);  // 至少发生过并发
 }
 

@@ -434,7 +434,7 @@ TEST_CASE_METHOD(EventBusFixture, "EventBus subscriber_count tracks subscribe/un
 }
 
 TEST_CASE_METHOD(EventBusFixture, "EventBus clear resets all debug counters", "[event_bus][debug]") {
-    auto t = EventBus::instance().subscribe<TestEvent>([](const TestEvent&) {});
+    [[maybe_unused]] auto t = EventBus::instance().subscribe<TestEvent>([](const TestEvent&) {});
     EventBus::instance().publish_async(TestEvent{});
     EventBus::instance().publish_async(TestEvent{});
 

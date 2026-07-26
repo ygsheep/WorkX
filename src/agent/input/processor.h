@@ -30,7 +30,7 @@ public:
 
         switch (parsed.type) {
             case InputType::Empty:
-                return {.should_query = false, .output_text = ""};
+                return {.should_query = false, .output_text = "", .messages = {}, .is_error = false};
 
             case InputType::SlashCommand:
                 return process_slash_command(*parsed.command, ctx);
@@ -42,7 +42,7 @@ public:
                 return process_text_prompt(parsed);
 
             default:
-                return {.should_query = false, .output_text = ""};
+                return {.should_query = false, .output_text = "", .messages = {}, .is_error = false};
         }
     }
 
@@ -55,6 +55,7 @@ private:
         return {
             .should_query = result.should_query,
             .output_text = result.result.text,
+            .messages = {},
             .is_error = result.result.is_error,
         };
     }
@@ -81,7 +82,9 @@ private:
 
         return {
             .should_query = true,
+            .output_text = {},
             .messages = std::move(messages),
+            .is_error = false,
         };
     }
 

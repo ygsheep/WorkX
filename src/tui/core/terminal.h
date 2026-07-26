@@ -55,7 +55,7 @@ class Terminal {
 public:
     using InputCallback = std::function<void(const std::string&)>;
 
-    explicit Terminal(const TerminalConfig& config = {});
+    explicit Terminal(const TerminalConfig& config = TerminalConfig{});
     ~Terminal();
 
     /// @brief 初始化终端（raw mode、平台设置、滚动区域）

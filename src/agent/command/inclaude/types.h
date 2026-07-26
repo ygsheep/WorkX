@@ -55,11 +55,11 @@ struct CommandResult {
     bool is_error{false};          ///< 是否错误
 
     static CommandResult ok(std::string text) {
-        return {.type = Type::Text, .text = std::move(text)};
+        return {.type = Type::Text, .text = std::move(text), .compact_data = {}, .is_error = false};
     }
 
     static CommandResult error(std::string msg) {
-        return {.type = Type::Text, .text = std::move(msg), .is_error = true};
+        return {.type = Type::Text, .text = std::move(msg), .compact_data = {}, .is_error = true};
     }
 };
 
