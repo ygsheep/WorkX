@@ -785,13 +785,13 @@ target_sources(workx_agent INTERFACE ${AGENT_SOURCES})
 
 ### Phase 3.5：ReAct Agent 增强（3 天）— 原 Phase 3
 > **前置条件**：Phase 3 工具线程安全审计完成
-- [ ] **3.1** 实现并行工具执行（`std::async`）— 仅对 Phase 3 审计通过的工具并行
-- [ ] **3.2** 实现 `IReActObserver`，重构 `ChatSession` 回调
-- [ ] **3.3** 实现 `ContextCompressor`（基础版：保留最近 N 轮 + 截断旧 tool_result）
-- [ ] **3.4** 实现 `ToolExecutor` 结果截断（`was_truncated` 字段）
-- [ ] **T-3 扩展**：`ChatRenderer` 跨线程字段原子化（`m_spinner_active`/`m_viewing_thinking`/`m_total_tokens` 等）
-- [ ] 编译验证 + Agent 端到端测试
-- [ ] **日志（G-1）**：ReActLoop 每轮 Thought/Action/Observation；ContextCompressor 压缩决策；工具截断事件
+- [x] **3.1** 实现并行工具执行（`std::async`）— 仅对 Phase 3 审计通过的工具并行
+- [x] **3.2** 实现 `IReActObserver`，重构 `ChatSession` 回调
+- [x] **3.3** 实现 `ContextCompressor`（基础版：保留最近 N 轮 + 截断旧 tool_result）
+- [x] **3.4** 实现 `ToolExecutor` 结果截断（`was_truncated` 字段）
+- [x] **T-3 扩展**：`ChatRenderer` 跨线程字段原子化（`m_spinner_active`/`m_viewing_thinking`/`m_total_tokens` 等）
+- [x] 编译验证 + Agent 端到端测试（336 test cases / 1142 assertions 全部通过）
+- [x] **日志（G-1）**：ReActLoop 每轮 Thought/Action/Observation；ContextCompressor 压缩决策；工具截断事件
 
 ### Phase 4：事件系统重构（2 天）
 - [ ] **1.1** 新增 `IEventBus` 接口
