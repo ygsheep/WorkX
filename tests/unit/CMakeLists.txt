@@ -19,11 +19,16 @@ set(UNIT_TEST_SOURCES
     core/events/test_event_bus.cpp
     core/task/test_task_manager.cpp
     tui/core/test_display_buffer.cpp
+    tui/core/test_tui_state.cpp
     tui/render/test_markdown_renderer.cpp
+    tui/render/test_spinner.cpp
+    tui/render/test_streaming_buffer.cpp
     tui/utils/test_utf8_utils.cpp
+    tui/widgets/test_status_bar.cpp
 )
 
 add_executable(workx_unit_tests ${UNIT_TEST_SOURCES})
+target_include_directories(workx_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(workx_unit_tests PRIVATE SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_link_libraries(workx_unit_tests PRIVATE libworkx Catch2::Catch2WithMain)
 
