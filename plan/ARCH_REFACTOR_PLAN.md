@@ -811,9 +811,18 @@ target_sources(workx_agent INTERFACE ${AGENT_SOURCES})
 - [x] 编译验证 + 全量单元测试通过（336 test cases / 1142 assertions）
 
 ### Phase 5：CMake 模块化（1 天）
-- [ ] **4.1** 按模块拆分 `CMakeLists.txt`
-- [ ] 验证所有平台可编译
-- [ ] **日志（G-1）**：无（构建系统无运行时日志需求）
+- [x] **4.1** 按模块拆分 `CMakeLists.txt`
+  - 根 `CMakeLists.txt` 仅保留项目设置、find_package、tree-sitter、liblogger、add_subdirectory
+  - 新增 `src/CMakeLists.txt`：创建空 `libworkx` 静态库 + `workx` exe，add_subdirectory 引入子模块
+  - 新增 `src/core/CMakeLists.txt`：core 源文件（config/task）
+  - 新增 `src/agent/CMakeLists.txt`：agent 源文件（api/command/compact/core/model/tool）
+  - 新增 `src/tui/CMakeLists.txt`：tui 源文件（core/input/render/setup/utils/widgets）+ 平台特定源
+  - 新增 `src/app/CMakeLists.txt`：app 源文件（command/config/ui），main.cpp 由 src/CMakeLists.txt 加入 workx exe
+  - 各子模块通过 `target_sources(libworkx PRIVATE ...)` 追加源文件，归属清晰
+- [x] 验证 Windows 平台可编译（Linux 平台待 CI 验证）
+- [x] 全量单元测试通过（336 test cases / 1142 assertions）
+- [x] example 工程构建通过（example_markdown / example_code_highlight）
+- [x] **日志（G-1）**：无（构建系统无运行时日志需求）
 
 ### Phase 6：回归测试与长期技术债（3 天）
 - [ ] 全量单元测试通过
