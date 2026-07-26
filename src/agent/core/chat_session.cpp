@@ -126,13 +126,13 @@ ChatSession::ChatSession(std::unique_ptr<ICompletionProvider> provider,
     , m_event_bus(event_bus)
     , m_config_manager(config_manager)
 {
-    // 从配置管理器读取重试配置
+    // H-3：从配置管理器读取重试配置，统一委托给 HttpRetryPolicy
     // 注意：仅当配置中显式设置时才覆盖，否则使用 preset 传入的值（可为不同 provider 设置不同延迟）
     auto& cfg = m_config_manager.get();
-    m_max_retries = cfg.has("backend.retry_count")
+    m_retry_policy.max_retries = cfg.has("backend.retry_count")
         ? cfg.get_or<int>("backend.retry_count", 3)
         : 3;
-    m_retry_delay_ms = cfg.has("backend.retry_delay_ms")
+    m_retry_policy.base_delay_ms = cfg.has("backend.retry_delay_ms")
         ? cfg.get_or<int>("backend.retry_delay_ms", retry_delay_ms)
         : retry_delay_ms;
 
@@ -241,11 +241,11 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
 
     m_generating.store(true);
 
-    int max_retries = m_max_retries;
-    int retry_delay_ms = m_retry_delay_ms;
+    // H-3：拷贝 HttpRetryPolicy 到任务闭包（不可变结构体，线程安全）
+    HttpRetryPolicy retry_policy = m_retry_policy;
 
     auto task = m_task_manager.get().launch("completion",
-        [this, retry_attempt, max_retries, retry_delay_ms, user_text]
+        [this, retry_attempt, retry_policy, user_text]
         (const std::atomic<bool>& should_cancel) {
             // 顶层异常安全网：确保任何未捕获异常都能重置 m_generating 并通知 UI
             try {
@@ -300,19 +300,20 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
 
             // ---- 错误处理 ----
             if (react_result.was_error) {
-                // max iterations 错误不可重试
-                bool is_max_iter = react_result.error_message.find("max iterations")
-                                   != std::string::npos;
+                // H-3：用 HttpRetryPolicy.is_retryable 统一判断
+                // http_status=0 表示业务错误（非 HTTP），由 error_message 内容判断
+                bool can_retry = retry_attempt < retry_policy.max_retries
+                                 && HttpRetryPolicy::is_retryable(0, react_result.error_message);
 
-                if (!is_max_iter && retry_attempt < max_retries) {
-                    // 指数退避，但限制上限为 60s
-                    int delay = std::min(retry_delay_ms * (1 << retry_attempt), 60000);
+                if (can_retry) {
+                    // H-3：委托给 HttpRetryPolicy.delay 计算退避（含 60s 上限）
+                    int delay = retry_policy.delay_ms(retry_attempt);
                     m_event_bus.get().publish_async(StreamErrorEvent{
                         .session_id = m_session_id,
                         .message = std::format(
                             "Error: {}, retrying in {}ms... ({}/{})",
                             react_result.error_message, delay,
-                            retry_attempt + 1, max_retries),
+                            retry_attempt + 1, retry_policy.max_retries),
                         .retryable = true
                     });
 

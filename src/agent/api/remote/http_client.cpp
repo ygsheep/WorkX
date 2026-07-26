@@ -8,6 +8,7 @@
 #include <thread>
 #include <mutex>
 #include <algorithm>
+#include <array>
 
 #include "liblogger/logger.h"
 
@@ -23,59 +24,104 @@ static struct CurlGlobal {
 } s_curl_global;
 
 // ============================================================
+// H-1：CURLSH 连接共享（跨 HttpClient 实例复用 TCP/TLS 连接）
+// ============================================================
+//
+// libcurl 的 CURLM 内部已有连接缓存（同一 CURLM 内的 CURL 句柄复用连接），
+// 但跨 CURLM 实例（即跨 HttpClient 实例）不共享。CURLSH 提供
+// CURL_LOCK_DATA_CONNECT 共享数据，让多个 CURLM/CURL 句柄复用连接缓存。
+//
+// 线程安全：CURLSH 本身不是线程安全的，通过 lock/unlock 回调加锁。
+// 共享数据按 CURL_LOCK_DATA 分组，每组一把 mutex，减少锁争用。
+
+namespace {
+
+/// @brief CURLSH 锁回调使用的 mutex 数组
+/// @details 索引按 CURL_LOCK_DATA 枚举值。CURL_LOCK_DATA_CONNECT 是最常用的，
+///          其他（如 COOKIE、SSL_SESSION）当前未共享，但数组预留足够空间。
+struct CurlShareLocks {
+    static constexpr int kLockDataCount = 10;
+    std::array<std::mutex, kLockDataCount> mutexes;
+
+    static CurlShareLocks& instance() {
+        static CurlShareLocks inst;
+        return inst;
+    }
+};
+
+void curl_share_lock_cb(CURL* /*handle*/, curl_lock_data data, curl_lock_access /*access*/, void* /*userptr*/) {
+    int idx = static_cast<int>(data);
+    if (idx >= 0 && idx < CurlShareLocks::kLockDataCount) {
+        CurlShareLocks::instance().mutexes[idx].lock();
+    }
+}
+
+void curl_share_unlock_cb(CURL* /*handle*/, curl_lock_data data, void* /*userptr*/) {
+    int idx = static_cast<int>(data);
+    if (idx >= 0 && idx < CurlShareLocks::kLockDataCount) {
+        CurlShareLocks::instance().mutexes[idx].unlock();
+    }
+}
+
+/// @brief 获取全局共享 CURLSH 句柄
+/// @details 共享 CURL_LOCK_DATA_CONNECT（连接缓存），跨 HttpClient 实例复用 TCP/TLS 连接
+CURLSH* shared_curl_share() {
+    static CURLSH* sh = []() {
+        CURLSH* s = curl_share_init();
+        if (s) {
+            curl_share_setopt(s, CURLSHOPT_LOCKFUNC, curl_share_lock_cb);
+            curl_share_setopt(s, CURLSHOPT_UNLOCKFUNC, curl_share_unlock_cb);
+            curl_share_setopt(s, CURLSHOPT_SHARE, CURL_LOCK_DATA_CONNECT);
+            LOG_INFO("[http] CURLSH 连接共享已启用（CURL_LOCK_DATA_CONNECT）");
+        }
+        return s;
+    }();
+    return sh;
+}
+
+} // anonymous namespace
+
+// ============================================================
 // URL 解析
 // ============================================================
 
 ParsedUrl HttpClient::parse_url(const std::string& url) {
+    // H-4：完全依赖 CURLU API（libcurl 7.62.0+），删除自定义 fallback
+    // 旧实现维护两套解析逻辑可能产生不一致结果，统一为单套
     ParsedUrl result;
 
     CURLU* hurl = curl_url();
-    if (hurl && curl_url_set(hurl, CURLUPART_URL, url.c_str(), 0) == CURLUE_OK) {
-        auto get_part = [&](CURLUPart p) -> std::string {
-            char* c = nullptr;
-            if (curl_url_get(hurl, p, &c, 0) == CURLUE_OK && c) {
-                std::string s(c); curl_free(c); return s;
-            }
-            return {};
-        };
-        result.scheme = get_part(CURLUPART_SCHEME);
-        result.host   = get_part(CURLUPART_HOST);
-        result.port   = get_part(CURLUPART_PORT);
-        if (result.port.empty())
-            result.port = (result.scheme == "https") ? "443" : "80";
-        {
-            std::string p = get_part(CURLUPART_PATH);
-            if (p.empty()) p = "/";
-            std::string q = get_part(CURLUPART_QUERY);
-            result.target = q.empty() ? p : p + "?" + q;
-        }
-        curl_url_cleanup(hurl);
-        return result;
+    if (!hurl) {
+        LOG_ERROR("[http] parse_url '{}' curl_url_init failed", url);
+        return result;  // 返回空 ParsedUrl，调用方检测 scheme.empty()
     }
-    if (hurl) curl_url_cleanup(hurl);
 
-    // fallback
-    std::string_view sv(url);
-    auto sep = sv.find("://");
-    if (sep != std::string_view::npos) {
-        result.scheme = sv.substr(0, sep);
-        sv.remove_prefix(sep + 3);
-    } else {
-        result.scheme = "https";
+    CURLUcode rc = curl_url_set(hurl, CURLUPART_URL, url.c_str(), 0);
+    if (rc != CURLUE_OK) {
+        LOG_ERROR("[http] parse_url '{}' failed: {}", url, curl_url_strerror(rc));
+        curl_url_cleanup(hurl);
+        return result;  // scheme 保持空，调用方检测
     }
-    auto slash = sv.find('/');
-    auto auth  = (slash != std::string_view::npos)
-                     ? std::string(sv.substr(0, slash)) : std::string(sv);
-    result.target = (slash != std::string_view::npos)
-                        ? std::string(sv.substr(slash)) : "/";
-    auto colon = auth.find(':');
-    if (colon != std::string::npos) {
-        result.host = auth.substr(0, colon);
-        result.port = auth.substr(colon + 1);
-    } else {
-        result.host = auth;
+
+    auto get_part = [&](CURLUPart p) -> std::string {
+        char* c = nullptr;
+        if (curl_url_get(hurl, p, &c, 0) == CURLUE_OK && c) {
+            std::string s(c); curl_free(c); return s;
+        }
+        return {};
+    };
+    result.scheme = get_part(CURLUPART_SCHEME);
+    result.host   = get_part(CURLUPART_HOST);
+    result.port   = get_part(CURLUPART_PORT);
+    if (result.port.empty())
         result.port = (result.scheme == "https") ? "443" : "80";
+    {
+        std::string p = get_part(CURLUPART_PATH);
+        if (p.empty()) p = "/";
+        std::string q = get_part(CURLUPART_QUERY);
+        result.target = q.empty() ? p : p + "?" + q;
     }
+    curl_url_cleanup(hurl);
     return result;
 }
 
@@ -118,6 +164,10 @@ HttpResponse HttpClient::get(const std::string& url,
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    // H-1：关联 CURLSH 共享连接缓存，跨 HttpClient 实例复用 TCP/TLS 连接
+    if (auto* sh = shared_curl_share()) {
+        curl_easy_setopt(curl, CURLOPT_SHARE, sh);
+    }
 
     struct curl_slist* hl = nullptr;
     for (const auto& [k, v] : headers)
@@ -161,6 +211,11 @@ public:
         : m_body(body)
         , m_reader(std::move(reader))
         , m_on_complete(std::move(on_complete))
+        // H-2：总时长超时（Timer-based），默认 120 秒
+        // timeout_ms 作为空闲超时（LOW_SPEED_TIME），总时长超时独立配置
+        // 当 timeout_ms > 0 时，总时长 = max(timeout_ms, 120000) 确保不短于空闲超时
+        , m_total_timeout_ms(timeout_ms > 0 ? (std::max)(timeout_ms, 120000) : 120000)
+        , m_start_time(std::chrono::steady_clock::now())
     {
         m_curl = curl_easy_init();
         if (!m_curl) return;
@@ -191,6 +246,10 @@ public:
         curl_easy_setopt(m_curl, CURLOPT_SSL_VERIFYPEER, 1L);
         curl_easy_setopt(m_curl, CURLOPT_SSL_VERIFYHOST, 2L);
         curl_easy_setopt(m_curl, CURLOPT_NOSIGNAL, 1L);
+        // H-1：关联 CURLSH 共享连接缓存
+        if (auto* sh = shared_curl_share()) {
+            curl_easy_setopt(m_curl, CURLOPT_SHARE, sh);
+        }
 
         for (const auto& [k, v] : headers)
             m_header_list = curl_slist_append(m_header_list, (k + ": " + v).c_str());
@@ -227,6 +286,15 @@ public:
             curl_multi_remove_handle(m_multi, m_curl);
             m_added_to_multi.store(false);
         }
+    }
+
+    /// @brief H-2：检查总时长超时
+    /// @return true 表示已超时，应由 poll_loop 触发 cancel + finish_with_error
+    bool is_total_timeout() const {
+        if (m_total_timeout_ms <= 0) return false;  // 0 表示禁用
+        auto elapsed = std::chrono::steady_clock::now() - m_start_time;
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+        return ms > m_total_timeout_ms;
     }
 
     void on_transfer_done(const CURLcode code) {
@@ -302,6 +370,9 @@ private:
     std::shared_ptr<SSEStreamReader> m_reader;
     std::function<void()> m_on_complete;
     std::atomic<bool> m_cancelled{false};
+    // H-2：总时长超时（Timer-based），0 表示禁用
+    int m_total_timeout_ms = 120000;  // 默认 2 分钟
+    std::chrono::steady_clock::time_point m_start_time;
 };
 
 // ============================================================
@@ -350,6 +421,31 @@ struct HttpClient::Impl {
                 }
             }
 
+            // H-2：总时长超时检查
+            // 遍历所有活跃 session，若超时则 cancel + finish_with_error
+            // 注意：必须在 sessions_mutex 锁外调用 finish_with_error，避免
+            // on_complete 回调内再次访问 HttpClient 造成死锁
+            {
+                std::vector<std::shared_ptr<StreamSession>> timed_out;
+                {
+                    std::lock_guard<std::mutex> lock(sessions_mutex);
+                    for (auto& [handle, session] : sessions_by_handle) {
+                        if (session->is_total_timeout()) {
+                            timed_out.push_back(session);
+                        }
+                    }
+                }
+                for (auto& session : timed_out) {
+                    LOG_WARN("[http][stream] total timeout exceeded, cancelling session");
+                    session->cancel();
+                    session->finish_with_error("Total request timeout exceeded");
+                    // 从 sessions map 移除（cancel 后不再有 DONE 事件）
+                    std::lock_guard<std::mutex> lock(sessions_mutex);
+                    sessions_by_handle.erase(session->easy_handle());
+                    // reader map 的清理交给下次 poll_loop 的 expired 回收
+                }
+            }
+
             // C.3：用 curl_multi_wait 替代 sleep_for(10ms) 忙等
             // curl_multi_wait 内部用 select/poll，无传输时阻塞等待（最多 100ms），
             // CPU 占用近零；有数据时立即返回。libcurl 官方推荐 API。
@@ -390,6 +486,13 @@ void HttpClient::async_post_stream(
         int timeout_ms) const {
     LOG_DEBUG("[http][stream] POST {} body_len={} timeout={}ms", url, body.size(), timeout_ms);
     auto parsed = parse_url(url);
+    // H-4：URL 解析失败（scheme 为空）时直接 finish reader，避免构造 "://" 怪 URL
+    if (parsed.scheme.empty()) {
+        LOG_ERROR("[http][stream] POST {} invalid URL", url);
+        reader->finish("Invalid URL: " + url);
+        if (on_complete) on_complete();
+        return;
+    }
     auto* key = reader.get();
 
     const auto session = std::make_shared<StreamSession>(

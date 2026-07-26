@@ -2,13 +2,13 @@
 
 > 本文档整合 `PHASE3_LONG_TERM_REFACTOR.md`（详细方案）与历史登记，作为技术债的唯一索引。
 > 详细重构方案请参考 `plan/PHASE3_LONG_TERM_REFACTOR.md`。
-> 最后更新：2026-07-27（P3 D-2/D-3 main.cpp 工厂化 + IBackend 接口隔离完成）
+> 最后更新：2026-07-27（P3 H-1/H-2/H-3/H-4 HTTP 客户端演进完成）
 
 ## 状态总览
 
-- 已修复：18 项（L-1 / L-2 / L-3 / L-6 / T-4 / T-6 / G-2 / G-3 / G-4 / D-2 / D-3 / D-4 / D-5 / D-6 / Q-1 / C-2 / C-3 / C-4）
+- 已修复：22 项（L-1 / L-2 / L-3 / L-6 / T-4 / T-6 / G-2 / G-3 / G-4 / D-2 / D-3 / D-4 / D-5 / D-6 / Q-1 / C-2 / C-3 / C-4 / H-1 / H-2 / H-3 / H-4）
 - 已安全：1 项（T-5 PHASE3 判定无需修复）
-- 待修复：11 项（L-5 / H-1 / H-2 / H-3 / H-4 / E-1 / E-5 / E-6 / Q-2 / Q-3 / Q-4）
+- 待修复：7 项（L-5 / E-1 / E-5 / E-6 / Q-2 / Q-3 / Q-4）
 - 文档化即可：1 项（Q-5）
 - 详细方案：见 `PHASE3_LONG_TERM_REFACTOR.md`
 
@@ -35,10 +35,10 @@
 
 | 编号 | 现象 | 文件:行号 | 影响 | 状态 |
 |------|------|-----------|------|------|
-| H-1 | 无连接池（无 CURLSH 共享） | `http_client.cpp:311-322` | 中（HTTPS 握手开销） | ⬜ 未修复 |
-| H-2 | 流式传输无总时长超时 | `http_client.cpp:180-189` | 中（异常慢响应无上限） | ⬜ 未修复 |
-| H-3 | 重试逻辑分散（Client/ChatSession 两层） | `client.cpp:218-315, chat_session.cpp:226-342` | 中（策略不一致） | ⬜ 未修复 |
-| H-4 | URL 解析双套逻辑（CURLU + fallback） | `http_client.cpp:29-80` | 低（维护成本） | ⬜ 未修复 |
+| H-1 | 无连接池（无 CURLSH 共享） | ~~`http_client.cpp:311-322`~~ | — | ✅ 已修复（新增 `shared_curl_share()` 全局 CURLSH，共享 `CURL_LOCK_DATA_CONNECT`；GET 和 StreamSession 通过 `CURLOPT_SHARE` 关联；提供 lock/unlock 回调确保线程安全） |
+| H-2 | 流式传输无总时长超时 | ~~`http_client.cpp:180-189`~~ | — | ✅ 已修复（StreamSession 添加 `m_total_timeout_ms`/`m_start_time`，默认 120 秒；poll_loop 中检测超时并 `cancel + finish_with_error`） |
+| H-3 | 重试逻辑分散（Client/ChatSession 两层） | ~~`client.cpp:218-315, chat_session.cpp:226-342`~~ | — | ✅ 已修复（提取 `HttpRetryPolicy` 到 `agent/api/retry.h`，含 `is_retryable`/`delay`/`delay_ms`；Client/ChatSession 委托给 `m_retry_policy`；新增 `test_retry_policy.cpp` 11 cases） |
+| H-4 | URL 解析双套逻辑（CURLU + fallback） | ~~`http_client.cpp:29-80`~~ | — | ✅ 已修复（删除 fallback，完全依赖 CURLU API；URL 无效时返回空 ParsedUrl，`async_post_stream` 检测 `scheme.empty()` 直接 finish reader） |
 
 ---
 
@@ -131,7 +131,7 @@
 | ~~**P2**~~ | ~~Q-1~~ | ~~Mock 实现（依赖 D-4/D-5/D-6）~~ | ✅ 已完成 |
 | ~~**P2**~~ | ~~C-2 + C-3 + C-4~~ | ~~配置系统 Schema 化~~ | ✅ 已完成 |
 | ~~**P2**~~ | ~~G-3 + G-4~~ | ~~日志命名空间统一~~ | ✅ 已完成 |
-| **P3** | H-1 + H-2 + H-3 + H-4 | HTTP 客户端演进 | 4 天 |
+| ~~**P3**~~ | ~~H-1 + H-2 + H-3 + H-4~~ | ~~HTTP 客户端演进~~ | ✅ 已完成 |
 | ~~**P3**~~ | ~~D-2 + D-3~~ | ~~main.cpp 工厂 + IBackendAdmin 拆分~~ | ✅ 已完成 |
 | **P3** | E-5 + E-6 | 错误处理类型安全 | 2 天 |
 | **P3** | Q-2 + Q-5 | 性能基准 + 文档 | 2 天 |

@@ -101,8 +101,8 @@ Client::Client(std::unique_ptr<IBackend> backend,
                ITaskManager& task_manager)
     : m_backend(std::move(backend))
     , m_system_prompt(std::move(system_prompt))
-    , m_max_retries(retry_count)
-    , m_retry_delay_ms(retry_delay_ms)
+    // H-3：委托给 HttpRetryPolicy 统一管理
+    , m_retry_policy{.max_retries = retry_count, .base_delay_ms = retry_delay_ms}
     , m_publish_events(publish_events)
     , m_task_manager(&task_manager)
     , m_event_bus(event_bus)
@@ -154,8 +154,7 @@ Client::Client(Client&& other) noexcept
     , m_messages(std::move(other.m_messages))
     , m_system_prompt(std::move(other.m_system_prompt))
     , m_generating(other.m_generating.load())
-    , m_max_retries(other.m_max_retries)
-    , m_retry_delay_ms(other.m_retry_delay_ms)
+    , m_retry_policy(other.m_retry_policy)
     , m_publish_events(other.m_publish_events)
     , m_task_manager(other.m_task_manager)
     , m_event_bus(other.m_event_bus)
@@ -186,8 +185,7 @@ Client& Client::operator=(Client&& other) noexcept {
             m_system_prompt = std::move(other.m_system_prompt);
         }
         m_generating.store(other.m_generating.load());
-        m_max_retries = other.m_max_retries;
-        m_retry_delay_ms = other.m_retry_delay_ms;
+        m_retry_policy = other.m_retry_policy;
         m_publish_events = other.m_publish_events;
         m_task_manager = other.m_task_manager;
         m_event_bus = other.m_event_bus;
@@ -243,8 +241,8 @@ Result<void, std::string> Client::run_stream(
     std::string& reasoning_out)
 {
     // B.3：拆分后的 run_stream 仅做顶层重试调度
-    // 子方法负责：退避延迟计算、submit 失败处理、流错误处理、事件发布
-    for (int attempt = 0; attempt <= m_max_retries; ++attempt) {
+    // H-3：重试次数和退避延迟统一由 m_retry_policy 管理
+    for (int attempt = 0; attempt <= m_retry_policy.max_retries; ++attempt) {
         // 每次重试前清空已累积输出，避免新旧内容拼接错乱
         content_out.clear();
         reasoning_out.clear();
@@ -256,7 +254,7 @@ Result<void, std::string> Client::run_stream(
         auto reader = m_backend->submit_completion(request);
         if (!reader) {
             // B.3：submit 失败 → 委托给 handle_submit_failure
-            int64_t delay = compute_backoff_delay_ms(attempt);
+            int64_t delay = m_retry_policy.delay_ms(attempt);
             if (handle_submit_failure(attempt, delay, cbs, should_stop)) {
                 continue;  // 已触发重试
             }
@@ -339,18 +337,15 @@ Result<void, std::string> Client::run_stream(
 // ============================================================
 
 int64_t Client::compute_backoff_delay_ms(int attempt) const {
-    // 用 64 位 + 上限，避免 1 << attempt 在 attempt=30+ 时 int 溢出（UB）
-    int64_t delay = static_cast<int64_t>(m_retry_delay_ms) * (1LL << attempt);
-    constexpr int64_t MAX_DELAY_MS = 60000;  // 上限 60 秒
-    if (delay > MAX_DELAY_MS) delay = MAX_DELAY_MS;
-    return delay;
+    // H-3：委托给 HttpRetryPolicy，统一退避算法
+    return m_retry_policy.delay_ms(attempt);
 }
 
 bool Client::handle_submit_failure(int attempt, int64_t delay_ms, const ChatCallbacks& cbs,
                                    const std::function<bool()>& should_stop) {
     // 返回值约定：true = 已触发重试（调用方 continue）；false = 应退出（重试耗尽或被中断）
     // 被中断时调用方通过 should_stop() 判断后返回 ok（与原逻辑一致）
-    if (attempt >= m_max_retries) {
+    if (attempt >= m_retry_policy.max_retries) {
         // 重试耗尽
         if (cbs.on_error) {
             cbs.on_error("Failed to submit completion request after retries", false);
@@ -368,7 +363,7 @@ bool Client::handle_submit_failure(int attempt, int64_t delay_ms, const ChatCall
     if (cbs.on_error) {
         cbs.on_error(
             "Submit failed, retrying in " + std::to_string(delay_ms) + "ms... ("
-            + std::to_string(attempt + 1) + "/" + std::to_string(m_max_retries) + ")",
+            + std::to_string(attempt + 1) + "/" + std::to_string(m_retry_policy.max_retries) + ")",
             true);
     }
     if (m_publish_events) {
@@ -388,7 +383,7 @@ bool Client::handle_submit_failure(int attempt, int64_t delay_ms, const ChatCall
 bool Client::handle_stream_error(int attempt, const ChatCallbacks& cbs,
                                  const std::function<bool()>& should_stop) {
     // 返回值约定：true = 已触发重试（调用方 break 内层 while）；false = 应退出
-    if (attempt >= m_max_retries) {
+    if (attempt >= m_retry_policy.max_retries) {
         if (cbs.on_error) {
             cbs.on_error("Stream error after retries", false);
         }
@@ -402,7 +397,7 @@ bool Client::handle_stream_error(int attempt, const ChatCallbacks& cbs,
         return false;
     }
 
-    int64_t delay = compute_backoff_delay_ms(attempt);
+    int64_t delay = m_retry_policy.delay_ms(attempt);
     if (cbs.on_error) {
         cbs.on_error("Stream error, retrying...", true);
     }

@@ -17,6 +17,7 @@
 #include <functional>
 #include "agent/api/i_completion_provider.h"
 #include "agent/api/chat_types.h"
+#include "agent/api/retry.h"  // H-3：HttpRetryPolicy
 #include "agent/core/react_observer.h"
 #include "core/events/event_bus.h"
 #include "core/config/config_manager.h"
@@ -140,9 +141,8 @@ private:
     // 工具注册表（可选，为空时不启用 function calling）
     std::shared_ptr<tool::ToolRegistry> m_tool_registry;
 
-    // 重试配置
-    int m_max_retries = 3;
-    int m_retry_delay_ms = 1000;
+    // H-3：重试策略统一由 HttpRetryPolicy 管理
+    HttpRetryPolicy m_retry_policy;
 
     // 中断事件订阅
     EventToken m_interrupt_token;

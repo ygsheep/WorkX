@@ -20,6 +20,7 @@
 #include "core/utils/result.h"
 #include "core/events/event_bus.h"
 #include "agent/api/chat_types.h"
+#include "agent/api/retry.h"  // H-3：HttpRetryPolicy
 #include "agent/model/provider_type.h"
 #include "core/task/task_manager.h"  // ITaskManager + TaskManager::instance() 默认实参
 
@@ -194,8 +195,8 @@ private:
     std::vector<ChatMessage> m_messages;
     std::string m_system_prompt;
     std::atomic<bool> m_generating{false};
-    int m_max_retries = 3;
-    int m_retry_delay_ms = 1000;
+    // H-3：用 HttpRetryPolicy 统一重试配置，替代散落的 m_max_retries/m_retry_delay_ms
+    HttpRetryPolicy m_retry_policy;
     bool m_publish_events = false;
 
     // D-1：任务管理器指针（非拥有；Client 可移动，用指针避免引用无法重新绑定）
