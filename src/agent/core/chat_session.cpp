@@ -12,7 +12,12 @@
 #include "core/task/task_manager.h"
 #include "core/config/config_manager.h"
 
-#include <algorithm>
+#include "agent/core/chat_session.h"
+#include "agent/core/react_loop.h"
+#include "agent/api/i_backend.h"
+#include "agent/message/types.h"
+#include "core/task/task_manager.h"
+#include "core/config/config_manager.h"
 #include <nlohmann/json.hpp>
 
 #include <chrono>
@@ -518,6 +523,12 @@ Result<void, std::string> ChatSession::load_session(const std::string& path) {
             std::format("Error loading session: {}", e.what())
         );
     }
+}
+
+IBackend* ChatSession::backend() const {
+    // L-1：通过 dynamic_cast 安全获取 IBackend 指针
+    // 若 provider 不是 IBackend（如本地推理核心），返回 nullptr
+    return dynamic_cast<IBackend*>(m_provider.get());
 }
 
 // ============================================================

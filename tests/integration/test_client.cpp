@@ -32,26 +32,29 @@ static std::string s_model;
 struct LmStudioFixture {
     LmStudioFixture() {
         static bool initialized = false;
-        if (!initialized) {
-            const char* env_url = std::getenv("LM_STUDIO_BASE_URL");
-            s_base_url = (env_url && env_url[0] != '\0')
-                ? env_url : "http://127.0.0.1:1234";
-            while (!s_base_url.empty() && s_base_url.back() == '/')
-                s_base_url.pop_back();
-            REQUIRE_FALSE(s_base_url.empty());
+        if (initialized) return;
 
-            const char* env_model = std::getenv("LM_STUDIO_MODEL");
-            s_model = (env_model && env_model[0] != '\0')
-                ? env_model : "google/gemma-4-e4b";
-
-            // 连通性测试：确保 LM Studio 已启动
-            HttpClient check_client;
-            auto resp = check_client.get(s_base_url + "/v1/models", {}, 5000);
-            if (!resp.error.empty() || resp.status_code != 200) {
-                FAIL("LM Studio 未启动或无法连接。请先启动 LM Studio 服务器 (lms server start)");
-            }
-            initialized = true;
+        // X-2 修复：未设置 LM_STUDIO_BASE_URL 时跳过（避免误用 Python mock 服务器
+        // 跑 LLM 推理测试用例）。需要 LLM 推理的测试必须显式设置 LM_STUDIO_BASE_URL
+        const char* env_url = std::getenv("LM_STUDIO_BASE_URL");
+        if (!env_url || env_url[0] == '\0') {
+            SKIP("LLM 推理测试需要 LM Studio。请设置 LM_STUDIO_BASE_URL 并启动 LM Studio");
         }
+        s_base_url = env_url;
+        while (!s_base_url.empty() && s_base_url.back() == '/') s_base_url.pop_back();
+        REQUIRE_FALSE(s_base_url.empty());
+
+        const char* env_model = std::getenv("LM_STUDIO_MODEL");
+        s_model = (env_model && env_model[0] != '\0')
+            ? env_model : "google/gemma-4-e4b";
+
+        // 连通性测试：确保 LM Studio 已启动
+        HttpClient check_client;
+        auto resp = check_client.get(s_base_url + "/v1/models", {}, 5000);
+        if (!resp.error.empty() || resp.status_code != 200) {
+            FAIL("LM Studio 未启动或无法连接。请先启动 LM Studio 服务器 (lms server start)");
+        }
+        initialized = true;
     }
 };
 
@@ -115,7 +118,7 @@ TEST_CASE_METHOD(LmStudioFixture, "Client chat sync", "[client][integration]") {
     REQUIRE(reply.isOk());
     REQUIRE_FALSE(reply.unwrap().empty());
 
-    auto& h = client.history();
+    auto h = client.history();
     REQUIRE(h.size() >= 2);  // user + assistant
     REQUIRE(h.back().role == ChatMessage::Role::Assistant);
 }

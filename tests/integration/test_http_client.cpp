@@ -9,6 +9,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "agent/api/remote/http_client.h"
 #include "agent/api/remote/sse_stream_reader.h"
+#include "test_server_fixture.h"
 
 #include <cstdlib>
 #include <string>
@@ -20,30 +21,32 @@
 using namespace agent;
 
 // ============================================================
-// 测试辅助：使用 LM Studio 作为测试服务器
+// 测试辅助：自动启停测试服务器
 // ============================================================
-// 服务器地址通过环境变量 LM_STUDIO_BASE_URL 指定
-// 默认 http://127.0.0.1:1234
-// 需要先启动 LM Studio 并加载模型
+// 默认行为：自动启动 tests/integration/fixtures/test_server.py（X-2 修复）
+// 兼容：若设置环境变量 LM_STUDIO_BASE_URL，则使用 LM Studio
+//
+// 用法：
+//   1. 直接运行 workx_integration_tests.exe（自动启 Python 服务器）
+//   2. 设置 LM_STUDIO_BASE_URL=http://127.0.0.1:1234 后运行（用 LM Studio）
 
 static std::string s_base_url;
+static std::unique_ptr<test::AutoTestServer> s_test_server;
 
 struct TestServerFixture {
     TestServerFixture() {
         static bool initialized = false;
         if (!initialized) {
-            const char* env_url = std::getenv("LM_STUDIO_BASE_URL");
-            s_base_url = (env_url && env_url[0] != '\0')
-                ? env_url : "http://127.0.0.1:1234";
-            while (!s_base_url.empty() && s_base_url.back() == '/')
-                s_base_url.pop_back();
+            s_test_server = std::make_unique<test::AutoTestServer>();
+            REQUIRE(s_test_server->is_ready());
+            s_base_url = s_test_server->base_url();
             REQUIRE_FALSE(s_base_url.empty());
 
-            // 连通性测试：确保 LM Studio 已启动
+            // 连通性测试
             HttpClient check_client;
             auto resp = check_client.get(s_base_url + "/v1/models", {}, 5000);
             if (!resp.error.empty() || resp.status_code != 200) {
-                FAIL("LM Studio 未启动或无法连接。请先启动 LM Studio 服务器 (lms server start)");
+                FAIL("测试服务器未就绪: " + s_base_url);
             }
             initialized = true;
         }

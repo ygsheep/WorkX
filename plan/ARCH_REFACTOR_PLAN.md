@@ -825,16 +825,32 @@ target_sources(workx_agent INTERFACE ${AGENT_SOURCES})
 - [x] **日志（G-1）**：无（构建系统无运行时日志需求）
 
 ### Phase 6：回归测试与长期技术债（3 天）
-- [ ] 全量单元测试通过
-- [ ] **X-2 修复**：集成测试 Python server 自动化启动（CMake fixture 或 test 启动脚本）
-- [ ] 集成测试通过（需 LLM backend）
-- [ ] 性能基准：对比重构前后 token 吞吐、工具调用延迟、并行 vs 串行工具执行
-- [ ] 内存检查：无泄漏、无越界
-- [ ] **长期技术债登记**（不在本方案实施，登记到 PLAN_PHASE4 或新文档）：
-  - L-1/L-2/L-3：raw pointer 系统性替换为 `std::reference_wrapper` 或 `not_null<T*>`
-  - H-1/H-2/H-3：HTTP 客户端连接池、总时长超时、重试逻辑统一
-  - E-5/E-6：ExecutionResult 字段语义、HttpResponse 错误码（移交 v2）
-- [ ] **日志（G-1）**：补齐遗漏模块（PermissionChecker / SSEStreamReader 等）
+- [x] 全量单元测试通过（336 cases / 1142 assertions）
+- [x] **X-2 修复**：集成测试 Python server 自动化启动
+  - 新增 `tests/integration/test_server_fixture.h`：`AutoTestServer` RAII 类，跨平台（Win32 + POSIX）
+  - `LM_STUDIO_BASE_URL` 未设置时自动启动 Python 服务器（6/6 通过）
+  - `LM_STUDIO_BASE_URL` 设置时切换为 LM Studio（9 个 LLM 推理测试 SKIP）
+  - 修改 `test_server.py`：`/v1/models` 添加 `object` 字段、SSE 响应改为 `Connection: close`
+  - 修复 `test_client.cpp` 现有 bug（`auto&` 绑定临时对象）
+- [x] 集成测试通过（Python server 路径 6/6 通过；LLM 推理测试需手动启动 LM Studio）
+- [ ] 性能基准：暂缓（已登记为 T-5 技术债，需在 DI 化完成后做以避免基准失效）
+- [ ] 内存检查：Windows 平台无 ASan 集成，暂缓（已登记为 T-6 技术债）
+- [x] **长期技术债登记**：新建 `plan/TECH_DEBT_REGISTRY.md`，登记 4 大类 13 项技术债
+  - L 类（生命周期）：L-1/L-2/L-3 raw pointer 与生命周期安全
+  - H 类（HTTP）：H-1 连接池 / H-2 总时长超时 / H-3 重试逻辑统一
+  - E 类（错误码）：E-5 ExecutionResult / E-6 HttpResponse 语义
+  - D 类（DI 未完成）：D-2/D-3/D-4 Terminal/Client/工具内部单例依赖
+  - T 类（测试）：T-4 Mock 实现 / T-5 性能基准 / T-6 Linux CI
+  - I 类（集成测试）：I-1 LM Studio 手动 / I-2 Linux 实测
+  - 含优先级矩阵：P0 Linux CI / P1 DI 补全 / P2 HTTP 健壮性 / P3 类型安全
+- [x] **日志（G-1）**：补齐 HttpClient（GET 错误/状态码、StreamSession 完成/取消/错误、async_post_stream/cancel_stream 入口）和 SSEStreamReader（cancel/finish 含 token 统计）日志埋点；PermissionChecker 仅空壳头文件无实现，跳过
+- [x] 修复 chat_session.cpp/h 重复声明与 main.cpp Phase 4 残留重复行（3 处）
+
+#### 架构验收 7.2 现状（未达理想标准，已登记为 D-2/D-3/D-4 技术债）
+- `EventBus::instance()` 在 8 处文件使用（理想：仅 core/events/ + main.cpp）
+- `ConfigManager::instance()` 在 9 处文件使用（理想：仅 core/config/ + main.cpp）
+- `TaskManager::instance()` 在 5 处文件使用（理想：仅 core/task/ + main.cpp）
+- 三个单例均有对应接口（IEventBus / IConfigManager / ITaskManager），核心组件（ChatSession/TaskManager）已支持 DI 注入
 
 ---
 

@@ -28,6 +28,9 @@
 
 namespace agent {
 
+/// @brief 后端接口前向声明（供 ChatSession::backend() 返回类型使用）
+class IBackend;
+
 /// @brief 对话会话
 /// @details 由外部驱动（main.cpp），通过 send_message() 提交文本，
 ///          后台 Task 调用 ICompletionProvider，发布 StreamTokenEvent/StreamDoneEvent。
@@ -102,6 +105,10 @@ public:
 
     /// @brief 从文件加载对话历史
     Result<void, std::string> load_session(const std::string& path);
+
+    /// @brief 获取底层 backend（供 UI 层获取模型列表等）
+    /// @return IBackend 指针，若 provider 不是 IBackend 则返回 nullptr
+    IBackend* backend() const;
 
 private:
     /// @brief 执行推理（在后台线程中运行，含 agent 循环）

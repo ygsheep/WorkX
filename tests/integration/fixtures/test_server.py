@@ -34,6 +34,7 @@ class TestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/v1/models":
             self._send_json(200, {
+                "object": "list",
                 "data": [
                     {"id": "gpt-4o", "owned_by": "openai", "context_length": 128000},
                     {"id": "gpt-3.5-turbo", "owned_by": "openai"},
@@ -63,7 +64,9 @@ class TestHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
+            # Connection: close 让客户端在响应结束后立即关闭连接，
+            # 避免 keep-alive 模式下客户端等待更多数据导致超时
+            self.send_header("Connection", "close")
             self.end_headers()
 
             chunks = [
