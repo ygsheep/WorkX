@@ -8,7 +8,7 @@
 #pragma once
 
 #include <memory>
-#include "agent/api/chat_types.h"
+#include "agent/api/backend_types.h"
 
 namespace agent {
 

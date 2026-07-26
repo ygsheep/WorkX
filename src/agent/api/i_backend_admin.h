@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "core/utils/result.h"
-#include "agent/api/chat_types.h"
+#include "agent/api/backend_types.h"
 
 namespace agent {
 

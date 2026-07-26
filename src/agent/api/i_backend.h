@@ -13,7 +13,7 @@
 #include <string>
 #include <memory>
 #include "core/utils/result.h"
-#include "agent/api/chat_types.h"
+#include "agent/api/backend_types.h"
 #include "agent/api/i_stream_reader.h"
 #include "agent/api/i_completion_provider.h"
 #include "agent/api/i_backend_admin.h"

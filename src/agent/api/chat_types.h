@@ -1,8 +1,9 @@
 /**
  * @file chat_types.h
  * @brief 聊天相关数据类型
- * @details ChatMessage, CompletionRequest, StreamChunk, BackendConfig, ModelInfo
- * @version 1.0.0
+ * @details ChatMessage, CompletionRequest, StreamChunk
+ *          BackendConfig/ModelInfo 已拆分到 backend_types.h（P1），本文件 #include 作为 shim
+ * @version 1.1.0
  * @date 2026-07
  */
 
@@ -13,6 +14,7 @@
 #include <chrono>
 #include <nlohmann/json.hpp>
 #include "agent/model/provider_type.h"
+#include "agent/api/backend_types.h"
 
 namespace agent {
 
@@ -123,41 +125,7 @@ struct StreamChunk {
     std::string tool_input_delta;       ///< is_tool_use_delta 时填充（partial JSON）
 };
 
-// ============================================================
-// BackendConfig
-// ============================================================
-
-/// @brief 后端配置
-struct BackendConfig {
-    enum class Type {
-        Remote,
-        Local
-    };
-
-    Type type = Type::Remote;
-    ProviderType provider = ProviderType::OpenAI;  ///< API 协议类型
-
-    // Remote 配置
-    std::string base_url;           ///< API 基础 URL
-    std::string api_key;            ///< API Key
-    std::string model_name;         ///< 模型名称
-    int timeout_ms = 30000;         ///< HTTP 超时（毫秒）
-
-    // Local 配置（Phase 5）
-    std::string model_path;
-    int n_ctx = 4096;
-    int n_gpu_layers = -1;
-};
-
-// ============================================================
-// ModelInfo
-// ============================================================
-
-/// @brief 模型信息
-struct ModelInfo {
-    std::string name;
-    std::string description;
-    int32_t context_length = 0;
-};
+// BackendConfig 和 ModelInfo 已移至 backend_types.h（P1 拆分）
+// 本文件通过上方 #include "agent/api/backend_types.h" 提供向后兼容 shim
 
 } // namespace agent
