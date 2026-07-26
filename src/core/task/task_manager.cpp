@@ -6,6 +6,7 @@
 #include "core/task/task_manager.h"
 #include "core/events/event_bus.h"
 #include "core/task/task_events.h"
+#include "liblogger/logger.h"
 #include <algorithm>
 #include <thread>
 
@@ -21,10 +22,15 @@ Task::Task(std::string name, TaskFunc func, float max_progress)
 Task::~Task() = default;
 
 void Task::execute() {
-    if (m_status != TaskStatus::Pending) return;
+    // CAS：仅当处于 Pending 时才进入 Running，避免重复 execute
+    TaskStatus expected = TaskStatus::Pending;
+    if (!m_status.compare_exchange_strong(expected, TaskStatus::Running,
+        std::memory_order_acq_rel, std::memory_order_acquire)) {
+        return;
+    }
 
-    m_status = TaskStatus::Running;
     m_start_time = std::chrono::steady_clock::now();
+    LOG_DEBUG("[task name={}] execute begin", m_name);
 
     const auto task_ptr = shared_from_this();
 
@@ -36,14 +42,16 @@ void Task::execute() {
     try {
         m_func(m_should_cancel);
 
-        if (!m_should_cancel) {
+        if (!m_should_cancel.load(std::memory_order_acquire)) {
             markCompleted();
         } else {
-            m_status = TaskStatus::Cancelled;
+            m_status.store(TaskStatus::Cancelled, std::memory_order_release);
 
             auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - m_start_time
             ).count();
+
+            LOG_INFO("[task name={}] cancelled, duration={}ms", m_name, duration);
 
             EventBus::instance().publish_async(TaskCancelledEvent{
                 .task = task_ptr,
@@ -52,19 +60,25 @@ void Task::execute() {
             });
         }
     } catch (const std::exception& e) {
+        LOG_ERROR("[task name={}] unhandled exception: {}", m_name, e.what());
         markFailed(e.what());
     } catch (...) {
+        LOG_ERROR("[task name={}] unhandled unknown exception", m_name);
         markFailed("Unknown exception");
     }
 }
 
 void Task::markCompleted() {
-    m_progress = m_max_progress;
-    m_status = TaskStatus::Completed;
+    m_progress.store(m_max_progress.load(std::memory_order_relaxed),
+                     std::memory_order_relaxed);
+    m_status.store(TaskStatus::Completed, std::memory_order_release);
 
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - m_start_time
     ).count();
+
+    LOG_DEBUG("[task name={}] execute end, status=Completed, duration={}ms",
+              m_name, duration);
 
     auto task_ptr = shared_from_this();
 
@@ -80,11 +94,14 @@ void Task::markCompleted() {
 }
 
 void Task::markFailed(const std::string& error_message) {
-    m_status = TaskStatus::Failed;
+    m_status.store(TaskStatus::Failed, std::memory_order_release);
 
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - m_start_time
     ).count();
+
+    LOG_DEBUG("[task name={}] execute end, status=Failed, duration={}ms, error={}",
+              m_name, duration, error_message);
 
     auto task_ptr = shared_from_this();
 
@@ -133,6 +150,7 @@ void TaskManager::start(std::shared_ptr<Task> task) {
     if (!task) return;
 
     if (task->getType() == TaskType::Blocking) {
+        LOG_INFO("[task name={}] started (blocking, sync)", task->getName());
         task->execute();
         return;
     }
@@ -140,6 +158,8 @@ void TaskManager::start(std::shared_ptr<Task> task) {
     std::lock_guard<std::mutex> lock(m_tasks_mutex);
     auto& entry = m_entries.emplace_back();
     entry.task = task;
+    LOG_INFO("[task name={}] started (async), total tasks={}",
+             task->getName(), m_entries.size());
     entry.thread = std::thread([task]() {
         task->execute();
         // 通知 waitForAll 检查 predicate
@@ -149,6 +169,7 @@ void TaskManager::start(std::shared_ptr<Task> task) {
 
 void TaskManager::cancel(std::shared_ptr<Task> task) {
     if (!task) return;
+    LOG_INFO("[task name={}] cancel requested", task->getName());
     task->cancel();
 }
 
@@ -177,6 +198,7 @@ std::vector<std::shared_ptr<Task>> TaskManager::getRunningTasks() const {
 void TaskManager::update() {
     std::lock_guard<std::mutex> lock(m_tasks_mutex);
 
+    size_t cleaned = 0;
     for (auto it = m_entries.begin(); it != m_entries.end(); ) {
         // Critical 类型不清理（持久任务）
         // 仅清理已 finished 的 entry，join 其线程
@@ -185,9 +207,13 @@ void TaskManager::update() {
                 it->thread.join();
             }
             it = m_entries.erase(it);
+            ++cleaned;
         } else {
             ++it;
         }
+    }
+    if (cleaned > 0) {
+        LOG_DEBUG("cleanup {} finished tasks, remaining={}", cleaned, m_entries.size());
     }
 }
 

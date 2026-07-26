@@ -252,6 +252,13 @@ Result<void, std::string> Client::run_stream(
 
             auto state = reader->next(should_stop, chunk);
 
+            // K-2：非 TUI 场景下若开启 EventBus 集成，需在同步阻塞期间
+            // 消费异步事件并清理已完成任务，避免事件滞留 / TaskManager 内存累积
+            if (m_publish_events) {
+                EventBus::instance().process_async_events();
+                TaskManager::instance().update();
+            }
+
             if (state == StreamState::HasData) {
                 if (!chunk.content_delta.empty() || !chunk.reasoning_delta.empty()) {
                     content_out += chunk.content_delta;

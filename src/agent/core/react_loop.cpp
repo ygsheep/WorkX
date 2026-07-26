@@ -438,6 +438,8 @@ ReActResult ReActLoop::run(
         tool::ToolContext ctx;
         ctx.cwd = std::filesystem::current_path().string();
         ctx.session_id = "default";
+        // 2.3 修复：将外部取消信号绑定到 ToolContext，工具可即时感知中断
+        ctx.cancel_flag = &should_cancel;
 
         for (const auto& tu : thought.tool_uses) {
             // --- Action 阶段 ---

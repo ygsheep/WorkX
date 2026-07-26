@@ -14,6 +14,8 @@
 #include <typeindex>
 #include <cstdint>
 
+#include "liblogger/logger.h"
+
 namespace agent {
 
 class EventToken {
@@ -129,6 +131,15 @@ public:
         m_async_queue.push_back([event]() {
             EventBus::instance().publish(event);
         });
+        // G-1 日志：记录事件入队与队列积压
+        const size_t queue_size = m_async_queue.size();
+        if (queue_size > 100) {
+            LOG_WARN("[event={}] publish_async backlog: {} events",
+                     typeid(T).name(), queue_size);
+        } else {
+            LOG_DEBUG("[event={}] publish_async enqueue, queue_size={}",
+                      typeid(T).name(), queue_size);
+        }
     }
 
     void process_async_events() {
@@ -138,18 +149,32 @@ public:
             queue_copy = std::move(m_async_queue);
             m_async_queue.clear();
         }
+        if (!queue_copy.empty()) {
+            LOG_DEBUG("process {} async events, remaining={}",
+                      queue_copy.size(), m_async_queue.size());
+        }
         for (auto& callback : queue_copy) {
             callback();
         }
     }
 
     void clear() {
+        size_t subscriber_count = 0;
+        size_t queue_size = 0;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
+            for (const auto& [_, callbacks] : m_callbacks) {
+                subscriber_count += callbacks.size();
+            }
             m_callbacks.clear();
         }
-        std::lock_guard<std::mutex> lock(m_async_mutex);
-        m_async_queue.clear();
+        {
+            std::lock_guard<std::mutex> lock(m_async_mutex);
+            queue_size = m_async_queue.size();
+            m_async_queue.clear();
+        }
+        LOG_INFO("EventBus cleared: {} subscribers, {} async events dropped",
+                 subscriber_count, queue_size);
     }
 
     // === 调试 / 诊断接口（G-1）===

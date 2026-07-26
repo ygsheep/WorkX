@@ -12,6 +12,7 @@
 #include "tui/widgets/bottom_bar_manager.h"
 #include "core/events/event_bus.h"
 #include "core/config/config_manager.h"
+#include "core/task/task_manager.h"
 #include "agent/message/types.h"
 
 #include <iostream>
@@ -89,10 +90,12 @@ Result<void, std::string> Terminal::initialize() {
     m_display_buffer->set_height(get_terminal_height());
 
     // 后台事件泵线程：确保异步事件（如流式输出）能被及时派发
+    // 同时驱动 TaskManager::update() 清理已完成任务（修复 1.2 / 2.1）
     m_event_pump_running = true;
     m_event_pump_thread = std::thread([this]() {
         while (m_event_pump_running) {
             EventBus::instance().process_async_events();
+            TaskManager::instance().update();
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
     });

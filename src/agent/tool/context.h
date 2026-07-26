@@ -28,19 +28,31 @@ struct ToolContext {
     std::string model;                      ///< 当前模型名称
     nlohmann::json options;                 ///< 额外选项
 
+    /// @brief 外部取消信号指针（可选）
+    /// @details 2.3 修复：由调用方（ReActLoop）传入 should_cancel 的地址，
+    ///          使工具能即时感知外部取消请求。nullptr 时回退到内部 cancelled_。
+    ///          生命周期由调用方保证（栈变量通常在 ToolContext 之上存活）。
+    const std::atomic<bool>* cancel_flag = nullptr;
+
     /// @brief 检查是否已取消
     /// @return 已取消返回 true
     bool is_cancelled() const {
+        if (cancel_flag != nullptr) {
+            return cancel_flag->load(std::memory_order_acquire);
+        }
         return cancelled_.load(std::memory_order_relaxed);
     }
 
-    /// @brief 请求取消
+    /// @brief 请求取消（仅当未绑定外部 cancel_flag 时有效）
     void cancel() {
-        cancelled_.store(true, std::memory_order_relaxed);
+        if (cancel_flag == nullptr) {
+            cancelled_.store(true, std::memory_order_relaxed);
+        }
+        // 绑定外部 cancel_flag 时由外部负责置位，本方法无操作
     }
 
 private:
-    std::atomic<bool> cancelled_{false};    ///< 取消标志
+    std::atomic<bool> cancelled_{false};    ///< 内部取消标志（fallback）
 };
 
 } // namespace agent::tool
