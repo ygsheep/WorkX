@@ -9,6 +9,8 @@
 
 ## 0. 诊断总览
 
+### 0.1 原诊断（已全部经代码验证为真实存在）
+
 | 子系统 | 核心问题 | 严重度 | 现有计划覆盖？ |
 |--------|---------|--------|-------------|
 | **EventBus** | 全局单例、无自动消费机制、事件类型散落 | 🔴 P0 | ❌ 未覆盖 |
@@ -17,10 +19,34 @@
 | **ChatSession** | 回调 lambda 过重、`session_id` 硬编码、重试递归 | 🟠 P1 | ⚠️ 部分覆盖（PHASE4） |
 | **CMake/目录** | 源文件手动枚举、无子模块 CMake | 🟡 P2 | ❌ 未覆盖 |
 
+### 0.2 架构探索新发现（文档原未覆盖，本次补充）
+
+| 编号 | 子系统 | 核心问题 | 严重度 | 处理方式 |
+|------|--------|---------|--------|---------|
+| **X-1** | 测试覆盖 | TaskManager/EventBus/ReActLoop/ToolExecutor 零单元测试 | 🔴 P0 | 本方案 Phase 0.5 |
+| **X-2** | 测试覆盖 | 集成测试依赖手动启动 Python server，CI 不可重复 | 🟠 P1 | 本方案 Phase 6 |
+| **T-2** | 线程安全 | 工具类无可重入性保证（PLAN 3.1 并行执行的前置条件） | 🟠 P1 | 本方案 Phase 3（新增） |
+| **K-1** | 线程安全 | ToolExecutor::execute() const 但 call() 可能修改状态 | 🟠 P1 | 本方案 Phase 3（新增） |
+| **K-2** | 事件系统 | Terminal 非唯一入口，Client::chat() 脚本场景不走主循环 | 🟠 P1 | 本方案 Phase 1 扩展 |
+| **C-1** | 配置管理 | ConfigManager 也是单例，与 EventBus 同病 | 🟠 P1 | 本方案 Phase 4 扩展 |
+| **D-1** | 依赖注入 | TaskManager 也是单例，测试无法注入线程池 mock | 🟠 P1 | 本方案 Phase 2 扩展 |
+| **L-4** | 线程安全 | Task::m_progress 也非原子（PLAN 2.4 只改 m_status 不完整） | 🟠 P1 | 本方案 Phase 1 扩展 |
+| **G-1** | 日志系统 | 核心模块几乎无日志（全项目仅 3 处 LOG） | 🟠 P1 | 每个 Phase 顺手补 |
+| **E-1** | 错误处理 | 4 种错误风格并存（Result/struct bool/异常混用） | 🟠 P1 | **独立立项 v2** |
+| **E-2** | 错误处理 | Result::unwrap() 抛异常是反模式 | 🟠 P1 | **独立立项 v2** |
+| **E-3** | 错误处理 | ChatSession::send_message() 返回 void，同步调用方无法感知失败 | 🟠 P1 | **独立立项 v2** |
+| **L-1** | 生命周期 | g_backend 裸指针跨函数传递所有权 | 🟠 P1 | 长期技术债（Phase 6+） |
+| **L-2** | 生命周期 | ReActLoop::m_provider 裸指针依赖文档约束 | 🟠 P1 | 长期技术债（Phase 6+） |
+| **T-1** | 线程安全 | EventBus publish() 持锁调回调，重入死锁风险 | 🟠 P1 | 本方案 Phase 4 |
+| **T-3** | 线程安全 | ChatRenderer 多数字段非原子 | 🟠 P1 | 本方案 Phase 3.5 |
+
+> P2/P3 共 14 条（L-3/L-5/T-4/T-5/T-6/C-2/C-3/G-2/G-3/G-4/H-1/H-2/H-3/H-4），详见探索报告，不在此表展开。
+
 **与现有计划的关系**：
 - `react-loop-plan.md` ✅ 已完成（ReActLoop 提取）
 - `PLAN_PHASE4.md` 🔧 待实施（代码质量 P2/P3，本方案不重复）
 - 本方案 🆕 聚焦 **架构级** 问题，与 PHASE4 正交、可并行
+- **`ARCH_REFACTOR_PLAN_V2.md`** 📋 独立项（错误处理统一，本方案完成后启动）
 
 ---
 
@@ -697,29 +723,75 @@ target_sources(workx_agent INTERFACE ${AGENT_SOURCES})
 
 ## 五、实施路线图
 
+> **执行顺序调整说明**：基于架构探索发现，新增 Phase 0.5（补测试）与 Phase 3（工具线程安全审计），
+> 扩展 Phase 1/2/4 覆盖新发现问题。每个 Phase 均包含日志补充任务（G-1）。
+
 ### Phase 0：准备（1 天）
 - [ ] 备份当前代码（git tag `before-arch-refactor`）
 - [ ] 确认所有测试可编译运行
 - [ ] 创建 feature 分支 `arch-refactor`
+- [ ] **日志（G-1）**：在 `lib/liblogger/logger.h` 确认 LOG_INFO/LOG_DEBUG/LOG_WARN/LOG_ERROR 宏可用；制定各模块日志埋点规范（含 session_id / task_id 上下文）
+
+### Phase 0.5：补核心模块测试（3 天）🔴 P0 — 新增
+> **目的**：建立回归网，后续 Phase 的重构需要测试保护。无测试不能重构。
+- [ ] `tests/unit/core/events/test_event_bus.cpp`：subscribe/unsubscribe/publish/publish_async/process_async_events/clear
+- [ ] `tests/unit/core/task/test_task_manager.cpp`：start/cancel/update/getRunningTasks/TaskStatus 状态机
+- [ ] `tests/unit/agent/core/test_react_loop.cpp`：Thought/Action/Observation 三阶段、should_cancel 中断、max_iterations
+- [ ] `tests/unit/agent/tool/test_tool_executor.cpp`：execute 权限检查、异常捕获、is_error 传播
+- [ ] `tests/unit/agent/tool/test_tool_registry.cpp`：register/lookup/权限路由
+- [ ] `tests/unit/tui/render/test_streaming_buffer.cpp`：push/stop/flush 多线程竞争
+- [ ] `tests/unit/tui/render/test_spinner.cpp`：start/stop/join
+- [ ] `tests/unit/tui/widgets/test_status_bar.cpp`：set_token_count/set_context_limit/set_cache_read_tokens 线程安全
+- [ ] 补 `MockProvider`：模拟流式 chunk、工具调用、错误响应（替换当前 test_chat_session.cpp:17-35 的简化版）
+- [ ] **日志（G-1）**：测试失败时输出 EventBus 队列状态、TaskManager 任务列表，便于定位
 
 ### Phase 1：P0 紧急修复（2 天）
 - [ ] **1.2** 在 `Terminal::run()` 中加入 `process_async_events()` 和 `TaskManager::update()` 调用
 - [ ] **2.1** 同上（已合并到 1.2）
 - [ ] **2.3** 修复 `ToolContext` 取消信号：传递 `should_cancel` 引用
 - [ ] **2.4** `TaskStatus` 改为原子类型
-- [ ] 编译验证 + 运行基本测试
+- [ ] **L-4 扩展**：`Task::m_progress` / `m_max_progress` 也改为 `std::atomic<float>`（PLAN 2.4 只改 m_status 不完整）
+- [ ] **K-2 扩展**：非 TUI 场景（`Client::chat()` / `chat_async()`）也需消费异步事件
+  - 方案：`Client` 内部启动轻量后台泵线程，或在 `chat()` 同步阻塞期间定期 `process_async_events()` + `TaskManager::update()`
+  - 单元测试场景：`MockEventBus` 同步发布，不依赖泵线程
+- [ ] 编译验证 + 运行 Phase 0.5 的测试
+- [ ] **日志（G-1）**：在 `EventBus::publish_async` 入队、`process_async_events` 消费、`TaskManager::start/update` 处加 LOG_DEBUG，统计队列积压
 
 ### Phase 2：任务系统增强（2 天）
 - [ ] **2.2** 实现 `ThreadPool`，替换 `TaskManager` 裸线程
 - [ ] `TaskManager` 适配线程池接口
+- [ ] **D-1 扩展**：`TaskManager` 单例 DI 化
+  - 抽取 `ITaskManager` 接口（或直接改为可注入的普通类）
+  - `ChatSession` / `Client` 构造函数接收 `TaskManager&`（或 `ITaskManager&`）
+  - `main.cpp` 显式组装，测试用 `MockTaskManager` 注入
 - [ ] 压力测试：并发启动 20+ 个 Task，验证线程数受限
+- [ ] **日志（G-1）**：ThreadPool 任务入队/出队/执行耗时/异常；Task 状态变更链路
 
-### Phase 3：ReAct Agent 增强（3 天）
-- [ ] **3.1** 实现并行工具执行（`std::async`）
+### Phase 3：工具线程安全审计（2 天）🟠 P1 — 新增
+> **目的**：PLAN 3.1 并行执行的先决条件。无审计直接并行化会引发数据竞争。
+- [ ] **T-2 审计**：逐个检查工具类的 `call()` 是否可重入
+  - `BashTool`：cwd/env 状态是否线程本地（当前未实现，需在实现时保证）
+  - `FileReadTool`：无状态，✅ 安全
+  - `FileWriteTool` / `FileEditTool`：`file_history` 有 mutex，但需审计并行写不同文件时的历史交叉
+  - `GlobTool` / `GrepTool`：无状态，✅ 安全
+  - `WebFetchTool`：HTTP 客户端是否线程安全（见 H-1）
+  - `MCPTool`：JSON-RPC 客户端是否线程安全
+- [ ] **K-1 修复**：`ToolExecutor::execute()` 是 `const` 但 `tool->call()` 可能修改工具状态
+  - 方案 A：`ITool::call()` 标注 `const` 语义为"逻辑 const"，工具内部用 mutex 保护可变状态
+  - 方案 B：`ToolExecutor` 为每个并行 tool_use 创建工具副本（若工具支持 clone）
+  - 方案 C：限制并行执行只针对无状态工具，有状态工具串行
+- [ ] **决策记录**：在 `plan/` 下产出《工具线程安全审计报告》，明确每个工具的并行策略
+- [ ] **日志（G-1）**：工具 execute 入口/出口、权限拒绝、异常捕获处加 LOG
+
+### Phase 3.5：ReAct Agent 增强（3 天）— 原 Phase 3
+> **前置条件**：Phase 3 工具线程安全审计完成
+- [ ] **3.1** 实现并行工具执行（`std::async`）— 仅对 Phase 3 审计通过的工具并行
 - [ ] **3.2** 实现 `IReActObserver`，重构 `ChatSession` 回调
 - [ ] **3.3** 实现 `ContextCompressor`（基础版：保留最近 N 轮 + 截断旧 tool_result）
-- [ ] **3.4** 实现 `ToolExecutor` 结果截断
+- [ ] **3.4** 实现 `ToolExecutor` 结果截断（`was_truncated` 字段）
+- [ ] **T-3 扩展**：`ChatRenderer` 跨线程字段原子化（`m_spinner_active`/`m_viewing_thinking`/`m_total_tokens` 等）
 - [ ] 编译验证 + Agent 端到端测试
+- [ ] **日志（G-1）**：ReActLoop 每轮 Thought/Action/Observation；ContextCompressor 压缩决策；工具截断事件
 
 ### Phase 4：事件系统重构（2 天）
 - [ ] **1.1** 新增 `IEventBus` 接口
@@ -728,16 +800,30 @@ target_sources(workx_agent INTERFACE ${AGENT_SOURCES})
 - [ ] `TaskManager` 注入 `IEventBus&`
 - [ ] `main.cpp` 组装时显式注入
 - [ ] **1.3** 新建 `core/events/events.h`，迁移事件类型
+- [ ] **C-1 扩展**：`ConfigManager` 单例 DI 化（同 EventBus 模式）
+  - 抽取 `IConfigManager` 接口
+  - `ChatSession` / `Terminal` / `SetupWizard` / `ModelSelector` 等接收 `IConfigManager&`
+  - 测试用 `MockConfigManager` 注入
+- [ ] **T-1 扩展**：修复 `EventBus::publish()` 持锁调回调的重入死锁风险
+  - 方案：回调执行移出锁外（拷贝订阅者列表后释放锁再调用）
+- [ ] **日志（G-1）**：subscribe/unsubscribe、publish 同步/异步、队列积压告警
 
 ### Phase 5：CMake 模块化（1 天）
 - [ ] **4.1** 按模块拆分 `CMakeLists.txt`
 - [ ] 验证所有平台可编译
+- [ ] **日志（G-1）**：无（构建系统无运行时日志需求）
 
-### Phase 6：回归测试（2 天）
+### Phase 6：回归测试与长期技术债（3 天）
 - [ ] 全量单元测试通过
+- [ ] **X-2 修复**：集成测试 Python server 自动化启动（CMake fixture 或 test 启动脚本）
 - [ ] 集成测试通过（需 LLM backend）
-- [ ] 性能基准：对比重构前后 token 吞吐、工具调用延迟
+- [ ] 性能基准：对比重构前后 token 吞吐、工具调用延迟、并行 vs 串行工具执行
 - [ ] 内存检查：无泄漏、无越界
+- [ ] **长期技术债登记**（不在本方案实施，登记到 PLAN_PHASE4 或新文档）：
+  - L-1/L-2/L-3：raw pointer 系统性替换为 `std::reference_wrapper` 或 `not_null<T*>`
+  - H-1/H-2/H-3：HTTP 客户端连接池、总时长超时、重试逻辑统一
+  - E-5/E-6：ExecutionResult 字段语义、HttpResponse 错误码（移交 v2）
+- [ ] **日志（G-1）**：补齐遗漏模块（PermissionChecker / SSEStreamReader 等）
 
 ---
 
@@ -745,25 +831,77 @@ target_sources(workx_agent INTERFACE ${AGENT_SOURCES})
 
 | 风险 | 影响 | 缓解措施 |
 |------|------|---------|
-| 并行工具执行导致文件竞争 | 高 | LLM 同一轮 tool_use 通常不操作同一文件；如有，由 OS 文件锁保护；后续可加文件锁管理器 |
+| 并行工具执行导致文件竞争 | 高 | Phase 3 审计先行；LLM 同一轮 tool_use 通常不操作同一文件；如有，由 OS 文件锁保护；后续可加文件锁管理器 |
+| **工具非线程安全导致并行化失败**（T-2/K-1） | 高 | Phase 3 审计后，对不安全工具降级为串行执行（方案 C）；审计报告明确每个工具策略 |
+| **非 TUI 场景异步事件滞留**（K-2） | 中 | Phase 1 扩展：Client 内部启动泵线程或同步消费；测试用 MockEventBus 同步发布 |
 | 上下文压缩导致 LLM 丢失关键信息 | 中 | 保留最近 3 轮完整上下文，仅压缩更早的；添加日志记录被压缩内容 |
 | ThreadPool 引入死锁 | 中 | 线程池任务不持有锁；Task 执行完自动通知；使用 `std::future::wait_for` 超时 |
-| IEventBus 接口变更导致编译失败 | 低 | 渐进式迁移，保留旧接口做 deprecated 转发；每次只改一个模块 |
+| IEventBus/IConfigManager/ITaskManager 接口变更导致编译失败 | 中 | 渐进式迁移，保留旧接口做 deprecated 转发；每次只改一个模块；Phase 0.5 测试保护 |
+| **EventBus publish 重入死锁**（T-1） | 中 | Phase 4 修复：回调执行移出锁外；Phase 0.5 测试覆盖重入场景 |
+| **ChatRenderer 跨线程字段撕裂**（T-3） | 中 | Phase 3.5 原子化；Phase 0.5 测试覆盖并发渲染 |
 | CMake 拆分破坏构建 | 低 | 保留根 CMake 做 fallback；CI 验证 Windows/Linux 双平台 |
+| **重构无回归网**（X-1） | 高 | Phase 0.5 先行补测试；每个 Phase 完成后跑全量测试 |
 
 ---
 
 ## 七、验收标准
 
-- [ ] `TaskManager::update()` 每帧被调用，已完成任务正确清理
-- [ ] 并发执行 10 个 `BashTool`（`sleep 1`），总耗时 < 2s（验证并行）
+### 7.1 功能验收
+- [ ] `TaskManager::update()` 每帧被调用（TUI 与非 TUI 场景均覆盖），已完成任务正确清理
+- [ ] 并发执行 10 个无状态 `BashTool`（`sleep 1`），总耗时 < 2s（验证并行）
 - [ ] 长会话（>30 轮）不触发 context limit 错误（验证压缩）
+- [ ] Ctrl+C 可中断正在执行的工具（验证取消信号传递）
+
+### 7.2 架构验收
 - [ ] `grep -r "EventBus::instance()" src/` 仅在 `core/events/` 和 `main.cpp` 中出现
-- [ ] 单元测试全部通过（`build/bin/workx_unit_tests.exe`）
+- [ ] `grep -r "ConfigManager::instance()" src/` 仅在 `core/config/` 和 `main.cpp` 中出现
+- [ ] `grep -r "TaskManager::instance()" src/` 仅在 `core/task/` 和 `main.cpp` 中出现
+- [ ] 三个单例均有对应接口（IEventBus / IConfigManager / ITaskManager）+ Mock 实现
+
+### 7.3 质量验收
+- [ ] 单元测试全部通过（`build/bin/workx_unit_tests.exe`），覆盖率较 Phase 0.5 前提升
+- [ ] 集成测试可自动化运行（X-2 修复）
 - [ ] 无新增编译警告
+- [ ] **日志覆盖**：核心模块（EventBus/TaskManager/ReActLoop/ChatSession/ToolExecutor/HttpClient）均有 LOG 埋点，关键路径可追溯
+
+### 7.4 文档验收
+- [ ] `plan/工具线程安全审计报告.md` 产出（Phase 3）
+- [ ] 本文档各 Phase 完成后勾选并标注实际耗时
 
 ---
 
-*文档版本: 1.0*  
+## 八、关联项目
+
+### 8.1 错误处理统一（独立立项 — V2）
+
+**项目代号**：`ARCH_REFACTOR_PLAN_V2.md`（待创建）
+**启动时机**：本方案（V1）完成后启动
+**覆盖问题**：
+- E-1：4 种错误处理风格并存（Result<T,E> / struct+bool / 异常 / HttpResponse+string）
+- E-2：`Result::unwrap()` 抛异常反模式
+- E-3：`ChatSession::send_message()` 返回 void，同步调用方无法感知失败
+- E-5：`ExecutionResult` 字段语义重叠（移交 V2）
+- E-6：`HttpResponse` 无错误码分类（移交 V2）
+
+**设计方向（初稿）**：
+- 统一采用 `Result<T, Error>` 风格，Error 为带错误码 + 上下文的类型
+- 废弃 `unwrap()` 抛异常路径，改为 `get_or` / `map` / `and_then` 链式
+- `send_message()` 返回 `Result<ReActResult, Error>`
+- `ExecutionResult` 重构为 `Result<ToolResult, ToolError>`，`was_truncated` 并入 ToolResult
+
+### 8.2 长期技术债（登记到 PLAN_PHASE4 或新文档）
+
+- L-1/L-2/L-3：raw pointer 系统性替换
+- L-5：StreamSession::m_multi 生命周期
+- T-4/T-5/T-6：StreamingBuffer / Terminal / Task 残余非原子字段
+- C-2/C-3/C-4：配置 schema、环境变量文档、ConfigScope 落地
+- G-2/G-3/G-4：Logger 析构 detach、命名空间、shared_ptr 单例
+- H-1/H-2/H-3/H-4：HTTP 客户端连接池、超时、重试、URL 解析
+- X-3：测试 Mock 增强
+- D-2/D-3：DI 容器、IBackend 接口职责
+
+---
+
+*文档版本: 1.1（整合架构探索发现，调整执行顺序）*  
 *基于代码版本: 2026-07-26*  
-*关联计划: react-loop-plan.md (已完成), PLAN_PHASE4.md (正交)*
+*关联计划: react-loop-plan.md (已完成), PLAN_PHASE4.md (正交), ARCH_REFACTOR_PLAN_V2.md (错误处理统一，待启动)*
