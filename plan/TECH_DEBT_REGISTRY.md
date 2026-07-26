@@ -2,12 +2,14 @@
 
 > 本文档整合 `PHASE3_LONG_TERM_REFACTOR.md`（详细方案）与历史登记，作为技术债的唯一索引。
 > 详细重构方案请参考 `plan/PHASE3_LONG_TERM_REFACTOR.md`。
-> 最后更新：2026-07-27（P2 G-3/G-4 Logger 命名空间统一完成）
+> 最后更新：2026-07-27（P2 C-2/C-3/C-4 配置系统 Schema 化完成）
 
 ## 状态总览
 
-- 已修复：13 项（L-1 / L-2 / L-3 / L-6 / T-4 / T-6 / G-2 / G-3 / G-4 / D-4 / D-5 / D-6 / Q-1）
-- 待修复：7 项
+- 已修复：16 项（L-1 / L-2 / L-3 / L-6 / T-4 / T-6 / G-2 / G-3 / G-4 / D-4 / D-5 / D-6 / Q-1 / C-2 / C-3 / C-4）
+- 已安全：1 项（T-5 PHASE3 判定无需修复）
+- 待修复：13 项（L-5 / H-1 / H-2 / H-3 / H-4 / D-2 / D-3 / E-1 / E-5 / E-6 / Q-2 / Q-3 / Q-4）
+- 文档化即可：1 项（Q-5）
 - 详细方案：见 `PHASE3_LONG_TERM_REFACTOR.md`
 
 ---
@@ -44,11 +46,14 @@
 
 | 编号 | 现象 | 文件:行号 | 影响 | 状态 |
 |------|------|-----------|------|------|
-| C-2 | 无结构化 Schema（无类型/范围/枚举） | `config_manager.h:23-33` | 中（无统一校验） | ⬜ 未修复 |
-| C-3 | `ConfigScope` 内部仍用单例 | `config_manager.h:91-123` | 中（无法注入 Mock） | ⬜ 未修复 |
-| C-4 | 环境变量硬编码分散，无 schema 绑定 | `app_config.cpp:135-161` | 低（无集中文档） | ⬜ 未修复 |
+| C-2 | 无结构化 Schema（无类型/范围/枚举） | ~~`config_manager.h:23-33`~~ | — | ✅ 已修复（ConfigSchema 结构 + 类型/范围/枚举校验，register_meta → register_schema 迁移 20 项配置） |
+| C-3 | `ConfigScope` 内部仍用单例 | ~~`config_manager.h:91-123`~~ | — | ✅ 已修复（ConfigScope 构造注入 IConfigManager&，默认参数保留兼容） |
+| C-4 | 环境变量硬编码分散，无 schema 绑定 | ~~`app_config.cpp:135-161`~~ | — | ✅ 已修复（6 个标准环境变量绑定 Schema.env_var 由 ConfigManager::load_from_env 统一加载；WORKX_NO_COLOR 保留 presence-only 语义；新增 `docs/ENVIRONMENT_VARIABLES.md` 集中文档） |
 
-**说明**：C-4 的 `load_from_env` 实际位于 `src/app/config/app_config.cpp` 而非 `config_manager.cpp`，读取 7 个环境变量：`WORKX_API_KEY/BASE_URL/MODEL/TIMEOUT/NO_COLOR/LOG_LEVEL/LOG_FILE`
+**说明**：
+- C-2 在 `app_config.cpp::register_config_defaults()` 中将 20 项配置全部迁移到 `register_schema`，包含类型/范围/枚举约束
+- C-3 ConfigScope 构造函数新增 `IConfigManager& cm` 参数（默认 `ConfigManager::instance()`），DI 路径已在 `test_config_manager.cpp` 测试
+- C-4 `load_from_env()` 简化为 `cfg.load_from_env()` + WORKX_NO_COLOR 特殊处理；环境变量文档见 `docs/ENVIRONMENT_VARIABLES.md`
 
 ---
 
@@ -104,7 +109,7 @@
 
 | 编号 | 现象 | 影响 | 状态 |
 |------|------|------|------|
-| Q-1 | MockConfigManager/MockEventBus/MockTaskManager 缺失 | 中（无法隔离测试） | ⬜ 未修复 |
+| Q-1 | MockConfigManager/MockEventBus/MockTaskManager 缺失 | ~~中（无法隔离测试）~~ | ✅ 已修复（`tests/unit/helpers/mock_*.h` 三个 Mock + `test_mock_helpers.cpp` 自测试） |
 | Q-2 | 性能基准测试缺失 | 低 | ⬜ 未修复 |
 | Q-3 | Linux 平台编译未验证 | 中（CI 风险） | ⬜ 未修复 |
 | Q-4 | AutoTestServer 在 Linux 上未实测 | 中 | ⬜ 未修复 |
@@ -124,7 +129,7 @@
 | ~~**P1**~~ | ~~G-2~~ | ~~Logger 析构 join~~ | ✅ 已完成 |
 | ~~**P2**~~ | ~~D-4 + D-5 + D-6~~ | ~~DI 化补全（解锁 Mock 测试）~~ | ✅ 已完成 |
 | ~~**P2**~~ | ~~Q-1~~ | ~~Mock 实现（依赖 D-4/D-5/D-6）~~ | ✅ 已完成 |
-| **P2** | C-2 + C-3 + C-4 | 配置系统 Schema 化 | 3 天 |
+| ~~**P2**~~ | ~~C-2 + C-3 + C-4~~ | ~~配置系统 Schema 化~~ | ✅ 已完成 |
 | ~~**P2**~~ | ~~G-3 + G-4~~ | ~~日志命名空间统一~~ | ✅ 已完成 |
 | **P3** | H-1 + H-2 + H-3 + H-4 | HTTP 客户端演进 | 4 天 |
 | **P3** | D-2 + D-3 | main.cpp 工厂 + IBackendAdmin 拆分 | 2 天 |

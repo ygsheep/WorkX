@@ -51,10 +51,15 @@ namespace keys {
     constexpr const char* EDIT_SCAN_SECRETS   = "tool.edit.scan_secrets";
 }
 
-/// @brief 注册所有配置项的元数据（描述、默认值、验证函数）
+/// @brief 注册所有配置项的结构化 Schema（类型/默认值/范围/枚举/环境变量映射）
+/// @details v2.0.0 起使用 ConfigSchema 替代 ConfigMeta，由 ConfigManager 在
+///          set_value() 时自动校验。环境变量绑定通过 Schema.env_var 声明。
 void register_config_defaults();
 
-/// @brief 从环境变量加载配置（WORKX_API_KEY, WORKX_BASE_URL 等）
+/// @brief 从环境变量加载配置
+/// @details 6 个标准环境变量由 ConfigManager::load_from_env() 按 Schema 加载：
+///          WORKX_API_KEY/BASE_URL/MODEL/TIMEOUT/LOG_LEVEL/LOG_FILE。
+///          WORKX_NO_COLOR 采用 presence-only 语义（兼容 no-color.org 规范）。
 void load_from_env();
 
 /// @brief 从配置文件加载

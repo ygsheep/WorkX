@@ -7,6 +7,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <filesystem>
 
@@ -109,6 +111,20 @@ Result<ConfigValue, std::string> ConfigManager::get_value(const std::string& key
 }
 
 Result<void, std::string> ConfigManager::set_value(const std::string& key, ConfigValue config_value) {
+    // C-2：Schema 校验（优先于 meta.validate_callback）
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto schema_it = m_schemas.find(key);
+        if (schema_it != m_schemas.end()) {
+            auto result = schema_it->second.validate_value(config_value);
+            if (result.isErr()) {
+                return Result<void, std::string>::err(
+                    std::format("Schema validation failed for '{}': {}", key, result.error())
+                );
+            }
+        }
+    }
+
     auto meta_it = m_metas.end();
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -269,8 +285,152 @@ std::vector<std::string> ConfigManager::get_all_keys() const {
     return keys;
 }
 
-ConfigScope::ConfigScope(const std::string& prefix)
-    : m_prefix(prefix) {
+// === C-2/C-4：结构化 Schema 实现 ===
+
+Result<void, std::string> ConfigSchema::validate_value(const ConfigValue& value) const {
+    // 类型校验
+    switch (type) {
+        case Type::Bool:
+            if (!std::holds_alternative<bool>(value)) {
+                return Result<void, std::string>::err(
+                    std::format("Expected bool, got {}", value.index() == 0 ? "bool" :
+                                value.index() == 1 ? "int" : value.index() == 2 ? "double" : "string"));
+            }
+            break;
+        case Type::Int:
+            if (!std::holds_alternative<int>(value)) {
+                return Result<void, std::string>::err("Expected int");
+            }
+            if (int_range) {
+                int v = std::get<int>(value);
+                if (v < int_range->first || v > int_range->second) {
+                    return Result<void, std::string>::err(std::format(
+                        "Value {} out of range [{}, {}]", v, int_range->first, int_range->second));
+                }
+            }
+            break;
+        case Type::Double:
+            if (!std::holds_alternative<double>(value)) {
+                return Result<void, std::string>::err("Expected double");
+            }
+            if (double_range) {
+                double v = std::get<double>(value);
+                if (v < double_range->first || v > double_range->second) {
+                    return Result<void, std::string>::err(std::format(
+                        "Value {} out of range [{}, {}]", v, double_range->first, double_range->second));
+                }
+            }
+            break;
+        case Type::String:
+            if (!std::holds_alternative<std::string>(value)) {
+                return Result<void, std::string>::err("Expected string");
+            }
+            break;
+        case Type::Enum:
+            if (!std::holds_alternative<std::string>(value)) {
+                return Result<void, std::string>::err("Expected string for enum");
+            }
+            {
+                const auto& s = std::get<std::string>(value);
+                if (std::find(enum_values.begin(), enum_values.end(), s) == enum_values.end()) {
+                    std::string allowed;
+                    for (size_t i = 0; i < enum_values.size(); ++i) {
+                        if (i > 0) allowed += ", ";
+                        allowed += enum_values[i];
+                    }
+                    return Result<void, std::string>::err(std::format(
+                        "Value '{}' not in enum [{}]", s, allowed));
+                }
+            }
+            break;
+    }
+
+    // 自定义验证
+    if (validate) {
+        auto result = validate(value);
+        if (result.isErr()) {
+            return result;
+        }
+    }
+
+    return Result<void, std::string>::ok();
+}
+
+void ConfigManager::register_schema(ConfigSchema schema) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_schemas[schema.key] = std::move(schema);
+}
+
+Result<ConfigSchema, std::string> ConfigManager::get_schema(const std::string& key) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_schemas.find(key);
+    if (it == m_schemas.end()) {
+        return Result<ConfigSchema, std::string>::err(
+            std::format("Config schema '{}' not found", key));
+    }
+    return Result<ConfigSchema, std::string>::ok(it->second);
+}
+
+std::vector<ConfigSchema> ConfigManager::get_all_schemas() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::vector<ConfigSchema> result;
+    result.reserve(m_schemas.size());
+    for (const auto& [_, schema] : m_schemas) {
+        result.push_back(schema);
+    }
+    return result;
+}
+
+void ConfigManager::load_from_env() {
+    // C-4：遍历所有已注册 Schema，按 env_var 加载环境变量
+    std::vector<std::pair<std::string, std::string>> env_bindings;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (const auto& [key, schema] : m_schemas) {
+            if (!schema.env_var.empty()) {
+                env_bindings.emplace_back(key, schema.env_var);
+            }
+        }
+    }
+
+    for (const auto& [key, env_var] : env_bindings) {
+        const char* val = std::getenv(env_var.c_str());
+        if (val == nullptr) continue;
+
+        // 查询 schema 获取类型
+        auto schema_result = get_schema(key);
+        if (schema_result.isErr()) continue;
+        const auto& schema = schema_result.unwrap();
+
+        // 按类型解析
+        ConfigValue parsed;
+        try {
+            switch (schema.type) {
+                case ConfigSchema::Type::Bool:
+                    parsed = (std::string(val) == "true" || std::string(val) == "1");
+                    break;
+                case ConfigSchema::Type::Int:
+                    parsed = std::stoi(val);
+                    break;
+                case ConfigSchema::Type::Double:
+                    parsed = std::stod(val);
+                    break;
+                case ConfigSchema::Type::String:
+                case ConfigSchema::Type::Enum:
+                    parsed = std::string(val);
+                    break;
+            }
+        } catch (const std::exception&) {
+            continue;  // 解析失败跳过
+        }
+
+        set_value(key, parsed);
+    }
+}
+
+ConfigScope::ConfigScope(const std::string& prefix, IConfigManager& cm)
+    : m_prefix(prefix)
+    , m_config(cm) {
     if (!m_prefix.empty() && m_prefix.back() != '.') {
         m_prefix += '.';
     }

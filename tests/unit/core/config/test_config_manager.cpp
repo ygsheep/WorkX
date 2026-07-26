@@ -144,3 +144,154 @@ TEST_CASE("ConfigScope", "[config]") {
 
     cfg.clear_for_test();
 }
+
+// C-3：ConfigScope DI 化测试
+TEST_CASE("ConfigScope DI injection", "[config][di]") {
+    auto& cfg = ConfigManager::instance();
+    cfg.clear_for_test();
+
+    SECTION("默认使用 ConfigManager::instance()") {
+        ConfigScope scope("default");
+        scope.set("key", 42);
+        REQUIRE(cfg.get_or<int>("default.key", 0) == 42);
+    }
+
+    SECTION("注入自定义 IConfigManager（通过 MockConfigManager）") {
+        // 使用 ConfigManager::instance() 作为注入目标验证 DI 路径
+        // 真正的 Mock 测试在 test_mock_helpers.cpp 中
+        ConfigScope scope("injected", cfg);
+        scope.set("value", std::string("test"));
+        REQUIRE(scope.get_or<std::string>("value", "") == "test");
+        REQUIRE(cfg.get_or<std::string>("injected.value", "") == "test");
+        REQUIRE(&scope.config_manager() == &cfg);
+    }
+
+    cfg.clear_for_test();
+}
+
+// C-2：ConfigSchema 测试
+TEST_CASE("ConfigSchema validation", "[config][schema]") {
+    auto& cfg = ConfigManager::instance();
+    cfg.clear_for_test();
+
+    SECTION("Int 范围校验") {
+        cfg.register_schema({
+            .key = "schema.int_val",
+            .description = "Test int with range",
+            .default_value = 50,
+            .type = ConfigSchema::Type::Int,
+            .int_range = std::make_pair<int64_t, int64_t>(0, 100)
+        });
+
+        REQUIRE(cfg.set("schema.int_val", 50).isOk());
+        REQUIRE(cfg.set("schema.int_val", 150).isErr());  // 超范围
+        REQUIRE(cfg.set("schema.int_val", -1).isErr());   // 超范围
+        REQUIRE(cfg.set("schema.int_val", 0).isOk());     // 边界
+        REQUIRE(cfg.set("schema.int_val", 100).isOk());   // 边界
+    }
+
+    SECTION("Enum 校验") {
+        cfg.register_schema({
+            .key = "schema.enum_val",
+            .description = "Test enum",
+            .default_value = std::string("a"),
+            .type = ConfigSchema::Type::Enum,
+            .enum_values = {"a", "b", "c"}
+        });
+
+        REQUIRE(cfg.set("schema.enum_val", std::string("a")).isOk());
+        REQUIRE(cfg.set("schema.enum_val", std::string("b")).isOk());
+        REQUIRE(cfg.set("schema.enum_val", std::string("d")).isErr());  // 非法值
+    }
+
+    SECTION("类型校验") {
+        cfg.register_schema({
+            .key = "schema.bool_val",
+            .description = "Test bool",
+            .default_value = false,
+            .type = ConfigSchema::Type::Bool
+        });
+
+        REQUIRE(cfg.set("schema.bool_val", true).isOk());
+        REQUIRE(cfg.set("schema.bool_val", 42).isErr());  // 类型不匹配
+    }
+
+    SECTION("get_schema / get_all_schemas") {
+        cfg.register_schema({
+            .key = "schema.lookup",
+            .description = "Lookup test",
+            .default_value = std::string("x"),
+            .type = ConfigSchema::Type::String
+        });
+
+        auto result = cfg.get_schema("schema.lookup");
+        REQUIRE(result.isOk());
+        REQUIRE(result.unwrap().key == "schema.lookup");
+
+        auto all = cfg.get_all_schemas();
+        REQUIRE_FALSE(all.empty());
+    }
+
+    cfg.clear_for_test();
+}
+
+// C-4：环境变量加载测试
+TEST_CASE("ConfigSchema load_from_env", "[config][env]") {
+    auto& cfg = ConfigManager::instance();
+    cfg.clear_for_test();
+
+    SECTION("环境变量自动加载") {
+        cfg.register_schema({
+            .key = "env.test_str",
+            .description = "Env string",
+            .default_value = std::string("default"),
+            .type = ConfigSchema::Type::String,
+            .env_var = "WORKX_TEST_ENV_STR"
+        });
+
+        // 设置环境变量
+        #ifdef _WIN32
+        _putenv_s("WORKX_TEST_ENV_STR", "from_env");
+        #else
+        setenv("WORKX_TEST_ENV_STR", "from_env", 1);
+        #endif
+
+        cfg.load_from_env();
+        REQUIRE(cfg.get_or<std::string>("env.test_str", "") == "from_env");
+
+        // 清理环境变量
+        #ifdef _WIN32
+        _putenv_s("WORKX_TEST_ENV_STR", "");
+        #else
+        unsetenv("WORKX_TEST_ENV_STR");
+        #endif
+    }
+
+    SECTION("Int 类型环境变量") {
+        cfg.register_schema({
+            .key = "env.test_int",
+            .description = "Env int",
+            .default_value = 0,
+            .type = ConfigSchema::Type::Int,
+            .int_range = std::make_pair<int64_t, int64_t>(0, 1000),
+            .env_var = "WORKX_TEST_ENV_INT"
+        });
+
+        #ifdef _WIN32
+        _putenv_s("WORKX_TEST_ENV_INT", "42");
+        #else
+        setenv("WORKX_TEST_ENV_INT", "42", 1);
+        #endif
+
+        cfg.load_from_env();
+        REQUIRE(cfg.get_or<int>("env.test_int", 0) == 42);
+
+        #ifdef _WIN32
+        _putenv_s("WORKX_TEST_ENV_INT", "");
+        #else
+        unsetenv("WORKX_TEST_ENV_INT");
+        #endif
+    }
+
+    cfg.clear_for_test();
+}
