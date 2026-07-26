@@ -142,8 +142,8 @@ struct ReActLoopFixture {
         registry->register_tool(echo_tool);
     }
 
-    ReActLoop make_loop(ReActLoop::Config config = {}) {
-        return ReActLoop(provider.get(), registry, config);
+    std::unique_ptr<ReActLoop> make_loop(ReActLoop::Config config = ReActLoop::Config{}) {
+        return std::make_unique<ReActLoop>(provider.get(), registry, config);
     }
 
     /// @brief 创建一个返回纯文本（无工具调用）的 reader
@@ -191,7 +191,7 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop returns FinalAnswer when no tool_u
 
     std::vector<ChatMessage> messages = {ChatMessage::user("hi")};
     auto loop = make_loop();
-    auto result = loop.run(messages, "", nlohmann::json::array(), should_cancel);
+    auto result = loop->run(messages, "", nlohmann::json::array(), should_cancel);
 
     REQUIRE_FALSE(result.was_error);
     REQUIRE_FALSE(result.was_interrupted);
@@ -212,7 +212,7 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop captures reasoning content", "[rea
 
     std::vector<ChatMessage> messages = {ChatMessage::user("q")};
     auto loop = make_loop();
-    auto result = loop.run(messages, "", nlohmann::json::array(), should_cancel);
+    auto result = loop->run(messages, "", nlohmann::json::array(), should_cancel);
 
     REQUIRE(result.final_answer == "answer");
     REQUIRE(result.final_reasoning == "thinking...");
@@ -227,7 +227,7 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop captures token statistics", "[reac
 
     std::vector<ChatMessage> messages = {ChatMessage::user("q")};
     auto loop = make_loop();
-    auto result = loop.run(messages, "", nlohmann::json::array(), should_cancel);
+    auto result = loop->run(messages, "", nlohmann::json::array(), should_cancel);
 
     REQUIRE(result.prompt_tokens == 100);
     REQUIRE(result.generated_tokens == 200);
@@ -248,7 +248,7 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop executes tool and feeds result bac
 
     std::vector<ChatMessage> messages = {ChatMessage::user("echo hello")};
     auto loop = make_loop();
-    auto result = loop.run(messages, "", registry->get_all_schemas(), should_cancel);
+    auto result = loop->run(messages, "", registry->get_all_schemas(), should_cancel);
 
     REQUIRE_FALSE(result.was_error);
     REQUIRE(result.final_answer == "Done after echo");
@@ -282,7 +282,7 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop tool not found returns error resul
 
     std::vector<ChatMessage> messages = {ChatMessage::user("q")};
     auto loop = make_loop();
-    auto result = loop.run(messages, "", registry->get_all_schemas(), should_cancel);
+    auto result = loop->run(messages, "", registry->get_all_schemas(), should_cancel);
 
     REQUIRE(result.total_tool_calls == 1);
     REQUIRE(messages[2].role == ChatMessage::Role::Tool);
@@ -298,7 +298,7 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop tool exception is caught and repor
 
     std::vector<ChatMessage> messages = {ChatMessage::user("q")};
     auto loop = make_loop();
-    auto result = loop.run(messages, "", registry->get_all_schemas(), should_cancel);
+    auto result = loop->run(messages, "", registry->get_all_schemas(), should_cancel);
 
     REQUIRE(result.total_tool_calls == 1);
     REQUIRE(messages[2].role == ChatMessage::Role::Tool);
@@ -314,7 +314,7 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop tool permission denied is reported
 
     std::vector<ChatMessage> messages = {ChatMessage::user("q")};
     auto loop = make_loop();
-    auto result = loop.run(messages, "", registry->get_all_schemas(), should_cancel);
+    auto result = loop->run(messages, "", registry->get_all_schemas(), should_cancel);
 
     REQUIRE(result.total_tool_calls == 1);
     REQUIRE(messages[2].content.find("Permission denied") != std::string::npos);
@@ -337,7 +337,7 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop stops at max_iterations", "[react_
     }
 
     std::vector<ChatMessage> messages = {ChatMessage::user("loop")};
-    auto result = loop.run(messages, "", registry->get_all_schemas(), should_cancel);
+    auto result = loop->run(messages, "", registry->get_all_schemas(), should_cancel);
 
     REQUIRE(result.total_iterations == 3);
     REQUIRE(result.was_error);  // 达到 max_iterations 视为错误
@@ -357,7 +357,7 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop cancels during Thought phase", "[r
 
     std::vector<ChatMessage> messages = {ChatMessage::user("q")};
     auto loop = make_loop();
-    auto result = loop.run(messages, "", nlohmann::json::array(), should_cancel);
+    auto result = loop->run(messages, "", nlohmann::json::array(), should_cancel);
 
     REQUIRE(result.was_interrupted);
     REQUIRE_FALSE(result.was_error);
@@ -373,7 +373,7 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop handles stream error", "[react_loo
 
     std::vector<ChatMessage> messages = {ChatMessage::user("q")};
     auto loop = make_loop();
-    auto result = loop.run(messages, "", nlohmann::json::array(), should_cancel);
+    auto result = loop->run(messages, "", nlohmann::json::array(), should_cancel);
 
     REQUIRE(result.was_error);
     REQUIRE(result.error_message.find("Stream error") != std::string::npos);
@@ -384,7 +384,7 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop handles null reader", "[react_loop
     // 不设置 next_reader，submit_completion 返回 nullptr
     std::vector<ChatMessage> messages = {ChatMessage::user("q")};
     auto loop = make_loop();
-    auto result = loop.run(messages, "", nlohmann::json::array(), should_cancel);
+    auto result = loop->run(messages, "", nlohmann::json::array(), should_cancel);
 
     REQUIRE(result.was_error);
     REQUIRE(result.error_message.find("Stream error") != std::string::npos);
@@ -405,7 +405,7 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop invokes on_step callback for each 
 
     std::vector<ChatMessage> messages = {ChatMessage::user("q")};
     auto loop = make_loop();
-    auto result = loop.run(messages, "", registry->get_all_schemas(), should_cancel, on_step);
+    auto result = loop->run(messages, "", registry->get_all_schemas(), should_cancel, on_step);
 
     // 应有：Thought(1) + Action(1) + Observation(1) + Thought(2) + FinalAnswer(2) = 5 步
     // 但实际代码可能只记录 Thought + FinalAnswer 步骤，Action/Observation 不一定单独记录
@@ -435,7 +435,7 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop invokes on_token callback for cont
 
     std::vector<ChatMessage> messages = {ChatMessage::user("q")};
     auto loop = make_loop();
-    auto result = loop.run(messages, "", nlohmann::json::array(), should_cancel, nullptr, on_token);
+    auto result = loop->run(messages, "", nlohmann::json::array(), should_cancel, nullptr, on_token);
 
     REQUIRE(collected_content == "Hello world!");
     REQUIRE(result.final_answer == "Hello world!");
@@ -457,7 +457,7 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop invokes on_token for reasoning del
 
     std::vector<ChatMessage> messages = {ChatMessage::user("q")};
     auto loop = make_loop();
-    auto result = loop.run(messages, "", nlohmann::json::array(), should_cancel, nullptr, on_token);
+    auto result = loop->run(messages, "", nlohmann::json::array(), should_cancel, nullptr, on_token);
 
     REQUIRE(collected_reasoning == "step1 step2");
 }
@@ -470,8 +470,8 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop works without registry (no tools)"
     auto reader = make_text_reader("plain answer");
 
     std::vector<ChatMessage> messages = {ChatMessage::user("q")};
-    ReActLoop loop(provider.get(), nullptr, {});  // registry = nullptr
-    auto result = loop.run(messages, "", nlohmann::json::array(), should_cancel);
+    auto loop = std::make_unique<ReActLoop>(provider.get(), nullptr, ReActLoop::Config{});  // registry = nullptr
+    auto result = loop->run(messages, "", nlohmann::json::array(), should_cancel);
 
     REQUIRE(result.final_answer == "plain answer");
     REQUIRE(result.total_tool_calls == 0);

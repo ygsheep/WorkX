@@ -17,6 +17,7 @@
 #include "core/events/event_bus.h"
 #include "agent/message/types.h"
 
+#include <cassert>
 #include <chrono>
 #include <thread>
 #include <algorithm>
@@ -347,6 +348,8 @@ ChatRenderer::ChatRenderer(Terminal* terminal)
     , m_formatter(std::make_unique<OutputFormatter>(terminal))
     , m_stream_buf(std::make_unique<StreamingBuffer>(terminal))
 {
+    // L-3 生命周期契约：Terminal 必须长于 ChatRenderer，由调用方（main.cpp）保证
+    assert(terminal != nullptr && "ChatRenderer: Terminal must outlive ChatRenderer");
 }
 
 ChatRenderer::~ChatRenderer() {

@@ -2,12 +2,12 @@
 
 > 本文档整合 `PHASE3_LONG_TERM_REFACTOR.md`（详细方案）与历史登记，作为技术债的唯一索引。
 > 详细重构方案请参考 `plan/PHASE3_LONG_TERM_REFACTOR.md`。
-> 最后更新：2026-07-27（基于源码核查）
+> 最后更新：2026-07-27（P1 批量修复完成）
 
 ## 状态总览
 
-- 已修复：1 项（L-1）
-- 待修复：19 项
+- 已修复：7 项（L-1 / L-2 / L-3 / L-6 / T-4 / T-6 / G-2）
+- 待修复：13 项
 - 详细方案：见 `PHASE3_LONG_TERM_REFACTOR.md`
 
 ---
@@ -17,10 +17,10 @@
 | 编号 | 现象 | 文件:行号 | 影响 | 状态 |
 |------|------|-----------|------|------|
 | L-1 | `IBackend* g_backend` 全局裸指针跨函数传递 | ~~main.cpp:170~~ | — | ✅ 已修复（改用 `session->backend()`） |
-| L-2 | `ReActLoop::m_provider` 裸指针 + 默认移动构造 | `react_loop.h:296, :192` | 中（移动后悬空） | ⬜ 未修复 |
-| L-3 | `ChatRenderer::m_terminal` 裸指针无契约 | `chat_renderer.h:66` | 低（依赖调用顺序） | ⬜ 未修复 |
+| L-2 | `ReActLoop::m_provider` 裸指针 + 默认移动构造 | ~~`react_loop.h:296, :192`~~ | — | ✅ 已修复（删除移动构造 + 构造 assert） |
+| L-3 | `ChatRenderer::m_terminal` 裸指针无契约 | ~~`chat_renderer.h:66`~~ | — | ✅ 已修复（构造 assert 生命周期契约） |
 | L-5 | `StreamSession::m_multi` 裸 CURLM 跨析构依赖 | `http_client.cpp:297, :201-211` | 低（防御已加） | ⬜ 未修复 |
-| L-6 | `Client::m_task_manager` 裸指针移动后无 assert | `client.h:196, client.cpp:136-151` | 低 | ⬜ 未修复（PHASE3 判定维持现状） |
+| L-6 | `Client::m_task_manager` 裸指针移动后无 assert | ~~`client.h:196, client.cpp:136-151`~~ | — | ✅ 已修复（析构 assert） |
 
 **说明**：
 - L-1 采用 PHASE3 方案 A 已修复，`_scripts/fix_gbackend.py` 留存重构痕迹
@@ -56,7 +56,7 @@
 
 | 编号 | 现象 | 文件:行号 | 影响 | 状态 |
 |------|------|-----------|------|------|
-| G-2 | `~Logger()` detach 写线程，use-after-free 风险 | `lib/liblogger/logger.h:141` | 中（崩溃风险） | ⬜ 未修复 |
+| G-2 | `~Logger()` detach 写线程，use-after-free 风险 | ~~`lib/liblogger/logger.h:141`~~ | — | ✅ 已修复（detach → join，先 join 再关闭文件流） |
 | G-3 | 命名空间混乱（`Agent` vs `agent`） | `logger.h:46, :344, :360-365` | 低（混淆） | ⬜ 未修复 |
 | G-4 | `get_instance()` 返回 `shared_ptr` 语义错误 | `logger.h:162-168` | 低 | ⬜ 未修复 |
 
@@ -68,9 +68,9 @@
 
 | 编号 | 现象 | 文件:行号 | 影响 | 状态 |
 |------|------|-----------|------|------|
-| T-4 | `Terminal::m_running/m_initialized` 非 atomic | `terminal.h:184-185` | 低（实际同线程） | ⬜ 未修复 |
+| T-4 | `Terminal::m_running/m_initialized` 非 atomic | ~~`terminal.h:184-185`~~ | — | ✅ 已修复（改 atomic<bool>） |
 | T-5 | `StreamingBuffer::stop()` flush 竞争 | `streaming_buffer.cpp:57-71` | — | ✅ 已安全（PHASE3 判定无需修复） |
-| T-6 | `Task::m_start_time` 非 atomic + 无 static_assert | `task_manager.h:146` | 低（单线程访问） | ⬜ 未修复 |
+| T-6 | `Task::m_start_time` 非 atomic + 无 static_assert | ~~`task_manager.h:146`~~ | — | ✅ 已修复（atomic<int64_t> 存 ns + static_assert + helper） |
 
 **说明**：T-5 实现细节与 PHASE3 伪代码略有差异（用 `std::lock_guard` 而非 `atomic store`），但 PHASE3 §6.1 本就判定"当前实现安全"
 
@@ -119,9 +119,9 @@
 | 优先级 | 项 | 理由 | 预估工期 |
 |--------|-----|------|----------|
 | **P0** | Q-3 + Q-4 | Linux CI 是后续所有验证的基础 | 2-3 天 |
-| **P1** | L-2 + L-3 + L-6 | 裸指针修复（低风险快速收益） | 2 天 |
-| **P1** | T-4 + T-6 | 防御性原子化 + static_assert | 0.5 天 |
-| **P1** | G-2 | Logger 析构 join（崩溃风险） | 0.5 天 |
+| ~~**P1**~~ | ~~L-2 + L-3 + L-6~~ | ~~裸指针修复~~ | ✅ 已完成 |
+| ~~**P1**~~ | ~~T-4 + T-6~~ | ~~防御性原子化 + static_assert~~ | ✅ 已完成 |
+| ~~**P1**~~ | ~~G-2~~ | ~~Logger 析构 join~~ | ✅ 已完成 |
 | **P2** | D-4 + D-5 + D-6 | DI 化补全（解锁 Mock 测试） | 3 天 |
 | **P2** | Q-1 | Mock 实现（依赖 D-4/D-5/D-6） | 2 天 |
 | **P2** | C-2 + C-3 + C-4 | 配置系统 Schema 化 | 3 天 |

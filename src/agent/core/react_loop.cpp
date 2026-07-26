@@ -12,6 +12,7 @@
 #include "liblogger/logger.h"
 
 #include <cctype>
+#include <cassert>
 #include <filesystem>
 #include <format>
 #include <future>
@@ -32,6 +33,7 @@ ReActLoop::ReActLoop(ICompletionProvider* provider,
     , m_config(config)
     , m_compressor(m_config.compressor_cfg)
 {
+    assert(provider != nullptr && "ReActLoop: provider must not be null");
     if (m_registry) {
         m_executor = std::make_unique<tool::ToolExecutor>(m_registry);
     }

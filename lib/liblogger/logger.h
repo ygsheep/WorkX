@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file logger.h
  * @brief 现代C++20轻量级日志系统
  * @details
@@ -134,11 +134,13 @@ public:
      * @brief 析构函数
      */
     ~Logger() {
-        // 停止写入线程
+        // G-2：停止写入线程（join 替代 detach，避免 use-after-free）
+        // 顺序：先设置 running=false 唤醒写线程，再 join 等待其处理完队列并退出，
+        //       最后关闭文件流。若 detach 则写线程可能在文件流关闭后仍写入。
         if (m_writer_thread.joinable()) {
             m_writer_running.store(false, std::memory_order_relaxed);
             m_queue_cv.notify_all();
-            m_writer_thread.detach();  // 使用 detach 避免阻塞
+            m_writer_thread.join();  // 等待写线程退出（最多阻塞 100ms）
         }
 
         // 关闭文件流

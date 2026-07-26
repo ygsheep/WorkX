@@ -58,7 +58,8 @@ Result<void, std::string> RemoteBackend::initialize(const BackendConfig& config)
 
     EventBus::instance().publish_async(BackendStatusEvent{
         .status = BackendStatusEvent::Connected,
-        .backend_name = name()
+        .backend_name = name(),
+        .error = {}
     });
 
     return Result<void, std::string>::ok();
@@ -79,7 +80,8 @@ void RemoteBackend::shutdown() {
 
         EventBus::instance().publish_async(BackendStatusEvent{
             .status = BackendStatusEvent::Disconnected,
-            .backend_name = name()
+            .backend_name = name(),
+            .error = {}
         });
     }
 }

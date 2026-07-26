@@ -191,11 +191,11 @@ public:
 
     ~ReActLoop() = default;
 
-    // 不可拷贝，可移动
+    // 不可拷贝，不可移动（m_provider 引用外部对象，移动后悬空）
     ReActLoop(const ReActLoop&) = delete;
     ReActLoop& operator=(const ReActLoop&) = delete;
-    ReActLoop(ReActLoop&&) = default;
-    ReActLoop& operator=(ReActLoop&&) = default;
+    ReActLoop(ReActLoop&&) = delete;
+    ReActLoop& operator=(ReActLoop&&) = delete;
 
     // ============================================================
     // 主接口
@@ -298,7 +298,7 @@ private:
     // 成员
     // ============================================================
 
-    ICompletionProvider* m_provider;              ///< 推理提供者（非拥有）
+    ICompletionProvider* m_provider = nullptr;    ///< 推理提供者（非拥有，外部对象须长于 ReActLoop）
     std::shared_ptr<tool::ToolRegistry> m_registry; ///< 工具注册表
     std::unique_ptr<tool::ToolExecutor> m_executor; ///< 工具执行器
     Config m_config;                              ///< 循环配置

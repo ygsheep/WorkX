@@ -8,6 +8,7 @@
 #include "agent/api/client.h"
 
 #include <chrono>
+#include <cassert>
 #include <thread>
 
 #include "agent/api/i_backend.h"
@@ -116,6 +117,11 @@ Client::Client(std::unique_ptr<IBackend> backend,
 }
 
 Client::~Client() {
+    // L-6：移动后 m_task_manager 可能为 nullptr，正常析构不应出现
+    // 若 m_backend 存在却无 task_manager，说明对象状态异常
+    assert((!m_backend || m_task_manager != nullptr) &&
+           "Client::~Client: m_task_manager null but m_backend alive (moved-from?)");
+
     if (m_subscribed && m_interrupt_token.is_valid()) {
         EventBus::instance().unsubscribe<InterruptEvent>(m_interrupt_token);
     }

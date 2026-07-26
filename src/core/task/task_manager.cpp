@@ -33,7 +33,10 @@ void Task::execute() {
         return;
     }
 
-    m_start_time = std::chrono::steady_clock::now();
+    m_start_time_ns.store(
+        std::chrono::steady_clock::now().time_since_epoch().count(),
+        std::memory_order_relaxed
+    );
     LOG_DEBUG("[task name={}] execute begin", m_name);
 
     const auto task_ptr = shared_from_this();
@@ -52,7 +55,7 @@ void Task::execute() {
             m_status.store(TaskStatus::Cancelled, std::memory_order_release);
 
             auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - m_start_time
+                std::chrono::steady_clock::now() - start_time()
             ).count();
 
             LOG_INFO("[task name={}] cancelled, duration={}ms", m_name, duration);
@@ -84,7 +87,7 @@ void Task::markCompleted() {
     m_status.store(TaskStatus::Completed, std::memory_order_release);
 
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - m_start_time
+        std::chrono::steady_clock::now() - start_time()
     ).count();
 
     LOG_DEBUG("[task name={}] execute end, status=Completed, duration={}ms",
@@ -107,7 +110,7 @@ void Task::markFailed(const std::string& error_message) {
     m_status.store(TaskStatus::Failed, std::memory_order_release);
 
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - m_start_time
+        std::chrono::steady_clock::now() - start_time()
     ).count();
 
     LOG_DEBUG("[task name={}] execute end, status=Failed, duration={}ms, error={}",

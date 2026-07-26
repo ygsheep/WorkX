@@ -18,6 +18,7 @@
 #include <condition_variable>
 #include <chrono>
 #include <thread>
+#include <type_traits>
 
 #include "core/task/thread_pool.h"
 #include "core/events/event_bus.h"
@@ -45,6 +46,10 @@ class Task : public std::enable_shared_from_this<Task> {
 public:
     using TaskFunc = std::function<void(const std::atomic<bool>& should_cancel)>;
     using FinishedCallback = std::function<void()>;
+
+    // T-6：编译期验证 start_time 原子字段满足 trivially copyable 要求
+    static_assert(std::is_trivially_copyable_v<std::atomic<int64_t>>,
+                  "std::atomic<int64_t> must be trivially copyable");
 
     /// @brief 构造
     /// @param event_bus 事件总线引用（D-1 DI：Task 通过它发布生命周期事件）
@@ -131,6 +136,13 @@ private:
     void markCompleted();
     void markFailed(const std::string& error_message = "Unknown error");
 
+    /// @brief 读取开始时间点（线程安全）
+    [[nodiscard]] std::chrono::steady_clock::time_point start_time() const noexcept {
+        return std::chrono::steady_clock::time_point{
+            std::chrono::nanoseconds{m_start_time_ns.load(std::memory_order_relaxed)}
+        };
+    }
+
 private:
     std::string m_name;
     TaskFunc m_func;
@@ -143,7 +155,9 @@ private:
     std::atomic<bool> m_should_cancel{false};
     std::function<void()> m_completed_callback;
 
-    std::chrono::steady_clock::time_point m_start_time;
+    // T-6：start_time 原子化（存 nanoseconds since epoch），消除潜在数据竞争
+    // 使用 int64_t 而非 time_point，确保跨平台 trivially copyable
+    std::atomic<int64_t> m_start_time_ns{0};
 
     // D-1：DI 注入的事件总线与结束回调
     IEventBus& m_event_bus;

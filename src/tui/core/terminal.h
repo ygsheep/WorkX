@@ -181,8 +181,9 @@ private:
     InputCallback m_input_callback;
     CtrlOCallback m_ctrl_o_callback;
     StatusRefreshCallback m_status_refresh_callback;
-    bool m_running = false;
-    bool m_initialized = false;
+    // T-4：跨线程访问（主线程 + 事件泵线程），原子化消除数据竞争
+    std::atomic<bool> m_running{false};
+    std::atomic<bool> m_initialized{false};
 
     History m_history;
     std::mutex m_output_mutex;  ///< 保护 IPlatform 输出操作
