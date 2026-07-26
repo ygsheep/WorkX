@@ -5,17 +5,21 @@
  */
 
 #include "core/task/task_manager.h"
-#include "core/events/event_bus.h"
 #include "core/task/task_events.h"
 #include "liblogger/logger.h"
 #include <algorithm>
 
 namespace agent {
 
-Task::Task(std::string name, TaskFunc func, float max_progress)
+Task::Task(std::string name, TaskFunc func,
+           IEventBus& event_bus,
+           FinishedCallback on_finished,
+           float max_progress)
     : m_name(std::move(name))
     , m_func(std::move(func))
     , m_max_progress(max_progress)
+    , m_event_bus(event_bus)
+    , m_on_finished(std::move(on_finished))
 {
 }
 
@@ -34,7 +38,7 @@ void Task::execute() {
 
     const auto task_ptr = shared_from_this();
 
-    EventBus::instance().publish_async(TaskStartedEvent{
+    m_event_bus.publish_async(TaskStartedEvent{
         .task = task_ptr,
         .task_name = m_name
     });
@@ -53,7 +57,7 @@ void Task::execute() {
 
             LOG_INFO("[task name={}] cancelled, duration={}ms", m_name, duration);
 
-            EventBus::instance().publish_async(TaskCancelledEvent{
+            m_event_bus.publish_async(TaskCancelledEvent{
                 .task = task_ptr,
                 .task_name = m_name,
                 .duration_ms = static_cast<float>(duration)
@@ -67,9 +71,11 @@ void Task::execute() {
         markFailed("Unknown exception");
     }
 
-    // 2.2：通过 TaskManager 单例通知 cv，让 waitForAll 能感知任务结束
+    // 通知 TaskManager 任务已结束，唤醒 waitForAll
     // （线程池模式下任务在 worker 线程执行，无 thread 可 join）
-    TaskManager::instance().m_tasks_cv.notify_all();
+    if (m_on_finished) {
+        m_on_finished();
+    }
 }
 
 void Task::markCompleted() {
@@ -86,7 +92,7 @@ void Task::markCompleted() {
 
     auto task_ptr = shared_from_this();
 
-    EventBus::instance().publish_async(TaskCompletedEvent{
+    m_event_bus.publish_async(TaskCompletedEvent{
         .task = task_ptr,
         .task_name = m_name,
         .duration_ms = static_cast<float>(duration)
@@ -109,7 +115,7 @@ void Task::markFailed(const std::string& error_message) {
 
     auto task_ptr = shared_from_this();
 
-    EventBus::instance().publish_async(TaskFailedEvent{
+    m_event_bus.publish_async(TaskFailedEvent{
         .task = task_ptr,
         .task_name = m_name,
         .error_message = error_message,
@@ -129,7 +135,12 @@ std::shared_ptr<Task> TaskManager::create(
     Task::TaskFunc func,
     TaskType type
 ) {
-    auto task = std::make_shared<Task>(name, std::move(func), 100.0f);
+    // 捕获 this 通过 callback 通知 m_tasks_cv，避免 Task 反向依赖 TaskManager 单例
+    auto task = std::make_shared<Task>(
+        name, std::move(func),
+        m_event_bus,
+        [this]() { m_tasks_cv.notify_all(); },
+        100.0f);
     task->setType(type);
     return task;
 }

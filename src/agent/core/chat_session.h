@@ -14,10 +14,12 @@
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
+#include <functional>
 #include "agent/api/i_completion_provider.h"
 #include "agent/api/chat_types.h"
 #include "agent/core/react_observer.h"
 #include "core/events/event_bus.h"
+#include "core/config/config_manager.h"
 #include "core/utils/result.h"
 #include "agent/message/types.h"
 #include "agent/tool/registry.h"
@@ -33,11 +35,11 @@ namespace agent {
 class ChatSession {
 public:
     /// @brief ReAct 循环事件发布器（3.2 IReActObserver 实现）
-    /// @details 将 ReActLoop 步骤事件转换为 EventBus 异步事件，
+    /// @details 将 ReActLoop 步骤事件转换为 IEventBus 异步事件，
     ///          使 ReActLoop 可脱离 EventBus 体系独立使用与测试。
     class ReActEventPublisher : public IReActObserver {
     public:
-        explicit ReActEventPublisher(std::string session_id);
+        explicit ReActEventPublisher(IEventBus& bus, std::string session_id);
         ~ReActEventPublisher() override = default;
 
         void on_thought(const ReActStep& step) override;
@@ -48,6 +50,7 @@ public:
                       const std::string& reasoning_delta) override;
 
     private:
+        IEventBus& m_bus;
         std::string m_session_id;
     };
     /// @brief 构造
@@ -56,10 +59,16 @@ public:
     /// @param session_id 会话标识（用于事件流区分多会话，默认 "default"）
     /// @param task_manager 任务管理器（D-1 DI 注入，默认全局单例；
     ///                     测试可传入 MockTaskManager）
+    /// @param event_bus 事件总线（D-1 DI 注入，默认全局单例；
+    ///                  测试可传入 MockEventBus）
+    /// @param config_manager 配置管理器（C-1 DI 注入，默认全局单例；
+    ///                       测试可传入 MockConfigManager）
     explicit ChatSession(std::unique_ptr<ICompletionProvider> provider,
                          int retry_delay_ms = 1000,
                          std::string session_id = "default",
-                         ITaskManager& task_manager = TaskManager::instance());
+                         ITaskManager& task_manager = TaskManager::instance(),
+                         IEventBus& event_bus = EventBus::instance(),
+                         IConfigManager& config_manager = ConfigManager::instance());
 
     ~ChatSession();
 
@@ -114,6 +123,12 @@ private:
 
     // D-1：任务管理器引用（非拥有，构造注入；ChatSession 不可移动，引用安全）
     std::reference_wrapper<ITaskManager> m_task_manager;
+
+    // D-1：事件总线引用（非拥有，构造注入）
+    std::reference_wrapper<IEventBus> m_event_bus;
+
+    // C-1：配置管理器引用（非拥有，构造注入）
+    std::reference_wrapper<IConfigManager> m_config_manager;
 
     // 工具注册表（可选，为空时不启用 function calling）
     std::shared_ptr<tool::ToolRegistry> m_tool_registry;

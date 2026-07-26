@@ -45,7 +45,7 @@ struct TaskManagerFixture {
 // ============================================================================
 
 TEST_CASE("Task default status is Pending", "[task_manager][task]") {
-    Task task("test", [](const std::atomic<bool>&) {});
+    Task task("test", [](const std::atomic<bool>&) {}, EventBus::instance());
     REQUIRE(task.getStatus() == TaskStatus::Pending);
     REQUIRE(task.getName() == "test");
     REQUIRE(task.getType() == TaskType::Normal);
@@ -54,7 +54,7 @@ TEST_CASE("Task default status is Pending", "[task_manager][task]") {
 }
 
 TEST_CASE("Task setProgress updates progress and completes at max", "[task_manager][task]") {
-    Task task("progress_test", [](const std::atomic<bool>&) {}, 100.0f);
+    Task task("progress_test", [](const std::atomic<bool>&) {}, EventBus::instance(), {}, 100.0f);
     REQUIRE(task.getProgress() == 0.0f);
     REQUIRE(task.getMaxProgress() == 100.0f);
 
@@ -69,14 +69,14 @@ TEST_CASE("Task setProgress updates progress and completes at max", "[task_manag
 }
 
 TEST_CASE("Task setProgress clamps to max_progress", "[task_manager][task]") {
-    Task task("clamp", [](const std::atomic<bool>&) {}, 50.0f);
+    Task task("clamp", [](const std::atomic<bool>&) {}, EventBus::instance(), {}, 50.0f);
     task.setProgress(200.0f);
     REQUIRE(task.getProgress() == 50.0f);
     REQUIRE(task.getStatus() == TaskStatus::Completed);
 }
 
 TEST_CASE("Task addProgress increments and completes at max", "[task_manager][task]") {
-    Task task("incremental", [](const std::atomic<bool>&) {}, 30.0f);
+    Task task("incremental", [](const std::atomic<bool>&) {}, EventBus::instance(), {}, 30.0f);
 
     task.addProgress(10.0f);
     REQUIRE(task.getProgress() == 10.0f);
@@ -91,7 +91,7 @@ TEST_CASE("Task addProgress increments and completes at max", "[task_manager][ta
 }
 
 TEST_CASE("Task cancel sets should_cancel flag", "[task_manager][task]") {
-    Task task("cancellable", [](const std::atomic<bool>&) {});
+    Task task("cancellable", [](const std::atomic<bool>&) {}, EventBus::instance());
     REQUIRE_FALSE(task.shouldCancel());
 
     task.cancel();
@@ -99,7 +99,7 @@ TEST_CASE("Task cancel sets should_cancel flag", "[task_manager][task]") {
 }
 
 TEST_CASE("Task setType changes type", "[task_manager][task]") {
-    Task task("typed", [](const std::atomic<bool>&) {});
+    Task task("typed", [](const std::atomic<bool>&) {}, EventBus::instance());
     REQUIRE(task.getType() == TaskType::Normal);
 
     task.setType(TaskType::Background);
@@ -401,6 +401,8 @@ TEST_CASE_METHOD(TaskManagerFixture, "Task onCompleted callback fires on complet
     auto task = std::make_shared<Task>(
         "with_callback",
         [](const std::atomic<bool>&) { /* quick */ },
+        EventBus::instance(),
+        std::function<void()>{},
         100.0f
     );
     task->onCompleted([&callback_fired]() {
@@ -449,6 +451,8 @@ TEST_CASE_METHOD(TaskManagerFixture, "TaskManager stress test: 50 concurrent tas
                 concurrent.fetch_sub(1, std::memory_order_relaxed);
                 completed_count.fetch_add(1, std::memory_order_relaxed);
             },
+            EventBus::instance(),
+            std::function<void()>{},
             100.0f
         );
         TaskManager::instance().start(task);

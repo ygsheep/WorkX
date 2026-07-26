@@ -20,6 +20,7 @@
 #include <thread>
 
 #include "core/task/thread_pool.h"
+#include "core/events/event_bus.h"
 
 namespace agent {
 
@@ -43,8 +44,15 @@ class TaskManager;
 class Task : public std::enable_shared_from_this<Task> {
 public:
     using TaskFunc = std::function<void(const std::atomic<bool>& should_cancel)>;
+    using FinishedCallback = std::function<void()>;
 
-    Task(std::string name, TaskFunc func, float max_progress = 100.0f);
+    /// @brief 构造
+    /// @param event_bus 事件总线引用（D-1 DI：Task 通过它发布生命周期事件）
+    /// @param on_finished 任务结束时的通知回调（用于唤醒 TaskManager::waitForAll）
+    Task(std::string name, TaskFunc func,
+         IEventBus& event_bus,
+         FinishedCallback on_finished = {},
+         float max_progress = 100.0f);
     ~Task();
 
     [[nodiscard]] const std::string& getName() const { return m_name; }
@@ -137,6 +145,10 @@ private:
 
     std::chrono::steady_clock::time_point m_start_time;
 
+    // D-1：DI 注入的事件总线与结束回调
+    IEventBus& m_event_bus;
+    FinishedCallback m_on_finished;
+
     friend class TaskManager;
 };
 
@@ -190,6 +202,10 @@ public:
     TaskManager(TaskManager&&) = delete;
     TaskManager& operator=(TaskManager&&) = delete;
 
+    /// @brief 构造（D-1 DI：可注入 IEventBus，默认使用全局单例）
+    explicit TaskManager(IEventBus& event_bus = EventBus::instance())
+        : m_pool(0), m_event_bus(event_bus) {}
+
     std::shared_ptr<Task> create(
         const std::string& name,
         Task::TaskFunc func,
@@ -219,14 +235,13 @@ public:
     [[nodiscard]] size_t pending_count() const { return m_pool.pending_count(); }
 
 private:
-    /// @brief 默认构造：使用 hardware_concurrency 大小的线程池
-    TaskManager() : m_pool(0) {}
     ~TaskManager() override;
 
     std::vector<std::shared_ptr<Task>> m_entries;
     mutable std::mutex m_tasks_mutex;
     std::condition_variable m_tasks_cv;
     ThreadPool m_pool;
+    IEventBus& m_event_bus;
 
     friend class Task;  // Task::execute 结束时通知 m_tasks_cv
 };

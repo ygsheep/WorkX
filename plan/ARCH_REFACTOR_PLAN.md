@@ -794,19 +794,21 @@ target_sources(workx_agent INTERFACE ${AGENT_SOURCES})
 - [x] **日志（G-1）**：ReActLoop 每轮 Thought/Action/Observation；ContextCompressor 压缩决策；工具截断事件
 
 ### Phase 4：事件系统重构（2 天）
-- [ ] **1.1** 新增 `IEventBus` 接口
-- [ ] `EventBus` 继承 `IEventBus`
-- [ ] `ChatSession` 构造函数注入 `IEventBus&`
-- [ ] `TaskManager` 注入 `IEventBus&`
-- [ ] `main.cpp` 组装时显式注入
-- [ ] **1.3** 新建 `core/events/events.h`，迁移事件类型
-- [ ] **C-1 扩展**：`ConfigManager` 单例 DI 化（同 EventBus 模式）
-  - 抽取 `IConfigManager` 接口
-  - `ChatSession` / `Terminal` / `SetupWizard` / `ModelSelector` 等接收 `IConfigManager&`
-  - 测试用 `MockConfigManager` 注入
-- [ ] **T-1 扩展**：修复 `EventBus::publish()` 持锁调回调的重入死锁风险
-  - 方案：回调执行移出锁外（拷贝订阅者列表后释放锁再调用）
-- [ ] **日志（G-1）**：subscribe/unsubscribe、publish 同步/异步、队列积压告警
+- [x] **1.1** 新增 `IEventBus` 接口（类型擦除虚函数 + 模板包装，_raw 后缀避免 MSVC 解析歧义）
+- [x] `EventBus` 继承 `IEventBus`
+- [x] `ChatSession` 构造函数注入 `IEventBus&`（同时注入 `IConfigManager&`）
+- [x] `TaskManager` 注入 `IEventBus&`（Task 构造也接收 IEventBus&，消除单例依赖）
+- [x] `main.cpp` 组装时显式注入（TaskManager::instance / EventBus::instance / ConfigManager::instance 三处显式组装）
+- [ ] **1.3** 新建 `core/events/events.h`，迁移事件类型（暂缓，事件类型已分散在 `task_events.h`/`message/types.h`，迁移收益较小）
+- [x] **C-1 扩展**：`ConfigManager` 单例 DI 化（同 EventBus 模式）
+  - [x] 抽取 `IConfigManager` 接口
+  - [x] `ChatSession` 接收 `IConfigManager&`（使用 `std::reference_wrapper` 成员）
+  - [ ] `Terminal` / `SetupWizard` / `ModelSelector` 接收 `IConfigManager&`（暂缓，后续按需迁移）
+  - [ ] 测试用 `MockConfigManager` 注入（暂缓，待 Phase 6 补 Mock 测试）
+- [x] **T-1 扩展**：修复 `EventBus::publish()` 持锁调回调的重入死锁风险
+  - 方案：回调执行移出锁外（拷贝 `callbacks_copy` 后释放锁再调用）
+- [x] **日志（G-1）**：subscribe/unsubscribe、publish 同步/异步、队列积压告警（>100 触发 WARN）
+- [x] 编译验证 + 全量单元测试通过（336 test cases / 1142 assertions）
 
 ### Phase 5：CMake 模块化（1 天）
 - [ ] **4.1** 按模块拆分 `CMakeLists.txt`

@@ -215,11 +215,13 @@ static int run(int argc, char* argv[]) {
 
         g_backend = backend.get();
         int default_retry_delay = preset && preset->retry_delay_ms > 0 ? preset->retry_delay_ms : 1000;
-        // D-1：显式组装注入 — ChatSession 共用 TaskManager 单例（未来切换测试替身时
-        // 只需改这一处）
+        // D-1：显式组装依赖 — 三大核心组件均通过单例注入，
+        // 未来切换 Mock 时只需修改这三处引用
         session = std::make_unique<ChatSession>(
             std::move(backend), default_retry_delay, "default",
-            TaskManager::instance());
+            TaskManager::instance(),
+            EventBus::instance(),
+            ConfigManager::instance());
 
         if (verbose) {
             std::cerr << "[debug] Backend ready\n";

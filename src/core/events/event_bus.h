@@ -1,8 +1,8 @@
 /**
  * @file event_bus.h
  * @brief 类型安全的事件总线 + RAII 事件守卫
- * @details Header-only，无外部依赖
- * @version 1.0.0
+ * @details Header-only，无外部依赖。继承 IEventBus 支持 DI 注入。
+ * @version 2.0.0
  */
 
 #pragma once
@@ -15,46 +15,12 @@
 #include <cstdint>
 
 #include "liblogger/logger.h"
+#include "core/events/event_token.h"
+#include "core/events/i_event_bus.h"
 
 namespace agent {
 
-class EventToken {
-public:
-    using ID = uint64_t;
-
-    EventToken() : m_id(0), m_is_valid(false) {}
-    explicit EventToken(ID id) : m_id(id), m_is_valid(true) {}
-
-    EventToken(const EventToken&) = default;
-    EventToken& operator=(const EventToken&) = default;
-
-    EventToken(EventToken&& other) noexcept
-        : m_id(other.m_id), m_is_valid(other.m_is_valid) {
-        other.m_is_valid = false;
-        other.m_id = 0;
-    }
-
-    EventToken& operator=(EventToken&& other) noexcept {
-        if (this != &other) {
-            m_id = other.m_id;
-            m_is_valid = other.m_is_valid;
-            other.m_is_valid = false;
-            other.m_id = 0;
-        }
-        return *this;
-    }
-
-    [[nodiscard]] bool is_valid() const { return m_is_valid; }
-    [[nodiscard]] ID get_id() const { return m_id; }
-
-    void invalidate() { m_is_valid = false; }
-
-private:
-    ID m_id;
-    bool m_is_valid;
-};
-
-class EventBus final {
+class EventBus final : public IEventBus {
 public:
     static EventBus& instance() noexcept {
         static EventBus inst;
@@ -66,30 +32,31 @@ public:
     EventBus(EventBus&&) = delete;
     EventBus& operator=(EventBus&&) = delete;
 
-    template<typename T>
-    [[nodiscard]] EventToken subscribe(std::function<void(const T&)> callback) {
+    // === IEventBus 类型擦除接口实现 ===
+
+    EventToken subscribe_raw(std::type_index type,
+                             std::function<void(const void*)> callback) override {
         std::lock_guard<std::mutex> lock(m_mutex);
 
         auto token = EventToken(m_next_token_id++);
 
-        auto& callbacks = m_callbacks[typeid(T)];
+        auto& callbacks = m_callbacks[type];
         callbacks.push_back(CallbackWrapper{
-            .callback = [callback](const void* event) {
-                callback(*static_cast<const T*>(event));
-            },
+            .callback = std::move(callback),
             .token_id = token.get_id()
         });
 
+        LOG_DEBUG("[event={}] subscribe, token={}, total_subscribers={}",
+                  type.name(), token.get_id(), callbacks.size());
         return token;
     }
 
-    template<typename T>
-    void unsubscribe(const EventToken& token) {
+    void unsubscribe_raw(std::type_index type, const EventToken& token) override {
         if (!token.is_valid()) return;
 
         std::lock_guard<std::mutex> lock(m_mutex);
 
-        auto it = m_callbacks.find(typeid(T));
+        auto it = m_callbacks.find(type);
         if (it != m_callbacks.end()) {
             auto& callbacks = it->second;
             callbacks.erase(
@@ -99,23 +66,24 @@ public:
                     }),
                 callbacks.end()
             );
+            LOG_DEBUG("[event={}] unsubscribe, token={}, remaining={}",
+                      type.name(), token.get_id(), callbacks.size());
         }
     }
 
-    template<typename T>
-    void publish(const T& event) {
-        // 拷贝回调列表，避免持锁调用用户代码（防止死锁与重入问题）
+    void publish_raw(std::type_index type, const void* event) override {
+        // T-1 修复：拷贝回调列表，避免持锁调用用户代码（防止死锁与重入问题）
         std::vector<CallbackWrapper> callbacks_copy;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
-            auto it = m_callbacks.find(typeid(T));
+            auto it = m_callbacks.find(type);
             if (it == m_callbacks.end()) return;
             callbacks_copy = it->second;
         }
 
         for (const auto& wrapper : callbacks_copy) {
             try {
-                wrapper.callback(&event);
+                wrapper.callback(event);
             } catch (const std::exception&) {
                 // 吞掉标准异常，不中断其他回调
             } catch (...) {
@@ -124,25 +92,22 @@ public:
         }
     }
 
-    template<typename T>
-    void publish_async(const T& event) {
+    void publish_async_raw(std::type_index type,
+                           std::function<void()> emitter) override {
         std::lock_guard<std::mutex> lock(m_async_mutex);
-        // 不捕获 this，通过 instance() 访问单例
-        m_async_queue.push_back([event]() {
-            EventBus::instance().publish(event);
-        });
+        m_async_queue.push_back(std::move(emitter));
         // G-1 日志：记录事件入队与队列积压
         const size_t queue_size = m_async_queue.size();
         if (queue_size > 100) {
             LOG_WARN("[event={}] publish_async backlog: {} events",
-                     typeid(T).name(), queue_size);
+                     type.name(), queue_size);
         } else {
             LOG_DEBUG("[event={}] publish_async enqueue, queue_size={}",
-                      typeid(T).name(), queue_size);
+                      type.name(), queue_size);
         }
     }
 
-    void process_async_events() {
+    void process_async_events() override {
         std::vector<std::function<void()>> queue_copy;
         {
             std::lock_guard<std::mutex> lock(m_async_mutex);
@@ -158,7 +123,7 @@ public:
         }
     }
 
-    void clear() {
+    void clear() override {
         size_t subscriber_count = 0;
         size_t queue_size = 0;
         {
@@ -177,25 +142,14 @@ public:
                  subscriber_count, queue_size);
     }
 
-    // === 调试 / 诊断接口（G-1）===
-    // 用于测试失败时输出 EventBus 内部状态，便于定位问题
+    // === 诊断接口 ===
 
-    /// @brief 异步事件队列当前积压数量
-    [[nodiscard]] size_t async_queue_size() const {
+    [[nodiscard]] size_t async_queue_size() const override {
         std::lock_guard<std::mutex> lock(m_async_mutex);
         return m_async_queue.size();
     }
 
-    /// @brief 指定事件类型的订阅者数量
-    template<typename T>
-    [[nodiscard]] size_t subscriber_count() const {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        auto it = m_callbacks.find(typeid(T));
-        return it != m_callbacks.end() ? it->second.size() : 0;
-    }
-
-    /// @brief 全部事件类型的订阅者总数
-    [[nodiscard]] size_t total_subscriber_count() const {
+    [[nodiscard]] size_t total_subscriber_count() const override {
         std::lock_guard<std::mutex> lock(m_mutex);
         size_t total = 0;
         for (const auto& [_, callbacks] : m_callbacks) {
@@ -204,9 +158,16 @@ public:
         return total;
     }
 
+protected:
+    [[nodiscard]] size_t subscriber_count_typed(std::type_index type) const override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_callbacks.find(type);
+        return it != m_callbacks.end() ? it->second.size() : 0;
+    }
+
 private:
     EventBus() = default;
-    ~EventBus() = default;
+    ~EventBus() override = default;
 
     struct CallbackWrapper {
         std::function<void(const void*)> callback;
