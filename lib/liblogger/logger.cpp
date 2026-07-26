@@ -1,14 +1,13 @@
-﻿/**
+/**
  * @file logger.cpp
  * @brief Logger 实现
  */
 
 #include "logger.h"
 
-namespace Agent {
-// 静态成员初始化
-std::shared_ptr<Logger> Logger::instance = nullptr;
-std::once_flag Logger::initFlag;
+namespace agent::log {
+// G-4：移除 static shared_ptr<Logger> instance 和 once_flag
+// 改为 get_instance() 内 static 局部变量（Meyers Singleton）
 // ============================================================================
 // Logger 实现
 // ============================================================================
@@ -175,4 +174,4 @@ void Logger::writer_thread_func() {
     }
 }
 
-} // namespace DearTs
+} // namespace agent::log

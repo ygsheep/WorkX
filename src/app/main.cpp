@@ -88,24 +88,25 @@ static int run(int argc, char* argv[]) {
 
     // ---- 初始化日志系统 ----
     {
-        auto logger = Agent::Logger::get_instance();
+        // G-3/G-4：使用 agent::log::Logger 全限定名 + 引用调用
+        auto& logger = agent::log::Logger::get_instance();
 
         // 设置日志级别
         std::string level_str = cfg.get_or<std::string>(keys::LOG_LEVEL, "info");
         std::transform(level_str.begin(), level_str.end(), level_str.begin(), ::tolower);
-        if (level_str == "trace")       logger->set_level(Agent::LogLevel::TRACE);
-        else if (level_str == "debug")  logger->set_level(Agent::LogLevel::DEBUG);
-        else if (level_str == "warn")   logger->set_level(Agent::LogLevel::WARN);
-        else if (level_str == "error")  logger->set_level(Agent::LogLevel::ERROR);
-        else if (level_str == "fatal")  logger->set_level(Agent::LogLevel::FATAL);
-        else                            logger->set_level(Agent::LogLevel::INFO);
+        if (level_str == "trace")       logger.set_level(agent::log::LogLevel::TRACE);
+        else if (level_str == "debug")  logger.set_level(agent::log::LogLevel::DEBUG);
+        else if (level_str == "warn")   logger.set_level(agent::log::LogLevel::WARN);
+        else if (level_str == "error")  logger.set_level(agent::log::LogLevel::ERROR);
+        else if (level_str == "fatal")  logger.set_level(agent::log::LogLevel::FATAL);
+        else                            logger.set_level(agent::log::LogLevel::INFO);
 
         // 启用文件输出（默认写入 %APPDATA%/workx/logs/workx.log）
         std::string log_file = cfg.get_or<std::string>(keys::LOG_FILE, "");
         if (log_file.empty()) {
             log_file = default_log_path().string();
         }
-        logger->enable_file_output(log_file, true);
+        logger.enable_file_output(log_file, true);
     }
 
     // ---- Debug 启动信息 ----

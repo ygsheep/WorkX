@@ -43,7 +43,8 @@
 #endif
 #endif
 
-namespace Agent {
+// G-3：命名空间统一为 agent::log（小写），保留 Agent 作为向后兼容 alias
+namespace agent::log {
 
 // 取消 Windows 头文件定义的宏，避免与 LogLevel 枚举冲突
 #ifdef ERROR
@@ -159,13 +160,10 @@ public:
 
     /**
      * @brief 获取Logger单例实例
-     * @return Logger引用
+     * @return Logger引用（G-4：返回引用替代 shared_ptr，单例不应共享所有权）
      */
-    static std::shared_ptr<Logger> get_instance() noexcept {
-        std::call_once(initFlag, []() {
-            // 使用 new 初始化 unique_ptr
-            instance = std::make_shared<Logger>(Token{});
-        });
+    static Logger& get_instance() noexcept {
+        static Logger instance(Token{});
         return instance;
     }
 
@@ -311,8 +309,8 @@ private:
     void writer_thread_func();
 
     // ==================== 成员变量 ====================
-    static std::shared_ptr<Logger> instance;
-    static std::once_flag initFlag;
+    // G-4：移除 static shared_ptr<Logger> instance 和 once_flag
+    // 改为 get_instance() 内 static 局部变量（Meyers Singleton）
 
     // 日志级别
     std::atomic<int> m_level{static_cast<int>(LogLevel::INFO)};
@@ -343,34 +341,39 @@ private:
 // 便捷访问函数
 // ============================================================================
 
-} // namespace DearTs
+} // namespace agent::log
+
+// G-3：向后兼容 alias（旧代码使用 Agent::Logger，新代码用 agent::log::Logger）
+namespace Agent = agent::log;
 
 // ============================================================================
 // 日志宏 - 统一简洁的 API
 // ============================================================================
 
 // 简单字符串日志（无需格式化）
-#define LOG_TRACE_STR(msg) Logger::get_instance()->trace(msg)
-#define LOG_DEBUG_STR(msg) Logger::get_instance()->debug(msg)
-#define LOG_INFO_STR(msg)  Logger::get_instance()->info(msg)
-#define LOG_WARN_STR(msg)  Logger::get_instance()->warn(msg)
-#define LOG_ERROR_STR(msg) Logger::get_instance()->error(msg)
-#define LOG_FATAL_STR(msg) Logger::get_instance()->fatal(msg)
+// G-4：get_instance() 返回引用，用 . 替代 ->
+#define LOG_TRACE_STR(msg) ::agent::log::Logger::get_instance().trace(msg)
+#define LOG_DEBUG_STR(msg) ::agent::log::Logger::get_instance().debug(msg)
+#define LOG_INFO_STR(msg)  ::agent::log::Logger::get_instance().info(msg)
+#define LOG_WARN_STR(msg)  ::agent::log::Logger::get_instance().warn(msg)
+#define LOG_ERROR_STR(msg) ::agent::log::Logger::get_instance().error(msg)
+#define LOG_FATAL_STR(msg) ::agent::log::Logger::get_instance().fatal(msg)
 
 // 格式化日志（使用 std::format）
 // C++20 __VA_OPT__ 标准写法，兼容新预处理器
-#define LOG_TRACE(fmt, ...) Agent::Logger::get_instance()->trace(std::format(fmt __VA_OPT__(,) __VA_ARGS__))
-#define LOG_DEBUG(fmt, ...) Agent::Logger::get_instance()->debug(std::format(fmt __VA_OPT__(,) __VA_ARGS__))
-#define LOG_INFO(fmt, ...)  Agent::Logger::get_instance()->info(std::format(fmt __VA_OPT__(,) __VA_ARGS__))
-#define LOG_WARN(fmt, ...)  Agent::Logger::get_instance()->warn(std::format(fmt __VA_OPT__(,) __VA_ARGS__))
-#define LOG_ERROR(fmt, ...) Agent::Logger::get_instance()->error(std::format(fmt __VA_OPT__(,) __VA_ARGS__))
-#define LOG_FATAL(fmt, ...) Agent::Logger::get_instance()->fatal(std::format(fmt __VA_OPT__(,) __VA_ARGS__))
+// G-3/G-4：宏用 agent::log::Logger 全限定名 + 引用调用
+#define LOG_TRACE(fmt, ...) ::agent::log::Logger::get_instance().trace(std::format(fmt __VA_OPT__(,) __VA_ARGS__))
+#define LOG_DEBUG(fmt, ...) ::agent::log::Logger::get_instance().debug(std::format(fmt __VA_OPT__(,) __VA_ARGS__))
+#define LOG_INFO(fmt, ...)  ::agent::log::Logger::get_instance().info(std::format(fmt __VA_OPT__(,) __VA_ARGS__))
+#define LOG_WARN(fmt, ...)  ::agent::log::Logger::get_instance().warn(std::format(fmt __VA_OPT__(,) __VA_ARGS__))
+#define LOG_ERROR(fmt, ...) ::agent::log::Logger::get_instance().error(std::format(fmt __VA_OPT__(,) __VA_ARGS__))
+#define LOG_FATAL(fmt, ...) ::agent::log::Logger::get_instance().fatal(std::format(fmt __VA_OPT__(,) __VA_ARGS__))
 
 // 向后兼容宏
-#define DEARTS_LOGGER() Logger::get_instance()
-#define DEARTS_LOG_TRACE(msg) Logger::get_instance()->trace(msg)
-#define DEARTS_LOG_DEBUG(msg) Logger::get_instance()->debug(msg)
-#define DEARTS_LOG_INFO(msg)  Logger::get_instance()->info(msg)
-#define DEARTS_LOG_WARN(msg)  Logger::get_instance()->warn(msg)
-#define DEARTS_LOG_ERROR(msg) Logger::get_instance()->error(msg)
-#define DEARTS_LOG_FATAL(msg) Logger::get_instance()->fatal(msg)
+#define DEARTS_LOGGER() ::agent::log::Logger::get_instance()
+#define DEARTS_LOG_TRACE(msg) ::agent::log::Logger::get_instance().trace(msg)
+#define DEARTS_LOG_DEBUG(msg) ::agent::log::Logger::get_instance().debug(msg)
+#define DEARTS_LOG_INFO(msg)  ::agent::log::Logger::get_instance().info(msg)
+#define DEARTS_LOG_WARN(msg)  ::agent::log::Logger::get_instance().warn(msg)
+#define DEARTS_LOG_ERROR(msg) ::agent::log::Logger::get_instance().error(msg)
+#define DEARTS_LOG_FATAL(msg) ::agent::log::Logger::get_instance().fatal(msg)

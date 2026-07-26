@@ -2,12 +2,12 @@
 
 > 本文档整合 `PHASE3_LONG_TERM_REFACTOR.md`（详细方案）与历史登记，作为技术债的唯一索引。
 > 详细重构方案请参考 `plan/PHASE3_LONG_TERM_REFACTOR.md`。
-> 最后更新：2026-07-27（P2 Q-1 Mock 实现完成）
+> 最后更新：2026-07-27（P2 G-3/G-4 Logger 命名空间统一完成）
 
 ## 状态总览
 
-- 已修复：11 项（L-1 / L-2 / L-3 / L-6 / T-4 / T-6 / G-2 / D-4 / D-5 / D-6 / Q-1）
-- 待修复：9 项
+- 已修复：13 项（L-1 / L-2 / L-3 / L-6 / T-4 / T-6 / G-2 / G-3 / G-4 / D-4 / D-5 / D-6 / Q-1）
+- 待修复：7 项
 - 详细方案：见 `PHASE3_LONG_TERM_REFACTOR.md`
 
 ---
@@ -57,8 +57,8 @@
 | 编号 | 现象 | 文件:行号 | 影响 | 状态 |
 |------|------|-----------|------|------|
 | G-2 | `~Logger()` detach 写线程，use-after-free 风险 | ~~`lib/liblogger/logger.h:141`~~ | — | ✅ 已修复（detach → join，先 join 再关闭文件流） |
-| G-3 | 命名空间混乱（`Agent` vs `agent`） | `logger.h:46, :344, :360-365` | 低（混淆） | ⬜ 未修复 |
-| G-4 | `get_instance()` 返回 `shared_ptr` 语义错误 | `logger.h:162-168` | 低 | ⬜ 未修复 |
+| G-3 | 命名空间混乱（`Agent` vs `agent`） | ~~`logger.h:46, :344, :360-365`~~ | — | ✅ 已修复（namespace Agent → agent::log，保留 Agent alias 向后兼容） |
+| G-4 | `get_instance()` 返回 `shared_ptr` 语义错误 | ~~`logger.h:162-168`~~ | — | ✅ 已修复（返回 Logger& 引用，Meyers Singleton，移除 static shared_ptr 成员） |
 
 **额外发现**：`logger.h:344` 闭合花括号注释 `} // namespace DearTs` 与 `namespace Agent` 声明不匹配，是命名空间历史改名的旁证
 
@@ -125,7 +125,7 @@
 | ~~**P2**~~ | ~~D-4 + D-5 + D-6~~ | ~~DI 化补全（解锁 Mock 测试）~~ | ✅ 已完成 |
 | ~~**P2**~~ | ~~Q-1~~ | ~~Mock 实现（依赖 D-4/D-5/D-6）~~ | ✅ 已完成 |
 | **P2** | C-2 + C-3 + C-4 | 配置系统 Schema 化 | 3 天 |
-| **P2** | G-3 + G-4 | 日志命名空间统一 | 1 天 |
+| ~~**P2**~~ | ~~G-3 + G-4~~ | ~~日志命名空间统一~~ | ✅ 已完成 |
 | **P3** | H-1 + H-2 + H-3 + H-4 | HTTP 客户端演进 | 4 天 |
 | **P3** | D-2 + D-3 | main.cpp 工厂 + IBackendAdmin 拆分 | 2 天 |
 | **P3** | E-5 + E-6 | 错误处理类型安全 | 2 天 |
