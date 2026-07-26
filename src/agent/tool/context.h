@@ -2,7 +2,7 @@
  * @file context.h
  * @brief ToolContext — 工具执行上下文
  * @details 在工具执行过程中传递的运行时信息：会话 ID、工作目录、权限模式、取消信号
- * @version 1.0.0
+ * @version 1.1.0
  * @date 2026-07
  */
 
@@ -12,7 +12,12 @@
 #include <atomic>
 #include <nlohmann/json.hpp>
 
-namespace agent::tool {
+namespace agent {
+
+// D-5：前向声明，避免 context.h 强依赖 i_config_manager.h
+class IConfigManager;
+
+namespace tool {
 
 /// @brief 工具执行上下文
 ///
@@ -33,6 +38,16 @@ struct ToolContext {
     ///          使工具能即时感知外部取消请求。nullptr 时回退到内部 cancelled_。
     ///          生命周期由调用方保证（栈变量通常在 ToolContext 之上存活）。
     const std::atomic<bool>* cancel_flag = nullptr;
+
+    /// @brief D-5：配置管理器指针（可选，非拥有）
+    /// @details 由调用方（ReActLoop）注入，工具通过 config_manager() 访问。
+    ///          nullptr 时 config_manager() 回退到 ConfigManager::instance()，
+    ///          保持向后兼容。生命周期由调用方保证（通常为 ChatSession 的成员）。
+    IConfigManager* config_manager_ptr = nullptr;
+
+    /// @brief 解析配置管理器（nullptr 时回退单例，向后兼容）
+    /// @return IConfigManager 引用
+    IConfigManager& config_manager() const;
 
     /// @brief 检查是否已取消
     /// @return 已取消返回 true
@@ -56,3 +71,4 @@ private:
 };
 
 } // namespace agent::tool
+} // namespace agent

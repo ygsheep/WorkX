@@ -28,6 +28,7 @@ target_sources(libworkx PRIVATE
     model/context_resolver.cpp
 
     # tool: 通用工具
+    tool/context.cpp
     tool/encoding.cpp
     tool/path_matcher.cpp
     tool/secret_scanner.cpp

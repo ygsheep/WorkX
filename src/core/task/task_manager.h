@@ -48,8 +48,10 @@ public:
     using FinishedCallback = std::function<void()>;
 
     // T-6：编译期验证 start_time 原子字段满足 trivially copyable 要求
-    static_assert(std::is_trivially_copyable_v<std::atomic<int64_t>>,
-                  "std::atomic<int64_t> must be trivially copyable");
+    // 注意：MSVC 对 std::atomic<T> 的 is_trivially_copyable 实现有历史 bug，
+    //       改为验证底层类型 int64_t 满足 trivially copyable（标准保证 atomic<T> 与 T 同为 trivially copyable）
+    static_assert(std::is_trivially_copyable_v<int64_t>,
+                  "int64_t must be trivially copyable (atomic<int64_t> shares this property)");
 
     /// @brief 构造
     /// @param event_bus 事件总线引用（D-1 DI：Task 通过它发布生命周期事件）

@@ -357,7 +357,8 @@ ChatRenderer::~ChatRenderer() {
 }
 
 void ChatRenderer::start() {
-    auto& bus = EventBus::instance();
+    // D-4：复用 Terminal 的 DI 路径，消除对 EventBus 单例的直接依赖
+    auto& bus = m_terminal->event_bus();
 
     // 启动会话计时
     m_status_bar->start_session_timer();
@@ -696,7 +697,8 @@ void ChatRenderer::start() {
 }
 
 void ChatRenderer::stop() {
-    auto& bus = EventBus::instance();
+    // D-4：复用 Terminal 的 DI 路径，消除对 EventBus 单例的直接依赖
+    auto& bus = m_terminal->event_bus();
 
     if (m_spinner_active.load()) {
         m_terminal->spinner_stop();

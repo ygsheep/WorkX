@@ -219,7 +219,7 @@ nlohmann::json FileEditTool::input_schema() const {
 
 ValidationResult FileEditTool::validate_input(
     const nlohmann::json& input,
-    const ToolContext& /*ctx*/
+    const ToolContext& ctx
 ) const {
     // 字段存在性与类型检查
     if (!input.contains("file_path") || !input["file_path"].is_string()) {
@@ -253,7 +253,8 @@ ValidationResult FileEditTool::validate_input(
     // === 错误码 0: secret 扫描（ConfigManager 开关控制） ===
     // 对齐 CC checkTeamMemSecrets，但 WorkX 没有 team memory 概念，
     // 通过 tool.edit.scan_secrets 开关让用户自行启用（默认关闭以兼容现有行为）
-    const bool scan_secrets = agent::ConfigManager::instance().get_or<bool>(
+    // D-5：通过 ctx.config_manager() 解析配置管理器，支持 DI 注入
+    const bool scan_secrets = ctx.config_manager().get_or<bool>(
         agent::keys::EDIT_SCAN_SECRETS, false
     );
     if (scan_secrets) {
@@ -272,7 +273,8 @@ ValidationResult FileEditTool::validate_input(
 
     // === 错误码 2: deny 规则（ConfigManager 配置） ===
     // 对齐 CC matchingRuleForInput，但 WorkX 简化为单一 deny 列表（无多源合并）
-    const std::string deny_raw = agent::ConfigManager::instance().get_or<std::string>(
+    // D-5：通过 ctx.config_manager() 解析配置管理器，支持 DI 注入
+    const std::string deny_raw = ctx.config_manager().get_or<std::string>(
         agent::keys::EDIT_DENY_PATTERNS, std::string{}
     );
     if (!deny_raw.empty()) {

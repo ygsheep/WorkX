@@ -27,11 +27,13 @@ namespace agent {
 
 ReActLoop::ReActLoop(ICompletionProvider* provider,
                      std::shared_ptr<tool::ToolRegistry> registry,
-                     Config config)
+                     Config config,
+                     IConfigManager* config_manager)
     : m_provider(provider)
     , m_registry(std::move(registry))
     , m_config(config)
     , m_compressor(m_config.compressor_cfg)
+    , m_config_manager(config_manager)
 {
     assert(provider != nullptr && "ReActLoop: provider must not be null");
     if (m_registry) {
@@ -512,6 +514,8 @@ ReActResult ReActLoop::run(
         ctx.session_id = "default";
         // 2.3 修复：将外部取消信号绑定到 ToolContext，工具可即时感知中断
         ctx.cancel_flag = &should_cancel;
+        // D-5：注入配置管理器，工具通过 ctx.config_manager() 访问（nullptr 时回退单例）
+        ctx.config_manager_ptr = m_config_manager;
 
         // 1. 同步发布所有 Action 步骤（UI 即时反馈工具调用开始）
         for (const auto& tu : thought.tool_uses) {

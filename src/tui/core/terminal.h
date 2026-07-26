@@ -19,6 +19,9 @@
 #include "tui/core/color_scheme.h"
 #include "tui/input/history.h"
 #include "tui/core/display_buffer.h"
+#include "core/events/i_event_bus.h"
+#include "core/config/i_config_manager.h"
+#include "core/task/task_manager.h"  // ITaskManager + TaskManager::instance() 默认实参
 
 namespace agent {
 
@@ -55,7 +58,15 @@ class Terminal {
 public:
     using InputCallback = std::function<void(const std::string&)>;
 
-    explicit Terminal(const TerminalConfig& config = TerminalConfig{});
+    /// @brief 构造 Terminal
+    /// @param config 终端配置
+    /// @param event_bus 事件总线（nullptr 时回退 EventBus::instance()，D-4 DI 化）
+    /// @param config_manager 配置管理器（nullptr 时回退 ConfigManager::instance()，D-5 DI 化）
+    /// @param task_manager 任务管理器（nullptr 时回退 TaskManager::instance()，D-6 DI 化）
+    explicit Terminal(const TerminalConfig& config = TerminalConfig{},
+                      IEventBus* event_bus = nullptr,
+                      IConfigManager* config_manager = nullptr,
+                      ITaskManager* task_manager = nullptr);
     ~Terminal();
 
     /// @brief 初始化终端（raw mode、平台设置、滚动区域）
@@ -164,6 +175,14 @@ public:
     BottomBarManager& bottom_bar() { return *m_bottom_bar; }
     const BottomBarManager& bottom_bar() const { return *m_bottom_bar; }
 
+    // D-4/D-5/D-6：依赖解析（public，供 ChatRenderer 等同生态组件复用 DI 路径）
+    /// @brief 解析事件总线（nullptr 时回退单例）
+    IEventBus& event_bus();
+    /// @brief 解析配置管理器（nullptr 时回退单例）
+    IConfigManager& config_manager();
+    /// @brief 解析任务管理器（nullptr 时回退单例）
+    ITaskManager& task_manager();
+
 private:
     void display_welcome();
     void run_simple();
@@ -199,6 +218,11 @@ private:
     std::vector<std::string> m_overlay_snapshot;
     int m_overlay_top = 0;
     int m_overlay_bottom = 0;
+
+    // D-4/D-5/D-6：DI 注入的依赖（nullptr 时回退单例，向后兼容）
+    IEventBus* m_event_bus = nullptr;        ///< 事件总线（非拥有）
+    IConfigManager* m_config_manager = nullptr;  ///< 配置管理器（非拥有）
+    ITaskManager* m_task_manager = nullptr;  ///< 任务管理器（非拥有）
 };
 
 } // namespace agent

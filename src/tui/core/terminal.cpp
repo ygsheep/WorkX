@@ -25,13 +25,30 @@ namespace agent {
 // 工厂函数声明（在 platform_win32.cpp 中定义）
 std::unique_ptr<IPlatform> create_platform();
 
-Terminal::Terminal(const TerminalConfig& config)
+Terminal::Terminal(const TerminalConfig& config,
+                   IEventBus* event_bus,
+                   IConfigManager* config_manager,
+                   ITaskManager* task_manager)
     : m_config(config)
+    , m_event_bus(event_bus)
+    , m_config_manager(config_manager)
+    , m_task_manager(task_manager)
 {
 }
 
 Terminal::~Terminal() {
     restore();
+}
+
+// D-4/D-5/D-6：依赖解析（nullptr 时回退单例，向后兼容）
+IEventBus& Terminal::event_bus() {
+    return m_event_bus ? *m_event_bus : EventBus::instance();
+}
+IConfigManager& Terminal::config_manager() {
+    return m_config_manager ? *m_config_manager : ConfigManager::instance();
+}
+ITaskManager& Terminal::task_manager() {
+    return m_task_manager ? *m_task_manager : TaskManager::instance();
 }
 
 Result<void, std::string> Terminal::initialize() {
@@ -94,8 +111,8 @@ Result<void, std::string> Terminal::initialize() {
     m_event_pump_running = true;
     m_event_pump_thread = std::thread([this]() {
         while (m_event_pump_running) {
-            EventBus::instance().process_async_events();
-            TaskManager::instance().update();
+            event_bus().process_async_events();
+            task_manager().update();
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
     });
@@ -191,11 +208,10 @@ void Terminal::run_simple() {
             echo_input(line);
         }
 
-        EventBus::instance().publish(UserInputEvent{
+        event_bus().publish(UserInputEvent{
             .text = line
         });
-
-        EventBus::instance().process_async_events();
+        event_bus().process_async_events();
 
         if (m_input_callback) {
             m_input_callback(line);
@@ -247,7 +263,7 @@ void Terminal::run_advanced() {
     static constexpr auto DOUBLE_PRESS_TIMEOUT = std::chrono::milliseconds(1000);
 
     while (m_running) {
-        EventBus::instance().process_async_events();
+        event_bus().process_async_events();
 
         // 刷新底部区域（状态栏或命令面板）
         if (m_status_refresh_callback) {
@@ -278,8 +294,8 @@ void Terminal::run_advanced() {
                 set_color(ColorRole::System);
                 write("Force exit.\n");
                 reset_color();
-                EventBus::instance().publish(InterruptEvent{.force = true});
-                EventBus::instance().publish(ShutdownEvent{.force = true});
+                event_bus().publish(InterruptEvent{.force = true});
+                event_bus().publish(ShutdownEvent{.force = true});
                 m_running = false;
                 break;
             }
@@ -288,8 +304,8 @@ void Terminal::run_advanced() {
             set_color(ColorRole::System);
             write("(Press Ctrl+C again to exit)\n");
             reset_color();
-            EventBus::instance().publish(InterruptEvent{.force = false});
-            EventBus::instance().process_async_events();
+            event_bus().publish(InterruptEvent{.force = false});
+            event_bus().process_async_events();
             continue;
         }
 
@@ -322,7 +338,7 @@ void Terminal::run_advanced() {
             echo_input(result.text);
         }
 
-        EventBus::instance().publish(UserInputEvent{
+        event_bus().publish(UserInputEvent{
             .text = result.text
         });
 
@@ -577,7 +593,7 @@ void Terminal::display_welcome() {
 
     if (width >= 60) {
         std::string ver_line = "WorkX v" + version_str;
-        std::string model_name = ConfigManager::instance().get_or<std::string>(
+        std::string model_name = config_manager().get_or<std::string>(
             "backend.model_name", "");
         std::string model_line = (model_name.empty() ? std::string("unknown") : model_name)
             + " \xc2\xb7 API Usage Billing";
@@ -621,7 +637,7 @@ void Terminal::display_welcome() {
             "  ╚══╝╚══╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝    ",
             nullptr, ColorRole::Default);
     } else {
-        std::string model_name = ConfigManager::instance().get_or<std::string>(
+        std::string model_name = config_manager().get_or<std::string>(
             "backend.model_name", "");
         set_color(ColorRole::SplashInfo);
         write("[WorkX] v");

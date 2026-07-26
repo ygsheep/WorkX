@@ -223,7 +223,8 @@ ToolResult FileReadTool::call(
     constexpr int MAX_LINES_LIMIT = 100000;  // 10 万行上限
     constexpr int MAX_LINES_FLOOR = 1;       // 至少 1 行
 
-    int max_size_cfg = agent::ConfigManager::instance().get_or<int>(
+    // D-5：通过 ctx.config_manager() 解析配置管理器，支持 DI 注入
+    int max_size_cfg = ctx.config_manager().get_or<int>(
         agent::keys::FILE_READ_MAX_SIZE,
         static_cast<int>(constants::MAX_FILE_SIZE_BYTES)
     );
@@ -233,7 +234,7 @@ ToolResult FileReadTool::call(
     }
     const size_t max_file_size = static_cast<size_t>(max_size_cfg);
 
-    int max_lines = agent::ConfigManager::instance().get_or<int>(
+    int max_lines = ctx.config_manager().get_or<int>(
         agent::keys::FILE_READ_MAX_LINES,
         constants::MAX_LINES_TO_READ
     );

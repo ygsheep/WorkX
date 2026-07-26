@@ -83,7 +83,8 @@ Result<Client, std::string> Client::create(ClientConfig cfg) {
 
     // 6. 构造 Client
     Client client(std::move(backend), cfg.system_prompt,
-                  cfg.retry_count, cfg.retry_delay_ms, cfg.enable_event_bus);
+                  cfg.retry_count, cfg.retry_delay_ms, cfg.enable_event_bus,
+                  cfg.event_bus);
     return Result<Client, std::string>::ok(std::move(client));
 }
 
@@ -96,6 +97,7 @@ Client::Client(std::unique_ptr<IBackend> backend,
                int retry_count,
                int retry_delay_ms,
                bool publish_events,
+               IEventBus* event_bus,
                ITaskManager& task_manager)
     : m_backend(std::move(backend))
     , m_system_prompt(std::move(system_prompt))
@@ -103,10 +105,12 @@ Client::Client(std::unique_ptr<IBackend> backend,
     , m_retry_delay_ms(retry_delay_ms)
     , m_publish_events(publish_events)
     , m_task_manager(&task_manager)
+    , m_event_bus(event_bus)
 {
     if (m_publish_events) {
         // 订阅 InterruptEvent → 自动中断
-        m_interrupt_token = EventBus::instance().subscribe<InterruptEvent>(
+        // 注意：构造函数体内 event_bus 与参数名冲突，用 this-> 明确调用成员函数
+        m_interrupt_token = this->event_bus().subscribe<InterruptEvent>(
             [this](const InterruptEvent&) {
                 if (m_backend) {
                     m_backend->interrupt();
@@ -116,6 +120,11 @@ Client::Client(std::unique_ptr<IBackend> backend,
     }
 }
 
+// D-4：依赖解析（nullptr 时回退单例，向后兼容）
+IEventBus& Client::event_bus() const {
+    return m_event_bus ? *m_event_bus : EventBus::instance();
+}
+
 Client::~Client() {
     // L-6：移动后 m_task_manager 可能为 nullptr，正常析构不应出现
     // 若 m_backend 存在却无 task_manager，说明对象状态异常
@@ -123,7 +132,8 @@ Client::~Client() {
            "Client::~Client: m_task_manager null but m_backend alive (moved-from?)");
 
     if (m_subscribed && m_interrupt_token.is_valid()) {
-        EventBus::instance().unsubscribe<InterruptEvent>(m_interrupt_token);
+        // 注意：移动后 m_event_bus 可能为 nullptr，回退单例 unsubscribe
+        event_bus().unsubscribe<InterruptEvent>(m_interrupt_token);
     }
     if (m_backend) {
         m_backend->interrupt();
@@ -148,19 +158,21 @@ Client::Client(Client&& other) noexcept
     , m_retry_delay_ms(other.m_retry_delay_ms)
     , m_publish_events(other.m_publish_events)
     , m_task_manager(other.m_task_manager)
+    , m_event_bus(other.m_event_bus)
     , m_interrupt_token(std::move(other.m_interrupt_token))
     , m_subscribed(other.m_subscribed)
 {
     other.m_subscribed = false;
     other.m_generating.store(false);
     other.m_task_manager = nullptr;
+    other.m_event_bus = nullptr;
 }
 
 Client& Client::operator=(Client&& other) noexcept {
     if (this != &other) {
         // 清理当前订阅
         if (m_subscribed && m_interrupt_token.is_valid()) {
-            EventBus::instance().unsubscribe<InterruptEvent>(m_interrupt_token);
+            event_bus().unsubscribe<InterruptEvent>(m_interrupt_token);
         }
         if (m_backend) {
             m_backend->interrupt();
@@ -178,12 +190,14 @@ Client& Client::operator=(Client&& other) noexcept {
         m_retry_delay_ms = other.m_retry_delay_ms;
         m_publish_events = other.m_publish_events;
         m_task_manager = other.m_task_manager;
+        m_event_bus = other.m_event_bus;
         m_interrupt_token = std::move(other.m_interrupt_token);
         m_subscribed = other.m_subscribed;
 
         other.m_subscribed = false;
         other.m_generating.store(false);
         other.m_task_manager = nullptr;
+        other.m_event_bus = nullptr;
     }
     return *this;
 }
@@ -267,7 +281,7 @@ Result<void, std::string> Client::run_stream(
             // K-2：非 TUI 场景下若开启 EventBus 集成，需在同步阻塞期间
             // 消费异步事件并清理已完成任务，避免事件滞留 / TaskManager 内存累积
             if (m_publish_events) {
-                EventBus::instance().process_async_events();
+                event_bus().process_async_events();
                 m_task_manager->update();
             }
 
@@ -342,7 +356,7 @@ bool Client::handle_submit_failure(int attempt, int64_t delay_ms, const ChatCall
             cbs.on_error("Failed to submit completion request after retries", false);
         }
         if (m_publish_events) {
-            EventBus::instance().publish_async(StreamErrorEvent{
+            event_bus().publish_async(StreamErrorEvent{
                 .session_id = "client",
                 .message = "Failed to submit completion request after retries",
                 .retryable = false
@@ -358,7 +372,7 @@ bool Client::handle_submit_failure(int attempt, int64_t delay_ms, const ChatCall
             true);
     }
     if (m_publish_events) {
-        EventBus::instance().publish_async(StreamErrorEvent{
+        event_bus().publish_async(StreamErrorEvent{
             .session_id = "client",
             .message = "Submit failed, retrying...",
             .retryable = true
@@ -379,7 +393,7 @@ bool Client::handle_stream_error(int attempt, const ChatCallbacks& cbs,
             cbs.on_error("Stream error after retries", false);
         }
         if (m_publish_events) {
-            EventBus::instance().publish_async(StreamErrorEvent{
+            event_bus().publish_async(StreamErrorEvent{
                 .session_id = "client",
                 .message = "Stream error after retries",
                 .retryable = false
@@ -400,7 +414,7 @@ bool Client::handle_stream_error(int attempt, const ChatCallbacks& cbs,
 
 void Client::publish_token_event(const StreamChunk& chunk) const {
     if (!m_publish_events) return;
-    EventBus::instance().publish_async(StreamTokenEvent{
+    event_bus().publish_async(StreamTokenEvent{
         .session_id = "client",
         .content_delta = chunk.content_delta,
         .reasoning_delta = chunk.reasoning_delta,
@@ -412,7 +426,7 @@ void Client::publish_token_event(const StreamChunk& chunk) const {
 void Client::publish_done_event(const std::string& content, const std::string& reasoning,
                                 bool was_interrupted, const StreamChunk& chunk) const {
     if (!m_publish_events) return;
-    EventBus::instance().publish_async(StreamDoneEvent{
+    event_bus().publish_async(StreamDoneEvent{
         .session_id = "client",
         .full_content = content,
         .full_reasoning = reasoning,
@@ -618,7 +632,7 @@ void Client::regenerate() {
     // 生成中拒绝 regenerate，避免与后台 push_back 竞态
     if (m_generating.load()) {
         if (m_publish_events) {
-            EventBus::instance().publish_async(StreamErrorEvent{
+            event_bus().publish_async(StreamErrorEvent{
                 .session_id = "client",
                 .message = "Still generating, cannot regenerate",
                 .retryable = true

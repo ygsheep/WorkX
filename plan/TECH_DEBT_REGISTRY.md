@@ -2,12 +2,12 @@
 
 > 本文档整合 `PHASE3_LONG_TERM_REFACTOR.md`（详细方案）与历史登记，作为技术债的唯一索引。
 > 详细重构方案请参考 `plan/PHASE3_LONG_TERM_REFACTOR.md`。
-> 最后更新：2026-07-27（P1 批量修复完成）
+> 最后更新：2026-07-27（P2 D 类 DI 化补全完成）
 
 ## 状态总览
 
-- 已修复：7 项（L-1 / L-2 / L-3 / L-6 / T-4 / T-6 / G-2）
-- 待修复：13 项
+- 已修复：10 项（L-1 / L-2 / L-3 / L-6 / T-4 / T-6 / G-2 / D-4 / D-5 / D-6）
+- 待修复：10 项
 - 详细方案：见 `PHASE3_LONG_TERM_REFACTOR.md`
 
 ---
@@ -82,9 +82,9 @@
 |------|------|-----------|------|------|
 | D-2 | `main.cpp` 530 行手动组装，无工厂函数 | `src/app/main.cpp` | 中（维护成本） | ⬜ 未修复 |
 | D-3 | `IBackend` 胖接口未拆分 `IBackendAdmin` | `i_backend.h:22-50` | 中（接口隔离原则） | ⬜ 未修复 |
-| D-4 | Terminal/ChatRenderer/Client 依赖 `EventBus::instance()` | `tui/core/terminal.cpp` 等 8 处 | 中（无法 Mock） | ⬜ 未修复 |
-| D-5 | 工具内部直接读 `ConfigManager::instance()` | `setup_wizard.cpp` 等 9 处 | 中（无法 Mock） | ⬜ 未修复 |
-| D-6 | `Terminal` 残留 `TaskManager::instance()` | `terminal.cpp:98` | 低 | ⬜ 未修复 |
+| D-4 | Terminal/ChatRenderer/Client 依赖 `EventBus::instance()` | ~~`tui/core/terminal.cpp` 等 8 处~~ | — | ✅ 已修复（Terminal DI 三件套 + Client IEventBus* 注入 + ChatRenderer 复用 Terminal 路径） |
+| D-5 | 工具内部直接读 `ConfigManager::instance()` | ~~`file_edit_tool.cpp` / `file_read_tool.cpp` 4 处~~ | — | ✅ 已修复（ToolContext 添加 config_manager_ptr + helper，ReActLoop 注入 IConfigManager*） |
+| D-6 | `Terminal` 残留 `TaskManager::instance()` | ~~`terminal.cpp:98`~~ | — | ✅ 已修复（Terminal DI 三件套含 ITaskManager*，与 D-4 一并完成） |
 
 **说明**：D-4/D-5/D-6 是 Phase 4 暂缓项，与 PHASE3 §7 D-2/D-3 编号有差异，本索引展开为独立项
 
@@ -122,7 +122,7 @@
 | ~~**P1**~~ | ~~L-2 + L-3 + L-6~~ | ~~裸指针修复~~ | ✅ 已完成 |
 | ~~**P1**~~ | ~~T-4 + T-6~~ | ~~防御性原子化 + static_assert~~ | ✅ 已完成 |
 | ~~**P1**~~ | ~~G-2~~ | ~~Logger 析构 join~~ | ✅ 已完成 |
-| **P2** | D-4 + D-5 + D-6 | DI 化补全（解锁 Mock 测试） | 3 天 |
+| ~~**P2**~~ | ~~D-4 + D-5 + D-6~~ | ~~DI 化补全（解锁 Mock 测试）~~ | ✅ 已完成 |
 | **P2** | Q-1 | Mock 实现（依赖 D-4/D-5/D-6） | 2 天 |
 | **P2** | C-2 + C-3 + C-4 | 配置系统 Schema 化 | 3 天 |
 | **P2** | G-3 + G-4 | 日志命名空间统一 | 1 天 |
