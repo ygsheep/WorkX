@@ -9,7 +9,7 @@
 
 #include <string_view>
 
-namespace agent {
+namespace tui {
 
 /**
  * @brief TUI 状态
@@ -108,4 +108,4 @@ private:
     TuiState m_state = TuiState::IDLE;
 };
 
-} // namespace agent
+} // namespace tui

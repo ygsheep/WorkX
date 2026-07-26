@@ -29,7 +29,9 @@
 #include <vector>
 #include <nlohmann/json.hpp>
 
-namespace agent {
+namespace tui {
+
+using namespace agent;  // P0: tui→agent 类型引用过渡方案，后续 P2/P3 收紧到显式前缀
 
 namespace {
 
@@ -793,4 +795,4 @@ void ChatRenderer::toggle_thinking_view() {
     }
 }
 
-} // namespace agent
+} // namespace tui

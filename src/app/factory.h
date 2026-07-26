@@ -19,12 +19,13 @@
 
 #include "core/config/i_config_manager.h"
 
+namespace tui { struct TerminalConfig; }
+namespace agent { namespace tool { class ToolRegistry; } }
+
 namespace agent {
 
 class ChatSession;
 struct ProviderPreset;
-struct TerminalConfig;
-namespace tool { class ToolRegistry; }
 
 /// @brief 会话创建结果（D-2 工厂返回）
 struct SessionResult {
@@ -42,7 +43,7 @@ void init_logger(IConfigManager& cfg, const std::filesystem::path& default_log_p
 /// @brief 从配置构建 TerminalConfig
 /// @param cfg 配置管理器
 /// @return 填充好的 TerminalConfig
-TerminalConfig make_terminal_config(IConfigManager& cfg);
+tui::TerminalConfig make_terminal_config(IConfigManager& cfg);
 
 /// @brief 创建 Backend + ChatSession
 /// @details 执行流程：

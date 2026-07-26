@@ -14,7 +14,7 @@
 #include <vector>
 #include "tui/core/screen.h"
 
-namespace agent {
+namespace tui {
 
 class Terminal;
 class IPlatform;
@@ -107,4 +107,4 @@ private:
     std::string m_input_buffer;       ///< 用户已输入的文本
 };
 
-} // namespace agent
+} // namespace tui

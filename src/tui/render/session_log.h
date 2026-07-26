@@ -13,7 +13,7 @@
 #include <vector>
 #include <cstdint>
 
-namespace agent {
+namespace tui {
 
 /// @brief 日志条目类型
 enum class LogEntryType {
@@ -73,4 +73,4 @@ private:
     std::vector<LogEntry> m_entries;
 };
 
-} // namespace agent
+} // namespace tui

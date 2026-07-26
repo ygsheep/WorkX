@@ -14,7 +14,9 @@
 #include <cstdio>
 #include <algorithm>
 
-namespace agent {
+namespace tui {
+
+using namespace agent;  // P0: tui→agent 类型引用过渡方案，后续 P2/P3 收紧到显式前缀
 
 FileSearchPanel::FileSearchPanel(Terminal* terminal)
     : m_terminal(terminal)
@@ -159,4 +161,4 @@ void FileSearchPanel::clear() {
     m_last_rendered.clear();
 }
 
-} // namespace agent
+} // namespace tui

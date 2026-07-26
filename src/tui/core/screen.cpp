@@ -9,7 +9,7 @@
 #include <algorithm>
 #include <format>
 
-namespace agent {
+namespace tui {
 
 Screen::Screen(Terminal* terminal)
     : m_terminal(terminal)
@@ -259,4 +259,4 @@ void Screen::ensure_lines(int row) {
     resize(m_width, new_h);
 }
 
-} // namespace agent
+} // namespace tui

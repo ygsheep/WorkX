@@ -18,12 +18,13 @@
 #include "agent/compact/token_count.h"
 #include "tui/core/tui_state.h"
 
-namespace agent {
+namespace agent { class EventToken; }
+
+namespace tui {
 
 class Terminal;
 class StatusBar;
 class Spinner;
-class EventToken;
 class OutputFormatter;
 class StreamingBuffer;
 
@@ -69,15 +70,15 @@ private:
     std::unique_ptr<StreamingBuffer> m_stream_buf;
 
     // 事件订阅 token
-    std::unique_ptr<EventToken> m_token_status;
-    std::unique_ptr<EventToken> m_token_stream;
-    std::unique_ptr<EventToken> m_token_done;
-    std::unique_ptr<EventToken> m_token_error;
-    std::unique_ptr<EventToken> m_token_step;
-    std::unique_ptr<EventToken> m_token_tool_call;
-    std::unique_ptr<EventToken> m_token_tool_result;
-    std::unique_ptr<EventToken> m_token_agent_done;
-    std::unique_ptr<EventToken> m_token_user_input;  ///< 用户输入事件（用于本地 token 估算）
+    std::unique_ptr<agent::EventToken> m_token_status;
+    std::unique_ptr<agent::EventToken> m_token_stream;
+    std::unique_ptr<agent::EventToken> m_token_done;
+    std::unique_ptr<agent::EventToken> m_token_error;
+    std::unique_ptr<agent::EventToken> m_token_step;
+    std::unique_ptr<agent::EventToken> m_token_tool_call;
+    std::unique_ptr<agent::EventToken> m_token_tool_result;
+    std::unique_ptr<agent::EventToken> m_token_agent_done;
+    std::unique_ptr<agent::EventToken> m_token_user_input;  ///< 用户输入事件（用于本地 token 估算）
 
     // 状态机
     TuiStateMachine m_state_machine;
@@ -103,4 +104,4 @@ private:
     std::unordered_map<std::string, ToolCallInfo> m_pending_tool_calls;
 };
 
-} // namespace agent
+} // namespace tui

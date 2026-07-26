@@ -10,7 +10,7 @@
 #include <string_view>
 #include "core/utils/result.h"
 
-namespace agent {
+namespace tui {
 
 /**
  * @brief 终端平台接口
@@ -20,7 +20,7 @@ public:
     virtual ~IPlatform() = default;
 
     /// @brief 启用 raw mode（关闭行缓冲和回显）
-    virtual Result<void, std::string> enable_raw_mode() = 0;
+    virtual agent::Result<void, std::string> enable_raw_mode() = 0;
 
     /// @brief 恢复终端原始设置
     virtual void disable_raw_mode() = 0;
@@ -51,4 +51,4 @@ public:
     virtual int put_codepoint(const char* utf8_data, size_t length, int expected_width) = 0;
 };
 
-} // namespace agent
+} // namespace tui

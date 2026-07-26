@@ -15,7 +15,7 @@
 #include <chrono>
 #include <functional>
 
-namespace agent {
+namespace tui {
 
 class Terminal;
 class StatusBar;
@@ -64,4 +64,4 @@ private:
     static constexpr int FRAME_INTERVAL_MS = 100;  // 100ms（10帧布莱叶旋转）
 };
 
-} // namespace agent
+} // namespace tui

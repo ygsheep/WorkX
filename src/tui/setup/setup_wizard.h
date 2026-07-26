@@ -15,7 +15,7 @@
 #include "agent/model/provider_preset.h"
 #include "tui/core/screen.h"
 
-namespace agent {
+namespace tui {
 
 class IPlatform;
 class Terminal;
@@ -32,10 +32,10 @@ public:
 
 private:
     /// @brief 步骤1：选择 API Provider
-    const ProviderPreset* select_provider();
+    const agent::ProviderPreset* select_provider();
 
     /// @brief 自定义流程：选择协议类型（OpenAI / Anthropic）
-    ProviderType select_protocol();
+    agent::ProviderType select_protocol();
 
     /// @brief 输入 API Key（* 掩码，可选是否必填）
     std::string prompt_api_key(const std::string& provider_name, bool required);
@@ -54,7 +54,7 @@ private:
                           const std::string& remote_url = "");
 
     // ---- 渲染 ----
-    void draw_provider_list(int selected, const std::vector<const ProviderPreset*>& presets);
+    void draw_provider_list(int selected, const std::vector<const agent::ProviderPreset*>& presets);
 
     /// @brief 简单的协议选项列表
     void draw_option_list(const std::vector<std::string>& options, int selected);
@@ -72,4 +72,4 @@ private:
     int m_cursor_row = 0;       ///< Screen 中当前写入行号
 };
 
-} // namespace agent
+} // namespace tui

@@ -6,7 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "tui/render/markdown_renderer.h"
 
-using namespace agent;
+using namespace tui;
 
 // ---- split_table_row ----
 

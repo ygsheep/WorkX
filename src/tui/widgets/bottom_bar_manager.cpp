@@ -14,7 +14,7 @@
 #include "tui/core/platform/i_platform.h"
 #include "core/events/event_bus.h"
 
-namespace agent {
+namespace tui {
 
 // Win32 特殊键码
 static constexpr char32_t KEY_ARROW_UP   = 0xE002;
@@ -204,4 +204,4 @@ std::string BottomBarManager::handle_tab() {
     return "";
 }
 
-} // namespace agent
+} // namespace tui

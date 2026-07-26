@@ -10,7 +10,7 @@
 #include <cstdio>
 #include <cmath>
 
-namespace agent {
+namespace tui {
 
 static const char* SPINNER_FRAMES[] = {
     "\xe2\xa0\x8b",
@@ -260,4 +260,4 @@ std::string StatusBar::format_bar() const {
     return bar;
 }
 
-} // namespace agent
+} // namespace tui

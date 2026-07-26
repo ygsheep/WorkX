@@ -17,7 +17,7 @@
 
 #include "tui/core/tui_state.h"
 
-namespace agent {
+namespace tui {
 
 class Terminal;
 
@@ -75,4 +75,4 @@ private:
     static constexpr int SPINNER_FRAME_COUNT = 10;
 };
 
-} // namespace agent
+} // namespace tui

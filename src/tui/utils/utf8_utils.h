@@ -12,7 +12,7 @@
 #include <utility>
 #include <cstdint>
 
-namespace agent {
+namespace tui {
 
 /**
  * @brief 解码后的 UTF-8 字符单元
@@ -57,4 +57,4 @@ int display_width(std::string_view text);
  */
 std::string truncate_to_width(std::string_view text, int max_width);
 
-} // namespace agent
+} // namespace tui

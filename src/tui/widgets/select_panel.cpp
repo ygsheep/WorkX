@@ -11,7 +11,7 @@
 
 #include <algorithm>
 
-namespace agent {
+namespace tui {
 
 SelectPanel::SelectPanel(Terminal* terminal, Screen* screen)
     : m_terminal(terminal)
@@ -219,4 +219,4 @@ void SelectPanel::dismiss() {
     // 由调用方负责 end_overlay + reset_buffers
 }
 
-} // namespace agent
+} // namespace tui

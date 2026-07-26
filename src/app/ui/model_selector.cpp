@@ -24,6 +24,8 @@
 
 namespace agent {
 
+using namespace tui;  // P0: tui→agent 类型引用过渡方案，后续 P2/P3 收紧到显式前缀
+
 /// "Custom Model..." 选项的 sentinel id
 static constexpr const char* CUSTOM_MODEL_ID = "__custom__";
 

@@ -11,10 +11,10 @@
 #include <cstdint>
 #include <string>
 
+namespace tui { class Terminal; class Screen; }
+
 namespace agent {
 
-class Terminal;
-class Screen;
 class IBackend;
 
 /// @brief 模型选择结果
@@ -31,7 +31,7 @@ struct ModelSelection {
 /// @param current_model 当前模型名
 /// @return 选中的模型及上下文窗口；name 为空表示取消
 ModelSelection select_model_interactive(
-    Terminal* term, Screen* scr, IBackend* bk,
+    tui::Terminal* term, tui::Screen* scr, IBackend* bk,
     const std::string& current_model);
 
 } // namespace agent

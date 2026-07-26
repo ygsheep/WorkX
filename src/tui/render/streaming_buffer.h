@@ -14,7 +14,7 @@
 #include <atomic>
 #include <functional>
 
-namespace agent {
+namespace tui {
 
 class Terminal;
 
@@ -57,4 +57,4 @@ private:
     static constexpr int FLUSH_INTERVAL_MS = 16;  // ~60fps
 };
 
-} // namespace agent
+} // namespace tui

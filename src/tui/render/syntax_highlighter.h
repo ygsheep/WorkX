@@ -17,7 +17,7 @@
 #include <string>
 #include <string_view>
 
-namespace agent {
+namespace tui {
 
 // ============================================================================
 // 颜色角色
@@ -112,4 +112,4 @@ int ansi_display_width(std::string_view text);
  */
 bool syntax_highlighting_enabled();
 
-} // namespace agent
+} // namespace tui

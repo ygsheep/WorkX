@@ -8,7 +8,7 @@
 
 #include <algorithm>
 
-namespace agent {
+namespace tui {
 
 DisplayBuffer::DisplayBuffer(int capacity) {
     m_capacity = capacity > 0 ? capacity : 1;
@@ -160,4 +160,4 @@ std::vector<std::string> DisplayBuffer::snapshot(int top_row, int bottom_row) co
     return result;
 }
 
-} // namespace agent
+} // namespace tui

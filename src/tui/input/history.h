@@ -11,7 +11,7 @@
 #include <vector>
 #include <filesystem>
 
-namespace agent {
+namespace tui {
 
 /**
  * @brief 输入历史管理器
@@ -55,4 +55,4 @@ private:
     size_t m_max_entries;
 };
 
-} // namespace agent
+} // namespace tui

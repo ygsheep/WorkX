@@ -9,7 +9,7 @@
 #include <fstream>
 #include <algorithm>
 
-namespace agent {
+namespace tui {
 
 History::History(size_t max_entries)
     : m_max_entries(max_entries)
@@ -71,4 +71,4 @@ bool History::save(const std::filesystem::path& path) const {
     return file.good();
 }
 
-} // namespace agent
+} // namespace tui

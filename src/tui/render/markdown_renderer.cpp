@@ -13,7 +13,7 @@
 #include <numeric>
 #include <sstream>
 
-namespace agent {
+namespace tui {
 
 // ---- helpers ----
 
@@ -831,4 +831,4 @@ std::string render_markdown_block(std::string_view text) {
     return os.str();
 }
 
-} // namespace agent
+} // namespace tui

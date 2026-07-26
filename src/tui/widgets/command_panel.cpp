@@ -12,7 +12,7 @@
 #include <cstdio>
 #include <algorithm>
 
-namespace agent {
+namespace tui {
 
 CommandPanel::CommandPanel(Terminal* terminal)
     : m_terminal(terminal)
@@ -175,4 +175,4 @@ void CommandPanel::clear() {
     m_last_rendered.clear();
 }
 
-} // namespace agent
+} // namespace tui

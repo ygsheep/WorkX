@@ -13,7 +13,7 @@
 
 #include "tui/render/markdown_renderer.h"
 
-namespace agent {
+namespace tui {
 
 class Terminal;
 
@@ -71,4 +71,4 @@ private:
     bool m_buffering_table_line = false;
 };
 
-} // namespace agent
+} // namespace tui

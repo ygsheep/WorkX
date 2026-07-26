@@ -9,7 +9,7 @@
 
 #include "tui/core/tui_state.h"
 
-using namespace agent;
+using namespace tui;
 
 // ============================================================================
 // tui_state_name

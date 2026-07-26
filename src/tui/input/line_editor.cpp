@@ -12,7 +12,7 @@
 #include <cwctype>
 #include <numeric>
 
-namespace agent {
+namespace tui {
 
 // Win32 特殊键码（与 platform_win32.cpp 一致）
 static constexpr char32_t KEY_ARROW_LEFT       = 0xE000;
@@ -639,4 +639,4 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
     }
 }
 
-} // namespace agent
+} // namespace tui

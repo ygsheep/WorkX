@@ -6,7 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "tui/utils/utf8_utils.h"
 
-using namespace agent;
+using namespace tui;
 
 TEST_CASE("display_width ASCII", "[utf8]") {
     REQUIRE(display_width("hello") == 5);

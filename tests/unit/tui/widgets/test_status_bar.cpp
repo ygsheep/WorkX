@@ -15,7 +15,7 @@
 #include "tui/widgets/status_bar.h"
 #include "tui/core/tui_state.h"
 
-using namespace agent;
+using namespace tui;
 
 namespace {
 

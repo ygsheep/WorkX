@@ -7,7 +7,7 @@
 
 #include <numeric>
 
-namespace agent {
+namespace tui {
 
 int char32_width(char32_t cp) {
     // 控制字符宽度 0（Tab 由调用方单独处理）
@@ -161,4 +161,4 @@ std::string truncate_to_width(std::string_view text, int max_width) {
     return result;
 }
 
-} // namespace agent
+} // namespace tui

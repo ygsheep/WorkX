@@ -14,7 +14,7 @@
 #include <memory>
 #include "tui/core/color_scheme.h"
 
-namespace agent {
+namespace tui {
 
 class Terminal;
 
@@ -96,4 +96,4 @@ private:
     std::vector<ScreenLine> m_previous;   // 上一帧
 };
 
-} // namespace agent
+} // namespace tui

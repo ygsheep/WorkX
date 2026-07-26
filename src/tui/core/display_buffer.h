@@ -14,7 +14,7 @@
 #include <string_view>
 #include <vector>
 
-namespace agent {
+namespace tui {
 
 /**
  * @brief 聊天输出镜像缓冲
@@ -82,4 +82,4 @@ private:
     std::string m_text_run;            ///< 挂起的纯文本累积
 };
 
-} // namespace agent
+} // namespace tui

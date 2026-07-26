@@ -10,7 +10,7 @@
 #include <string_view>
 #include <vector>
 
-namespace agent {
+namespace tui {
 
 /**
  * @brief 列对齐方式
@@ -170,4 +170,4 @@ std::string render_code_block(std::string_view lang, const std::vector<std::stri
  */
 std::string render_markdown_block(std::string_view text);
 
-} // namespace agent
+} // namespace tui

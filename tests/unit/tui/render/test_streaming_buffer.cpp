@@ -19,7 +19,7 @@
 #include "tui/core/terminal.h"
 #include "tui/render/streaming_buffer.h"
 
-using namespace agent;
+using namespace tui;
 using namespace std::chrono_literals;
 
 namespace {

@@ -59,8 +59,8 @@ void init_logger(IConfigManager& cfg, const std::filesystem::path& default_log_p
 // make_terminal_config
 // ============================================================
 
-TerminalConfig make_terminal_config(IConfigManager& cfg) {
-    TerminalConfig config;
+tui::TerminalConfig make_terminal_config(IConfigManager& cfg) {
+    tui::TerminalConfig config;
     config.simple_io = cfg.get_or<bool>(keys::SIMPLE_IO, false);
     config.use_color = !cfg.get_or<bool>(keys::NO_COLOR, false);
     config.prompt_string = cfg.get_or<std::string>(keys::PROMPT, "> ");

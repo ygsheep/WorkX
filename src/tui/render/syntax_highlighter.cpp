@@ -62,7 +62,7 @@ extern "C" {
 }
 #endif // WORKX_HAS_TREE_SITTER
 
-namespace agent {
+namespace tui {
 
 // ============================================================================
 // 公共工具: strip_ansi / ansi_display_width
@@ -632,4 +632,4 @@ std::string highlight_code(std::string_view lang, std::string_view code) {
 
 #endif // WORKX_HAS_TREE_SITTER
 
-} // namespace agent
+} // namespace tui

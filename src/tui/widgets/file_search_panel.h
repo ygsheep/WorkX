@@ -13,7 +13,7 @@
 #include <vector>
 #include "app/ui/file_index.h"
 
-namespace agent {
+namespace tui {
 
 class Terminal;
 
@@ -60,7 +60,7 @@ private:
     Terminal* m_terminal;
 
     std::string m_query;                              ///< 搜索查询
-    std::vector<FileIndex::Entry> m_results;          ///< 搜索结果
+    std::vector<agent::FileIndex::Entry> m_results;          ///< 搜索结果
     int m_selected = 0;                               ///< 当前选中索引
 
     bool m_visible = false;                    ///< 面板是否可见
@@ -69,4 +69,4 @@ private:
     std::string m_last_rendered;               ///< 上次渲染内容（差分比较）
 };
 
-} // namespace agent
+} // namespace tui

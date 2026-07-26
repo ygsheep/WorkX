@@ -12,7 +12,7 @@
 #include <vector>
 #include <functional>
 
-namespace agent {
+namespace tui {
 
 class Terminal;
 
@@ -81,4 +81,4 @@ private:
     std::string m_last_rendered;      ///< 上次渲染内容（差分比较）
 };
 
-} // namespace agent
+} // namespace tui

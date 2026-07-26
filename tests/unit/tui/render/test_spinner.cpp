@@ -16,7 +16,7 @@
 #include "tui/core/terminal.h"
 #include "tui/render/spinner.h"
 
-using namespace agent;
+using namespace tui;
 using namespace std::chrono_literals;
 
 namespace {

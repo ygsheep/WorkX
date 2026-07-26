@@ -20,7 +20,9 @@
 #include <thread>
 #include <filesystem>
 
-namespace agent {
+namespace tui {
+
+using namespace agent;  // P0: tui→agent 类型引用过渡方案，后续 P2/P3 收紧到显式前缀
 
 // 工厂函数声明（在 platform_win32.cpp 中定义）
 std::unique_ptr<IPlatform> create_platform();
@@ -650,4 +652,4 @@ void Terminal::display_welcome() {
     write("\r\n");
 }
 
-} // namespace agent
+} // namespace tui

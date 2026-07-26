@@ -13,7 +13,7 @@
 #include <memory>
 #include "tui/core/tui_state.h"
 
-namespace agent {
+namespace tui {
 
 class Terminal;
 class StatusBar;
@@ -95,4 +95,4 @@ private:
     std::string m_current_line;  ///< 当前行内容（用于 Tab 补全时构造替换文本）
 };
 
-} // namespace agent
+} // namespace tui

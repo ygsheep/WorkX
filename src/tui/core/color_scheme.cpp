@@ -6,6 +6,6 @@
 
 #include "tui/core/color_scheme.h"
 
-namespace agent {
+namespace tui {
 // 颜色方案目前为编译时常量，无需额外实现
-} // namespace agent
+} // namespace tui

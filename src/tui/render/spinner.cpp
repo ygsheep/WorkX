@@ -9,7 +9,7 @@
 
 #include <chrono>
 
-namespace agent {
+namespace tui {
 
 Spinner::Spinner(Terminal* terminal)
     : m_terminal(terminal)
@@ -77,4 +77,4 @@ void Spinner::run() {
     }
 }
 
-} // namespace agent
+} // namespace tui

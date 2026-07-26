@@ -20,7 +20,9 @@
 #define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
 #endif
 
-namespace agent {
+namespace tui {
+
+using namespace agent;  // P0: tui→agent 类型引用过渡方案，后续 P2/P3 收紧到显式前缀
 
 // Win32 特殊键码（Private Use Area，不与真实输入冲突）
 static constexpr char32_t KEY_ARROW_LEFT       = 0xE000;
@@ -247,4 +249,4 @@ std::unique_ptr<IPlatform> create_platform() {
     return std::make_unique<Win32Platform>();
 }
 
-} // namespace agent
+} // namespace tui

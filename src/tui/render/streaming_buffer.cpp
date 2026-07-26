@@ -9,7 +9,7 @@
 
 #include <chrono>
 
-namespace agent {
+namespace tui {
 
 StreamingBuffer::StreamingBuffer(Terminal* terminal)
     : m_terminal(terminal)
@@ -86,4 +86,4 @@ void StreamingBuffer::flush_loop() {
     }
 }
 
-} // namespace agent
+} // namespace tui

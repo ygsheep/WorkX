@@ -9,7 +9,7 @@
 
 #include <string_view>
 
-namespace agent {
+namespace tui {
 
 /**
  * @brief 颜色角色
@@ -100,4 +100,4 @@ constexpr std::string_view get_color_ansi(ColorRole role) {
     }
 }
 
-} // namespace agent
+} // namespace tui

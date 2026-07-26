@@ -9,7 +9,7 @@
 #include "tui/core/color_scheme.h"
 #include "tui/utils/utf8_utils.h"
 
-namespace agent {
+namespace tui {
 
 // ---- 工具图标映射 ----
 
@@ -322,4 +322,4 @@ bool OutputFormatter::render_text_line(const std::string& line) {
     return false;  // 未输出 \n，调用方需自行 write("\n")
 }
 
-} // namespace agent
+} // namespace tui

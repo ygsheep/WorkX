@@ -14,7 +14,9 @@
 #include <cstring>
 #include <memory>
 
-namespace agent {
+namespace tui {
+
+using namespace agent;  // P0: tui→agent 类型引用过渡方案，后续 P2/P3 收紧到显式前缀
 
 // POSIX 特殊键码
 static constexpr char32_t KEY_ARROW_LEFT       = 0xE000;
@@ -233,4 +235,4 @@ std::unique_ptr<IPlatform> create_platform() {
     return std::make_unique<PosixPlatform>();
 }
 
-} // namespace agent
+} // namespace tui

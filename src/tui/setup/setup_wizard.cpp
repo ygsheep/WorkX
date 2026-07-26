@@ -10,7 +10,9 @@
 
 #include <filesystem>
 
-namespace agent {
+namespace tui {
+
+using namespace agent;  // P0: tui→agent 类型引用过渡方案，后续 P2/P3 收紧到显式前缀
 
 // E.10：UTF-8 编码辅助函数（setup_wizard 内部使用）
 // 将 codepoint 编码为 UTF-8 并追加到 out
@@ -432,4 +434,4 @@ char32_t SetupWizard::read_key() {
     return m_platform->read_char();
 }
 
-} // namespace agent
+} // namespace tui

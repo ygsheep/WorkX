@@ -5,7 +5,7 @@
 
 #include "tui/render/session_log.h"
 
-namespace agent {
+namespace tui {
 
 void SessionLog::add_thought(int32_t step, std::string reasoning, std::string content, int32_t seconds) {
     LogEntry e;
@@ -54,4 +54,4 @@ void SessionLog::add_tool_result(int32_t step, std::string result, bool is_error
     m_entries.push_back(std::move(e));
 }
 
-} // namespace agent
+} // namespace tui

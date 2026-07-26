@@ -12,7 +12,7 @@
 #include <functional>
 #include <memory>
 
-namespace agent {
+namespace tui {
 
 class IPlatform;
 
@@ -133,4 +133,4 @@ private:
     EditingChangedCallback m_editing_changed_cb;
 };
 
-} // namespace agent
+} // namespace tui
