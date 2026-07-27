@@ -8,7 +8,6 @@ vcpkg_installed/
 
 # IDE and editor directories
 .idea/
-.claude/
 .trae/
 .vscode/
 
