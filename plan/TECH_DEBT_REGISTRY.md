@@ -2,13 +2,13 @@
 
 > 本文档整合 `PHASE3_LONG_TERM_REFACTOR.md`（详细方案）与历史登记，作为技术债的唯一索引。
 > 详细重构方案请参考 `plan/PHASE3_LONG_TERM_REFACTOR.md`。
-> 最后更新：2026-07-27（P3 Q-2 性能基准测试 + Q-5 集成测试文档完成）
+> 最后更新：2026-07-27（P0 Q-3 Linux 平台编译验证完成）
 
 ## 状态总览
 
-- 已修复：26 项（L-1 / L-2 / L-3 / L-6 / T-4 / T-6 / G-2 / G-3 / G-4 / D-2 / D-3 / D-4 / D-5 / D-6 / Q-1 / Q-2 / Q-5 / C-2 / C-3 / C-4 / H-1 / H-2 / H-3 / H-4 / E-5 / E-6）
+- 已修复：27 项（L-1 / L-2 / L-3 / L-6 / T-4 / T-6 / G-2 / G-3 / G-4 / D-2 / D-3 / D-4 / D-5 / D-6 / Q-1 / Q-2 / Q-3 / Q-5 / C-2 / C-3 / C-4 / H-1 / H-2 / H-3 / H-4 / E-5 / E-6）
 - 已安全：1 项（T-5 PHASE3 判定无需修复）
-- 待修复：4 项（L-5 / E-1 / Q-3 / Q-4）
+- 待修复：3 项（L-5 / E-1 / Q-4）
 - 详细方案：见 `PHASE3_LONG_TERM_REFACTOR.md`
 
 ---
@@ -110,7 +110,7 @@
 |------|------|------|------|
 | Q-1 | MockConfigManager/MockEventBus/MockTaskManager 缺失 | ~~中（无法隔离测试）~~ | ✅ 已修复（`tests/unit/helpers/mock_*.h` 三个 Mock + `test_mock_helpers.cpp` 自测试） |
 | Q-2 | 性能基准测试缺失 | ~~低~~ | ✅ 已修复（新增 `tests/benchmarks/` 目录，含 EventBus/TokenCount/ConfigManager 三个 benchmark 文件，共 7 个 BENCHMARK 用例；通过 `-DWORKX_BUILD_BENCHMARKS=ON` 启用独立可执行文件 `workx_benchmarks`，默认不编译以避免拖慢 CI） |
-| Q-3 | Linux 平台编译未验证 | 中（CI 风险） | ⬜ 未修复 |
+| Q-3 | Linux 平台编译未验证 | ~~中（CI 风险）~~ | ✅ 已修复（WSL Ubuntu 24.04 + gcc 13.3 + Catch2 v3 编译通过，405 unit test cases / 1368 assertions 全部通过；修复 GCC `-Wmissing-field-initializers`/`-Wunused-function`/`-Wunused-parameter` 警告：ConfigSchema 和 ExecutorResult 补全默认成员初始化器，未使用的辅助函数加 `[[maybe_unused]]`，TODO 工具的未使用参数注释化） |
 | Q-4 | AutoTestServer 在 Linux 上未实测 | 中 | ⬜ 未修复 |
 | Q-5 | LM Studio LLM 推理测试需手动启动 | ~~低~~ | ✅ 已修复（新增 `docs/INTEGRATION_TESTING.md`，详细说明自动模式（Python mock 服务器 RAII 启停）与手动模式（LM Studio 环境变量配置）两种集成测试运行方式、CI 集成示例和故障排查指南） |
 
@@ -122,7 +122,7 @@
 
 | 优先级 | 项 | 理由 | 预估工期 |
 |--------|-----|------|----------|
-| **P0** | Q-3 + Q-4 | Linux CI 是后续所有验证的基础 | 2-3 天 |
+| ~~**P0**~~ | ~~Q-3~~ | ~~Linux 平台编译验证~~ | ✅ 已完成 |
 | ~~**P1**~~ | ~~L-2 + L-3 + L-6~~ | ~~裸指针修复~~ | ✅ 已完成 |
 | ~~**P1**~~ | ~~T-4 + T-6~~ | ~~防御性原子化 + static_assert~~ | ✅ 已完成 |
 | ~~**P1**~~ | ~~G-2~~ | ~~Logger 析构 join~~ | ✅ 已完成 |

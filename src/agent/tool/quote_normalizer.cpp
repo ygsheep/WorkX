@@ -22,7 +22,7 @@ constexpr char kSmartDoubleLeft[]  = "\xE2\x80\x9C";  // U+201C "
 constexpr char kSmartDoubleRight[] = "\xE2\x80\x9D";  // U+201D "
 
 /// 检查字节序列是否匹配指定前缀
-bool starts_with(std::string_view s, size_t pos, std::string_view prefix) {
+[[maybe_unused]] bool starts_with(std::string_view s, size_t pos, std::string_view prefix) {
     if (pos + prefix.size() > s.size()) return false;
     for (size_t i = 0; i < prefix.size(); ++i) {
         if (s[pos + i] != prefix[i]) return false;

@@ -108,7 +108,7 @@ TEST_CASE("MockEventBus 订阅与发布记录", "[mock][event_bus]") {
     SECTION("subscribe + dispatch_enabled 触发回调") {
         bus.set_dispatch_enabled(true);
         int received = 0;
-        auto token = bus.subscribe<TestEvent>([&](const TestEvent& e) {
+        bus.subscribe<TestEvent>([&](const TestEvent& e) {
             received = e.value;
         });
         REQUIRE(bus.subscriber_count_typed<TestEvent>() == 1);

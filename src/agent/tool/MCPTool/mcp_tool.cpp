@@ -42,8 +42,8 @@ nlohmann::json MCPTool::input_schema() const {
 }
 
 ToolResult MCPTool::call(
-    const nlohmann::json& input,
-    const ToolContext& ctx
+    const nlohmann::json& /*input*/,
+    const ToolContext& /*ctx*/
 ) const {
     // TODO: 实现 MCP 工具调用逻辑
     return ToolResult::error("MCPTool not implemented");

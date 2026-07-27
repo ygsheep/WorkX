@@ -44,8 +44,8 @@ nlohmann::json GrepTool::input_schema() const {
 }
 
 ToolResult GrepTool::call(
-    const nlohmann::json& input,
-    const ToolContext& ctx
+    const nlohmann::json& /*input*/,
+    const ToolContext& /*ctx*/
 ) const {
     // TODO: 实现 grep 搜索逻辑
     return ToolResult::error("GrepTool not implemented");

@@ -15,7 +15,7 @@ namespace agent::compact {
 namespace {
 
 /// @brief 不区分大小写比较字符串后缀
-bool ends_with_ci(std::string_view str, std::string_view suffix) {
+[[maybe_unused]] bool ends_with_ci(std::string_view str, std::string_view suffix) {
     if (str.size() < suffix.size()) return false;
     auto off = str.size() - suffix.size();
     return std::equal(suffix.begin(), suffix.end(), str.begin() + off,

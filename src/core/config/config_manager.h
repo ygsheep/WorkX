@@ -38,6 +38,8 @@ struct ConfigMeta {
 /// @brief 结构化配置 Schema（C-2/C-4）
 /// @details 在 ConfigMeta 基础上增加类型约束、范围约束、枚举值、环境变量映射。
 ///          register_schema() 注册后，set_value() 时自动校验。
+/// @note 所有字段均提供默认成员初始化器，聚合初始化时省略字段不会触发
+///       GCC `-Wmissing-field-initializers` 警告。
 struct ConfigSchema {
     std::string key;                   ///< 配置键
     std::string description;           ///< 人类可读描述
@@ -54,17 +56,15 @@ struct ConfigSchema {
     } type = Type::String;
 
     /// @brief 整数范围约束（仅 type=Int 时生效）
-    std::optional<std::pair<int64_t, int64_t>> int_range;
+    std::optional<std::pair<int64_t, int64_t>> int_range = std::nullopt;
     /// @brief 浮点范围约束（仅 type=Double 时生效）
-    std::optional<std::pair<double, double>> double_range;
+    std::optional<std::pair<double, double>> double_range = std::nullopt;
     /// @brief 枚举值列表（仅 type=Enum 时生效）
-    std::vector<std::string> enum_values;
-
+    std::vector<std::string> enum_values = {};
     /// @brief 对应的环境变量名（C-4，空表示不绑定环境变量）
-    std::string env_var;
-
+    std::string env_var = {};
     /// @brief 自定义验证函数（与类型/范围/枚举校验叠加，均需通过）
-    std::function<Result<void, std::string>(const ConfigValue&)> validate;
+    std::function<Result<void, std::string>(const ConfigValue&)> validate = {};
 
     /// @brief 校验配置值是否符合 schema
     /// @param value 待校验的值

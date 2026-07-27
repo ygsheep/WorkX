@@ -20,10 +20,10 @@ namespace agent::command {
 /// 命令执行结果（扩展版，包含元信息）
 struct ExecutorResult {
     CommandResult result;
-    std::string command_name;
+    std::string command_name = {};
     bool should_query{false};       ///< 是否需要后续查询模型
     // TODO: chain input not yet implemented — 字段保留待后续实现
-    std::optional<std::string> next_input;
+    std::optional<std::string> next_input = std::nullopt;
     bool submit_next_input{false};
 };
 
