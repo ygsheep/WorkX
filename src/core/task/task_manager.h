@@ -133,10 +133,11 @@ public:
         m_completed_callback = std::move(callback);
     }
 
-private:
+    /// @brief 执行任务（M-6：原 private + friend TaskManager，改为 public）
+    /// @details TaskManager::start 通过此入口驱动任务执行；
+    ///          测试可直接调用 execute() 驱动状态机，无需 friend。
+    ///          状态转换：Pending → Running → (Completed|Cancelled|Failed)
     void execute();
-    void markCompleted();
-    void markFailed(const std::string& error_message = "Unknown error");
 
     /// @brief 读取开始时间点（线程安全）
     [[nodiscard]] std::chrono::steady_clock::time_point start_time() const noexcept {
@@ -144,6 +145,11 @@ private:
             std::chrono::nanoseconds{m_start_time_ns.load(std::memory_order_relaxed)}
         };
     }
+
+private:
+    // M-6：状态机内部转换方法保持 private，避免外部跳过 execute() 直接置终态
+    void markCompleted();
+    void markFailed(const std::string& error_message = "Unknown error");
 
 private:
     std::string m_name;
@@ -165,7 +171,8 @@ private:
     IEventBus& m_event_bus;
     FinishedCallback m_on_finished;
 
-    friend class TaskManager;
+    // M-6：删除 friend class TaskManager —— execute() 已为 public，
+    //      通信通过 m_on_finished 回调，无需 Task 直接访问 TaskManager 私有成员
 };
 
 // ============================================================
@@ -268,7 +275,8 @@ private:
     ThreadPool m_pool;
     IEventBus& m_event_bus;
 
-    friend class Task;  // Task::execute 结束时通知 m_tasks_cv / m_wait_cv
+    // M-6：删除 friend class Task —— Task 通过 m_on_finished 回调通知 cv，
+    //      无需反向访问 TaskManager 私有成员，状态机可独立测试
 };
 
 } // namespace agent

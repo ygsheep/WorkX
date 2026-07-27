@@ -60,7 +60,7 @@ ResultV2<void> RemoteBackend::initialize(const BackendConfig& config) {
 
 #ifdef WORKX_HAS_CURL
     m_http_client = std::make_unique<HttpClient>();
-    m_ready.store(true);
+    m_state.store(BackendState::Ready, std::memory_order_release);
 
     // H-1：通过 DI 注入的 m_event_bus 发布，不再调用 EventBus::instance()；
     // 为 nullptr 时跳过发布（保持向后兼容）
@@ -81,14 +81,32 @@ ResultV2<void> RemoteBackend::initialize(const BackendConfig& config) {
 }
 
 void RemoteBackend::shutdown() {
-    if (m_ready.load()) {
-        interrupt();
+    // M-7：仅当处于 Ready / Generating 时执行 shutdown 流程
+    BackendState expected = BackendState::Ready;
+    // CAS：若 Ready 则转 Idle 执行 shutdown；若 Generating 先转 Shutdown 再走 interrupt
+    if (m_state.compare_exchange_strong(expected, BackendState::Shutdown,
+        std::memory_order_acq_rel, std::memory_order_acquire)) {
         if (m_http_client) {
             m_http_client->shutdown();
         }
-        m_ready.store(false);
 
         // H-1：通过 DI 注入的 m_event_bus 发布
+        if (m_event_bus) {
+            m_event_bus->publish_async(BackendStatusEvent{
+                .status = BackendStatusEvent::Disconnected,
+                .backend_name = name(),
+                .error = {}
+            });
+        }
+        return;
+    }
+    // Generating 态：先 interrupt（内部会清理 active_reader），再 shutdown
+    if (m_state.load(std::memory_order_acquire) == BackendState::Generating) {
+        interrupt();  // 会把 Generating 之外的 active_reader 清掉
+        m_state.store(BackendState::Shutdown, std::memory_order_release);
+        if (m_http_client) {
+            m_http_client->shutdown();
+        }
         if (m_event_bus) {
             m_event_bus->publish_async(BackendStatusEvent{
                 .status = BackendStatusEvent::Disconnected,
@@ -109,7 +127,9 @@ ModelInfo RemoteBackend::get_model_info() const {
 
 std::shared_ptr<IStreamReader> RemoteBackend::submit_completion(const CompletionRequest& request) {
 #ifdef WORKX_HAS_CURL
-    if (!m_ready.load() || !m_adapter || !m_http_client) {
+    // M-7：单一状态判断，Ready 才接受请求
+    if (m_state.load(std::memory_order_acquire) != BackendState::Ready ||
+        !m_adapter || !m_http_client) {
         return nullptr;
     }
 
@@ -120,7 +140,12 @@ std::shared_ptr<IStreamReader> RemoteBackend::submit_completion(const Completion
         return nullptr;
     }
 
-    m_generating.store(true);
+    // M-7：CAS Ready → Generating
+    BackendState expected = BackendState::Ready;
+    if (!m_state.compare_exchange_strong(expected, BackendState::Generating,
+        std::memory_order_acq_rel, std::memory_order_acquire)) {
+        return nullptr;
+    }
 
     // 创建 SSE 流读取器，传入 Provider 特定的解析回调
     auto parse_cb = [this](const std::string& event_type,
@@ -142,7 +167,8 @@ std::shared_ptr<IStreamReader> RemoteBackend::submit_completion(const Completion
         url, header_pairs, body, reader,
         [this]() {
             std::lock_guard<std::mutex> lock(m_active_mutex);
-            m_generating.store(false);
+            // M-7：生成完成，回到 Ready 态
+            m_state.store(BackendState::Ready, std::memory_order_release);
             m_active_reader.reset();
         },
         m_config.timeout_ms);
@@ -165,7 +191,10 @@ void RemoteBackend::interrupt() {
         }
         m_active_reader.reset();
     }
-    m_generating.store(false);
+    // M-7：若处于 Generating，回到 Ready；其他状态不变
+    BackendState expected = BackendState::Generating;
+    m_state.compare_exchange_strong(expected, BackendState::Ready,
+        std::memory_order_acq_rel, std::memory_order_acquire);
 }
 
 // ============================================================
@@ -174,7 +203,9 @@ void RemoteBackend::interrupt() {
 
 ResultV2<std::vector<ModelInfo>> RemoteBackend::list_models() {
 #ifdef WORKX_HAS_CURL
-    if (!m_ready.load() || !m_adapter || !m_http_client) {
+    // M-7：Ready 态才允许查询模型列表
+    if (m_state.load(std::memory_order_acquire) != BackendState::Ready ||
+        !m_adapter || !m_http_client) {
         return ResultV2<std::vector<ModelInfo>>::err(
             Error::Code::InternalError, "Backend not ready");
     }

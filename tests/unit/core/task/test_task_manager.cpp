@@ -522,3 +522,66 @@ TEST_CASE_METHOD(TaskManagerFixture, "TaskManager pool rejects unbounded thread 
     TaskManager::instance().waitForAll();
     REQUIRE(done.load() == 100);
 }
+
+// ============================================================================
+// M-6: Task 状态机可独立测试（friend 已删除，execute() 公开）
+// ============================================================================
+
+TEST_CASE("Task execute is public, drives state machine without friend (M-6)",
+          "[task_manager][task][m6]") {
+    // M-6：验证 Task::execute 已为 public，测试可直接调用驱动状态机，
+    //      无需 friend class TaskManager 反向访问私有成员。
+    //      Task 继承 enable_shared_from_this，execute 内部调用 shared_from_this()，
+    //      因此必须用 shared_ptr 构造（不能栈对象）。
+    std::atomic<bool> executed{false};
+    auto task = std::make_shared<Task>(
+        "m6_direct_execute",
+        [&executed](const std::atomic<bool>&) { executed = true; },
+        EventBus::instance());
+
+    REQUIRE(task->getStatus() == TaskStatus::Pending);
+    REQUIRE_FALSE(executed.load());
+
+    // 直接调用 public execute()，不经过 TaskManager::start
+    task->execute();
+
+    REQUIRE(executed.load());
+    REQUIRE(task->getStatus() == TaskStatus::Completed);
+    REQUIRE(task->isFinished());
+
+    // 二次 execute 应为 no-op（CAS 保护：Pending → Running 仅一次）
+    task->execute();
+    REQUIRE(task->getStatus() == TaskStatus::Completed);
+}
+
+TEST_CASE("Task execute transitions Pending → Running → Cancelled (M-6)",
+          "[task_manager][task][m6]") {
+    // M-6：验证 execute 在 should_cancel=true 时走 Cancelled 分支
+    auto task = std::make_shared<Task>(
+        "m6_cancelled",
+        [](const std::atomic<bool>&) { /* 用户函数检查 cancel 并返回 */ },
+        EventBus::instance());
+    task->cancel();  // 设置 should_cancel
+
+    REQUIRE(task->shouldCancel());
+    REQUIRE(task->getStatus() == TaskStatus::Pending);
+
+    task->execute();
+
+    REQUIRE(task->getStatus() == TaskStatus::Cancelled);
+    REQUIRE(task->isFinished());
+}
+
+TEST_CASE("Task execute catches exception and marks Failed (M-6)",
+          "[task_manager][task][m6]") {
+    // M-6：验证 execute 异常路径（markFailed 为 private，通过 execute 间接触发）
+    auto task = std::make_shared<Task>(
+        "m6_throws",
+        [](const std::atomic<bool>&) { throw std::runtime_error("boom"); },
+        EventBus::instance());
+
+    task->execute();
+
+    REQUIRE(task->getStatus() == TaskStatus::Failed);
+    REQUIRE(task->isFinished());
+}
