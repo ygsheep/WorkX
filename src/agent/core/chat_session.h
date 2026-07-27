@@ -15,6 +15,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <functional>
+#include <utility>   // C-1：std::pair
 #include "agent/api/i_completion_provider.h"
 #include "agent/api/chat_types.h"
 #include "agent/api/retry.h"  // H-3：HttpRetryPolicy
@@ -107,6 +108,11 @@ public:
     /// @brief 获取会话 ID
     const std::string& session_id() const { return m_session_id; }
 
+    /// @brief C-2：暴露 completion provider 原始指针（用于 factory 获取 IBackendAdmin）
+    /// @details 调用方（factory）可通过 dynamic_cast<IBackendAdmin*> 安全转型。
+    ///          返回的指针生命周期由 ChatSession 管理，session 析构后禁止使用。
+    ICompletionProvider* completion_provider() const { return m_provider.get(); }
+
     /// @brief 是否正在生成
     bool is_generating() const { return m_generating.load(); }
 
@@ -127,13 +133,21 @@ public:
     /// @return 包含 system_prompt（可选）和 messages 数组的 JSON 对象
     nlohmann::json serialize_state() const;
 
-    /// @brief H-6：从 JSON 反序列化会话状态（纯函数，不触碰文件系统）
+    /// @brief H-6：从 JSON 反序列化会话状态（C-1：真正纯函数，不触碰成员状态）
     /// @details 解析 system_prompt 与 messages，校验字段完整性。
-    ///          调用方负责加锁提交到 m_system_prompt / m_messages。
+    ///          仅对输入 j 进行只读解析，返回新构造的 (messages, system_prompt)，
+    ///          调用方负责通过 commit_state() 提交到成员。
     ///          公开为 public 以便单元测试直接验证反序列化逻辑。
     /// @param j JSON 对象（来自 load_session 读取的文件）
-    /// @return 成功返回 void；失败返回错误信息（字段缺失/类型错误等）
-    Result<void, std::string> deserialize_state(const nlohmann::json& j);
+    /// @return 成功返回 (messages, system_prompt)；失败返回错误信息
+    static Result<std::pair<std::vector<ChatMessage>, std::string>, std::string>
+    deserialize_state(const nlohmann::json& j);
+
+    /// @brief C-1：提交反序列化结果到成员状态（加锁一次性写入）
+    /// @details 将 deserialize_state 返回的 (messages, system_prompt) 原子提交。
+    ///          load_session 内部调用；测试中也可直接构造 pair 后调用此方法
+    ///          设置初始状态，避免依赖 deserialize_state 形成闭环测试。
+    void commit_state(std::vector<ChatMessage> messages, std::string system_prompt);
 
     /// @brief H-7：纯函数计算重试决策
     /// @details 分离 5 类关注点中的纯逻辑部分：
@@ -144,9 +158,10 @@ public:
     /// @param retry_policy HTTP 重试策略（提供 max_retries / is_retryable / delay_ms）
     /// @param attempt 当前重试次数（0=首次请求失败后的第一次重试判定）
     /// @return RetryDecision：Continue（无错误）/ Sleep（可重试）/ Stop（不可重试或超上限）
+    /// C-3：移除 noexcept —— delay_ms 不再 noexcept，且调用链含 std::format 可能抛
     static RetryDecision compute_retry(const ReActResult& react_result,
                                        const HttpRetryPolicy& retry_policy,
-                                       int attempt) noexcept;
+                                       int attempt);
 
     // H-8：移除 backend() 方法。
     // 原设计暴露完整 IBackend* 给 UI 层，违反接口隔离（UI 可误调 shutdown() 等

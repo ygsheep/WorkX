@@ -405,7 +405,7 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
 
 RetryDecision ChatSession::compute_retry(const ReActResult& react_result,
                                          const HttpRetryPolicy& retry_policy,
-                                         int attempt) noexcept {
+                                         int attempt) {
     // 无错误：继续执行（非错误路径）
     if (!react_result.was_error) {
         return RetryDecision{RetryAction::Continue, 0};
@@ -470,7 +470,9 @@ nlohmann::json ChatSession::serialize_state() const {
     return j;
 }
 
-Result<void, std::string> ChatSession::deserialize_state(const nlohmann::json& j) {
+// C-1：改为真正纯函数——不修改任何成员状态，仅解析 j 返回 (messages, system_prompt)
+Result<std::pair<std::vector<ChatMessage>, std::string>, std::string>
+ChatSession::deserialize_state(const nlohmann::json& j) {
     std::vector<ChatMessage> new_messages;
     std::string new_system_prompt;
 
@@ -485,10 +487,12 @@ Result<void, std::string> ChatSession::deserialize_state(const nlohmann::json& j
 
                 // H-6：const operator[] 在 missing key 上触发 assert，必须先 contains 检查
                 if (!m.contains("role")) {
-                    return Result<void, std::string>::err("Message missing 'role' field");
+                    return Result<std::pair<std::vector<ChatMessage>, std::string>, std::string>::err(
+                        "Message missing 'role' field");
                 }
                 if (!m.contains("content")) {
-                    return Result<void, std::string>::err("Message missing 'content' field");
+                    return Result<std::pair<std::vector<ChatMessage>, std::string>, std::string>::err(
+                        "Message missing 'content' field");
                 }
 
                 std::string role_str = m["role"].get<std::string>();
@@ -497,7 +501,7 @@ Result<void, std::string> ChatSession::deserialize_state(const nlohmann::json& j
                 else if (role_str == "assistant")  msg.role = ChatMessage::Role::Assistant;
                 else if (role_str == "tool")       msg.role = ChatMessage::Role::Tool;
                 else {
-                    return Result<void, std::string>::err(
+                    return Result<std::pair<std::vector<ChatMessage>, std::string>, std::string>::err(
                         std::format("Unknown role: {}", role_str));
                 }
 
@@ -517,24 +521,26 @@ Result<void, std::string> ChatSession::deserialize_state(const nlohmann::json& j
             }
         }
     } catch (const nlohmann::json::parse_error& e) {
-        return Result<void, std::string>::err(
+        return Result<std::pair<std::vector<ChatMessage>, std::string>, std::string>::err(
             std::format("JSON parse error: {}", e.what()));
     } catch (const nlohmann::json::type_error& e) {
-        return Result<void, std::string>::err(
+        return Result<std::pair<std::vector<ChatMessage>, std::string>, std::string>::err(
             std::format("JSON type error: {}", e.what()));
     } catch (const std::exception& e) {
-        return Result<void, std::string>::err(
+        return Result<std::pair<std::vector<ChatMessage>, std::string>, std::string>::err(
             std::format("Error deserializing session: {}", e.what()));
     }
 
-    // 一次性加锁写入
-    {
-        std::lock_guard<std::mutex> lock(m_state_mutex);
-        m_messages = std::move(new_messages);
-        m_system_prompt = std::move(new_system_prompt);
-    }
+    return Result<std::pair<std::vector<ChatMessage>, std::string>, std::string>::ok(
+        std::make_pair(std::move(new_messages), std::move(new_system_prompt)));
+}
 
-    return Result<void, std::string>::ok();
+// C-1：一次性加锁提交状态到成员
+void ChatSession::commit_state(std::vector<ChatMessage> messages,
+                                std::string system_prompt) {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    m_messages = std::move(messages);
+    m_system_prompt = std::move(system_prompt);
 }
 
 // ============================================================
@@ -582,7 +588,14 @@ Result<void, std::string> ChatSession::load_session(const std::string& path) {
         file >> j;
         file.close();
 
-        return deserialize_state(j);
+        // C-1：deserialize_state 是纯函数，需通过 commit_state 提交到成员
+        auto parse_result = deserialize_state(j);
+        if (parse_result.isErr()) {
+            return Result<void, std::string>::err(parse_result.error());
+        }
+        auto [messages, system_prompt] = std::move(parse_result).unwrap();
+        commit_state(std::move(messages), std::move(system_prompt));
+        return Result<void, std::string>::ok();
 
     } catch (const nlohmann::json::parse_error& e) {
         return Result<void, std::string>::err(

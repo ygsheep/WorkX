@@ -1,6 +1,10 @@
 /**
  * @file test_chat_session.cpp
  * @brief ChatSession 单元测试
+ * @details H-A/H-B：修复 Closed AI Loop 与单例污染问题
+ *          - H-A：serialize_state 测试不再通过 deserialize_state 设置状态，
+ *                 改用 commit_state 直接注入
+ *          - H-B：所有测试改用 MockConfigManager，避免污染单例
  */
 
 #include <catch2/catch_test_macros.hpp>
@@ -10,64 +14,54 @@
 #include "core/task/task_manager.h"
 #include "agent/message/types.h"
 #include "agent/api/retry.h"
-#include "core/config/config_manager.h"
 #include "helpers/mock_provider.h"
+#include "helpers/mock_config_manager.h"  // H-B
 
 using namespace agent;
+using namespace agent::test;
 
 namespace {
 
-/// @brief 创建测试用 ChatSession（使用共享 MockCompletionProvider）
-/// @details H-4：DI 三件套必须显式注入，使用单例满足测试需求
-std::unique_ptr<ChatSession> make_test_session() {
+/// @brief 创建测试用 ChatSession（H-B：使用 MockConfigManager）
+std::unique_ptr<ChatSession> make_test_session(MockConfigManager& cfg) {
     return std::make_unique<ChatSession>(
         std::unique_ptr<ICompletionProvider>(new test::MockCompletionProvider()),
         TaskManager::instance(),
         EventBus::instance(),
-        ConfigManager::instance()
+        cfg
     );
 }
 
 } // anonymous namespace
 
 TEST_CASE("ChatSession basic operations", "[session]") {
-    auto& cfg = ConfigManager::instance();
-    cfg.clear_for_test();
-    cfg.set("backend.retry_count", 0);
+    MockConfigManager cfg;
 
-    auto session = make_test_session();
+    auto session = make_test_session(cfg);
 
     REQUIRE_FALSE(session->is_generating());
     REQUIRE(session->get_messages().empty());
 
     session->set_system_prompt("You are helpful");
     session->clear_history();
-
-    cfg.clear_for_test();
 }
 
 TEST_CASE("ChatSession load non-existent file", "[session]") {
-    auto& cfg = ConfigManager::instance();
-    cfg.clear_for_test();
-    cfg.set("backend.retry_count", 0);
+    MockConfigManager cfg;
 
-    auto session = make_test_session();
+    auto session = make_test_session(cfg);
 
     auto load_result = session->load_session("nonexistent_file_12345.json");
     REQUIRE(load_result.isErr());
-
-    cfg.clear_for_test();
 }
 
 TEST_CASE("ChatSession save and load round-trip", "[session]") {
-    auto& cfg = ConfigManager::instance();
-    cfg.clear_for_test();
-    cfg.set("backend.retry_count", 0);
+    MockConfigManager cfg;
 
     std::string test_path = "test_roundtrip_tmp.json";
 
     {
-        auto session = make_test_session();
+        auto session = make_test_session(cfg);
         session->set_system_prompt("Test system prompt");
 
         auto save_result = session->save_session(test_path);
@@ -75,14 +69,13 @@ TEST_CASE("ChatSession save and load round-trip", "[session]") {
     }
 
     {
-        auto session = make_test_session();
+        auto session = make_test_session(cfg);
 
         auto load_result = session->load_session(test_path);
         REQUIRE(load_result.isOk());
     }
 
     std::filesystem::remove(test_path);
-    cfg.clear_for_test();
 }
 
 // ============================================================
@@ -90,11 +83,9 @@ TEST_CASE("ChatSession save and load round-trip", "[session]") {
 // ============================================================
 
 TEST_CASE("ChatSession serialize_state empty messages", "[session][h6][serialize]") {
-    auto& cfg = ConfigManager::instance();
-    cfg.clear_for_test();
-    cfg.set("backend.retry_count", 0);
+    MockConfigManager cfg;
 
-    auto session = make_test_session();
+    auto session = make_test_session(cfg);
     // 不设置 system_prompt，不添加 messages
     auto j = session->serialize_state();
 
@@ -104,46 +95,41 @@ TEST_CASE("ChatSession serialize_state empty messages", "[session][h6][serialize
     REQUIRE(j.contains("messages"));
     REQUIRE(j["messages"].is_array());
     REQUIRE(j["messages"].empty());
-
-    cfg.clear_for_test();
 }
 
 TEST_CASE("ChatSession serialize_state with system_prompt", "[session][h6][serialize]") {
-    auto& cfg = ConfigManager::instance();
-    cfg.clear_for_test();
-    cfg.set("backend.retry_count", 0);
+    MockConfigManager cfg;
 
-    auto session = make_test_session();
+    auto session = make_test_session(cfg);
     session->set_system_prompt("You are helpful");
 
     auto j = session->serialize_state();
     REQUIRE(j["system_prompt"] == "You are helpful");
-
-    cfg.clear_for_test();
 }
 
 TEST_CASE("ChatSession serialize_state all roles", "[session][h6][serialize]") {
-    auto& cfg = ConfigManager::instance();
-    cfg.clear_for_test();
-    cfg.set("backend.retry_count", 0);
+    MockConfigManager cfg;
 
-    auto session = make_test_session();
-    // 通过 save/load 路径不便构造消息，直接走 serialize_state 反向覆盖
-    // 先设置一组消息
-    session->set_system_prompt("sys");
-    {
-        // 直接通过 deserialize 注入消息以测试 serialize
-        nlohmann::json input;
-        input["system_prompt"] = "sys";
-        input["messages"] = nlohmann::json::array({
-            {{"role", "system"}, {"content", "sys msg"}},
-            {{"role", "user"}, {"content", "hello"}},
-            {{"role", "assistant"}, {"content", "hi"}, {"reasoning_content", "thinking"}},
-            {{"role", "tool"}, {"content", "result"}, {"tool_call_id", "tc1"}, {"tool_name", "Read"}}
-        });
-        auto r = session->deserialize_state(input);
-        REQUIRE(r.isOk());
-    }
+    auto session = make_test_session(cfg);
+
+    // H-A 修复：原测试通过 deserialize_state 设置状态后用 serialize_state 验证，
+    // 形成 Closed AI Loop（deserialize 错误会掩盖 serialize 错误）。
+    // 改用 commit_state 直接注入已知状态。
+    std::vector<ChatMessage> messages;
+    messages.push_back({.role = ChatMessage::Role::System, .content = "sys msg"});
+    messages.push_back({.role = ChatMessage::Role::User, .content = "hello"});
+    messages.push_back({
+        .role = ChatMessage::Role::Assistant,
+        .content = "hi",
+        .reasoning_content = "thinking"
+    });
+    messages.push_back({
+        .role = ChatMessage::Role::Tool,
+        .content = "result",
+        .tool_call_id = "tc1",
+        .tool_name = "Read"
+    });
+    session->commit_state(std::move(messages), "sys");
 
     auto j = session->serialize_state();
     REQUIRE(j["system_prompt"] == "sys");
@@ -164,87 +150,68 @@ TEST_CASE("ChatSession serialize_state all roles", "[session][h6][serialize]") {
     REQUIRE(j["messages"][3]["content"] == "result");
     REQUIRE(j["messages"][3]["tool_call_id"] == "tc1");
     REQUIRE(j["messages"][3]["tool_name"] == "Read");
-
-    cfg.clear_for_test();
 }
 
 TEST_CASE("ChatSession deserialize_state round-trip", "[session][h6][deserialize]") {
-    auto& cfg = ConfigManager::instance();
-    cfg.clear_for_test();
-    cfg.set("backend.retry_count", 0);
+    MockConfigManager cfg;
 
-    auto session1 = make_test_session();
-    session1->set_system_prompt("round-trip test");
-
-    // 通过 deserialize 注入消息
+    // H-A 修复：直接测试 deserialize_state 纯函数本身，不依赖 session 实例
     nlohmann::json input;
     input["system_prompt"] = "round-trip test";
     input["messages"] = nlohmann::json::array({
         {{"role", "user"}, {"content", "q1"}},
         {{"role", "assistant"}, {"content", "a1"}}
     });
-    REQUIRE(session1->deserialize_state(input).isOk());
 
-    // serialize → deserialize round-trip
-    auto j = session1->serialize_state();
+    auto parse_result = ChatSession::deserialize_state(input);
+    REQUIRE(parse_result.isOk());
 
-    auto session2 = make_test_session();
-    REQUIRE(session2->deserialize_state(j).isOk());
+    auto [messages, system_prompt] = std::move(parse_result).unwrap();
+    REQUIRE(system_prompt == "round-trip test");
+    REQUIRE(messages.size() == 2);
+    REQUIRE(messages[0].role == ChatMessage::Role::User);
+    REQUIRE(messages[0].content == "q1");
+    REQUIRE(messages[1].role == ChatMessage::Role::Assistant);
+    REQUIRE(messages[1].content == "a1");
 
-    auto j2 = session2->serialize_state();
-    REQUIRE(j == j2);
+    // 通过 commit_state 提交后再 serialize 验证 round-trip
+    auto session = make_test_session(cfg);
+    session->commit_state(std::vector<ChatMessage>(messages), system_prompt);
 
-    cfg.clear_for_test();
+    auto j = session->serialize_state();
+    REQUIRE(j["system_prompt"] == "round-trip test");
+    REQUIRE(j["messages"].size() == 2);
+    REQUIRE(j["messages"][0]["role"] == "user");
+    REQUIRE(j["messages"][0]["content"] == "q1");
 }
 
 TEST_CASE("ChatSession deserialize_state rejects unknown role", "[session][h6][deserialize]") {
-    auto& cfg = ConfigManager::instance();
-    cfg.clear_for_test();
-    cfg.set("backend.retry_count", 0);
-
-    auto session = make_test_session();
     nlohmann::json input;
     input["messages"] = nlohmann::json::array({
         {{"role", "alien"}, {"content", "??"}}
     });
 
-    auto r = session->deserialize_state(input);
+    auto r = ChatSession::deserialize_state(input);
     REQUIRE(r.isErr());
     REQUIRE(r.error().find("Unknown role") != std::string::npos);
-
-    cfg.clear_for_test();
 }
 
 TEST_CASE("ChatSession deserialize_state accepts missing messages", "[session][h6][deserialize]") {
-    auto& cfg = ConfigManager::instance();
-    cfg.clear_for_test();
-    cfg.set("backend.retry_count", 0);
-
-    auto session = make_test_session();
     nlohmann::json input;  // 完全空对象
-    auto r = session->deserialize_state(input);
+    auto r = ChatSession::deserialize_state(input);
     REQUIRE(r.isOk());
-    REQUIRE(session->get_messages().empty());
-
-    cfg.clear_for_test();
+    REQUIRE(r.unwrap().first.empty());  // messages 为空
 }
 
 TEST_CASE("ChatSession deserialize_state rejects malformed content", "[session][h6][deserialize]") {
-    auto& cfg = ConfigManager::instance();
-    cfg.clear_for_test();
-    cfg.set("backend.retry_count", 0);
-
-    auto session = make_test_session();
     // content 字段缺失
     nlohmann::json input;
     input["messages"] = nlohmann::json::array({
         nlohmann::json::object({{"role", "user"}})  // 缺 content
     });
 
-    auto r = session->deserialize_state(input);
+    auto r = ChatSession::deserialize_state(input);
     REQUIRE(r.isErr());
-
-    cfg.clear_for_test();
 }
 
 // ============================================================
@@ -330,6 +297,23 @@ TEST_CASE("compute_retry handles empty error_message", "[session][h7][retry]") {
 
     auto d = ChatSession::compute_retry(r, policy, 0);
     REQUIRE(d.action == RetryAction::Stop);
+}
+
+// C-3 回归测试：attempt >= 63 不应触发 UB
+TEST_CASE("compute_retry handles attempt >= 63 without UB", "[session][h7][retry][c-3]") {
+    ReActResult r;
+    r.was_error = true;
+    r.error_message = "connection timeout";
+    HttpRetryPolicy policy{.max_retries = 100, .base_delay_ms = 1000, .max_delay_ms = 60000};
+
+    // attempt=63: 1LL << 63 是 UB（有符号 int64），应被保护直接返回 max_delay_ms
+    auto d = ChatSession::compute_retry(r, policy, 63);
+    REQUIRE(d.action == RetryAction::Sleep);
+    REQUIRE(d.delay_ms == 60000);
+
+    // attempt=100: 超过 max_retries，Stop
+    auto d2 = ChatSession::compute_retry(r, policy, 100);
+    REQUIRE(d2.action == RetryAction::Stop);
 }
 
 // ============================================================
