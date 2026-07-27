@@ -18,6 +18,9 @@
 
 #include "tui/core/terminal.h"
 #include "tui/render/streaming_buffer.h"
+#include "core/events/event_bus.h"
+#include "core/config/config_manager.h"
+#include "core/task/task_manager.h"
 
 using namespace tui;
 using namespace std::chrono_literals;
@@ -25,8 +28,12 @@ using namespace std::chrono_literals;
 namespace {
 
 /// @brief 未 initialize() 的 Terminal，仅用于满足 StreamingBuffer 构造签名
-/// @details buffer 为空时 flush_now 提前 return，不调用 write_safe
-Terminal null_terminal;
+/// @details buffer 为空时 flush_now 提前 return，不调用 write_safe。
+///          H-4：Terminal 不再提供默认实参，需显式注入三大依赖单例。
+Terminal null_terminal(&agent::EventBus::instance(),
+                      &agent::ConfigManager::instance(),
+                      &agent::TaskManager::instance(),
+                      TerminalConfig{});
 
 } // namespace
 

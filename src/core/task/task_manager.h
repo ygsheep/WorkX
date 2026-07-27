@@ -207,9 +207,9 @@ public:
 
 class TaskManager final : public ITaskManager {
 public:
-    /// @brief 单例访问（向后兼容，新代码应优先 DI 注入）
+    /// @brief 单例访问（H-4：显式注入 EventBus::instance()，组装层使用）
     static TaskManager& instance() noexcept {
-        static TaskManager inst;
+        static TaskManager inst(EventBus::instance());
         return inst;
     }
 
@@ -218,8 +218,8 @@ public:
     TaskManager(TaskManager&&) = delete;
     TaskManager& operator=(TaskManager&&) = delete;
 
-    /// @brief 构造（D-1 DI：可注入 IEventBus，默认使用全局单例）
-    explicit TaskManager(IEventBus& event_bus = EventBus::instance())
+    /// @brief 构造（H-4：DI 必须显式注入 IEventBus，无默认实参回退单例）
+    explicit TaskManager(IEventBus& event_bus)
         : m_pool(0), m_event_bus(event_bus) {}
 
     std::shared_ptr<Task> create(

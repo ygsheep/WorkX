@@ -73,8 +73,10 @@ ResultV2<Client> Client::create(ClientConfig cfg) {
         }
     }
 
-    // 4. 创建后端
-    auto backend = BackendFactory::create(cfg.backend);
+    // 4. 创建后端（H-1：透传 cfg.event_bus；为 nullptr 时回退 EventBus::instance()
+    //    以保留 BackendStatusEvent 发布，与 Client::event_bus() 行为一致）
+    IEventBus* backend_bus = cfg.event_bus ? cfg.event_bus : &EventBus::instance();
+    auto backend = BackendFactory::create(cfg.backend, backend_bus);
     if (!backend) {
         return ResultV2<Client>::err(
             Error::Code::InternalError, "Failed to create backend");
@@ -86,10 +88,10 @@ ResultV2<Client> Client::create(ClientConfig cfg) {
         return ResultV2<Client>::err(init_result.error());
     }
 
-    // 6. 构造 Client
+    // 6. 构造 Client（H-4：显式注入 TaskManager::instance()，不再依赖默认实参）
     Client client(std::move(backend), cfg.system_prompt,
                   cfg.retry_count, cfg.retry_delay_ms, cfg.enable_event_bus,
-                  cfg.event_bus);
+                  cfg.event_bus, TaskManager::instance());
     return ResultV2<Client>::ok(std::move(client));
 }
 
@@ -125,9 +127,9 @@ Client::Client(std::unique_ptr<IBackend> backend,
     }
 }
 
-// D-4：依赖解析（nullptr 时回退单例，向后兼容）
+// H-4：依赖解析（不再回退单例；m_publish_events=true 时要求 m_event_bus 非空）
 IEventBus& Client::event_bus() const {
-    return m_event_bus ? *m_event_bus : EventBus::instance();
+    return *m_event_bus;
 }
 
 Client::~Client() {
@@ -137,7 +139,7 @@ Client::~Client() {
            "Client::~Client: m_task_manager null but m_backend alive (moved-from?)");
 
     if (m_subscribed && m_interrupt_token.is_valid()) {
-        // 注意：移动后 m_event_bus 可能为 nullptr，回退单例 unsubscribe
+        // H-4：m_subscribed=true 隐含 m_publish_events=true，m_event_bus 必须非空
         event_bus().unsubscribe<InterruptEvent>(m_interrupt_token);
     }
     if (m_backend) {

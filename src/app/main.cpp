@@ -105,8 +105,11 @@ static int run(int argc, char* argv[]) {
         std::cerr << "[debug]   simple_io: " << (cfg.get_or<bool>(keys::SIMPLE_IO, false) ? "true" : "false") << "\n";
     }
 
-    // ---- Terminal（D-2：委托工厂构建 config）----
-    Terminal terminal(make_terminal_config(cfg));
+    // ---- Terminal（D-2：委托工厂构建 config；H-4：显式注入三大依赖）----
+    Terminal terminal(&EventBus::instance(),
+                      &ConfigManager::instance(),
+                      &TaskManager::instance(),
+                      make_terminal_config(cfg));
 
     auto init_result = terminal.initialize();
     if (init_result.isErr()) {

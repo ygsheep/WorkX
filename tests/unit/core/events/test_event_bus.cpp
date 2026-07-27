@@ -2,7 +2,8 @@
  * @file test_event_bus.cpp
  * @brief EventBus 单元测试
  * @details 覆盖 subscribe/unsubscribe/publish/publish_async/process_async_events/clear
- *          以及 EventGuard RAII、异常安全、多订阅者、跨线程发布等场景
+ *          以及异常安全、多订阅者、跨线程发布等场景。
+ *          H-2：EventGuard<T> 模板已删除，相关测试用例同步移除。
  */
 
 #include <catch2/catch_test_macros.hpp>
@@ -213,7 +214,7 @@ TEST_CASE_METHOD(EventBusFixture, "EventBus process_async_events clears queue", 
 }
 
 // ============================================================================
-// clear & EventGuard RAII
+// clear (H-2：EventGuard 测试已删除)
 // ============================================================================
 
 TEST_CASE_METHOD(EventBusFixture, "EventBus clear removes all subscribers and async queue", "[event_bus][clear]") {
@@ -232,39 +233,6 @@ TEST_CASE_METHOD(EventBusFixture, "EventBus clear removes all subscribers and as
     // async queue should also be empty
     EventBus::instance().process_async_events();
     REQUIRE(received == 0);
-}
-
-TEST_CASE_METHOD(EventBusFixture, "EventGuard auto-unsubscribes on destruction", "[event_bus][guard]") {
-    int received = 0;
-    {
-        auto guard = make_event_guard<TestEvent>(
-            [&received](const TestEvent& e) { received = e.value; }
-        );
-        EventBus::instance().publish(TestEvent{.value = 10});
-        REQUIRE(received == 10);
-    }  // guard destroyed
-
-    EventBus::instance().publish(TestEvent{.value = 100});
-    REQUIRE(received == 10);  // no longer receives
-}
-
-TEST_CASE_METHOD(EventBusFixture, "EventGuard move invalidates source", "[event_bus][guard]") {
-    int received = 0;
-    std::unique_ptr<EventGuard<TestEvent>> guard_b;
-
-    {
-        auto guard_a = make_event_guard<TestEvent>(
-            [&received](const TestEvent& e) { received = e.value; }
-        );
-        guard_b = std::make_unique<EventGuard<TestEvent>>(std::move(guard_a));
-    }  // guard_a moved, does not unsubscribe
-
-    EventBus::instance().publish(TestEvent{.value = 33});
-    REQUIRE(received == 33);  // guard_b still holds subscription
-
-    guard_b.reset();
-    EventBus::instance().publish(TestEvent{.value = 999});
-    REQUIRE(received == 33);  // guard_b destroyed, unsubscribed
 }
 
 // ============================================================================

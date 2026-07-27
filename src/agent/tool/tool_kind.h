@@ -1,29 +1,15 @@
 /**
  * @file tool_kind.h
- * @brief 工具分类枚举
- * @details 工具类型分类，用于 ToolCallEvent.tool_type 字段，供 UI 渲染层
- *          按类别展示工具调用。属于 tool 领域的元数据，定义在 agent::tool
- *          命名空间下。
+ * @brief 工具分类枚举（H-3：已迁移至 core/tool_kind.h，本文件为向后兼容 shim）
+ * @details 历史位置：ToolType 枚举原寄居于 agent/message/types.h，后迁回 agent/tool/。
+ *          H-3 修复分层越界：core/events/events.h 反向依赖 agent/tool/tool_kind.h，
+ *          现将枚举迁移至 core/tool_kind.h，agent 反向 include core。
  *
- *          历史位置：原寄居于 agent/message/types.h 的 agent:: 命名空间，
- *          属于反向依赖（tool 领域类型错位到 message 层）。本次迁回 tool/。
- * @version 1.0.0
+ *          保留本文件以避免破坏现有 #include "agent/tool/tool_kind.h" 调用方。
+ * @version 2.0.0
  * @date 2026-07
  */
 
 #pragma once
 
-namespace agent::tool {
-
-/// @brief 工具类型分类（用于 UI 渲染分组）
-enum class ToolType {
-    ReadFile,       ///< 文件读取
-    WriteFile,      ///< 文件写入
-    EditFile,       ///< 文件编辑
-    Execute,        ///< Shell 命令
-    Search,         ///< 搜索（grep/find）
-    Agent,          ///< 子代理
-    Other           ///< 其他/未知
-};
-
-} // namespace agent::tool
+#include "core/tool_kind.h"

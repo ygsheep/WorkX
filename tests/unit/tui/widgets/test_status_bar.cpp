@@ -14,14 +14,21 @@
 #include "tui/core/terminal.h"
 #include "tui/widgets/status_bar.h"
 #include "tui/core/tui_state.h"
+#include "core/events/event_bus.h"
+#include "core/config/config_manager.h"
+#include "core/task/task_manager.h"
 
 using namespace tui;
 
 namespace {
 
 /// @brief 未 initialize() 的 Terminal，仅用于满足 StatusBar 构造签名
-/// @details StatusBar 的 set_* 方法仅修改成员变量，不调用 Terminal 写入
-Terminal null_terminal;
+/// @details StatusBar 的 set_* 方法仅修改成员变量，不调用 Terminal 写入。
+///          H-4：Terminal 不再提供默认实参，需显式注入三大依赖单例。
+Terminal null_terminal(&agent::EventBus::instance(),
+                      &agent::ConfigManager::instance(),
+                      &agent::TaskManager::instance(),
+                      TerminalConfig{});
 
 } // namespace
 

@@ -79,7 +79,9 @@ struct ClientConfig {
     /// 开启后：订阅 InterruptEvent 自动中断 + 发布 StreamToken/Done/Error
     bool enable_event_bus = false;
 
-    /// D-4：事件总线注入（nullptr 时回退 EventBus::instance()，向后兼容）
+    /// H-4：事件总线注入（nullptr 时 Client 不发布事件；
+    ///         RemoteBackend 在 Client::create 内部会回退 EventBus::instance()
+    ///         以保留 BackendStatusEvent 发布）
     /// @details 仅当 enable_event_bus=true 时使用
     IEventBus* event_bus = nullptr;
 };
@@ -157,7 +159,7 @@ private:
            int retry_delay_ms,
            bool publish_events,
            IEventBus* event_bus,
-           ITaskManager& task_manager = TaskManager::instance());
+           ITaskManager& task_manager);
 
     /// 构造 CompletionRequest（含 system_prompt + history + 新消息）
     CompletionRequest build_request(const std::string& user_text);
@@ -208,10 +210,11 @@ private:
     // D-1：任务管理器指针（非拥有；Client 可移动，用指针避免引用无法重新绑定）
     ITaskManager* m_task_manager = nullptr;
 
-    // D-4：事件总线指针（非拥有；nullptr 时回退单例，向后兼容）
+    // H-4：事件总线指针（非拥有；m_publish_events=true 时必须非空，
+    //     由 Client::create 显式注入，nullptr 时不应触发事件发布路径）
     IEventBus* m_event_bus = nullptr;
 
-    /// @brief 解析事件总线（nullptr 时回退单例）
+    /// @brief 解析事件总线（H-4：不再回退单例，要求 m_publish_events=true 时 m_event_bus 非空）
     IEventBus& event_bus() const;
 
     /// 保护 m_messages 和 m_system_prompt 的互斥量

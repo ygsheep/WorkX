@@ -103,8 +103,8 @@ SessionResult create_session(IConfigManager& cfg, const ProviderPreset* preset) 
     int default_timeout = preset && preset->timeout_ms > 0 ? preset->timeout_ms : 30000;
     backend_config.timeout_ms = cfg.get_or<int>(keys::TIMEOUT_MS, default_timeout);
 
-    // 创建后端
-    auto backend = BackendFactory::create(backend_config);
+    // 创建后端（H-1：显式注入 EventBus::instance() 以保留 BackendStatusEvent 发布）
+    auto backend = BackendFactory::create(backend_config, &EventBus::instance());
     if (!backend) {
         return result;  // session 保持 nullptr
     }
@@ -118,10 +118,11 @@ SessionResult create_session(IConfigManager& cfg, const ProviderPreset* preset) 
     // 构造 ChatSession（DI 三件套）
     int default_retry_delay = preset && preset->retry_delay_ms > 0 ? preset->retry_delay_ms : 1000;
     result.session = std::make_unique<ChatSession>(
-        std::move(backend), default_retry_delay, "default",
+        std::move(backend),
         TaskManager::instance(),
         EventBus::instance(),
-        ConfigManager::instance());
+        ConfigManager::instance(),
+        default_retry_delay, "default");
 
     // 注册内置工具
     auto tool_registry = std::make_shared<tool::ToolRegistry>();

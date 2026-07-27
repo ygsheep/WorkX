@@ -291,7 +291,7 @@ TEST_CASE("FileEditTool validate_input missing fields", "[file_edit_tool]") {
     }
 }
 
-TEST_CASE("FileEditTool validate_input error code 1 (old==new)", "[file_edit_tool]") {
+TEST_CASE("FileEditTool validate_input error code 1 - old==new", "[file_edit_tool]") {
     TestEnv env;
     FileEditTool tool;
     ToolContext ctx;
@@ -300,7 +300,7 @@ TEST_CASE("FileEditTool validate_input error code 1 (old==new)", "[file_edit_too
     REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("same"));
 }
 
-TEST_CASE("FileEditTool validate_input error code 4 (file not exist)", "[file_edit_tool]") {
+TEST_CASE("FileEditTool validate_input error code 4 - file not exist", "[file_edit_tool]") {
     TestEnv env;
     FileEditTool tool;
     ToolContext ctx;
@@ -311,7 +311,7 @@ TEST_CASE("FileEditTool validate_input error code 4 (file not exist)", "[file_ed
     REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("does not exist"));
 }
 
-TEST_CASE("FileEditTool validate_input error code 5 (.ipynb)", "[file_edit_tool]") {
+TEST_CASE("FileEditTool validate_input error code 5 - .ipynb", "[file_edit_tool]") {
     TestEnv env;
     FileEditTool tool;
     ToolContext ctx;
@@ -322,7 +322,7 @@ TEST_CASE("FileEditTool validate_input error code 5 (.ipynb)", "[file_edit_tool]
     REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("Jupyter"));
 }
 
-TEST_CASE("FileEditTool validate_input error code 3 (file exists non-empty + old=empty)", "[file_edit_tool]") {
+TEST_CASE("FileEditTool validate_input error code 3 - file exists non-empty + old=empty", "[file_edit_tool]") {
     TestEnv env;
     TempDir tmp;
     auto fp = tmp.make_file("existing.txt", "existing content");
@@ -333,7 +333,7 @@ TEST_CASE("FileEditTool validate_input error code 3 (file exists non-empty + old
     REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("already exists"));
 }
 
-TEST_CASE("FileEditTool validate_input error code 6 (not pre-read)", "[file_edit_tool]") {
+TEST_CASE("FileEditTool validate_input error code 6 - not pre-read", "[file_edit_tool]") {
     TestEnv env;
     TempDir tmp;
     auto fp = tmp.make_file("unread.txt", "line1\nline2\n");
@@ -344,7 +344,7 @@ TEST_CASE("FileEditTool validate_input error code 6 (not pre-read)", "[file_edit
     REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("not been read"));
 }
 
-TEST_CASE("FileEditTool validate_input error code 7 (staleness)", "[file_edit_tool]") {
+TEST_CASE("FileEditTool validate_input error code 7 - staleness", "[file_edit_tool]") {
     TestEnv env;
     TempDir tmp;
     auto fp = tmp.make_file("stale.txt", "old content\n");
@@ -364,7 +364,7 @@ TEST_CASE("FileEditTool validate_input error code 7 (staleness)", "[file_edit_to
     REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("modified since read"));
 }
 
-TEST_CASE("FileEditTool validate_input error code 8 (no match)", "[file_edit_tool]") {
+TEST_CASE("FileEditTool validate_input error code 8 - no match", "[file_edit_tool]") {
     TestEnv env;
     TempDir tmp;
     auto fp = tmp.make_file("nomatch.txt", "hello world\n");
@@ -378,7 +378,7 @@ TEST_CASE("FileEditTool validate_input error code 8 (no match)", "[file_edit_too
     REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("not found"));
 }
 
-TEST_CASE("FileEditTool validate_input error code 9 (multiple matches, no replace_all)", "[file_edit_tool]") {
+TEST_CASE("FileEditTool validate_input error code 9 - multiple matches, no replace_all", "[file_edit_tool]") {
     TestEnv env;
     TempDir tmp;
     auto fp = tmp.make_file("multi.txt", "foo\nfoo\nfoo\n");
@@ -416,7 +416,7 @@ TEST_CASE("FileEditTool validate_input happy path single match", "[file_edit_too
     REQUIRE(r.is_ok());
 }
 
-TEST_CASE("FileEditTool validate_input create new file (old=empty, file not exist)", "[file_edit_tool]") {
+TEST_CASE("FileEditTool validate_input create new file - old=empty, file not exist", "[file_edit_tool]") {
     TestEnv env;
     TempDir tmp;
     auto fp = tmp.path() / "newfile.txt";
@@ -430,7 +430,7 @@ TEST_CASE("FileEditTool validate_input create new file (old=empty, file not exis
 // FileEditTool validate_input 错误码 0/2 (新实现)
 // ============================================================
 
-TEST_CASE("FileEditTool validate_input error code 0 (secret scanning)", "[file_edit_tool][secret]") {
+TEST_CASE("FileEditTool validate_input error code 0 - secret scanning", "[file_edit_tool][secret]") {
     TestEnv env;
     TempDir tmp;
     auto fp = tmp.make_file("with_secret.txt", "placeholder\n");
@@ -464,7 +464,7 @@ TEST_CASE("FileEditTool validate_input secret scan disabled by default", "[file_
     REQUIRE(r.is_ok());
 }
 
-TEST_CASE("FileEditTool validate_input error code 2 (deny rules)", "[file_edit_tool][deny]") {
+TEST_CASE("FileEditTool validate_input error code 2 - deny rules", "[file_edit_tool][deny]") {
     TestEnv env;
     TempDir tmp;
     auto fp = tmp.make_file("denied.env", "KEY=value\n");
@@ -1021,7 +1021,7 @@ TEST_CASE("FileEditTool smart quote matching", "[file_edit_tool][quote_normalize
     REQUIRE(content == "hello " + kSmartDoubleLeft + "C++" + kSmartDoubleRight + "!\n");
 }
 
-TEST_CASE("FileEditTool exact quote match (no normalization)", "[file_edit_tool][quote_normalizer]") {
+TEST_CASE("FileEditTool exact quote match - no normalization", "[file_edit_tool][quote_normalizer]") {
     TestEnv env;
     TempDir tmp;
     // 文件使用直引号

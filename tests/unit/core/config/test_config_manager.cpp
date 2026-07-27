@@ -137,7 +137,8 @@ TEST_CASE("ConfigScope", "[config]") {
     auto& cfg = ConfigManager::instance();
     cfg.clear_for_test();
 
-    ConfigScope scope("myapp");
+    // H-4：ConfigScope 不再提供默认实参，需显式注入
+    ConfigScope scope("myapp", cfg);
     scope.set("width", 800);
 
     REQUIRE(cfg.has("myapp.width"));
@@ -147,13 +148,13 @@ TEST_CASE("ConfigScope", "[config]") {
     cfg.clear_for_test();
 }
 
-// C-3：ConfigScope DI 化测试
+// C-3：ConfigScope DI 化测试（H-4：移除默认实参，所有调用方需显式注入）
 TEST_CASE("ConfigScope DI injection", "[config][di]") {
     auto& cfg = ConfigManager::instance();
     cfg.clear_for_test();
 
-    SECTION("默认使用 ConfigManager::instance()") {
-        ConfigScope scope("default");
+    SECTION("显式注入 ConfigManager::instance()") {
+        ConfigScope scope("default", ConfigManager::instance());
         scope.set("key", 42);
         REQUIRE(cfg.get_or<int>("default.key", 0) == 42);
     }

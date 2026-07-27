@@ -110,11 +110,11 @@ void ChatSession::ReActEventPublisher::on_token(const std::string& content_delta
 // ============================================================
 
 ChatSession::ChatSession(std::unique_ptr<ICompletionProvider> provider,
-                         int retry_delay_ms,
-                         std::string session_id,
                          ITaskManager& task_manager,
                          IEventBus& event_bus,
-                         IConfigManager& config_manager)
+                         IConfigManager& config_manager,
+                         int retry_delay_ms,
+                         std::string session_id)
     : m_provider(std::move(provider))
     , m_session_id(std::move(session_id))
     , m_task_manager(task_manager)

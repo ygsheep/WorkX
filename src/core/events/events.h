@@ -11,8 +11,9 @@
  *
  *          注：ChatMessage / ToolUse / CompletionRequest / StreamChunk 等
  *          消息与 DTO 类型位于 agent/api/chat_types.h；ToolType 枚举位于
- *          agent/tool/tool_kind.h。本文件仅含事件类型。
- * @version 1.2.0
+ *          core/tool_kind.h（H-3 从 agent/tool/tool_kind.h 迁入 core 层，
+ *          消除 core 反向依赖 agent 的分层越界）。本文件仅含事件类型。
+ * @version 1.3.0
  * @date 2026-07
  */
 
@@ -21,7 +22,7 @@
 #include <string>
 #include <vector>
 
-#include "agent/tool/tool_kind.h"
+#include "core/tool_kind.h"  // H-3：ToolType 枚举迁至 core 层，消除反向依赖
 
 namespace agent {
 
