@@ -16,7 +16,7 @@
 #include "agent/model/provider_preset.h"
 #include "app/config/app_config.h"
 #include "app/ui/model_selector.h"
-#include "core/config/config_manager.h"
+#include "core/config/i_config_manager.h"
 #include "tui/core/platform/i_platform.h"
 #include "tui/core/screen.h"
 #include "tui/core/terminal.h"
@@ -30,6 +30,7 @@ using namespace tui;  // P0: tui→agent 类型引用过渡方案，后续 P2/P3
 static constexpr const char* CUSTOM_MODEL_ID = "__custom__";
 
 ModelSelection select_model_interactive(
+    IConfigManager& cfg,
     Terminal* term, Screen* scr, IBackend* bk,
     const std::string& current_model)
 {
@@ -40,8 +41,6 @@ ModelSelection select_model_interactive(
     constexpr char32_t KEY_ESC   = 0x1B;
     constexpr char32_t KEY_SPACE = 0x20;
     constexpr char32_t KEY_CTRL_C = 0xE009;
-
-    auto& cfg = ConfigManager::instance();
 
     // 获取 base_url
     std::string base_url;

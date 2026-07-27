@@ -26,6 +26,8 @@ namespace agent {
 
 class ChatSession;
 struct ProviderPreset;
+class ITaskManager;
+class IEventBus;
 
 /// @brief 会话创建结果（D-2 工厂返回）
 struct SessionResult {
@@ -53,8 +55,13 @@ tui::TerminalConfig make_terminal_config(IConfigManager& cfg);
 ///          4. 注册内置工具、拼接系统提示词
 /// @param cfg 配置管理器
 /// @param preset Provider 预设（nullptr 表示无预设）
+/// @param task_manager 任务管理器（M-1：显式 DI，替代 TaskManager::instance()）
+/// @param event_bus 事件总线（M-1：显式 DI，替代 EventBus::instance()）
 /// @return SessionResult（session 可能为 nullptr）
-SessionResult create_session(IConfigManager& cfg, const ProviderPreset* preset);
+SessionResult create_session(IConfigManager& cfg,
+                             const ProviderPreset* preset,
+                             ITaskManager& task_manager,
+                             IEventBus& event_bus);
 
 /// @brief 注册内置工具到 ToolRegistry
 /// @details 注册 FileReadTool / FileWriteTool / FileEditTool

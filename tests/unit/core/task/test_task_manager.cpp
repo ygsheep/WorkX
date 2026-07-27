@@ -140,6 +140,30 @@ TEST_CASE_METHOD(TaskManagerFixture, "TaskManager launch starts task", "[task_ma
     REQUIRE(task->getStatus() == TaskStatus::Completed);
 }
 
+TEST_CASE_METHOD(TaskManagerFixture, "TaskManager wait(task) blocks until finished (H-9)",
+                 "[task_manager][wait][h9]") {
+    // H-9：验证 wait(task) 替代 sleep_for 轮询
+    std::atomic<bool> executed{false};
+    auto task = TaskManager::instance().launch(
+        "wait-target",
+        [&executed](const std::atomic<bool>&) {
+            std::this_thread::sleep_for(50ms);
+            executed = true;
+        }
+    );
+
+    // wait(task) 应阻塞直到 task 结束
+    TaskManager::instance().wait(task);
+    REQUIRE(executed.load());
+    REQUIRE(task->isFinished());
+}
+
+TEST_CASE_METHOD(TaskManagerFixture, "TaskManager wait(nullptr) is no-op (H-9)",
+                 "[task_manager][wait][h9]") {
+    // H-9：nullptr 安全性
+    REQUIRE_NOTHROW(TaskManager::instance().wait(nullptr));
+}
+
 TEST_CASE_METHOD(TaskManagerFixture, "TaskManager launch Blocking task executes synchronously", "[task_manager][blocking]") {
     std::atomic<bool> executed{false};
     auto task = TaskManager::instance().launch(

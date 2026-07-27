@@ -10,7 +10,10 @@
 
 namespace agent {
 
+class IConfigManager;
+
 /// @brief CLI 参数解析（最高优先级，覆盖配置文件和环境变量）
-void parse_cli_args(int argc, char* argv[]);
+/// @note M-2：接收 IConfigManager& 注入，可注入 Mock 测试参数解析逻辑。
+void parse_cli_args(IConfigManager& cfg, int argc, char* argv[]);
 
 } // namespace agent

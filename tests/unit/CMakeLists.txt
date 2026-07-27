@@ -5,6 +5,7 @@ set(UNIT_TEST_SOURCES
     ../test_main.cpp
     helpers/test_mock_helpers.cpp
     app/test_factory.cpp
+    app/test_cli_args.cpp
     agent/api/test_anthropic_adapter.cpp
     agent/api/test_openai_adapter.cpp
     agent/api/test_http_response.cpp
@@ -16,6 +17,7 @@ set(UNIT_TEST_SOURCES
     agent/model/test_provider_preset.cpp
     agent/model/test_model_config.cpp
     agent/compact/test_token_count.cpp
+    agent/input/test_input_processor.cpp
     agent/tool/test_file_edit_tool.cpp
     agent/tool/test_tool_executor.cpp
     agent/tool/test_tool_registry.cpp

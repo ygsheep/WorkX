@@ -59,7 +59,9 @@ using namespace tui;  // P0: tui→agent 类型引用过渡方案，后续 P2/P3
 
 static int run(int argc, char* argv[]) {
     // ---- 注册配置元数据 ----
-    register_config_defaults();
+    // M-2：显式注入 ConfigManager 单例（main.cpp 作为装配层负责依赖组装）
+    auto& cfg_manager = ConfigManager::instance();
+    register_config_defaults(cfg_manager);
 
     // ---- 配置加载顺序：配置文件 → 环境变量 → CLI 参数 ----
     // 1. 配置文件（最低优先级）
@@ -73,23 +75,23 @@ static int run(int argc, char* argv[]) {
     }
 
     if (!explicit_config_path.empty()) {
-        load_from_config_file(explicit_config_path);
+        load_from_config_file(cfg_manager, explicit_config_path);
     } else {
         // 尝试默认配置文件
         auto default_path = default_config_path();
         if (std::filesystem::exists(default_path)) {
-            load_from_config_file(default_path);
+            load_from_config_file(cfg_manager, default_path);
         }
     }
 
     // 2. 环境变量（中等优先级）
-    load_from_env();
+    load_from_env(cfg_manager);
 
     // 3. CLI 参数（最高优先级）
-    parse_cli_args(argc, argv);
+    parse_cli_args(cfg_manager, argc, argv);
 
     // ---- 从 ConfigManager 读取配置 ----
-    auto& cfg = ConfigManager::instance();
+    auto& cfg = cfg_manager;  // M-2：复用装配层已获取的单例引用
 
     // ---- 初始化日志系统（D-2：委托工厂）----
     init_logger(cfg, default_log_path());
@@ -135,7 +137,7 @@ static int run(int argc, char* argv[]) {
     Screen screen(&terminal);
 
     if (needs_wizard) {
-        SetupWizard wizard(terminal.platform(), &terminal, &screen);
+        SetupWizard wizard(terminal.platform(), &terminal, &screen, cfg);
         bool ok = wizard.run_wizard();
         if (!ok) {
             terminal.restore();
@@ -149,7 +151,9 @@ static int run(int argc, char* argv[]) {
     const ProviderPreset* preset = provider_name.empty() ? nullptr : find_preset(provider_name);
 
     // ---- Backend + Session（D-2：委托工厂）----
-    auto session_result = create_session(cfg, preset);
+    auto session_result = create_session(cfg, preset,
+                                         TaskManager::instance(),
+                                         EventBus::instance());
     auto session = std::move(session_result.session);
     std::string remote_url = std::move(session_result.remote_url);
     std::string model_name = std::move(session_result.model_name);
@@ -171,7 +175,7 @@ static int run(int argc, char* argv[]) {
     // ---- 启动时模型选择（model_name 为空时触发） ----
     if (session && session->backend() && model_name.empty()) {
         ModelSelection sel = select_model_interactive(
-            &terminal, &screen, session->backend(), model_name);
+            cfg, &terminal, &screen, session->backend(), model_name);
         if (!sel.name.empty()) {
             cfg.set(keys::MODEL_NAME, sel.name);
             session->backend()->set_model_name(sel.name);
@@ -263,7 +267,7 @@ static int run(int argc, char* argv[]) {
             return;
         }
         ModelSelection sel = select_model_interactive(
-            &terminal, &screen, session->backend(),
+            cfg, &terminal, &screen, session->backend(),
             cfg.get_or<std::string>(keys::MODEL_NAME, ""));
         if (!sel.name.empty()) {
             cfg.set(keys::MODEL_NAME, sel.name);

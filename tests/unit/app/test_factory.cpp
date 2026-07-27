@@ -35,7 +35,7 @@ using namespace agent;
 TEST_CASE("make_terminal_config defaults", "[factory][terminal]") {
     auto& cfg = ConfigManager::instance();
     cfg.clear_for_test();
-    register_config_defaults();
+    register_config_defaults(cfg);
 
     auto config = make_terminal_config(cfg);
 
@@ -50,7 +50,7 @@ TEST_CASE("make_terminal_config defaults", "[factory][terminal]") {
 TEST_CASE("make_terminal_config custom values", "[factory][terminal]") {
     auto& cfg = ConfigManager::instance();
     cfg.clear_for_test();
-    register_config_defaults();
+    register_config_defaults(cfg);
 
     cfg.set(keys::SIMPLE_IO, true);
     cfg.set(keys::NO_COLOR, true);
@@ -138,10 +138,12 @@ TEST_CASE("build_system_prompt appends tool prompts", "[factory][prompt]") {
 TEST_CASE("create_session returns empty when no remote_url", "[factory][session]") {
     auto& cfg = ConfigManager::instance();
     cfg.clear_for_test();
-    register_config_defaults();
+    register_config_defaults(cfg);
 
-    // 不设置 remote_url，也不设置 provider（无 preset）
-    auto result = create_session(cfg, nullptr);
+    // M-1：显式注入 TaskManager / EventBus 单例（测试场景无 Mock 时复用单例）
+    auto result = create_session(cfg, nullptr,
+                                 TaskManager::instance(),
+                                 EventBus::instance());
 
     REQUIRE(result.session == nullptr);
     REQUIRE(result.remote_url.empty());
@@ -153,14 +155,16 @@ TEST_CASE("create_session returns empty when no remote_url", "[factory][session]
 TEST_CASE("create_session resolves url from preset", "[factory][session]") {
     auto& cfg = ConfigManager::instance();
     cfg.clear_for_test();
-    register_config_defaults();
+    register_config_defaults(cfg);
 
     // 使用 lm-studio preset（默认 URL http://localhost:1234/v1）
     std::string provider_name = "lm-studio";
     const ProviderPreset* preset = find_preset(provider_name);
     REQUIRE(preset != nullptr);
 
-    auto result = create_session(cfg, preset);
+    auto result = create_session(cfg, preset,
+                                 TaskManager::instance(),
+                                 EventBus::instance());
 
     // URL 从 preset 解析（不实际创建 backend，因为无网络）
     REQUIRE(result.remote_url == std::string(preset->default_url));

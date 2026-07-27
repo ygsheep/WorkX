@@ -233,6 +233,17 @@ void TaskManager::waitForAll() {
     });
 }
 
+void TaskManager::wait(std::shared_ptr<Task> task) {
+    if (!task) return;
+    // H-9：替代 ChatSession 析构中的 sleep_for(50ms) 轮询
+    // 利用 Task::execute 结束时调用的 m_on_finished 回调（notify m_tasks_cv）
+    std::unique_lock<std::mutex> lock(m_tasks_mutex);
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    m_tasks_cv.wait_until(lock, deadline, [&task]() {
+        return task->isFinished();
+    });
+}
+
 void TaskManager::cancelAll() {
     std::lock_guard<std::mutex> lock(m_tasks_mutex);
     for (auto& task : m_entries) {

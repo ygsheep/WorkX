@@ -25,6 +25,7 @@
 #include "agent/tool/registry.h"
 #include "core/config/config_manager.h"
 #include "core/events/event_bus.h"
+#include "core/events/i_event_bus.h"
 #include "core/task/task_manager.h"
 #include "tui/core/terminal.h"
 
@@ -71,7 +72,10 @@ tui::TerminalConfig make_terminal_config(IConfigManager& cfg) {
 // create_session
 // ============================================================
 
-SessionResult create_session(IConfigManager& cfg, const ProviderPreset* preset) {
+SessionResult create_session(IConfigManager& cfg,
+                             const ProviderPreset* preset,
+                             ITaskManager& task_manager,
+                             IEventBus& event_bus) {
     SessionResult result;
 
     // URL: cfg(显式设置) > preset > ""
@@ -115,13 +119,13 @@ SessionResult create_session(IConfigManager& cfg, const ProviderPreset* preset) 
         return result;  // session 保持 nullptr
     }
 
-    // 构造 ChatSession（DI 三件套）
+    // 构造 ChatSession（M-1：显式注入 task_manager / event_bus / cfg，不再用单例）
     int default_retry_delay = preset && preset->retry_delay_ms > 0 ? preset->retry_delay_ms : 1000;
     result.session = std::make_unique<ChatSession>(
         std::move(backend), default_retry_delay, "default",
-        TaskManager::instance(),
-        EventBus::instance(),
-        ConfigManager::instance());
+        task_manager,
+        event_bus,
+        cfg);
 
     // 注册内置工具
     auto tool_registry = std::make_shared<tool::ToolRegistry>();

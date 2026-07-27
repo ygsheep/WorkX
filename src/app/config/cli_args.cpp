@@ -13,14 +13,13 @@
 #include "agent/model/provider_preset.h"
 #include "app/config/app_config.h"
 #include "app/config/cli_args.h"
-#include "core/config/config_manager.h"
+#include "core/config/i_config_manager.h"
 
 namespace agent {
 
-void parse_cli_args(int argc, char* argv[]) {
+void parse_cli_args(IConfigManager& cfg, int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        auto& cfg = ConfigManager::instance();
 
         if (arg == "--simple-io") {
             cfg.set(keys::SIMPLE_IO, true);

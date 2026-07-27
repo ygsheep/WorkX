@@ -199,6 +199,12 @@ public:
     virtual void update() = 0;
     virtual void waitForAll() = 0;
     virtual void cancelAll() = 0;
+
+    /// @brief 等待指定任务结束（H-9：替代 ChatSession 析构中的 sleep_for 轮询）
+    /// @param task 待等待的任务
+    /// @details 阻塞直到 task->isFinished() 为 true 或 30 秒兜底超时。
+    ///          利用 Task::execute 结束时调用的 m_on_finished 回调通知 cv。
+    virtual void wait(std::shared_ptr<Task> task) = 0;
 };
 
 // ============================================================
@@ -244,6 +250,7 @@ public:
     void update() override;
     void waitForAll() override;
     void cancelAll() override;
+    void wait(std::shared_ptr<Task> task) override;
 
     /// @brief 工作线程数（诊断 / 测试用）
     [[nodiscard]] size_t worker_count() const noexcept { return m_pool.worker_count(); }

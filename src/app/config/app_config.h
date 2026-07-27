@@ -12,6 +12,9 @@
 
 namespace agent {
 
+class IConfigManager;
+class ConfigManager;
+
 /// 配置键字符串常量
 namespace keys {
     // Terminal
@@ -54,16 +57,21 @@ namespace keys {
 /// @brief 注册所有配置项的结构化 Schema（类型/默认值/范围/枚举/环境变量映射）
 /// @details v2.0.0 起使用 ConfigSchema 替代 ConfigMeta，由 ConfigManager 在
 ///          set_value() 时自动校验。环境变量绑定通过 Schema.env_var 声明。
-void register_config_defaults();
+/// @note M-2：接收 ConfigManager&（非 IConfigManager&），因 register_schema 是
+///             ConfigManager 特有方法，不属于 IConfigManager 接口。配置初始化
+///             本质是引导阶段，与业务组件的可测试性需求分离。
+void register_config_defaults(ConfigManager& cfg);
 
 /// @brief 从环境变量加载配置
 /// @details 6 个标准环境变量由 ConfigManager::load_from_env() 按 Schema 加载：
 ///          WORKX_API_KEY/BASE_URL/MODEL/TIMEOUT/LOG_LEVEL/LOG_FILE。
 ///          WORKX_NO_COLOR 采用 presence-only 语义（兼容 no-color.org 规范）。
-void load_from_env();
+/// @note M-2：接收 ConfigManager&，原因同 register_config_defaults。
+void load_from_env(ConfigManager& cfg);
 
 /// @brief 从配置文件加载
-void load_from_config_file(const std::filesystem::path& path);
+/// @note M-2：接收 IConfigManager&，可注入 Mock 测试配置加载逻辑。
+void load_from_config_file(IConfigManager& cfg, const std::filesystem::path& path);
 
 /// @brief 默认配置文件路径（平台相关）
 std::filesystem::path default_config_path();
