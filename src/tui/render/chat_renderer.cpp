@@ -413,13 +413,8 @@ void ChatRenderer::start() {
     // StreamDoneEvent / AgentDoneEvent 后会自然触发 render 刷新显示。
     m_token_user_input = std::make_unique<EventToken>(
         bus.subscribe<UserInputEvent>([this](const UserInputEvent& e) {
-            if (!e.text.empty()) {
-                // 用 compact::estimate_messages_tokens 统一估算（对齐 claude-code 启发式）
-                ChatMessage tmp = ChatMessage::user(e.text);
-                int32_t estimated = compact::estimate_messages_tokens({tmp});
-                m_total_tokens.fetch_add(estimated);
-                m_status_bar->set_token_count(m_total_tokens.load());
-            }
+            m_token_stats.add_user_input(e.text);
+            m_status_bar->set_token_count(m_token_stats.total_tokens());
         })
     );
 
@@ -518,27 +513,20 @@ void ChatRenderer::start() {
             //   Anthropic 命中 prompt cache 时 prompt_tokens 不含 cache 部分，需单独累加
             // - provider 不返回 usage 时：用 compact::estimate_messages_tokens 估算响应内容
             if (e.prompt_tokens > 0 || e.generated_tokens > 0) {
-                m_total_tokens.store(e.prompt_tokens
-                                    + e.cache_creation_input_tokens
-                                    + e.cache_read_input_tokens
-                                    + e.generated_tokens);
-                // 同步 cache 命中信息到 StatusBar（仅 cache_read 表示命中）
-                m_status_bar->set_cache_read_tokens(e.cache_read_input_tokens);
+                m_token_stats.update_from_usage(e.prompt_tokens,
+                                                e.generated_tokens,
+                                                e.cache_creation_input_tokens,
+                                                e.cache_read_input_tokens);
             } else {
-                // 估算本次响应内容（content + reasoning）
-                ChatMessage tmp = ChatMessage::assistant(e.full_content);
-                tmp.reasoning_content = e.full_reasoning;
-                int32_t estimated = compact::estimate_message_tokens(tmp);
-                m_total_tokens.fetch_add(estimated);
-                // provider 未返回 usage，清除 cache 显示
-                m_status_bar->set_cache_read_tokens(0);
+                m_token_stats.add_response_estimate(e.full_content, e.full_reasoning);
             }
+            m_status_bar->set_cache_read_tokens(m_token_stats.cache_read_tokens());
 
-            m_message_count.fetch_add(1);
+            m_token_stats.increment_message_count();
             m_terminal->mark_cursor_left_output();
             transition_to(TuiState::IDLE);
             m_status_bar->set_state(TuiState::IDLE);
-            m_status_bar->set_token_count(m_total_tokens.load());
+            m_status_bar->set_token_count(m_token_stats.total_tokens());
             m_status_bar->render();
             // 流结束，光标复位到输入行
             {
@@ -601,7 +589,7 @@ void ChatRenderer::start() {
     m_token_tool_call = std::make_unique<EventToken>(
         bus.subscribe<ToolCallEvent>([this](const ToolCallEvent& e) {
             auto icon = get_tool_icon(e.tool_name);
-            const int indent_level = m_tool_indent.load();
+            const int indent_level = m_tool_tracker.on_tool_call(e.call_id, e.tool_name, e.arguments);
             std::string indent(indent_level * 2, ' ');
 
             m_terminal->set_color(ColorRole::ToolName);
@@ -609,29 +597,18 @@ void ChatRenderer::start() {
                 indent, icon.icon, e.tool_name));
             m_terminal->reset_color();
 
-            // 记录调用上下文, 供 ToolResultEvent 推断语言/路径
-            m_pending_tool_calls[e.call_id] = ToolCallInfo{e.tool_name, e.arguments};
-
             // 更新 StatusBar
             m_status_bar->set_tool_name(e.tool_name);
             transition_to(TuiState::TOOL_RUNNING);
             m_status_bar->set_state(TuiState::TOOL_RUNNING);
             m_status_bar->render();
-
-            m_tool_indent.fetch_add(1);
         })
     );
 
     // ---- ToolResultEvent ----
     m_token_tool_result = std::make_unique<EventToken>(
         bus.subscribe<ToolResultEvent>([this](const ToolResultEvent& e) {
-            int prev = m_tool_indent.fetch_sub(1);
-            int new_indent = prev > 0 ? prev - 1 : 0;
-            if (prev <= 0) {
-                // 防御性：不允许变为负数，回滚
-                m_tool_indent.store(0);
-                new_indent = 0;
-            }
+            auto [info_opt, new_indent] = m_tool_tracker.on_tool_result(e.call_id);
             std::string indent(new_indent * 2, ' ');
 
             // 成功/失败标记
@@ -640,13 +617,10 @@ void ChatRenderer::start() {
                 : "\xe2\x9c\x93"; // ✓
             ColorRole marker_color = e.is_error ? ColorRole::Failure : ColorRole::Success;
 
-            // 取出调用上下文 (推断语言/路径); 找不到时走默认 preview 路径
-            ToolCallInfo info;
-            auto it = m_pending_tool_calls.find(e.call_id);
-            bool has_info = (it != m_pending_tool_calls.end());
+            bool has_info = info_opt.has_value();
+            ToolCallTracker::ToolCallInfo info;
             if (has_info) {
-                info = std::move(it->second);
-                m_pending_tool_calls.erase(it);
+                info = std::move(*info_opt);
             }
 
             m_terminal->set_color(marker_color);
@@ -690,10 +664,10 @@ void ChatRenderer::start() {
     );
 
     // ---- AgentDoneEvent ----
-    // 用户反馈完成提示多余，已移除文本输出；保留 m_tool_indent 重置
+    // 用户反馈完成提示多余，已移除文本输出；保留 m_tool_tracker.reset_indent()
     m_token_agent_done = std::make_unique<EventToken>(
         bus.subscribe<AgentDoneEvent>([this](const AgentDoneEvent& /*e*/) {
-            m_tool_indent.store(0);
+            m_tool_tracker.reset_indent();
         })
     );
 }

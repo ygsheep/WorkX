@@ -25,6 +25,8 @@ set(UNIT_TEST_SOURCES
     core/task/test_thread_pool.cpp
     tui/core/test_display_buffer.cpp
     tui/core/test_tui_state.cpp
+    tui/model/test_token_stats_model.cpp
+    tui/model/test_tool_call_tracker.cpp
     tui/render/test_markdown_renderer.cpp
     tui/render/test_spinner.cpp
     tui/render/test_streaming_buffer.cpp

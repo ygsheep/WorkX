@@ -12,11 +12,10 @@
 #include <memory>
 #include <chrono>
 #include <atomic>
-#include <unordered_map>
 
-#include "agent/api/chat_types.h"
-#include "agent/compact/token_count.h"
 #include "tui/core/tui_state.h"
+#include "tui/model/token_stats_model.h"
+#include "tui/model/tool_call_tracker.h"
 
 namespace agent { class EventToken; }
 
@@ -58,12 +57,6 @@ private:
     /// E.9：输入提示列位置常量（流结束/错误时光标复位的列）
     static constexpr int INPUT_PROMPT_COL = 3;
 
-    /// @brief 活跃工具调用上下文 (ToolCallEvent 存, ToolResultEvent 取)
-    struct ToolCallInfo {
-        std::string tool_name;
-        std::string arguments;  ///< 原始 JSON 字符串, 用于解析 file_path 等
-    };
-
     Terminal* m_terminal;
     std::unique_ptr<StatusBar> m_status_bar;
     std::unique_ptr<OutputFormatter> m_formatter;
@@ -92,16 +85,10 @@ private:
     std::atomic<bool> m_viewing_thinking{false};         ///< 是否在思考视图
     std::atomic<int32_t> m_thinking_seconds{0};          ///< 思考持续秒数（Spinner 线程写）
 
-    // 会话统计
-    std::atomic<int32_t> m_message_count{0};
-    std::atomic<int32_t> m_total_tokens{0};
+    // P2: 提取的状态管理模型
+    TokenStatsModel m_token_stats;            ///< 会话 token 统计
+    ToolCallTracker m_tool_tracker;           ///< 工具调用嵌套与上下文管理
     std::atomic<bool> m_streaming_started{false};  ///< 是否已输出 "● Thought for"（防重复）
-
-    // 工具调用嵌套层级
-    std::atomic<int> m_tool_indent{0};
-
-    // 活跃工具调用上下文 (call_id → info), 用于 ToolResultEvent 时推断语言/路径
-    std::unordered_map<std::string, ToolCallInfo> m_pending_tool_calls;
 };
 
 } // namespace tui
