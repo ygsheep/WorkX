@@ -23,6 +23,8 @@ set(UNIT_TEST_SOURCES
     core/events/test_event_bus.cpp
     core/task/test_task_manager.cpp
     core/task/test_thread_pool.cpp
+    core/utils/test_error.cpp
+    core/utils/test_result_v2.cpp
     tui/core/test_display_buffer.cpp
     tui/core/test_tui_state.cpp
     tui/model/test_token_stats_model.cpp

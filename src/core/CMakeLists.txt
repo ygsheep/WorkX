@@ -4,4 +4,5 @@
 target_sources(libworkx PRIVATE
     config/config_manager.cpp
     task/task_manager.cpp
+    utils/error.cpp
 )
