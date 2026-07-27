@@ -8,7 +8,8 @@
 
 #pragma once
 
-#include "core/utils/result.h"
+#include "core/utils/result.h"          // 旧 Result（过渡期保留，V2-8 标记 deprecated）
+#include "core/utils/result_v2.h"       // V2-1：新 ResultV2
 #include "core/config/i_config_manager.h"
 #include <cstdint>
 #include <optional>
@@ -23,12 +24,13 @@
 namespace agent {
 
 /// @brief 配置元数据（旧版，向后兼容）
+/// @details V2-1：validate_callback 签名改为返回 ResultV2<void>
 struct ConfigMeta {
     std::string description;
     ConfigValue default_value;
     bool is_required = false;
 
-    using ValidateCallback = std::function<Result<void, std::string>(const ConfigValue&)>;
+    using ValidateCallback = std::function<ResultV2<void>(const ConfigValue&)>;
     ValidateCallback validate_callback;
 
     using ChangeCallback = std::function<void(const ConfigValue&)>;
@@ -64,12 +66,13 @@ struct ConfigSchema {
     /// @brief 对应的环境变量名（C-4，空表示不绑定环境变量）
     std::string env_var = {};
     /// @brief 自定义验证函数（与类型/范围/枚举校验叠加，均需通过）
-    std::function<Result<void, std::string>(const ConfigValue&)> validate = {};
+    /// @details V2-1：返回 ResultV2<void>，错误码应为 ConfigInvalid
+    std::function<ResultV2<void>(const ConfigValue&)> validate = {};
 
     /// @brief 校验配置值是否符合 schema
     /// @param value 待校验的值
-    /// @return 成功返回 ok；失败返回错误消息
-    [[nodiscard]] Result<void, std::string> validate_value(const ConfigValue& value) const;
+    /// @return 成功返回 ok；失败返回 Error（ConfigInvalid）
+    [[nodiscard]] ResultV2<void> validate_value(const ConfigValue& value) const;
 };
 
 class ConfigManager final : public IConfigManager {
@@ -84,19 +87,19 @@ public:
     ConfigManager(ConfigManager&&) = delete;
     ConfigManager& operator=(ConfigManager&&) = delete;
 
-    // === IConfigManager 类型擦除接口实现 ===
+    // === IConfigManager 类型擦除接口实现（V2-1：返回 ResultV2）===
 
     [[nodiscard]] bool has(const std::string& key) const override;
 
-    [[nodiscard]] Result<ConfigValue, std::string> get_value(
+    [[nodiscard]] ResultV2<ConfigValue> get_value(
         const std::string& key) const override;
 
-    Result<void, std::string> set_value(
+    ResultV2<void> set_value(
         const std::string& key, ConfigValue value) override;
 
-    Result<void, std::string> load_from_file(
+    ResultV2<void> load_from_file(
         const std::filesystem::path& path) override;
-    Result<void, std::string> save_to_file(
+    ResultV2<void> save_to_file(
         const std::filesystem::path& path) override;
 
     [[nodiscard]] std::vector<std::string> get_all_keys() const override;
@@ -108,7 +111,7 @@ public:
 
     void remove(const std::string& key);
     void register_meta(const std::string& key, ConfigMeta meta);
-    [[nodiscard]] Result<ConfigMeta, std::string> get_meta(const std::string& key) const;
+    [[nodiscard]] ResultV2<ConfigMeta> get_meta(const std::string& key) const;
 
     // === C-2/C-4：结构化 Schema ===
 
@@ -117,7 +120,8 @@ public:
     void register_schema(ConfigSchema schema);
 
     /// @brief 获取配置 Schema
-    [[nodiscard]] Result<ConfigSchema, std::string> get_schema(const std::string& key) const;
+    /// @return 成功返回 Schema；失败返回 Error（ConfigMissing）
+    [[nodiscard]] ResultV2<ConfigSchema> get_schema(const std::string& key) const;
 
     /// @brief 获取所有已注册 Schema
     [[nodiscard]] std::vector<ConfigSchema> get_all_schemas() const;
@@ -164,12 +168,12 @@ public:
     [[nodiscard]] IConfigManager& config_manager() const { return m_config.get(); }
 
     template<typename T>
-    Result<void, std::string> set(const std::string& key, T value) {
+    ResultV2<void> set(const std::string& key, T value) {
         return m_config.get().set(make_key(key), std::move(value));
     }
 
     template<typename T>
-    [[nodiscard]] Result<T, std::string> get(const std::string& key) const {
+    [[nodiscard]] ResultV2<T> get(const std::string& key) const {
         return m_config.get().get<T>(make_key(key));
     }
 

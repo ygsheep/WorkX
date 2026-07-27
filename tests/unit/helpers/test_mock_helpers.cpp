@@ -51,19 +51,19 @@ TEST_CASE("MockConfigManager 基本读写", "[mock][config]") {
     SECTION("get 类型不匹配返回错误") {
         cfg.set("key", std::string("value"));
         auto result = cfg.get<int>("key");
-        REQUIRE(result.isErr());
+        REQUIRE(result.is_err());
     }
 
     SECTION("load/save 默认成功") {
-        REQUIRE(cfg.load_from_file("dummy.json").isOk());
-        REQUIRE(cfg.save_to_file("dummy.json").isOk());
+        REQUIRE(cfg.load_from_file("dummy.json").is_ok());
+        REQUIRE(cfg.save_to_file("dummy.json").is_ok());
     }
 
     SECTION("load 错误注入") {
         cfg.set_load_error(std::string("file not found"));
         auto result = cfg.load_from_file("missing.json");
-        REQUIRE(result.isErr());
-        REQUIRE(result.error() == "file not found");
+        REQUIRE(result.is_err());
+        REQUIRE(result.error().message == "file not found");
     }
 
     SECTION("get_all_keys 返回所有键") {

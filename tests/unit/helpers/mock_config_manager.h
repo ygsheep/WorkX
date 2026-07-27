@@ -37,47 +37,51 @@ public:
     MockConfigManager(const MockConfigManager&) = delete;
     MockConfigManager& operator=(const MockConfigManager&) = delete;
 
-    // === IConfigManager 实现 ===
+    // === IConfigManager 实现（V2-1：返回 ResultV2）===
 
     [[nodiscard]] bool has(const std::string& key) const override {
         std::lock_guard<std::mutex> lock(m_mutex);
         return m_values.count(key) > 0;
     }
 
-    [[nodiscard]] Result<ConfigValue, std::string> get_value(
+    [[nodiscard]] ResultV2<ConfigValue> get_value(
         const std::string& key) const override {
         std::lock_guard<std::mutex> lock(m_mutex);
         auto it = m_values.find(key);
         if (it == m_values.end()) {
-            return Result<ConfigValue, std::string>::err(
-                "Key not found: " + key);
+            return ResultV2<ConfigValue>::err(
+                Error::Code::ConfigMissing,
+                "Key not found: " + key,
+                key);
         }
-        return Result<ConfigValue, std::string>::ok(it->second);
+        return ResultV2<ConfigValue>::ok(it->second);
     }
 
-    Result<void, std::string> set_value(
+    ResultV2<void> set_value(
         const std::string& key, ConfigValue value) override {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_values[key] = std::move(value);
-        return Result<void, std::string>::ok();
+        return ResultV2<void>::ok();
     }
 
-    Result<void, std::string> load_from_file(
+    ResultV2<void> load_from_file(
         const std::filesystem::path& /*path*/) override {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_load_error) {
-            return Result<void, std::string>::err(*m_load_error);
+            return ResultV2<void>::err(
+                Error::Code::ConfigParseFailed, *m_load_error);
         }
-        return Result<void, std::string>::ok();
+        return ResultV2<void>::ok();
     }
 
-    Result<void, std::string> save_to_file(
+    ResultV2<void> save_to_file(
         const std::filesystem::path& /*path*/) override {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_save_error) {
-            return Result<void, std::string>::err(*m_save_error);
+            return ResultV2<void>::err(
+                Error::Code::ConfigParseFailed, *m_save_error);
         }
-        return Result<void, std::string>::ok();
+        return ResultV2<void>::ok();
     }
 
     [[nodiscard]] std::vector<std::string> get_all_keys() const override {

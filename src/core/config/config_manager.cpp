@@ -81,20 +81,21 @@ void ConfigManager::register_meta(const std::string& key, ConfigMeta meta) {
     m_metas[key] = std::move(meta);
 }
 
-Result<ConfigMeta, std::string> ConfigManager::get_meta(const std::string& key) const {
+ResultV2<ConfigMeta> ConfigManager::get_meta(const std::string& key) const {
     std::lock_guard<std::mutex> lock(m_mutex);
     auto it = m_metas.find(key);
     if (it == m_metas.end()) {
-        return Result<ConfigMeta, std::string>::err(
-            std::format("Config meta '{}' not found", key)
-        );
+        return ResultV2<ConfigMeta>::err(
+            Error::Code::ConfigMissing,
+            std::format("Config meta '{}' not found", key),
+            key);
     }
-    return Result<ConfigMeta, std::string>::ok(it->second);
+    return ResultV2<ConfigMeta>::ok(it->second);
 }
 
-// === IConfigManager 类型擦除接口实现 ===
+// === IConfigManager 类型擦除接口实现（V2-1：返回 ResultV2）===
 
-Result<ConfigValue, std::string> ConfigManager::get_value(const std::string& key) const {
+ResultV2<ConfigValue> ConfigManager::get_value(const std::string& key) const {
     std::lock_guard<std::mutex> lock(m_mutex);
 
     auto it = m_values.find(key);
@@ -102,25 +103,29 @@ Result<ConfigValue, std::string> ConfigManager::get_value(const std::string& key
         // 尝试 meta 的默认值
         auto meta_it = m_metas.find(key);
         if (meta_it != m_metas.end()) {
-            return Result<ConfigValue, std::string>::ok(meta_it->second.default_value);
+            return ResultV2<ConfigValue>::ok(meta_it->second.default_value);
         }
-        return Result<ConfigValue, std::string>::err(
-            std::format("Config key '{}' not found", key));
+        return ResultV2<ConfigValue>::err(
+            Error::Code::ConfigMissing,
+            std::format("Config key '{}' not found", key),
+            key);
     }
-    return Result<ConfigValue, std::string>::ok(it->second);
+    return ResultV2<ConfigValue>::ok(it->second);
 }
 
-Result<void, std::string> ConfigManager::set_value(const std::string& key, ConfigValue config_value) {
+ResultV2<void> ConfigManager::set_value(const std::string& key, ConfigValue config_value) {
     // C-2：Schema 校验（优先于 meta.validate_callback）
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         auto schema_it = m_schemas.find(key);
         if (schema_it != m_schemas.end()) {
             auto result = schema_it->second.validate_value(config_value);
-            if (result.isErr()) {
-                return Result<void, std::string>::err(
-                    std::format("Schema validation failed for '{}': {}", key, result.error())
-                );
+            if (result.is_err()) {
+                return ResultV2<void>::err(
+                    Error::Code::ConfigInvalid,
+                    std::format("Schema validation failed for '{}': {}",
+                                key, result.error().message),
+                    key);
             }
         }
     }
@@ -135,10 +140,12 @@ Result<void, std::string> ConfigManager::set_value(const std::string& key, Confi
         auto& meta = meta_it->second;
         if (meta.validate_callback) {
             auto result = meta.validate_callback(config_value);
-            if (result.isErr()) {
-                return Result<void, std::string>::err(
-                    std::format("Validation failed for '{}': {}", key, result.error())
-                );
+            if (result.is_err()) {
+                return ResultV2<void>::err(
+                    Error::Code::ConfigInvalid,
+                    std::format("Validation failed for '{}': {}",
+                                key, result.error().message),
+                    key);
             }
         }
     }
@@ -173,27 +180,29 @@ Result<void, std::string> ConfigManager::set_value(const std::string& key, Confi
     for (const auto& cb : pending_callbacks) { cb(); }
     if (has_change_callback) { change_callback(config_value); }
 
-    return Result<void, std::string>::ok();
+    return ResultV2<void>::ok();
 }
 
-Result<void, std::string> ConfigManager::load_from_file(const std::filesystem::path& path) {
+ResultV2<void> ConfigManager::load_from_file(const std::filesystem::path& path) {
     if (!std::filesystem::exists(path)) {
-        return Result<void, std::string>::err(
-            std::format("Config file not found: {}", path.string())
-        );
+        return ResultV2<void>::err(
+            Error::Code::ResourceNotFound,
+            std::format("Config file not found: {}", path.string()),
+            path.string());
     }
 
     std::ifstream file(path);
     if (!file.is_open()) {
-        return Result<void, std::string>::err(
-            std::format("Failed to open config file: {}", path.string())
-        );
+        return ResultV2<void>::err(
+            Error::Code::ResourceNotFound,
+            std::format("Failed to open config file: {}", path.string()),
+            path.string());
     }
 
     // 空文件视为有效配置（无内容），优雅降级
     if (file.peek() == std::ifstream::traits_type::eof()) {
         file.close();
-        return Result<void, std::string>::ok();
+        return ResultV2<void>::ok();
     }
 
     try {
@@ -205,20 +214,22 @@ Result<void, std::string> ConfigManager::load_from_file(const std::filesystem::p
         // 同时向后兼容旧的扁平格式 {"backend.api_key": "..."}
         flatten_json(j, "", m_values);
 
-        return Result<void, std::string>::ok();
+        return ResultV2<void>::ok();
 
     } catch (const nlohmann::json::parse_error& e) {
-        return Result<void, std::string>::err(
-            std::format("JSON parse error in {}: {}", path.string(), e.what())
-        );
+        return ResultV2<void>::err(
+            Error::Code::ConfigParseFailed,
+            std::format("JSON parse error in {}: {}", path.string(), e.what()),
+            path.string());
     } catch (const std::exception& e) {
-        return Result<void, std::string>::err(
-            std::format("Error reading {}: {}", path.string(), e.what())
-        );
+        return ResultV2<void>::err(
+            Error::Code::ConfigParseFailed,
+            std::format("Error reading {}: {}", path.string(), e.what()),
+            path.string());
     }
 }
 
-Result<void, std::string> ConfigManager::save_to_file(const std::filesystem::path& path) {
+ResultV2<void> ConfigManager::save_to_file(const std::filesystem::path& path) {
     nlohmann::json j;
 
     {
@@ -237,18 +248,20 @@ Result<void, std::string> ConfigManager::save_to_file(const std::filesystem::pat
 
         std::ofstream file(path);
         if (!file.is_open()) {
-            return Result<void, std::string>::err(
-                std::format("Failed to create config file: {}", path.string())
-            );
+            return ResultV2<void>::err(
+                Error::Code::ConfigParseFailed,
+                std::format("Failed to create config file: {}", path.string()),
+                path.string());
         }
         file << j.dump(4);
         file.close();
-        return Result<void, std::string>::ok();
+        return ResultV2<void>::ok();
 
     } catch (const std::exception& e) {
-        return Result<void, std::string>::err(
-            std::format("Error writing {}: {}", path.string(), e.what())
-        );
+        return ResultV2<void>::err(
+            Error::Code::ConfigParseFailed,
+            std::format("Error writing {}: {}", path.string(), e.what()),
+            path.string());
     }
 }
 
@@ -285,50 +298,62 @@ std::vector<std::string> ConfigManager::get_all_keys() const {
     return keys;
 }
 
-// === C-2/C-4：结构化 Schema 实现 ===
+// === C-2/C-4：结构化 Schema 实现（V2-1：返回 ResultV2）===
 
-Result<void, std::string> ConfigSchema::validate_value(const ConfigValue& value) const {
+ResultV2<void> ConfigSchema::validate_value(const ConfigValue& value) const {
     // 类型校验
     switch (type) {
         case Type::Bool:
             if (!std::holds_alternative<bool>(value)) {
-                return Result<void, std::string>::err(
+                return ResultV2<void>::err(
+                    Error::Code::ConfigInvalid,
                     std::format("Expected bool, got {}", value.index() == 0 ? "bool" :
-                                value.index() == 1 ? "int" : value.index() == 2 ? "double" : "string"));
+                                value.index() == 1 ? "int" : value.index() == 2 ? "double" : "string"),
+                    key);
             }
             break;
         case Type::Int:
             if (!std::holds_alternative<int>(value)) {
-                return Result<void, std::string>::err("Expected int");
+                return ResultV2<void>::err(
+                    Error::Code::ConfigInvalid, "Expected int", key);
             }
             if (int_range) {
                 int v = std::get<int>(value);
                 if (v < int_range->first || v > int_range->second) {
-                    return Result<void, std::string>::err(std::format(
-                        "Value {} out of range [{}, {}]", v, int_range->first, int_range->second));
+                    return ResultV2<void>::err(
+                        Error::Code::ConfigInvalid,
+                        std::format("Value {} out of range [{}, {}]",
+                                    v, int_range->first, int_range->second),
+                        key);
                 }
             }
             break;
         case Type::Double:
             if (!std::holds_alternative<double>(value)) {
-                return Result<void, std::string>::err("Expected double");
+                return ResultV2<void>::err(
+                    Error::Code::ConfigInvalid, "Expected double", key);
             }
             if (double_range) {
                 double v = std::get<double>(value);
                 if (v < double_range->first || v > double_range->second) {
-                    return Result<void, std::string>::err(std::format(
-                        "Value {} out of range [{}, {}]", v, double_range->first, double_range->second));
+                    return ResultV2<void>::err(
+                        Error::Code::ConfigInvalid,
+                        std::format("Value {} out of range [{}, {}]",
+                                    v, double_range->first, double_range->second),
+                        key);
                 }
             }
             break;
         case Type::String:
             if (!std::holds_alternative<std::string>(value)) {
-                return Result<void, std::string>::err("Expected string");
+                return ResultV2<void>::err(
+                    Error::Code::ConfigInvalid, "Expected string", key);
             }
             break;
         case Type::Enum:
             if (!std::holds_alternative<std::string>(value)) {
-                return Result<void, std::string>::err("Expected string for enum");
+                return ResultV2<void>::err(
+                    Error::Code::ConfigInvalid, "Expected string for enum", key);
             }
             {
                 const auto& s = std::get<std::string>(value);
@@ -338,8 +363,10 @@ Result<void, std::string> ConfigSchema::validate_value(const ConfigValue& value)
                         if (i > 0) allowed += ", ";
                         allowed += enum_values[i];
                     }
-                    return Result<void, std::string>::err(std::format(
-                        "Value '{}' not in enum [{}]", s, allowed));
+                    return ResultV2<void>::err(
+                        Error::Code::ConfigInvalid,
+                        std::format("Value '{}' not in enum [{}]", s, allowed),
+                        key);
                 }
             }
             break;
@@ -348,12 +375,12 @@ Result<void, std::string> ConfigSchema::validate_value(const ConfigValue& value)
     // 自定义验证
     if (validate) {
         auto result = validate(value);
-        if (result.isErr()) {
+        if (result.is_err()) {
             return result;
         }
     }
 
-    return Result<void, std::string>::ok();
+    return ResultV2<void>::ok();
 }
 
 void ConfigManager::register_schema(ConfigSchema schema) {
@@ -361,14 +388,16 @@ void ConfigManager::register_schema(ConfigSchema schema) {
     m_schemas[schema.key] = std::move(schema);
 }
 
-Result<ConfigSchema, std::string> ConfigManager::get_schema(const std::string& key) const {
+ResultV2<ConfigSchema> ConfigManager::get_schema(const std::string& key) const {
     std::lock_guard<std::mutex> lock(m_mutex);
     auto it = m_schemas.find(key);
     if (it == m_schemas.end()) {
-        return Result<ConfigSchema, std::string>::err(
-            std::format("Config schema '{}' not found", key));
+        return ResultV2<ConfigSchema>::err(
+            Error::Code::ConfigMissing,
+            std::format("Config schema '{}' not found", key),
+            key);
     }
-    return Result<ConfigSchema, std::string>::ok(it->second);
+    return ResultV2<ConfigSchema>::ok(it->second);
 }
 
 std::vector<ConfigSchema> ConfigManager::get_all_schemas() const {
@@ -399,8 +428,8 @@ void ConfigManager::load_from_env() {
 
         // 查询 schema 获取类型
         auto schema_result = get_schema(key);
-        if (schema_result.isErr()) continue;
-        const auto& schema = schema_result.unwrap();
+        if (schema_result.is_err()) continue;
+        const auto& schema = schema_result.value();
 
         // 按类型解析
         ConfigValue parsed;

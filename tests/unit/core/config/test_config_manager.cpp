@@ -1,6 +1,6 @@
 /**
  * @file test_config_manager.cpp
- * @brief ConfigManager 单元测试
+ * @brief ConfigManager 单元测试（V2-1：ResultV2 迁移版）
  */
 
 #include <catch2/catch_test_macros.hpp>
@@ -15,31 +15,31 @@ TEST_CASE("ConfigManager basic set/get", "[config]") {
 
     SECTION("set and get int") {
         auto result = cfg.set("test.int_val", 42);
-        REQUIRE(result.isOk());
+        REQUIRE(result.is_ok());
         auto val = cfg.get<int>("test.int_val");
-        REQUIRE(val.isOk());
-        REQUIRE(val.unwrap() == 42);
+        REQUIRE(val.is_ok());
+        REQUIRE(val.value() == 42);
     }
 
     SECTION("set and get string") {
         cfg.set("test.str_val", std::string("hello"));
         auto val = cfg.get<std::string>("test.str_val");
-        REQUIRE(val.isOk());
-        REQUIRE(val.unwrap() == "hello");
+        REQUIRE(val.is_ok());
+        REQUIRE(val.value() == "hello");
     }
 
     SECTION("set and get bool") {
         cfg.set("test.bool_val", true);
         auto val = cfg.get<bool>("test.bool_val");
-        REQUIRE(val.isOk());
-        REQUIRE(val.unwrap() == true);
+        REQUIRE(val.is_ok());
+        REQUIRE(val.value() == true);
     }
 
     SECTION("set and get double") {
         cfg.set("test.double_val", 3.14);
         auto val = cfg.get<double>("test.double_val");
-        REQUIRE(val.isOk());
-        REQUIRE_THAT(val.unwrap(), Catch::Matchers::WithinAbs(3.14, 0.001));
+        REQUIRE(val.is_ok());
+        REQUIRE_THAT(val.value(), Catch::Matchers::WithinAbs(3.14, 0.001));
     }
 
     cfg.clear_for_test();
@@ -65,27 +65,29 @@ TEST_CASE("ConfigManager validation", "[config]") {
     auto& cfg = ConfigManager::instance();
     cfg.clear_for_test();
 
-    cfg.register_meta("test.validated", {
+    cfg.register_meta("test.validated", ConfigMeta{
         .description = "Test validated key",
         .default_value = 10,
         .is_required = false,
-        .validate_callback = [](const ConfigValue& v) -> Result<void, std::string> {
+        .validate_callback = [](const ConfigValue& v) -> ResultV2<void> {
             if (std::holds_alternative<int>(v) && std::get<int>(v) < 0) {
-                return Result<void, std::string>::err("must be >= 0");
+                return ResultV2<void>::err(
+                    Error::Code::ConfigInvalid, "must be >= 0");
             }
-            return Result<void, std::string>::ok();
+            return ResultV2<void>::ok();
         },
         .change_callback = {}
     });
 
     SECTION("valid value accepted") {
         auto result = cfg.set("test.validated", 5);
-        REQUIRE(result.isOk());
+        REQUIRE(result.is_ok());
     }
 
-    SECTION("invalid value rejected") {
+    SECTION("invalid value rejected with ConfigInvalid") {
         auto result = cfg.set("test.validated", -1);
-        REQUIRE(result.isErr());
+        REQUIRE(result.is_err());
+        REQUIRE(result.error().code == Error::Code::ConfigInvalid);
     }
 
     cfg.clear_for_test();
@@ -175,7 +177,7 @@ TEST_CASE("ConfigSchema validation", "[config][schema]") {
     cfg.clear_for_test();
 
     SECTION("Int 范围校验") {
-        cfg.register_schema({
+        cfg.register_schema(ConfigSchema{
             .key = "schema.int_val",
             .description = "Test int with range",
             .default_value = 50,
@@ -183,15 +185,15 @@ TEST_CASE("ConfigSchema validation", "[config][schema]") {
             .int_range = std::make_pair<int64_t, int64_t>(0, 100)
         });
 
-        REQUIRE(cfg.set("schema.int_val", 50).isOk());
-        REQUIRE(cfg.set("schema.int_val", 150).isErr());  // 超范围
-        REQUIRE(cfg.set("schema.int_val", -1).isErr());   // 超范围
-        REQUIRE(cfg.set("schema.int_val", 0).isOk());     // 边界
-        REQUIRE(cfg.set("schema.int_val", 100).isOk());   // 边界
+        REQUIRE(cfg.set("schema.int_val", 50).is_ok());
+        REQUIRE(cfg.set("schema.int_val", 150).is_err());  // 超范围
+        REQUIRE(cfg.set("schema.int_val", -1).is_err());   // 超范围
+        REQUIRE(cfg.set("schema.int_val", 0).is_ok());     // 边界
+        REQUIRE(cfg.set("schema.int_val", 100).is_ok());   // 边界
     }
 
     SECTION("Enum 校验") {
-        cfg.register_schema({
+        cfg.register_schema(ConfigSchema{
             .key = "schema.enum_val",
             .description = "Test enum",
             .default_value = std::string("a"),
@@ -199,25 +201,25 @@ TEST_CASE("ConfigSchema validation", "[config][schema]") {
             .enum_values = {"a", "b", "c"}
         });
 
-        REQUIRE(cfg.set("schema.enum_val", std::string("a")).isOk());
-        REQUIRE(cfg.set("schema.enum_val", std::string("b")).isOk());
-        REQUIRE(cfg.set("schema.enum_val", std::string("d")).isErr());  // 非法值
+        REQUIRE(cfg.set("schema.enum_val", std::string("a")).is_ok());
+        REQUIRE(cfg.set("schema.enum_val", std::string("b")).is_ok());
+        REQUIRE(cfg.set("schema.enum_val", std::string("d")).is_err());  // 非法值
     }
 
     SECTION("类型校验") {
-        cfg.register_schema({
+        cfg.register_schema(ConfigSchema{
             .key = "schema.bool_val",
             .description = "Test bool",
             .default_value = false,
             .type = ConfigSchema::Type::Bool
         });
 
-        REQUIRE(cfg.set("schema.bool_val", true).isOk());
-        REQUIRE(cfg.set("schema.bool_val", 42).isErr());  // 类型不匹配
+        REQUIRE(cfg.set("schema.bool_val", true).is_ok());
+        REQUIRE(cfg.set("schema.bool_val", 42).is_err());  // 类型不匹配
     }
 
     SECTION("get_schema / get_all_schemas") {
-        cfg.register_schema({
+        cfg.register_schema(ConfigSchema{
             .key = "schema.lookup",
             .description = "Lookup test",
             .default_value = std::string("x"),
@@ -225,8 +227,8 @@ TEST_CASE("ConfigSchema validation", "[config][schema]") {
         });
 
         auto result = cfg.get_schema("schema.lookup");
-        REQUIRE(result.isOk());
-        REQUIRE(result.unwrap().key == "schema.lookup");
+        REQUIRE(result.is_ok());
+        REQUIRE(result.value().key == "schema.lookup");
 
         auto all = cfg.get_all_schemas();
         REQUIRE_FALSE(all.empty());
@@ -241,7 +243,7 @@ TEST_CASE("ConfigSchema load_from_env", "[config][env]") {
     cfg.clear_for_test();
 
     SECTION("环境变量自动加载") {
-        cfg.register_schema({
+        cfg.register_schema(ConfigSchema{
             .key = "env.test_str",
             .description = "Env string",
             .default_value = std::string("default"),
@@ -268,7 +270,7 @@ TEST_CASE("ConfigSchema load_from_env", "[config][env]") {
     }
 
     SECTION("Int 类型环境变量") {
-        cfg.register_schema({
+        cfg.register_schema(ConfigSchema{
             .key = "env.test_int",
             .description = "Env int",
             .default_value = 0,
@@ -291,6 +293,82 @@ TEST_CASE("ConfigSchema load_from_env", "[config][env]") {
         #else
         unsetenv("WORKX_TEST_ENV_INT");
         #endif
+    }
+
+    cfg.clear_for_test();
+}
+
+// ============================================================
+// V2-1 新增：Error::Code 断言测试
+// ============================================================
+
+TEST_CASE("ConfigManager V2-1 Error::Code", "[config][v2]") {
+    auto& cfg = ConfigManager::instance();
+    cfg.clear_for_test();
+
+    SECTION("get 缺失键返回 ConfigMissing") {
+        auto result = cfg.get<int>("nonexistent.key");
+        REQUIRE(result.is_err());
+        REQUIRE(result.error().code == Error::Code::ConfigMissing);
+        REQUIRE(result.error().context == "nonexistent.key");
+    }
+
+    SECTION("get 类型不匹配返回 ConfigInvalid") {
+        cfg.set("type.mismatch", std::string("hello"));
+        auto result = cfg.get<int>("type.mismatch");
+        REQUIRE(result.is_err());
+        REQUIRE(result.error().code == Error::Code::ConfigInvalid);
+        REQUIRE(result.error().context == "type.mismatch");
+    }
+
+    SECTION("set Schema 范围校验失败返回 ConfigInvalid") {
+        cfg.register_schema(ConfigSchema{
+            .key = "v2.range",
+            .description = "Range test",
+            .default_value = 50,
+            .type = ConfigSchema::Type::Int,
+            .int_range = std::make_pair<int64_t, int64_t>(0, 100)
+        });
+
+        auto result = cfg.set("v2.range", 200);
+        REQUIRE(result.is_err());
+        REQUIRE(result.error().code == Error::Code::ConfigInvalid);
+        REQUIRE(result.error().context == "v2.range");
+    }
+
+    SECTION("set Schema 枚举校验失败返回 ConfigInvalid") {
+        cfg.register_schema(ConfigSchema{
+            .key = "v2.enum",
+            .description = "Enum test",
+            .default_value = std::string("a"),
+            .type = ConfigSchema::Type::Enum,
+            .enum_values = {"a", "b", "c"}
+        });
+
+        auto result = cfg.set("v2.enum", std::string("z"));
+        REQUIRE(result.is_err());
+        REQUIRE(result.error().code == Error::Code::ConfigInvalid);
+        REQUIRE(result.error().context == "v2.enum");
+    }
+
+    SECTION("get_schema 缺失返回 ConfigMissing") {
+        auto result = cfg.get_schema("nonexistent.schema");
+        REQUIRE(result.is_err());
+        REQUIRE(result.error().code == Error::Code::ConfigMissing);
+        REQUIRE(result.error().context == "nonexistent.schema");
+    }
+
+    SECTION("get_meta 缺失返回 ConfigMissing") {
+        auto result = cfg.get_meta("nonexistent.meta");
+        REQUIRE(result.is_err());
+        REQUIRE(result.error().code == Error::Code::ConfigMissing);
+        REQUIRE(result.error().context == "nonexistent.meta");
+    }
+
+    SECTION("load_from_file 文件不存在返回 ResourceNotFound") {
+        auto result = cfg.load_from_file("nonexistent_config_file.json");
+        REQUIRE(result.is_err());
+        REQUIRE(result.error().code == Error::Code::ResourceNotFound);
     }
 
     cfg.clear_for_test();

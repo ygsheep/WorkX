@@ -3,7 +3,8 @@
  * @brief 配置管理器抽象接口（C-1 DI 化）
  * @details 类型擦除的虚函数接口 + 模板包装，允许测试注入 MockConfigManager，
  *          解除对 ConfigManager 单例的硬依赖。
- * @version 1.0.0
+ *          V2-1：所有可失败 API 返回 ResultV2<T>，替代 Result<T, std::string>。
+ * @version 2.0.0
  * @date 2026-07
  */
 
@@ -12,9 +13,10 @@
 #include <string>
 #include <vector>
 #include <filesystem>
+#include <format>
 #include <variant>
 
-#include "core/utils/result.h"
+#include "core/utils/result_v2.h"
 
 namespace agent {
 
@@ -32,17 +34,23 @@ public:
     [[nodiscard]] virtual bool has(const std::string& key) const = 0;
 
     /// @brief 获取配置值（类型擦除）
-    /// @return 成功返回 ConfigValue；失败返回错误消息
-    [[nodiscard]] virtual Result<ConfigValue, std::string> get_value(
+    /// @return 成功返回 ConfigValue；失败返回 Error（ConfigMissing）
+    [[nodiscard]] virtual ResultV2<ConfigValue> get_value(
         const std::string& key) const = 0;
 
     /// @brief 设置配置值（类型擦除）
-    virtual Result<void, std::string> set_value(
+    /// @return 成功返回 void；失败返回 Error（ConfigInvalid）
+    virtual ResultV2<void> set_value(
         const std::string& key, ConfigValue value) = 0;
 
-    virtual Result<void, std::string> load_from_file(
+    /// @brief 从文件加载配置
+    /// @return 成功返回 void；失败返回 Error（ResourceNotFound/ConfigParseFailed）
+    virtual ResultV2<void> load_from_file(
         const std::filesystem::path& path) = 0;
-    virtual Result<void, std::string> save_to_file(
+
+    /// @brief 保存配置到文件
+    /// @return 成功返回 void；失败返回 Error（ConfigParseFailed）
+    virtual ResultV2<void> save_to_file(
         const std::filesystem::path& path) = 0;
 
     [[nodiscard]] virtual std::vector<std::string> get_all_keys() const = 0;
@@ -50,30 +58,33 @@ public:
     // === 模板包装（非虚，委托虚函数）===
 
     /// @brief 获取配置值（类型安全）
+    /// @return 成功返回 T；失败返回 Error（ConfigMissing 或 ConfigInvalid）
     template<typename T>
-    [[nodiscard]] Result<T, std::string> get(const std::string& key) const {
+    [[nodiscard]] ResultV2<T> get(const std::string& key) const {
         auto result = get_value(key);
-        if (result.isErr()) {
-            return Result<T, std::string>::err(result.error());
+        if (result.is_err()) {
+            return result.error();
         }
-        const auto& v = result.unwrap();
+        const auto& v = result.value();
         if (!std::holds_alternative<T>(v)) {
-            return Result<T, std::string>::err(
-                std::format("Type mismatch for config key '{}'", key));
+            return ResultV2<T>::err(
+                Error::Code::ConfigInvalid,
+                std::format("Type mismatch for config key '{}'", key),
+                key);
         }
-        return Result<T, std::string>::ok(std::get<T>(v));
+        return ResultV2<T>::ok(std::get<T>(v));
     }
 
     /// @brief 获取配置值，失败时返回默认值
     template<typename T>
     [[nodiscard]] T get_or(const std::string& key, T default_value) const {
         auto result = get<T>(key);
-        return result.isOk() ? result.unwrap() : default_value;
+        return result.is_ok() ? std::move(result.value()) : std::move(default_value);
     }
 
     /// @brief 设置配置值（类型安全）
     template<typename T>
-    Result<void, std::string> set(const std::string& key, T value) {
+    ResultV2<void> set(const std::string& key, T value) {
         return set_value(key, ConfigValue(std::move(value)));
     }
 };

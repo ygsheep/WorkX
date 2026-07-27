@@ -405,7 +405,7 @@ void SetupWizard::save_and_confirm(const std::string& provider_name,
     m_cursor_row++;
     int r = m_cursor_row;
 
-    if (result.isOk()) {
+    if (result.is_ok()) {
         m_screen->write(r, 2, "配置已保存！", ColorRole::StatusBar);
         m_screen->write(r + 1, 4, "\xe2\x9c\x93  保存成功！", ColorRole::System);
         m_screen->write(r + 2, 4, std::format("提供商：{}", display_name), ColorRole::Default);
@@ -415,7 +415,7 @@ void SetupWizard::save_and_confirm(const std::string& provider_name,
         m_screen->write(r + 5, 4, "使用 --provider 或编辑配置来更改。", ColorRole::Dim);
     } else {
         m_screen->write(r, 2, "保存失败", ColorRole::StatusBar);
-        m_screen->write(r + 1, 4, "x  " + result.error(), ColorRole::Error);
+        m_screen->write(r + 1, 4, "x  " + result.error().to_string(), ColorRole::Error);
         m_screen->write(r + 2, 4, "设置仅本次会话有效。", ColorRole::Dim);
     }
 

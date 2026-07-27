@@ -194,8 +194,8 @@ void load_from_env() {
 
 void load_from_config_file(const std::filesystem::path& path) {
     auto result = ConfigManager::instance().load_from_file(path);
-    if (result.isErr()) {
-        std::cerr << "Warning: " << result.error() << "\n";
+    if (result.is_err()) {
+        std::cerr << "Warning: " << result.error().to_string() << "\n";
     }
 }
 
