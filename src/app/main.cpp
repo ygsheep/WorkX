@@ -107,8 +107,11 @@ static int run(int argc, char* argv[]) {
         std::cerr << "[debug]   simple_io: " << (cfg.get_or<bool>(keys::SIMPLE_IO, false) ? "true" : "false") << "\n";
     }
 
-    // ---- Terminal（D-2：委托工厂构建 config）----
-    Terminal terminal(make_terminal_config(cfg));
+    // ---- Terminal（D-2：委托工厂构建 config；H-4：显式注入三大依赖）----
+    Terminal terminal(&EventBus::instance(),
+                      &ConfigManager::instance(),
+                      &TaskManager::instance(),
+                      make_terminal_config(cfg));
 
     auto init_result = terminal.initialize();
     if (init_result.isErr()) {
@@ -157,6 +160,10 @@ static int run(int argc, char* argv[]) {
     auto session = std::move(session_result.session);
     std::string remote_url = std::move(session_result.remote_url);
     std::string model_name = std::move(session_result.model_name);
+    // H-8：UI 层通过 IBackendAdmin* 调用 list_models / set_model_name，
+    // 不再依赖 ChatSession::backend() 暴露完整 IBackend*。
+    // 生命周期：session 持有 backend，session 存活期间 admin 有效。
+    auto backend_admin = session_result.backend_admin;
 
     if (session && verbose) {
         std::cerr << "[debug] Backend ready\n";
@@ -173,12 +180,13 @@ static int run(int argc, char* argv[]) {
     input_processor = std::make_unique<agent::input::InputProcessor>(registry);
 
     // ---- 启动时模型选择（model_name 为空时触发） ----
-    if (session && session->backend() && model_name.empty()) {
+    // H-8：使用 factory 注入的 backend_admin 替代 session->backend()
+    if (session && backend_admin && model_name.empty()) {
         ModelSelection sel = select_model_interactive(
-            cfg, &terminal, &screen, session->backend(), model_name);
+            cfg, &terminal, &screen, backend_admin, model_name);
         if (!sel.name.empty()) {
             cfg.set(keys::MODEL_NAME, sel.name);
-            session->backend()->set_model_name(sel.name);
+            backend_admin->set_model_name(sel.name);
             model_name = sel.name;
             // 持久化用户选择的 context_length（若 selector 返回了有效值）
             if (sel.context_length > 0) {
@@ -259,19 +267,20 @@ static int run(int argc, char* argv[]) {
     sys_ctx.on_exit = []() {
         EventBus::instance().publish(ShutdownEvent{.force = false});
     };
-    sys_ctx.on_model_select = [&terminal, &screen, &session, &cfg, &renderer, &preset]() {
-        if (!session || !session->backend()) {
+    sys_ctx.on_model_select = [&terminal, &screen, &backend_admin, &cfg, &renderer, &preset]() {
+        // H-8：使用 factory 注入的 backend_admin 替代 session->backend()
+        if (!backend_admin) {
             terminal.set_color(ColorRole::Error);
             terminal.write("No backend configured. Use --provider first.\n");
             terminal.reset_color();
             return;
         }
         ModelSelection sel = select_model_interactive(
-            cfg, &terminal, &screen, session->backend(),
+            cfg, &terminal, &screen, backend_admin,
             cfg.get_or<std::string>(keys::MODEL_NAME, ""));
         if (!sel.name.empty()) {
             cfg.set(keys::MODEL_NAME, sel.name);
-            if (session->backend()) session->backend()->set_model_name(sel.name);
+            backend_admin->set_model_name(sel.name);
             if (auto* sb = renderer.status_bar()) {
                 sb->set_model_name(sel.name);
                 // 上下文窗口：统一通过 resolver 解析（优先级：provider→user cfg→capability→preset→default）

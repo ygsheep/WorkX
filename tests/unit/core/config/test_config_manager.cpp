@@ -6,8 +6,10 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "core/config/config_manager.h"
+#include "helpers/mock_config_manager.h"  // H-B：ConfigScope DI 测试使用
 
 using namespace agent;
+using namespace agent::test;  // H-B：MockConfigManager
 
 TEST_CASE("ConfigManager basic set/get", "[config]") {
     auto& cfg = ConfigManager::instance();
@@ -137,7 +139,8 @@ TEST_CASE("ConfigScope", "[config]") {
     auto& cfg = ConfigManager::instance();
     cfg.clear_for_test();
 
-    ConfigScope scope("myapp");
+    // H-4：ConfigScope 不再提供默认实参，需显式注入
+    ConfigScope scope("myapp", cfg);
     scope.set("width", 800);
 
     REQUIRE(cfg.has("myapp.width"));
@@ -147,28 +150,42 @@ TEST_CASE("ConfigScope", "[config]") {
     cfg.clear_for_test();
 }
 
-// C-3：ConfigScope DI 化测试
+// C-3：ConfigScope DI 化测试（H-4：移除默认实参，所有调用方需显式注入）
+// H-B：改用 MockConfigManager 验证 DI 解耦（旧实现注入单例，测试无效）
 TEST_CASE("ConfigScope DI injection", "[config][di]") {
-    auto& cfg = ConfigManager::instance();
-    cfg.clear_for_test();
+    SECTION("注入 MockConfigManager 写入只进 mock，不进单例") {
+        // H-B：使用 MockConfigManager 替代 ConfigManager::instance()
+        // 若 ConfigScope 内部偷偷调单例，本测试会失败
+        MockConfigManager mock;
+        ConfigScope scope("default", mock);
 
-    SECTION("默认使用 ConfigManager::instance()") {
-        ConfigScope scope("default");
         scope.set("key", 42);
-        REQUIRE(cfg.get_or<int>("default.key", 0) == 42);
+
+        // 写入应只进 mock，不污染单例
+        REQUIRE(mock.has("default.key"));
+        REQUIRE(mock.get_or<int>("default.key", 0) == 42);
+        REQUIRE(scope.get_or<int>("key", 0) == 42);
+        REQUIRE(&scope.config_manager() == &mock);
+
+        // 验证全局单例未被污染（DI 解耦的核心证据）
+        REQUIRE_FALSE(ConfigManager::instance().has("default.key"));
     }
 
-    SECTION("注入自定义 IConfigManager（通过 MockConfigManager）") {
-        // 使用 ConfigManager::instance() 作为注入目标验证 DI 路径
-        // 真正的 Mock 测试在 test_mock_helpers.cpp 中
-        ConfigScope scope("injected", cfg);
-        scope.set("value", std::string("test"));
-        REQUIRE(scope.get_or<std::string>("value", "") == "test");
-        REQUIRE(cfg.get_or<std::string>("injected.value", "") == "test");
-        REQUIRE(&scope.config_manager() == &cfg);
-    }
+    SECTION("不同前缀的 scope 写入相互隔离") {
+        MockConfigManager mock_a;
+        MockConfigManager mock_b;
 
-    cfg.clear_for_test();
+        ConfigScope scope_a("app.a", mock_a);
+        ConfigScope scope_b("app.b", mock_b);
+
+        scope_a.set("x", 1);
+        scope_b.set("x", 2);
+
+        REQUIRE(mock_a.get_or<int>("app.a.x", 0) == 1);
+        REQUIRE(mock_b.get_or<int>("app.b.x", 0) == 2);
+        REQUIRE_FALSE(mock_a.has("app.b.x"));
+        REQUIRE_FALSE(mock_b.has("app.a.x"));
+    }
 }
 
 // C-2：ConfigSchema 测试

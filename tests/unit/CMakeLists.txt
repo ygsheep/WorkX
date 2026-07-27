@@ -9,8 +9,10 @@ set(UNIT_TEST_SOURCES
     agent/api/test_anthropic_adapter.cpp
     agent/api/test_openai_adapter.cpp
     agent/api/test_http_response.cpp
+    agent/api/test_remote_backend.cpp
     agent/api/test_retry_policy.cpp
     agent/api/test_sse_parser.cpp
+    agent/api/test_client.cpp
     agent/core/test_chat_session.cpp
     agent/core/test_react_loop.cpp
     agent/command/test_command_system.cpp
@@ -19,6 +21,7 @@ set(UNIT_TEST_SOURCES
     agent/compact/test_token_count.cpp
     agent/input/test_input_processor.cpp
     agent/tool/test_file_edit_tool.cpp
+    agent/tool/test_tool_context.cpp
     agent/tool/test_tool_executor.cpp
     agent/tool/test_tool_registry.cpp
     core/config/test_config_manager.cpp

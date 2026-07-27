@@ -25,15 +25,19 @@ namespace agent { namespace tool { class ToolRegistry; } }
 namespace agent {
 
 class ChatSession;
+class IBackendAdmin;
 struct ProviderPreset;
 class ITaskManager;
 class IEventBus;
 
 /// @brief 会话创建结果（D-2 工厂返回）
+/// @details H-8：新增 backend_admin 字段，UI 层通过它调用 list_models /
+///          set_model_name 等管理接口，避免暴露完整 IBackend*。
 struct SessionResult {
     std::unique_ptr<ChatSession> session;  ///< 创建的会话（无 remote_url 时为 nullptr）
     std::string remote_url;                ///< 解析后的 API URL
     std::string model_name;                ///< 解析后的模型名
+    IBackendAdmin* backend_admin = nullptr;  ///< H-8：后端管理句柄（非拥有，session 持有 backend 生命周期）
 };
 
 /// @brief 初始化日志系统
@@ -53,6 +57,7 @@ tui::TerminalConfig make_terminal_config(IConfigManager& cfg);
 ///          2. 解析 remote_url（cfg > preset > ""）和 model_name（cfg > preset > ""）
 ///          3. 若 remote_url 非空：创建 Backend → initialize → 构造 ChatSession
 ///          4. 注册内置工具、拼接系统提示词
+///          5. H-8：返回 IBackendAdmin* 给 UI 层调用管理接口
 /// @param cfg 配置管理器
 /// @param preset Provider 预设（nullptr 表示无预设）
 /// @param task_manager 任务管理器（M-1：显式 DI，替代 TaskManager::instance()）

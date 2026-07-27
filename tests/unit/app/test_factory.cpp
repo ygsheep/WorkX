@@ -14,12 +14,16 @@
 #include "app/factory.h"
 #include "app/config/app_config.h"
 #include "core/config/config_manager.h"
+#include "agent/api/backend_factory.h"  // H-C：BackendFactory::create
+#include "agent/api/backend_types.h"    // H-C：BackendConfig
 #include "agent/api/i_backend.h"
 #include "agent/api/i_backend_admin.h"
 #include "agent/api/i_completion_provider.h"
 #include "agent/core/chat_session.h"
 #include "agent/model/provider_preset.h"
 #include "agent/tool/registry.h"
+#include "core/events/event_bus.h"      // H-C：EventBus::instance()
+#include "core/task/task_manager.h"     // H-C：TaskManager::instance()
 #include "tui/core/terminal.h"
 
 #include <algorithm>
@@ -184,4 +188,118 @@ TEST_CASE("IBackendAdmin is base of IBackend", "[factory][ibackend_admin]") {
                   "IBackend must inherit from IBackendAdmin");
     static_assert(std::is_base_of_v<ICompletionProvider, IBackend>,
                   "IBackend must inherit from ICompletionProvider");
+}
+
+// ============================================================
+// H-8: SessionResult 携带 backend_admin 字段
+// ============================================================
+
+TEST_CASE("SessionResult has backend_admin field (H-8)", "[factory][h8]") {
+    // 编译期验证：SessionResult 包含 backend_admin 字段，类型为 IBackendAdmin*
+    // （H-8：UI 层通过此字段调用 list_models/set_model_name，不再依赖 ChatSession::backend()）
+    SessionResult result;
+    REQUIRE(result.backend_admin == nullptr);  // 默认 nullptr
+}
+
+// ============================================================
+// H-C: backend_admin 生命周期与 ChatSession 一致
+// ============================================================
+
+TEST_CASE("create_session no remote_url: backend_admin stays nullptr", "[factory][h-c]") {
+    auto& cfg = ConfigManager::instance();
+    cfg.clear_for_test();
+    register_config_defaults(cfg);
+
+    // M-1：显式注入 TaskManager / EventBus 单例
+    auto result = create_session(cfg, nullptr,
+                                 TaskManager::instance(),
+                                 EventBus::instance());
+
+    // 无 remote_url → session 未创建 → backend_admin 必须为 nullptr
+    REQUIRE(result.session == nullptr);
+    REQUIRE(result.backend_admin == nullptr);
+
+    cfg.clear_for_test();
+}
+
+TEST_CASE("backend_admin shares lifetime with session (H-C)", "[factory][h-c]") {
+    // H-C：验证 backend_admin 与 session 的生命周期绑定
+    // 由于 create_session 需要 LM Studio 运行才能成功构造 session，
+    // 此处通过手动构造 ChatSession + dynamic_cast 验证生命周期关系
+    auto& cfg = ConfigManager::instance();
+    cfg.clear_for_test();
+    register_config_defaults(cfg);
+
+    // 手动构造一个最小 backend（RemoteBackend，不 initialize）
+    BackendConfig backend_config;
+    backend_config.type = BackendConfig::Type::Remote;
+    backend_config.provider = ProviderType::OpenAI;
+    backend_config.base_url = "http://localhost:1234/v1";
+    backend_config.model_name = "test-model";
+    backend_config.api_key = "";
+    backend_config.timeout_ms = 1000;
+
+    auto backend = BackendFactory::create(backend_config, nullptr);
+    REQUIRE(backend != nullptr);
+
+    // C-2 修复路径：先构造 session，再通过 completion_provider() 获取 admin
+    std::unique_ptr<ChatSession> session = std::make_unique<ChatSession>(
+        std::move(backend),
+        TaskManager::instance(),
+        EventBus::instance(),
+        cfg,
+        1000, "test");
+
+    IBackendAdmin* admin = nullptr;
+    if (auto* provider = session->completion_provider()) {
+        admin = dynamic_cast<IBackendAdmin*>(provider);
+    }
+
+    // admin 应非空（IBackend 同时实现 ICompletionProvider 和 IBackendAdmin）
+    REQUIRE(admin != nullptr);
+
+    // 验证生命周期绑定：session 存活期间 admin 有效
+    REQUIRE(admin == dynamic_cast<IBackendAdmin*>(session->completion_provider()));
+
+    // 析构 session 后 admin 悬垂（无法在 runtime 安全验证悬垂，但可验证
+    // completion_provider() 与 admin 来自同一 session）
+    session.reset();
+    // admin 此时已悬垂，不进行任何操作（仅文档性验证）
+
+    cfg.clear_for_test();
+}
+
+TEST_CASE("completion_provider exposes ICompletionProvider (H-C)", "[factory][h-c]") {
+    // 验证 ChatSession::completion_provider() 返回的指针可正确 dynamic_cast
+    // 到 IBackendAdmin（C-2 修复的核心契约）
+    auto& cfg = ConfigManager::instance();
+    cfg.clear_for_test();
+    register_config_defaults(cfg);
+
+    BackendConfig backend_config;
+    backend_config.type = BackendConfig::Type::Remote;
+    backend_config.provider = ProviderType::OpenAI;
+    backend_config.base_url = "http://localhost:1234/v1";
+    backend_config.model_name = "test";
+    backend_config.api_key = "";
+    backend_config.timeout_ms = 1000;
+
+    auto backend = BackendFactory::create(backend_config, nullptr);
+    REQUIRE(backend != nullptr);
+
+    ChatSession session(std::move(backend),
+                        TaskManager::instance(),
+                        EventBus::instance(),
+                        cfg,
+                        1000, "test");
+
+    // completion_provider() 应返回非空 ICompletionProvider*
+    ICompletionProvider* provider = session.completion_provider();
+    REQUIRE(provider != nullptr);
+
+    // IBackend 同时实现 ICompletionProvider 和 IBackendAdmin，dynamic_cast 成功
+    IBackendAdmin* admin = dynamic_cast<IBackendAdmin*>(provider);
+    REQUIRE(admin != nullptr);
+
+    cfg.clear_for_test();
 }

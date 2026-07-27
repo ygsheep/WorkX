@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "agent/api/chat_types.h"
-#include "agent/api/i_backend.h"
+#include "agent/api/i_backend_admin.h"
 #include "agent/model/config.h"
 #include "agent/model/provider_preset.h"
 #include "app/config/app_config.h"
@@ -31,7 +31,7 @@ static constexpr const char* CUSTOM_MODEL_ID = "__custom__";
 
 ModelSelection select_model_interactive(
     IConfigManager& cfg,
-    Terminal* term, Screen* scr, IBackend* bk,
+    Terminal* term, Screen* scr, IBackendAdmin* admin,
     const std::string& current_model)
 {
     constexpr char32_t KEY_UP    = 0xE002;
@@ -71,9 +71,9 @@ ModelSelection select_model_interactive(
     // 获取模型列表，同时保留 context_length（如有）
     std::vector<std::string> model_names;
     std::unordered_map<std::string, int32_t> ctx_len_map;
-    auto result = bk ? bk->list_models()
-                     : ResultV2<std::vector<ModelInfo>>::err(
-                         Error::Code::InternalError, "No backend");
+    auto result = admin ? admin->list_models()
+                        : ResultV2<std::vector<ModelInfo>>::err(
+                            Error::Code::InternalError, "No backend");
 
     if (result.is_ok()) {
         auto models = std::move(result.value());

@@ -22,7 +22,7 @@ struct TestEvent {
 
 } // anonymous namespace
 
-TEST_CASE("MockConfigManager 基本读写", "[mock][config]") {
+TEST_CASE("MockConfigManager basic read/write", "[mock][config]") {
     using namespace agent::test;
     MockConfigManager cfg;
 
@@ -80,7 +80,7 @@ TEST_CASE("MockConfigManager 基本读写", "[mock][config]") {
     }
 }
 
-TEST_CASE("MockEventBus 订阅与发布记录", "[mock][event_bus]") {
+TEST_CASE("MockEventBus subscribe and publish records", "[mock][event_bus]") {
     using namespace agent::test;
     MockEventBus bus;
 
@@ -144,7 +144,7 @@ TEST_CASE("MockEventBus 订阅与发布记录", "[mock][event_bus]") {
     }
 }
 
-TEST_CASE("MockTaskManager 任务创建与计数", "[mock][task_manager]") {
+TEST_CASE("MockTaskManager task creation and counting", "[mock][task_manager]") {
     using namespace agent::test;
     MockTaskManager tm;
 
@@ -199,7 +199,7 @@ TEST_CASE("MockTaskManager 任务创建与计数", "[mock][task_manager]") {
     }
 }
 
-TEST_CASE("三个 Mock 可作为接口引用使用", "[mock][integration]") {
+TEST_CASE("Three Mocks can be used as interface references", "[mock][integration]") {
     using namespace agent::test;
     MockEventBus bus;
     MockConfigManager cfg;

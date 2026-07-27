@@ -15,6 +15,9 @@
 
 #include "tui/core/terminal.h"
 #include "tui/render/spinner.h"
+#include "core/events/event_bus.h"
+#include "core/config/config_manager.h"
+#include "core/task/task_manager.h"
 
 using namespace tui;
 using namespace std::chrono_literals;
@@ -22,8 +25,12 @@ using namespace std::chrono_literals;
 namespace {
 
 /// @brief 未 initialize() 的 Terminal，仅用于满足 Spinner 构造签名
-/// @details Spinner 不调用 Terminal 的写入方法，未初始化的 Terminal 安全可用
-Terminal null_terminal;
+/// @details Spinner 不调用 Terminal 的写入方法，未初始化的 Terminal 安全可用。
+///          H-4：Terminal 不再提供默认实参，需显式注入三大依赖单例。
+Terminal null_terminal(&agent::EventBus::instance(),
+                      &agent::ConfigManager::instance(),
+                      &agent::TaskManager::instance(),
+                      TerminalConfig{});
 
 } // namespace
 

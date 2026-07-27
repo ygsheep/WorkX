@@ -154,9 +154,9 @@ class ConfigScope {
 public:
     /// @brief 构造 ConfigScope
     /// @param prefix 键前缀（如 "backend."）
-    /// @param cm 配置管理器引用（C-3 DI 化，默认使用 ConfigManager::instance()）
+    /// @param cm 配置管理器引用（H-4：DI 必须显式注入，无默认实参回退单例）
     explicit ConfigScope(const std::string& prefix,
-                         IConfigManager& cm = ConfigManager::instance());
+                         IConfigManager& cm);
     ~ConfigScope();
 
     ConfigScope(const ConfigScope&) = delete;

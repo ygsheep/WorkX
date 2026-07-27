@@ -59,7 +59,7 @@ TEST_CASE("ToolRegistry register_tool ignores null", "[tool_registry][register]"
     REQUIRE(registry.size() == 0);
 }
 
-TEST_CASE("ToolRegistry register_tool allows duplicate name (last wins)", "[tool_registry][register]") {
+TEST_CASE("ToolRegistry register_tool allows duplicate name - last wins", "[tool_registry][register]") {
     ToolRegistry registry;
     registry.register_tool(std::make_shared<StubTool>("Dup"));
     registry.register_tool(std::make_shared<StubTool>("Dup"));

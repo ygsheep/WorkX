@@ -27,10 +27,10 @@ using namespace agent;  // P0: tui→agent 类型引用过渡方案，后续 P2/
 // 工厂函数声明（在 platform_win32.cpp 中定义）
 std::unique_ptr<IPlatform> create_platform();
 
-Terminal::Terminal(const TerminalConfig& config,
-                   IEventBus* event_bus,
+Terminal::Terminal(IEventBus* event_bus,
                    IConfigManager* config_manager,
-                   ITaskManager* task_manager)
+                   ITaskManager* task_manager,
+                   const TerminalConfig& config)
     : m_config(config)
     , m_event_bus(event_bus)
     , m_config_manager(config_manager)
@@ -42,15 +42,15 @@ Terminal::~Terminal() {
     restore();
 }
 
-// D-4/D-5/D-6：依赖解析（nullptr 时回退单例，向后兼容）
+// H-4：依赖解析（不再回退单例；调用方需保证构造时注入非空指针）
 IEventBus& Terminal::event_bus() {
-    return m_event_bus ? *m_event_bus : EventBus::instance();
+    return *m_event_bus;
 }
 IConfigManager& Terminal::config_manager() {
-    return m_config_manager ? *m_config_manager : ConfigManager::instance();
+    return *m_config_manager;
 }
 ITaskManager& Terminal::task_manager() {
-    return m_task_manager ? *m_task_manager : TaskManager::instance();
+    return *m_task_manager;
 }
 
 Result<void, std::string> Terminal::initialize() {
