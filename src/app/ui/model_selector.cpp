@@ -72,10 +72,12 @@ ModelSelection select_model_interactive(
     // 获取模型列表，同时保留 context_length（如有）
     std::vector<std::string> model_names;
     std::unordered_map<std::string, int32_t> ctx_len_map;
-    auto result = bk ? bk->list_models() : Result<std::vector<ModelInfo>, std::string>::err("No backend");
+    auto result = bk ? bk->list_models()
+                     : ResultV2<std::vector<ModelInfo>>::err(
+                         Error::Code::InternalError, "No backend");
 
-    if (result.isOk()) {
-        auto models = result.unwrap();
+    if (result.is_ok()) {
+        auto models = std::move(result.value());
         model_names.reserve(models.size());
         for (auto& m : models) {
             if (m.context_length > 0) {

@@ -13,7 +13,8 @@
 #include <string>
 #include <vector>
 
-#include "core/utils/result.h"
+#include "core/utils/result.h"          // 旧 Result（过渡期保留）
+#include "core/utils/result_v2.h"       // V2-3：新 ResultV2
 #include "agent/api/backend_types.h"
 
 namespace agent {
@@ -28,8 +29,10 @@ public:
     virtual std::string name() const = 0;
 
     /// @brief 从 API 获取可用模型列表
-    /// @return 模型信息列表，或错误信息
-    virtual Result<std::vector<ModelInfo>, std::string> list_models() = 0;
+    /// @return 成功返回模型信息列表；失败返回 Error
+    /// @details V2-3：从 Result<vector<ModelInfo>, string> 迁移到 ResultV2
+    ///          错误码：NetworkTimeout/NetworkDisconnected/HttpError/HttpServerDown 等
+    virtual ResultV2<std::vector<ModelInfo>> list_models() = 0;
 
     /// @brief 运行时切换模型名（不重启）
     /// @param name 新模型名

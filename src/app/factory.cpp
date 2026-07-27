@@ -109,9 +109,9 @@ SessionResult create_session(IConfigManager& cfg, const ProviderPreset* preset) 
         return result;  // session 保持 nullptr
     }
 
-    // 初始化后端
+    // 初始化后端（V2-3：initialize 返回 ResultV2）
     auto init_result = backend->initialize(backend_config);
-    if (init_result.isErr()) {
+    if (init_result.is_err()) {
         return result;  // session 保持 nullptr
     }
 

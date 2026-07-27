@@ -30,12 +30,16 @@ RemoteBackend::~RemoteBackend() {
     shutdown();
 }
 
-Result<void, std::string> RemoteBackend::initialize(const BackendConfig& config) {
+ResultV2<void> RemoteBackend::initialize(const BackendConfig& config) {
     if (config.type != BackendConfig::Type::Remote) {
-        return Result<void, std::string>::err("RemoteBackend requires Remote config type");
+        return ResultV2<void>::err(
+            Error::Code::InvalidInput,
+            "RemoteBackend requires Remote config type");
     }
     if (config.base_url.empty()) {
-        return Result<void, std::string>::err("base_url is required for RemoteBackend");
+        return ResultV2<void>::err(
+            Error::Code::InvalidInput,
+            "base_url is required for RemoteBackend");
     }
 
     m_config = config;
@@ -49,7 +53,9 @@ Result<void, std::string> RemoteBackend::initialize(const BackendConfig& config)
             m_adapter = std::make_unique<AnthropicAdapter>();
             break;
         default:
-            return Result<void, std::string>::err("Unknown provider type");
+            return ResultV2<void>::err(
+                Error::Code::InternalError,
+                "Unknown provider type");
     }
 
 #ifdef WORKX_HAS_CURL
@@ -62,11 +68,11 @@ Result<void, std::string> RemoteBackend::initialize(const BackendConfig& config)
         .error = {}
     });
 
-    return Result<void, std::string>::ok();
+    return ResultV2<void>::ok();
 #else
-    return Result<void, std::string>::err(
-        "RemoteBackend requires CURL. Check CURL installation and reconfigure"
-    );
+    return ResultV2<void>::err(
+        Error::Code::NotImplemented,
+        "RemoteBackend requires CURL. Check CURL installation and reconfigure");
 #endif
 }
 
@@ -159,10 +165,11 @@ void RemoteBackend::interrupt() {
 // list_models 实现
 // ============================================================
 
-Result<std::vector<ModelInfo>, std::string> RemoteBackend::list_models() {
+ResultV2<std::vector<ModelInfo>> RemoteBackend::list_models() {
 #ifdef WORKX_HAS_CURL
     if (!m_ready.load() || !m_adapter || !m_http_client) {
-        return Result<std::vector<ModelInfo>, std::string>::err("Backend not ready");
+        return ResultV2<std::vector<ModelInfo>>::err(
+            Error::Code::InternalError, "Backend not ready");
     }
 
     // 检查 provider 是否支持 list_models HTTP 端点
@@ -171,16 +178,18 @@ Result<std::vector<ModelInfo>, std::string> RemoteBackend::list_models() {
     if (!endpoint.supported) {
         auto builtin = m_adapter->get_builtin_models();
         if (!builtin.empty()) {
-            return Result<std::vector<ModelInfo>, std::string>::ok(std::move(builtin));
+            return ResultV2<std::vector<ModelInfo>>::ok(std::move(builtin));
         }
-        return Result<std::vector<ModelInfo>, std::string>::err(
+        return ResultV2<std::vector<ModelInfo>>::err(
+            Error::Code::NotImplemented,
             "This provider does not support list_models endpoint");
     }
 
     // 构建 URL（用 endpoint.url_suffix，如 "/v1/models"）
     std::string url = m_config.base_url;
     if (url.empty()) {
-        return Result<std::vector<ModelInfo>, std::string>::err("base_url is empty");
+        return ResultV2<std::vector<ModelInfo>>::err(
+            Error::Code::ConfigInvalid, "base_url is empty");
     }
     while (!url.empty() && url.back() == '/') url.pop_back();
     url += endpoint.url_suffix;
@@ -211,16 +220,16 @@ Result<std::vector<ModelInfo>, std::string> RemoteBackend::list_models() {
     if (result.is_err()) {
         const auto& err = result.error();
         LOG_ERROR("[backend] list_models network error: {}", err.to_string());
-        return Result<std::vector<ModelInfo>, std::string>::err(
-            std::format("HTTP request failed: [{}] {}", err.code_string(), err.message));
+        // 直接传播 Error，保留错误码（NetworkTimeout/NetworkDisconnected 等）
+        return ResultV2<std::vector<ModelInfo>>::err(err);
     }
 
     const auto& response = result.value();
 
     // HTTP 4xx/5xx 错误（已到达服务器，但服务端返回错误状态码）
     if (response.is_http_error()) {
-        return Result<std::vector<ModelInfo>, std::string>::err(
-            std::format("HTTP error: {} ({})", response.status_code, response.body));
+        return ResultV2<std::vector<ModelInfo>>::err(
+            Error::from_http_response(response.status_code, response.body, url));
     }
 
     // 解析 JSON 响应
@@ -241,17 +250,21 @@ Result<std::vector<ModelInfo>, std::string> RemoteBackend::list_models() {
         }
 
         if (models.empty()) {
-            return Result<std::vector<ModelInfo>, std::string>::err("No models returned by API");
+            return ResultV2<std::vector<ModelInfo>>::err(
+                Error::Code::InternalError, "No models returned by API");
         }
 
-        return Result<std::vector<ModelInfo>, std::string>::ok(std::move(models));
+        return ResultV2<std::vector<ModelInfo>>::ok(std::move(models));
     } catch (const nlohmann::json::parse_error& e) {
-        return Result<std::vector<ModelInfo>, std::string>::err(
-            std::format("JSON parse error: {}", e.what()));
+        return ResultV2<std::vector<ModelInfo>>::err(
+            Error::Code::ConfigParseFailed,
+            std::format("JSON parse error: {}", e.what()),
+            url);
     }
 
 #else
-    return Result<std::vector<ModelInfo>, std::string>::err(
+    return ResultV2<std::vector<ModelInfo>>::err(
+        Error::Code::NotImplemented,
         "RemoteBackend requires CURL. Check CURL installation and reconfigure");
 #endif
 }

@@ -28,11 +28,11 @@ public:
 
     // IBackend 接口
     std::string name() const override { return "remote"; }
-    Result<void, std::string> initialize(const BackendConfig& config) override;
+    ResultV2<void> initialize(const BackendConfig& config) override;
     void shutdown() override;
     bool is_ready() const override { return m_ready.load(); }
     ModelInfo get_model_info() const override;
-    Result<std::vector<ModelInfo>, std::string> list_models() override;
+    ResultV2<std::vector<ModelInfo>> list_models() override;
     void set_model_name(const std::string& name) override { m_config.model_name = name; }
 
     // ICompletionProvider 接口

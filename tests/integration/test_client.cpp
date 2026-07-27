@@ -64,15 +64,15 @@ struct LmStudioFixture {
 
 TEST_CASE_METHOD(LmStudioFixture, "Client create success", "[client][integration]") {
     auto r = Client::create({.provider = "lm-studio", .model = s_model});
-    REQUIRE(r.isOk());
-    auto client = std::move(r.unwrap());
+    REQUIRE(r.is_ok());
+    auto client = std::move(r.value());
     REQUIRE(client.model_name() == s_model);
 }
 
 TEST_CASE("Client create failure without base_url", "[client]") {
     // 既不设 provider 也不设 base_url → initialize 失败
     auto r = Client::create({.backend = {.provider = ProviderType::OpenAI}});
-    REQUIRE(r.isErr());
+    REQUIRE(r.is_err());
 }
 
 // ============================================================
@@ -81,23 +81,23 @@ TEST_CASE("Client create failure without base_url", "[client]") {
 
 TEST_CASE_METHOD(LmStudioFixture, "Client list_models", "[client][integration]") {
     auto r = Client::create({.provider = "lm-studio", .model = s_model});
-    REQUIRE(r.isOk());
-    auto client = std::move(r.unwrap());
+    REQUIRE(r.is_ok());
+    auto client = std::move(r.value());
 
     auto models = client.list_models();
-    REQUIRE(models.isOk());
-    REQUIRE_FALSE(models.unwrap().empty());
+    REQUIRE(models.is_ok());
+    REQUIRE_FALSE(models.value().empty());
 }
 
 TEST_CASE_METHOD(LmStudioFixture, "Client set_model", "[client][integration]") {
     auto r = Client::create({.provider = "lm-studio", .model = s_model});
-    REQUIRE(r.isOk());
-    auto client = std::move(r.unwrap());
+    REQUIRE(r.is_ok());
+    auto client = std::move(r.value());
 
     // 获取第一个可用模型名
     auto models = client.list_models();
-    REQUIRE(models.isOk());
-    auto& model_list = models.unwrap();
+    REQUIRE(models.is_ok());
+    auto model_list = std::move(models.value());
     REQUIRE_FALSE(model_list.empty());
 
     const auto& first_model = model_list[0].name;
@@ -111,12 +111,12 @@ TEST_CASE_METHOD(LmStudioFixture, "Client set_model", "[client][integration]") {
 
 TEST_CASE_METHOD(LmStudioFixture, "Client chat sync", "[client][integration]") {
     auto r = Client::create({.provider = "lm-studio", .model = s_model});
-    REQUIRE(r.isOk());
-    auto client = std::move(r.unwrap());
+    REQUIRE(r.is_ok());
+    auto client = std::move(r.value());
 
     auto reply = client.chat("Say hello in one word.");
-    REQUIRE(reply.isOk());
-    REQUIRE_FALSE(reply.unwrap().empty());
+    REQUIRE(reply.is_ok());
+    REQUIRE_FALSE(reply.value().empty());
 
     auto h = client.history();
     REQUIRE(h.size() >= 2);  // user + assistant
@@ -125,8 +125,8 @@ TEST_CASE_METHOD(LmStudioFixture, "Client chat sync", "[client][integration]") {
 
 TEST_CASE_METHOD(LmStudioFixture, "Client stream_chat content", "[client][integration]") {
     auto r = Client::create({.provider = "lm-studio", .model = s_model});
-    REQUIRE(r.isOk());
-    auto client = std::move(r.unwrap());
+    REQUIRE(r.is_ok());
+    auto client = std::move(r.value());
 
     std::string content, reasoning;
     bool done = false;
@@ -135,15 +135,15 @@ TEST_CASE_METHOD(LmStudioFixture, "Client stream_chat content", "[client][integr
         [&](const StreamChunk&) { done = true; },
         [](const std::string&, bool) {}
     });
-    REQUIRE(res.isOk());
+    REQUIRE(res.is_ok());
     REQUIRE(done);
     REQUIRE_FALSE(content.empty());
 }
 
 TEST_CASE_METHOD(LmStudioFixture, "Client stream_chat reasoning", "[client][integration]") {
     auto r = Client::create({.provider = "lm-studio", .model = s_model});
-    REQUIRE(r.isOk());
-    auto client = std::move(r.unwrap());
+    REQUIRE(r.is_ok());
+    auto client = std::move(r.value());
 
     std::string content, reasoning;
     client.stream_chat("Think step by step: what is 15 + 27?", {
@@ -167,12 +167,12 @@ TEST_CASE_METHOD(LmStudioFixture, "Client stream_chat reasoning", "[client][inte
 
 TEST_CASE_METHOD(LmStudioFixture, "Client clear_history", "[client][integration]") {
     auto r = Client::create({.provider = "lm-studio", .model = s_model});
-    REQUIRE(r.isOk());
-    auto client = std::move(r.unwrap());
+    REQUIRE(r.is_ok());
+    auto client = std::move(r.value());
 
     // 先对话产生历史
     auto reply = client.chat("Hi");
-    REQUIRE(reply.isOk());
+    REQUIRE(reply.is_ok());
     REQUIRE_FALSE(client.history().empty());
 
     client.clear_history();
@@ -185,8 +185,8 @@ TEST_CASE_METHOD(LmStudioFixture, "Client clear_history", "[client][integration]
 
 TEST_CASE_METHOD(LmStudioFixture, "Client stream_chat_async", "[client][integration][async]") {
     auto r = Client::create({.provider = "lm-studio", .model = s_model});
-    REQUIRE(r.isOk());
-    auto client = std::move(r.unwrap());
+    REQUIRE(r.is_ok());
+    auto client = std::move(r.value());
 
     std::mutex mtx;
     std::condition_variable cv;
@@ -211,7 +211,7 @@ TEST_CASE_METHOD(LmStudioFixture, "Client stream_chat_async", "[client][integrat
             cv.notify_one();
         }
     });
-    REQUIRE(res.isOk());
+    REQUIRE(res.is_ok());
 
     // 等待后台完成（最多 30s）
     {
@@ -224,8 +224,8 @@ TEST_CASE_METHOD(LmStudioFixture, "Client stream_chat_async", "[client][integrat
 
 TEST_CASE_METHOD(LmStudioFixture, "Client interrupt async", "[client][integration][async]") {
     auto r = Client::create({.provider = "lm-studio", .model = s_model});
-    REQUIRE(r.isOk());
-    auto client = std::move(r.unwrap());
+    REQUIRE(r.is_ok());
+    auto client = std::move(r.value());
 
     std::mutex mtx;
     std::condition_variable cv;

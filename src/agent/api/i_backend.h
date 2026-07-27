@@ -12,7 +12,8 @@
 
 #include <string>
 #include <memory>
-#include "core/utils/result.h"
+#include "core/utils/result.h"          // 旧 Result（过渡期保留）
+#include "core/utils/result_v2.h"       // V2-3：新 ResultV2
 #include "agent/api/backend_types.h"
 #include "agent/api/i_stream_reader.h"
 #include "agent/api/i_completion_provider.h"
@@ -28,7 +29,10 @@ class IBackend : public ICompletionProvider, public IBackendAdmin {
 public:
     /// @brief 初始化后端
     /// @param config 后端配置
-    virtual Result<void, std::string> initialize(const BackendConfig& config) = 0;
+    /// @return 成功返回 void；失败返回 Error
+    /// @details V2-3：从 Result<void, string> 迁移到 ResultV2
+    ///          错误码：InvalidInput（参数错误）/InternalError（未知 provider 等）
+    virtual ResultV2<void> initialize(const BackendConfig& config) = 0;
 
     /// @brief 关闭后端
     virtual void shutdown() = 0;

@@ -18,6 +18,7 @@
 #include <mutex>
 
 #include "core/utils/result.h"
+#include "core/utils/result_v2.h"       // V2-3：新 ResultV2
 #include "core/events/event_bus.h"
 #include "agent/api/chat_types.h"
 #include "agent/api/retry.h"  // H-3：HttpRetryPolicy
@@ -94,14 +95,15 @@ public:
     /// @brief 从配置创建 Client
     /// @details 内部完成：查 preset（若 provider 非空）→ 拼 BackendConfig
     ///          → BackendFactory::create → backend->initialize
-    /// @return 失败返回错误信息（不抛异常）
+    /// @return 失败返回 Error（不抛异常）
+    /// @details V2-3：从 Result<Client, string> 迁移到 ResultV2<Client>
     /// @code
     /// auto r = Client::create({.provider = "lm-studio",
     ///                          .model = "google/gemma-4-e4b"});
-    /// if (r.isErr()) { std::cerr << r.error(); return; }
-    /// Client client = std::move(r.unwrap());
+    /// if (r.is_err()) { std::cerr << r.error().message; return; }
+    /// Client client = std::move(r.value());
     /// @endcode
-    static Result<Client, std::string> create(ClientConfig config);
+    static ResultV2<Client> create(ClientConfig config);
 
     // ---- 会话管理 ----
     void set_system_prompt(const std::string& prompt);
@@ -112,29 +114,32 @@ public:
     // ---- 阻塞 API（脚本/CLI 场景）----
     // 在调用线程同步执行，回调在该线程触发。调用期间线程被阻塞。
     // 适合一次性脚本；TUI 主线程勿用（会冻结界面）。
-    Result<std::string, std::string> chat(const std::string& user_text);
-    Result<std::string, std::string> chat(const std::vector<ChatMessage>& messages);
-    Result<void, std::string> stream_chat(const std::string& user_text,
-                                          const ChatCallbacks& cbs);
-    Result<void, std::string> stream_chat(const std::vector<ChatMessage>& messages,
-                                          const ChatCallbacks& cbs);
+    /// @details V2-3：返回 ResultV2，错误通过 Error 携带错误码
+    ResultV2<std::string> chat(const std::string& user_text);
+    ResultV2<std::string> chat(const std::vector<ChatMessage>& messages);
+    ResultV2<void> stream_chat(const std::string& user_text,
+                               const ChatCallbacks& cbs);
+    ResultV2<void> stream_chat(const std::vector<ChatMessage>& messages,
+                               const ChatCallbacks& cbs);
 
     // ---- 异步 API（TUI/交互场景）----
     // 立即返回，推理在 TaskManager 后台任务中执行。
     // 回调在后台线程触发 → 调用方需处理线程安全。
     // TUI 场景建议开启 enable_event_bus，用 EventBus 回主线程渲染。
     // 返回 Ok 表示已提交；提交级失败返回 Err。
-    Result<void, std::string> chat_async(const std::string& user_text,
-                                         const ChatCallbacks& cbs);
-    Result<void, std::string> stream_chat_async(const std::string& user_text,
-                                                const ChatCallbacks& cbs);
+    /// @details V2-3：返回 ResultV2，错误通过 Error 携带错误码
+    ResultV2<void> chat_async(const std::string& user_text,
+                              const ChatCallbacks& cbs);
+    ResultV2<void> stream_chat_async(const std::string& user_text,
+                                     const ChatCallbacks& cbs);
 
     // ---- 控制 ----
     void interrupt();
     [[nodiscard]] bool is_generating() const;
 
     // ---- 后端能力透传 ----
-    Result<std::vector<ModelInfo>, std::string> list_models();
+    /// @details V2-3：返回 ResultV2，错误通过 Error 携带错误码
+    ResultV2<std::vector<ModelInfo>> list_models();
     void set_model(const std::string& name);
     [[nodiscard]] std::string model_name() const;
 
@@ -160,11 +165,12 @@ private:
 
     /// 流式核心实现（阻塞版共享）
     /// @param should_stop 外部取消检查
-    Result<void, std::string> run_stream(const CompletionRequest& request,
-                                         const ChatCallbacks& cbs,
-                                         const std::function<bool()>& should_stop,
-                                         std::string& content_out,
-                                         std::string& reasoning_out);
+    /// @details V2-3：返回 ResultV2，错误通过 Error 携带错误码
+    ResultV2<void> run_stream(const CompletionRequest& request,
+                              const ChatCallbacks& cbs,
+                              const std::function<bool()>& should_stop,
+                              std::string& content_out,
+                              std::string& reasoning_out);
 
     /// @brief 可中断的睡眠（用于重试退避等待）
     /// @return true 表示睡眠期间 should_stop() 变为 true（应退出）

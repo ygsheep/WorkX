@@ -17,8 +17,9 @@
 namespace agent {
 
 /// @brief 统一结果类型（V2）
-/// @details std::variant<T, Error> 的语义化封装，替代 Result<T, std::string>
+/// @details std::variant<monostate, T, Error> 的语义化封装，替代 Result<T, std::string>
 /// @note 不提供 unwrap() 抛异常路径；用 value/value_or/map/and_then 链式调用
+/// @details 使用 std::monostate 作为 variant 首位类型，避免要求 T 默认构造
 template<typename T>
 class ResultV2 {
     static_assert(!std::is_same_v<T, Error>, "ResultV2<Error> is not allowed");
@@ -29,20 +30,20 @@ public:
     /// @details 允许 `return error;` 在返回 ResultV2<T> 的函数中隐式转换
     /// @note 这是有意为之的，支持 TRY_RESULT_V2 宏的错误传播语义
     ResultV2(Error error) {
-        m_data.template emplace<1>(std::move(error));
+        m_data.template emplace<2>(std::move(error));
     }
 
     /// @brief 成功构造
     static ResultV2 ok(T value) {
         ResultV2 r;
-        r.m_data.template emplace<0>(std::move(value));
+        r.m_data.template emplace<1>(std::move(value));
         return r;
     }
 
     /// @brief 错误构造
     static ResultV2 err(Error error) {
         ResultV2 r;
-        r.m_data.template emplace<1>(std::move(error));
+        r.m_data.template emplace<2>(std::move(error));
         return r;
     }
 
@@ -51,29 +52,29 @@ public:
         return err(Error{code, std::move(message), std::move(context)});
     }
 
-    [[nodiscard]] bool is_ok() const noexcept { return m_data.index() == 0; }
-    [[nodiscard]] bool is_err() const noexcept { return m_data.index() == 1; }
+    [[nodiscard]] bool is_ok() const noexcept { return m_data.index() == 1; }
+    [[nodiscard]] bool is_err() const noexcept { return m_data.index() == 2; }
 
     /// @brief 获取值引用（仅 ok 时有效，调用方需先 is_ok() 守卫）
     /// @note 不抛异常，err 时为未定义行为（debug 模式 assert）
     [[nodiscard]] T& value() noexcept {
-        return std::get<0>(m_data);
+        return std::get<1>(m_data);
     }
     [[nodiscard]] const T& value() const noexcept {
-        return std::get<0>(m_data);
+        return std::get<1>(m_data);
     }
 
     /// @brief 获取错误引用（仅 err 时有效）
     [[nodiscard]] Error& error() noexcept {
-        return std::get<1>(m_data);
+        return std::get<2>(m_data);
     }
     [[nodiscard]] const Error& error() const noexcept {
-        return std::get<1>(m_data);
+        return std::get<2>(m_data);
     }
 
     /// @brief 获取值或默认值（不抛异常）
     [[nodiscard]] T value_or(T default_value) const {
-        return is_ok() ? std::get<0>(m_data) : std::move(default_value);
+        return is_ok() ? std::get<1>(m_data) : std::move(default_value);
     }
 
     /// @brief 映射成功值（functor）
@@ -81,18 +82,18 @@ public:
     auto map(F&& f) const & -> ResultV2<std::invoke_result_t<F, const T&>> {
         using R = std::invoke_result_t<F, const T&>;
         if (is_ok()) {
-            return ResultV2<R>::ok(f(std::get<0>(m_data)));
+            return ResultV2<R>::ok(f(std::get<1>(m_data)));
         }
-        return ResultV2<R>::err(std::get<1>(m_data));
+        return ResultV2<R>::err(std::get<2>(m_data));
     }
 
     template<typename F>
     auto map(F&& f) && -> ResultV2<std::invoke_result_t<F, T&&>> {
         using R = std::invoke_result_t<F, T&&>;
         if (is_ok()) {
-            return ResultV2<R>::ok(f(std::move(std::get<0>(m_data))));
+            return ResultV2<R>::ok(f(std::move(std::get<1>(m_data))));
         }
-        return ResultV2<R>::err(std::move(std::get<1>(m_data)));
+        return ResultV2<R>::err(std::move(std::get<2>(m_data)));
     }
 
     /// @brief 链式操作（monadic bind）
@@ -101,23 +102,23 @@ public:
     auto and_then(F&& f) && -> std::invoke_result_t<F, T&&> {
         using R = std::invoke_result_t<F, T&&>;
         if (is_ok()) {
-            return f(std::move(std::get<0>(m_data)));
+            return f(std::move(std::get<1>(m_data)));
         }
-        return R::err(std::move(std::get<1>(m_data)));
+        return R::err(std::move(std::get<2>(m_data)));
     }
 
     /// @brief 错误映射（error functor）
     template<typename F>
     ResultV2 map_err(F&& f) const {
         if (is_err()) {
-            return ResultV2::err(f(std::get<1>(m_data)));
+            return ResultV2::err(f(std::get<2>(m_data)));
         }
         return *this;
     }
 
 private:
     ResultV2() = default;
-    std::variant<T, Error> m_data;
+    std::variant<std::monostate, T, Error> m_data;
 };
 
 /// @brief ResultV2<void> 特化

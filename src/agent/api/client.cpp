@@ -24,14 +24,16 @@ namespace agent {
 // create() — 静态工厂
 // ============================================================
 
-Result<Client, std::string> Client::create(ClientConfig cfg) {
+ResultV2<Client> Client::create(ClientConfig cfg) {
     const ProviderPreset* preset = nullptr;
     // 1. 若指定了 provider preset，查表填充 backend 默认值
     if (!cfg.provider.empty()) {
         preset = find_preset(cfg.provider);
         if (!preset) {
-            return Result<Client, std::string>::err(
-                "Unknown provider preset: " + cfg.provider);
+            return ResultV2<Client>::err(
+                Error::Code::InvalidInput,
+                "Unknown provider preset: " + cfg.provider,
+                cfg.provider);
         }
         if (cfg.backend.base_url.empty()) {
             cfg.backend.base_url = std::string(preset->default_url);
@@ -49,7 +51,8 @@ Result<Client, std::string> Client::create(ClientConfig cfg) {
 
     // 3. 校验必要字段
     if (cfg.backend.base_url.empty()) {
-        return Result<Client, std::string>::err("base_url is required");
+        return ResultV2<Client>::err(
+            Error::Code::InvalidInput, "base_url is required");
     }
     cfg.backend.type = BackendConfig::Type::Remote;
 
@@ -63,7 +66,8 @@ Result<Client, std::string> Client::create(ClientConfig cfg) {
             needs_key = false;
         }
         if (needs_key) {
-            return Result<Client, std::string>::err(
+            return ResultV2<Client>::err(
+                Error::Code::AuthenticationFailed,
                 "API key is required for remote backend "
                 "(set via --api-key or config)");
         }
@@ -72,20 +76,21 @@ Result<Client, std::string> Client::create(ClientConfig cfg) {
     // 4. 创建后端
     auto backend = BackendFactory::create(cfg.backend);
     if (!backend) {
-        return Result<Client, std::string>::err("Failed to create backend");
+        return ResultV2<Client>::err(
+            Error::Code::InternalError, "Failed to create backend");
     }
 
-    // 5. 初始化后端
+    // 5. 初始化后端（V2-3：backend->initialize 返回 ResultV2）
     auto init_result = backend->initialize(cfg.backend);
-    if (init_result.isErr()) {
-        return Result<Client, std::string>::err(init_result.error());
+    if (init_result.is_err()) {
+        return ResultV2<Client>::err(init_result.error());
     }
 
     // 6. 构造 Client
     Client client(std::move(backend), cfg.system_prompt,
                   cfg.retry_count, cfg.retry_delay_ms, cfg.enable_event_bus,
                   cfg.event_bus);
-    return Result<Client, std::string>::ok(std::move(client));
+    return ResultV2<Client>::ok(std::move(client));
 }
 
 // ============================================================
@@ -233,7 +238,7 @@ CompletionRequest Client::build_request(const std::vector<ChatMessage>& messages
 // run_stream — 核心流式逻辑（阻塞版共享）
 // ============================================================
 
-Result<void, std::string> Client::run_stream(
+ResultV2<void> Client::run_stream(
     const CompletionRequest& request,
     const ChatCallbacks& cbs,
     const std::function<bool()>& should_stop,
@@ -248,7 +253,7 @@ Result<void, std::string> Client::run_stream(
         reasoning_out.clear();
 
         if (should_stop()) {
-            return Result<void, std::string>::ok();
+            return ResultV2<void>::ok();
         }
 
         auto reader = m_backend->submit_completion(request);
@@ -260,9 +265,10 @@ Result<void, std::string> Client::run_stream(
             }
             // 被中断 or 重试耗尽
             if (should_stop()) {
-                return Result<void, std::string>::ok();  // 被中断 → ok
+                return ResultV2<void>::ok();  // 被中断 → ok
             }
-            return Result<void, std::string>::err(
+            return ResultV2<void>::err(
+                Error::Code::InternalError,
                 "Failed to submit completion request after retries");
         }
 
@@ -306,7 +312,7 @@ Result<void, std::string> Client::run_stream(
                     cbs.on_done(chunk);
                 }
                 publish_done_event(content_out, reasoning_out, false, chunk);
-                return Result<void, std::string>::ok();
+                return ResultV2<void>::ok();
             } else if (state == StreamState::Cancelled) {
                 if (cbs.on_done) {
                     StreamChunk final_chunk = chunk;
@@ -314,7 +320,7 @@ Result<void, std::string> Client::run_stream(
                     cbs.on_done(final_chunk);
                 }
                 publish_done_event(content_out, reasoning_out, true, chunk);
-                return Result<void, std::string>::ok();
+                return ResultV2<void>::ok();
             } else if (state == StreamState::Error) {
                 // B.3：流错误 → 委托给 handle_stream_error
                 if (handle_stream_error(attempt, cbs, should_stop)) {
@@ -322,14 +328,16 @@ Result<void, std::string> Client::run_stream(
                 }
                 // 被中断 or 重试耗尽
                 if (should_stop()) {
-                    return Result<void, std::string>::ok();  // 被中断 → ok
+                    return ResultV2<void>::ok();  // 被中断 → ok
                 }
-                return Result<void, std::string>::err("Stream error after retries");
+                return ResultV2<void>::err(
+                    Error::Code::StreamError,
+                    "Stream error after retries");
             }
         }
     }
 
-    return Result<void, std::string>::ok();
+    return ResultV2<void>::ok();
 }
 
 // ============================================================
@@ -453,7 +461,7 @@ bool Client::interruptible_sleep(std::chrono::milliseconds duration,
 // 阻塞 API
 // ============================================================
 
-Result<std::string, std::string> Client::chat(const std::string& user_text) {
+ResultV2<std::string> Client::chat(const std::string& user_text) {
     auto request = build_request(user_text);
     {
         std::lock_guard<std::mutex> lock(m_messages_mutex);
@@ -465,12 +473,12 @@ Result<std::string, std::string> Client::chat(const std::string& user_text) {
     auto result = run_stream(request, {}, []() { return false; }, content, reasoning);
     m_generating.store(false);
 
-    if (result.isOk()) {
+    if (result.is_ok()) {
         {
             std::lock_guard<std::mutex> lock(m_messages_mutex);
             m_messages.push_back(ChatMessage::assistant(content));
         }
-        return Result<std::string, std::string>::ok(std::move(content));
+        return ResultV2<std::string>::ok(std::move(content));
     }
     // 失败时回滚 user 消息，避免孤儿消息污染历史
     {
@@ -479,10 +487,10 @@ Result<std::string, std::string> Client::chat(const std::string& user_text) {
             m_messages.pop_back();
         }
     }
-    return Result<std::string, std::string>::err(result.error());
+    return ResultV2<std::string>::err(result.error());
 }
 
-Result<std::string, std::string> Client::chat(const std::vector<ChatMessage>& messages) {
+ResultV2<std::string> Client::chat(const std::vector<ChatMessage>& messages) {
     auto request = build_request(messages);
 
     m_generating.store(true);
@@ -490,14 +498,14 @@ Result<std::string, std::string> Client::chat(const std::vector<ChatMessage>& me
     auto result = run_stream(request, {}, []() { return false; }, content, reasoning);
     m_generating.store(false);
 
-    if (result.isOk()) {
-        return Result<std::string, std::string>::ok(std::move(content));
+    if (result.is_ok()) {
+        return ResultV2<std::string>::ok(std::move(content));
     }
-    return Result<std::string, std::string>::err(result.error());
+    return ResultV2<std::string>::err(result.error());
 }
 
-Result<void, std::string> Client::stream_chat(const std::string& user_text,
-                                               const ChatCallbacks& cbs) {
+ResultV2<void> Client::stream_chat(const std::string& user_text,
+                                   const ChatCallbacks& cbs) {
     auto request = build_request(user_text);
     {
         std::lock_guard<std::mutex> lock(m_messages_mutex);
@@ -509,7 +517,7 @@ Result<void, std::string> Client::stream_chat(const std::string& user_text,
     auto result = run_stream(request, cbs, []() { return false; }, content, reasoning);
     m_generating.store(false);
 
-    if (result.isOk()) {
+    if (result.is_ok()) {
         std::lock_guard<std::mutex> lock(m_messages_mutex);
         m_messages.push_back(ChatMessage::assistant(content));
     } else {
@@ -522,8 +530,8 @@ Result<void, std::string> Client::stream_chat(const std::string& user_text,
     return result;
 }
 
-Result<void, std::string> Client::stream_chat(const std::vector<ChatMessage>& messages,
-                                               const ChatCallbacks& cbs) {
+ResultV2<void> Client::stream_chat(const std::vector<ChatMessage>& messages,
+                                   const ChatCallbacks& cbs) {
     auto request = build_request(messages);
 
     m_generating.store(true);
@@ -538,19 +546,20 @@ Result<void, std::string> Client::stream_chat(const std::vector<ChatMessage>& me
 // 异步 API
 // ============================================================
 
-Result<void, std::string> Client::chat_async(const std::string& user_text,
-                                              const ChatCallbacks& cbs) {
+ResultV2<void> Client::chat_async(const std::string& user_text,
+                                  const ChatCallbacks& cbs) {
     // chat_async 不再包装，直接委托 stream_chat_async
     // stream_chat_async 已负责累积 content 并 push assistant 消息
     return stream_chat_async(user_text, cbs);
 }
 
-Result<void, std::string> Client::stream_chat_async(const std::string& user_text,
-                                                     const ChatCallbacks& cbs) {
+ResultV2<void> Client::stream_chat_async(const std::string& user_text,
+                                         const ChatCallbacks& cbs) {
     // 用 compare_exchange_strong 修复 TOCTOU
     bool expected = false;
     if (!m_generating.compare_exchange_strong(expected, true)) {
-        return Result<void, std::string>::err("Already generating");
+        return ResultV2<void>::err(
+            Error::Code::InternalError, "Already generating");
     }
 
     auto request = build_request(user_text);
@@ -606,7 +615,7 @@ Result<void, std::string> Client::stream_chat_async(const std::string& user_text
             m_generating.store(false);
         });
 
-    return Result<void, std::string>::ok();
+    return ResultV2<void>::ok();
 }
 
 // ============================================================
@@ -665,7 +674,7 @@ bool Client::is_generating() const {
 // 后端能力透传
 // ============================================================
 
-Result<std::vector<ModelInfo>, std::string> Client::list_models() {
+ResultV2<std::vector<ModelInfo>> Client::list_models() {
     return m_backend->list_models();
 }
 
