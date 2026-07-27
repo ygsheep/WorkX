@@ -11,9 +11,10 @@
 
 #include <string>
 #include <vector>
-#include "core/config/config_manager.h"
 #include "agent/model/provider_preset.h"
 #include "tui/core/screen.h"
+
+namespace agent { class IConfigManager; }
 
 namespace tui {
 
@@ -24,7 +25,9 @@ class Terminal;
 /// @details 当首次启动且未配置 Provider 时运行
 class SetupWizard {
 public:
-    SetupWizard(IPlatform* platform, Terminal* terminal, Screen* screen);
+    /// @brief 构造（M-2：注入 IConfigManager 替代 ConfigManager::instance()）
+    SetupWizard(IPlatform* platform, Terminal* terminal, Screen* screen,
+                agent::IConfigManager& cfg);
 
     /// @brief 运行设置向导
     /// @return true 配置成功，false 用户取消
@@ -68,6 +71,7 @@ private:
     IPlatform* m_platform;
     Terminal* m_terminal;
     Screen* m_screen;           ///< 差分渲染引擎
+    agent::IConfigManager& m_cfg;  ///< M-2：配置管理器（DI 注入）
 
     int m_cursor_row = 0;       ///< Screen 中当前写入行号
 };

@@ -27,6 +27,8 @@ namespace agent {
 class ChatSession;
 class IBackendAdmin;
 struct ProviderPreset;
+class ITaskManager;
+class IEventBus;
 
 /// @brief 会话创建结果（D-2 工厂返回）
 /// @details H-8：新增 backend_admin 字段，UI 层通过它调用 list_models /
@@ -58,8 +60,13 @@ tui::TerminalConfig make_terminal_config(IConfigManager& cfg);
 ///          5. H-8：返回 IBackendAdmin* 给 UI 层调用管理接口
 /// @param cfg 配置管理器
 /// @param preset Provider 预设（nullptr 表示无预设）
+/// @param task_manager 任务管理器（M-1：显式 DI，替代 TaskManager::instance()）
+/// @param event_bus 事件总线（M-1：显式 DI，替代 EventBus::instance()）
 /// @return SessionResult（session 可能为 nullptr）
-SessionResult create_session(IConfigManager& cfg, const ProviderPreset* preset);
+SessionResult create_session(IConfigManager& cfg,
+                             const ProviderPreset* preset,
+                             ITaskManager& task_manager,
+                             IEventBus& event_bus);
 
 /// @brief 注册内置工具到 ToolRegistry
 /// @details 注册 FileReadTool / FileWriteTool / FileEditTool

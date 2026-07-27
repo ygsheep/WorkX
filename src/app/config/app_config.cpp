@@ -16,12 +16,12 @@
 
 #include "app/config/app_config.h"
 #include "core/config/config_manager.h"
+#include "core/config/i_config_manager.h"
 #include "agent/tool/constants.h"
 
 namespace agent {
 
-void register_config_defaults() {
-    auto& cfg = ConfigManager::instance();
+void register_config_defaults(ConfigManager& cfg) {
 
     // === Terminal ===
     cfg.register_schema({
@@ -175,8 +175,7 @@ void register_config_defaults() {
     });
 }
 
-void load_from_env() {
-    auto& cfg = ConfigManager::instance();
+void load_from_env(ConfigManager& cfg) {
 
     // 1. 由 ConfigManager 统一加载已绑定到 Schema 的环境变量
     //    覆盖：WORKX_API_KEY / WORKX_BASE_URL / WORKX_MODEL / WORKX_TIMEOUT
@@ -192,8 +191,8 @@ void load_from_env() {
     }
 }
 
-void load_from_config_file(const std::filesystem::path& path) {
-    auto result = ConfigManager::instance().load_from_file(path);
+void load_from_config_file(IConfigManager& cfg, const std::filesystem::path& path) {
+    auto result = cfg.load_from_file(path);
     if (result.is_err()) {
         std::cerr << "Warning: " << result.error().to_string() << "\n";
     }

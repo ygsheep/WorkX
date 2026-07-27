@@ -139,7 +139,9 @@ ChatSession::~ChatSession() {
     if (m_provider) {
         m_provider->interrupt();
     }
-    // 等待后台任务完成，防止 use-after-free
+    // H-9：等待后台任务完成，防止 use-after-free
+    // 改用 ITaskManager::wait(task) 替代 sleep_for(50ms) 轮询
+    // wait 内部用 condition_variable.wait_until + 30s 兜底超时
     std::shared_ptr<Task> task;
     {
         std::lock_guard<std::mutex> lock(m_state_mutex);
@@ -147,11 +149,7 @@ ChatSession::~ChatSession() {
     }
     if (task) {
         task->cancel();
-        // 等待任务结束（最长 30 秒兜底）
-        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-        while (task->isRunning() && std::chrono::steady_clock::now() < deadline) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
+        m_task_manager.get().wait(task);
     }
 }
 

@@ -16,6 +16,7 @@ namespace tui { class Terminal; class Screen; }
 namespace agent {
 
 class IBackendAdmin;
+class IConfigManager;
 
 /// @brief 模型选择结果
 /// @details select_model_interactive 返回，携带模型名与上下文窗口大小
@@ -25,12 +26,14 @@ struct ModelSelection {
 };
 
 /// @brief 交互式模型选择（启动时和 /model 命令共用）
+/// @param cfg 配置管理器（M-2：DI 注入，替代 ConfigManager::instance()）
 /// @param term 终端
 /// @param scr 屏幕
 /// @param admin 后端管理句柄（H-8：用于获取模型列表，替代完整 IBackend*）
 /// @param current_model 当前模型名
 /// @return 选中的模型及上下文窗口；name 为空表示取消
 ModelSelection select_model_interactive(
+    IConfigManager& cfg,
     tui::Terminal* term, tui::Screen* scr, IBackendAdmin* admin,
     const std::string& current_model);
 

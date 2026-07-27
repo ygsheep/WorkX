@@ -7,6 +7,8 @@
 #include "tui/core/terminal.h"
 #include "tui/core/platform/i_platform.h"
 #include "tui/utils/utf8_utils.h"
+#include "core/config/i_config_manager.h"
+#include "app/config/app_config.h"
 
 #include <filesystem>
 
@@ -81,10 +83,12 @@ static std::filesystem::path default_config_path() {
 // SetupWizard
 // ============================================================
 
-SetupWizard::SetupWizard(IPlatform* platform, Terminal* terminal, Screen* screen)
+SetupWizard::SetupWizard(IPlatform* platform, Terminal* terminal, Screen* screen,
+                         agent::IConfigManager& cfg)
     : m_platform(platform)
     , m_terminal(terminal)
     , m_screen(screen)
+    , m_cfg(cfg)
 {
 }
 
@@ -392,7 +396,7 @@ void SetupWizard::save_and_confirm(const std::string& provider_name,
                                     const std::string& api_key,
                                     const std::string& model_name,
                                     const std::string& remote_url) {
-    auto& cfg = ConfigManager::instance();
+    auto& cfg = m_cfg;  // M-2：使用构造注入的 IConfigManager&
 
     cfg.set("backend.provider", provider_name);
     cfg.set("backend.api_key", api_key);

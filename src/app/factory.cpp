@@ -26,6 +26,7 @@
 #include "agent/tool/registry.h"
 #include "core/config/config_manager.h"
 #include "core/events/event_bus.h"
+#include "core/events/i_event_bus.h"
 #include "core/task/task_manager.h"
 #include "tui/core/terminal.h"
 
@@ -72,7 +73,10 @@ tui::TerminalConfig make_terminal_config(IConfigManager& cfg) {
 // create_session
 // ============================================================
 
-SessionResult create_session(IConfigManager& cfg, const ProviderPreset* preset) {
+SessionResult create_session(IConfigManager& cfg,
+                             const ProviderPreset* preset,
+                             ITaskManager& task_manager,
+                             IEventBus& event_bus) {
     SessionResult result;
 
     // URL: cfg(显式设置) > preset > ""
@@ -104,8 +108,9 @@ SessionResult create_session(IConfigManager& cfg, const ProviderPreset* preset) 
     int default_timeout = preset && preset->timeout_ms > 0 ? preset->timeout_ms : 30000;
     backend_config.timeout_ms = cfg.get_or<int>(keys::TIMEOUT_MS, default_timeout);
 
-    // 创建后端（H-1：显式注入 EventBus::instance() 以保留 BackendStatusEvent 发布）
-    auto backend = BackendFactory::create(backend_config, &EventBus::instance());
+    // 创建后端（H-1：显式注入 event_bus 以保留 BackendStatusEvent 发布；
+    //              M-1：不再回退 EventBus::instance()）
+    auto backend = BackendFactory::create(backend_config, &event_bus);
     if (!backend) {
         return result;  // session 保持 nullptr
     }
@@ -116,15 +121,15 @@ SessionResult create_session(IConfigManager& cfg, const ProviderPreset* preset) 
         return result;  // session 保持 nullptr
     }
 
-    // 构造 ChatSession（DI 三件套）
+    // 构造 ChatSession（M-1：显式注入 task_manager / event_bus / cfg，不再用单例）
     // C-2：先构造 session，再从 session 暴露的 admin 接口获取 backend_admin
     //      （避免 std::move(backend) 之前赋值导致 ChatSession 构造抛异常时悬垂指针）
     int default_retry_delay = preset && preset->retry_delay_ms > 0 ? preset->retry_delay_ms : 1000;
     result.session = std::make_unique<ChatSession>(
         std::move(backend),
-        TaskManager::instance(),
-        EventBus::instance(),
-        ConfigManager::instance(),
+        task_manager,
+        event_bus,
+        cfg,
         default_retry_delay, "default");
 
     // C-2：session 构造成功后，backend 已由 session 持有。

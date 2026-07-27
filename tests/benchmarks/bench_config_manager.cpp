@@ -16,8 +16,8 @@ using namespace agent;
 
 TEST_CASE("ConfigManager get/set throughput", "[benchmark][config]") {
     // 确保配置已注册
-    register_config_defaults();
     auto& cfg = ConfigManager::instance();
+    register_config_defaults(cfg);
 
     BENCHMARK("get_or<string> 10k times") {
         std::string acc;
@@ -46,8 +46,8 @@ TEST_CASE("ConfigManager get/set throughput", "[benchmark][config]") {
 }
 
 TEST_CASE("ConfigManager has() lookup", "[benchmark][config]") {
-    register_config_defaults();
     auto& cfg = ConfigManager::instance();
+    register_config_defaults(cfg);
 
     BENCHMARK("has() 10k times (existing key)") {
         bool acc = false;

@@ -138,11 +138,15 @@ std::shared_ptr<Task> TaskManager::create(
     Task::TaskFunc func,
     TaskType type
 ) {
-    // 捕获 this 通过 callback 通知 m_tasks_cv，避免 Task 反向依赖 TaskManager 单例
+    // 捕获 this 通过 callback 通知 m_tasks_cv / m_wait_cv，避免 Task 反向依赖 TaskManager 单例
+    // H-D：m_wait_cv 与 m_tasks_cv 分离，wait(task) 不再持 m_tasks_mutex，避免与 start/cancel 死锁
     auto task = std::make_shared<Task>(
         name, std::move(func),
         m_event_bus,
-        [this]() { m_tasks_cv.notify_all(); },
+        [this]() {
+            m_tasks_cv.notify_all();
+            m_wait_cv.notify_all();
+        },
         100.0f);
     task->setType(type);
     return task;
@@ -230,6 +234,18 @@ void TaskManager::waitForAll() {
     m_tasks_cv.wait_until(lock, deadline, [this]() {
         return m_entries.empty() || std::all_of(m_entries.begin(), m_entries.end(),
             [](const std::shared_ptr<Task>& t) { return t->isFinished(); });
+    });
+}
+
+void TaskManager::wait(std::shared_ptr<Task> task) {
+    if (!task) return;
+    // H-9：替代 ChatSession 析构中的 sleep_for(50ms) 轮询
+    // H-D：不持有 m_tasks_mutex，避免与 start()/cancel()/getTasks() 等需要 m_tasks_mutex
+    //      的路径死锁。利用 Task::execute 结束时调用的 m_on_finished 回调通知 m_wait_cv。
+    std::unique_lock<std::mutex> lock(m_wait_mutex);
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    m_wait_cv.wait_until(lock, deadline, [&task]() {
+        return task->isFinished();
     });
 }
 
