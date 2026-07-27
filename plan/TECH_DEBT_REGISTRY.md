@@ -2,13 +2,13 @@
 
 > 本文档整合 `PHASE3_LONG_TERM_REFACTOR.md`（详细方案）与历史登记，作为技术债的唯一索引。
 > 详细重构方案请参考 `plan/PHASE3_LONG_TERM_REFACTOR.md`。
-> 最后更新：2026-07-27（P3 H-1/H-2/H-3/H-4 HTTP 客户端演进完成）
+> 最后更新：2026-07-27（P3 E-5/E-6 错误处理类型安全完成）
 
 ## 状态总览
 
-- 已修复：22 项（L-1 / L-2 / L-3 / L-6 / T-4 / T-6 / G-2 / G-3 / G-4 / D-2 / D-3 / D-4 / D-5 / D-6 / Q-1 / C-2 / C-3 / C-4 / H-1 / H-2 / H-3 / H-4）
+- 已修复：24 项（L-1 / L-2 / L-3 / L-6 / T-4 / T-6 / G-2 / G-3 / G-4 / D-2 / D-3 / D-4 / D-5 / D-6 / Q-1 / C-2 / C-3 / C-4 / H-1 / H-2 / H-3 / H-4 / E-5 / E-6）
 - 已安全：1 项（T-5 PHASE3 判定无需修复）
-- 待修复：7 项（L-5 / E-1 / E-5 / E-6 / Q-2 / Q-3 / Q-4）
+- 待修复：5 项（L-5 / E-1 / Q-2 / Q-3 / Q-4）
 - 文档化即可：1 项（Q-5）
 - 详细方案：见 `PHASE3_LONG_TERM_REFACTOR.md`
 
@@ -100,8 +100,8 @@
 | 编号 | 现象 | 影响 | 状态 |
 |------|------|------|------|
 | E-1 | 4 种错误风格并存（异常/Result/optional/bool） | 中（V2 前置） | ⬜ 暂不实施（独立立项 V2） |
-| E-5 | `ExecutionResult` 字段语义模糊 | 低 | ⬜ 未修复 |
-| E-6 | `HttpResponse` 错误码与 HTTP 状态码混淆 | 低 | ⬜ 未修复 |
+| E-5 | `ExecutionResult` 字段语义模糊 | — | ✅ 已修复（commit ef3d295：字段语义文档化，tool_name=上下文 / result=权威错误源 / is_error=冗余缓存 / was_truncated=元信息；新增 is_ok/is_truncated/to_string 便捷方法） |
+| E-6 | `HttpResponse` 错误码与 HTTP 状态码混淆 | — | ✅ 已修复（commit ef3d295：新增 7 个便捷方法 is_success/is_http_error/is_network_error/is_client_error/is_server_error/is_rate_limited/is_retryable；remote_backend.cpp::list_models 改用便捷方法替代结构化绑定 + 手工 if；test_http_response.cpp 33 cases 覆盖状态空间） |
 
 ---
 
@@ -133,7 +133,7 @@
 | ~~**P2**~~ | ~~G-3 + G-4~~ | ~~日志命名空间统一~~ | ✅ 已完成 |
 | ~~**P3**~~ | ~~H-1 + H-2 + H-3 + H-4~~ | ~~HTTP 客户端演进~~ | ✅ 已完成 |
 | ~~**P3**~~ | ~~D-2 + D-3~~ | ~~main.cpp 工厂 + IBackendAdmin 拆分~~ | ✅ 已完成 |
-| **P3** | E-5 + E-6 | 错误处理类型安全 | 2 天 |
+| ~~**P3**~~ | ~~E-5 + E-6~~ | ~~错误处理类型安全~~ | ✅ 已完成（commit ef3d295） |
 | **P3** | Q-2 + Q-5 | 性能基准 + 文档 | 2 天 |
 | **V2** | E-1 | 错误处理统一（独立立项） | — |
 
