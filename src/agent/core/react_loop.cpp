@@ -36,6 +36,8 @@ ReActLoop::ReActLoop(ICompletionProvider* provider,
     , m_config_manager(config_manager)
 {
     assert(provider != nullptr && "ReActLoop: provider must not be null");
+    assert(m_config_manager != nullptr &&
+           "ReActLoop: config_manager must not be null (H-5: explicit DI required)");
     if (m_registry) {
         m_executor = std::make_unique<tool::ToolExecutor>(m_registry);
     }
@@ -514,7 +516,7 @@ ReActResult ReActLoop::run(
         ctx.session_id = "default";
         // 2.3 修复：将外部取消信号绑定到 ToolContext，工具可即时感知中断
         ctx.cancel_flag = &should_cancel;
-        // D-5：注入配置管理器，工具通过 ctx.config_manager() 访问（nullptr 时回退单例）
+        // H-5：注入配置管理器（非空），工具通过 ctx.config_manager() 访问
         ctx.config_manager_ptr = m_config_manager;
 
         // 1. 同步发布所有 Action 步骤（UI 即时反馈工具调用开始）

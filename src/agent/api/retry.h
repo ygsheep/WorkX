@@ -73,14 +73,20 @@ struct HttpRetryPolicy {
     /// @param attempt 重试次数（0 = 首次请求后的第一次重试）
     /// @return 延迟时长
     /// @details 公式：min(base_delay_ms * 2^attempt, max_delay_ms)
-    ///          使用 64 位计算避免 int 溢出（attempt=30+ 时 1<<attempt 是 UB）
+    ///          C-3：保护 attempt >= 63 时的 UB（1LL << 63 在有符号 int64 下是 UB）
+    ///          attempt 超过 62 直接返回 max_delay_ms（实际场景 max_retries 不会超过 10）
     std::chrono::milliseconds delay(int attempt) const {
+        if (attempt >= 63) {
+            return std::chrono::milliseconds(max_delay_ms);
+        }
         int64_t d = static_cast<int64_t>(base_delay_ms) * (1LL << attempt);
         if (d > max_delay_ms) d = max_delay_ms;
         return std::chrono::milliseconds(d);
     }
 
     /// @brief 便捷方法：返回延迟的毫秒数
+    /// @details C-3：不再标记 noexcept，因为 delay() 含分支判断逻辑复杂；
+    ///               实际不会抛出，但移除 noexcept 避免契约误导
     int delay_ms(int attempt) const {
         return static_cast<int>(delay(attempt).count());
     }

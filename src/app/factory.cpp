@@ -17,6 +17,7 @@
 #include "agent/api/backend_factory.h"
 #include "agent/api/chat_types.h"
 #include "agent/api/i_backend.h"
+#include "agent/api/i_backend_admin.h"  // C-2：dynamic_cast 到 IBackendAdmin*
 #include "agent/core/chat_session.h"
 #include "agent/model/provider_preset.h"
 #include "agent/tool/FileEditTool/file_edit_tool.h"
@@ -116,6 +117,8 @@ SessionResult create_session(IConfigManager& cfg, const ProviderPreset* preset) 
     }
 
     // 构造 ChatSession（DI 三件套）
+    // C-2：先构造 session，再从 session 暴露的 admin 接口获取 backend_admin
+    //      （避免 std::move(backend) 之前赋值导致 ChatSession 构造抛异常时悬垂指针）
     int default_retry_delay = preset && preset->retry_delay_ms > 0 ? preset->retry_delay_ms : 1000;
     result.session = std::make_unique<ChatSession>(
         std::move(backend),
@@ -123,6 +126,14 @@ SessionResult create_session(IConfigManager& cfg, const ProviderPreset* preset) 
         EventBus::instance(),
         ConfigManager::instance(),
         default_retry_delay, "default");
+
+    // C-2：session 构造成功后，backend 已由 session 持有。
+    // 通过 ChatSession 暴露的 completion_provider() 获取 ICompletionProvider*，
+    // 再 dynamic_cast 到 IBackendAdmin*（IBackend 同时继承两者）。
+    // session 存活期间 backend_admin 始终有效；session 析构后禁止使用。
+    if (auto* provider = result.session->completion_provider()) {
+        result.backend_admin = dynamic_cast<IBackendAdmin*>(provider);
+    }
 
     // 注册内置工具
     auto tool_registry = std::make_shared<tool::ToolRegistry>();

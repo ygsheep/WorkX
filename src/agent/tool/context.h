@@ -39,14 +39,15 @@ struct ToolContext {
     ///          生命周期由调用方保证（栈变量通常在 ToolContext 之上存活）。
     const std::atomic<bool>* cancel_flag = nullptr;
 
-    /// @brief D-5：配置管理器指针（可选，非拥有）
-    /// @details 由调用方（ReActLoop）注入，工具通过 config_manager() 访问。
-    ///          nullptr 时 config_manager() 回退到 ConfigManager::instance()，
-    ///          保持向后兼容。生命周期由调用方保证（通常为 ChatSession 的成员）。
+    /// @brief H-5：配置管理器指针（必填，非拥有）
+    /// @details 由调用方（ReActLoop）显式注入，工具通过 config_manager() 访问。
+    ///          H-5 移除单例回退：nullptr 时 config_manager() 抛 std::logic_error，
+    ///          强制 DI 显式依赖。生命周期由调用方保证（通常为 ChatSession 的成员）。
     IConfigManager* config_manager_ptr = nullptr;
 
-    /// @brief 解析配置管理器（nullptr 时回退单例，向后兼容）
+    /// @brief 解析配置管理器（H-5：nullptr 时抛异常，不再回退单例）
     /// @return IConfigManager 引用
+    /// @throws std::logic_error 当 config_manager_ptr == nullptr
     IConfigManager& config_manager() const;
 
     /// @brief 检查是否已取消

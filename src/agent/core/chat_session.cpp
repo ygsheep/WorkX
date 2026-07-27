@@ -294,27 +294,25 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
             }
 
             // ---- 错误处理 ----
+            // H-7：纯函数 compute_retry 决策，I/O 由 run_completion 执行
             if (react_result.was_error) {
-                // H-3：用 HttpRetryPolicy.is_retryable 统一判断
-                // http_status=0 表示业务错误（非 HTTP），由 error_message 内容判断
-                bool can_retry = retry_attempt < retry_policy.max_retries
-                                 && HttpRetryPolicy::is_retryable(0, react_result.error_message);
+                auto decision = compute_retry(react_result, retry_policy, retry_attempt);
 
-                if (can_retry) {
-                    // H-3：委托给 HttpRetryPolicy.delay 计算退避（含 60s 上限）
-                    int delay = retry_policy.delay_ms(retry_attempt);
+                switch (decision.action) {
+                case RetryAction::Sleep: {
+                    // 可重试：发布重试提示事件 + 可中断等待 + 递归重试
                     m_event_bus.get().publish_async(StreamErrorEvent{
                         .session_id = m_session_id,
                         .message = std::format(
                             "Error: {}, retrying in {}ms... ({}/{})",
-                            react_result.error_message, delay,
+                            react_result.error_message, decision.delay_ms,
                             retry_attempt + 1, retry_policy.max_retries),
                         .retryable = true
                     });
 
                     // 可中断的等待
                     auto wait_until = std::chrono::steady_clock::now() +
-                                      std::chrono::milliseconds(delay);
+                                      std::chrono::milliseconds(decision.delay_ms);
                     while (std::chrono::steady_clock::now() < wait_until) {
                         if (should_cancel) {
                             m_generating.store(false);
@@ -329,12 +327,19 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
                         // 所以 m_messages 中只有成功的 round，直接重试即可
                         run_completion(user_text, retry_attempt + 1);
                     }
-                } else {
+                    break;
+                }
+                case RetryAction::Stop:
+                    // 不可重试：发布终止事件
                     m_event_bus.get().publish_async(StreamErrorEvent{
                         .session_id = m_session_id,
                         .message = react_result.error_message,
                         .retryable = false
                     });
+                    break;
+                case RetryAction::Continue:
+                    // 无错误路径，理论上不应进入（was_error=true 时不会返回 Continue）
+                    break;
                 }
                 m_generating.store(false);
                 return;
@@ -394,7 +399,36 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
 // 会话持久化
 // ============================================================
 
-Result<void, std::string> ChatSession::save_session(const std::string& path) const {
+// ============================================================
+// H-7：compute_retry 纯函数（重试决策）
+// ============================================================
+
+RetryDecision ChatSession::compute_retry(const ReActResult& react_result,
+                                         const HttpRetryPolicy& retry_policy,
+                                         int attempt) {
+    // 无错误：继续执行（非错误路径）
+    if (!react_result.was_error) {
+        return RetryDecision{RetryAction::Continue, 0};
+    }
+
+    // 可重试判定：①未超 max_retries ②HttpRetryPolicy.is_retryable 通过
+    // http_status=0 表示业务错误（非 HTTP），由 error_message 内容判断
+    const bool can_retry = attempt < retry_policy.max_retries
+                           && HttpRetryPolicy::is_retryable(0, react_result.error_message);
+
+    if (!can_retry) {
+        return RetryDecision{RetryAction::Stop, 0};
+    }
+
+    // 退避延迟计算（委托 HttpRetryPolicy.delay_ms，含 60s 上限）
+    return RetryDecision{RetryAction::Sleep, retry_policy.delay_ms(attempt)};
+}
+
+// ============================================================
+// H-6：序列化/反序列化纯函数
+// ============================================================
+
+nlohmann::json ChatSession::serialize_state() const {
     nlohmann::json j;
 
     // 拷贝 system_prompt 和 messages，避免长时间持锁
@@ -410,7 +444,9 @@ Result<void, std::string> ChatSession::save_session(const std::string& path) con
         j["system_prompt"] = system_prompt_copy;
     }
 
-    auto& messages = j["messages"];
+    // H-6 修复：显式初始化 messages 为数组，避免空消息时 j["messages"] 为 null
+    // （原代码 auto& messages = j["messages"]; 在空消息时遗留 null 值）
+    nlohmann::json messages = nlohmann::json::array();
     for (const auto& msg : messages_copy) {
         nlohmann::json m;
         switch (msg.role) {
@@ -429,52 +465,18 @@ Result<void, std::string> ChatSession::save_session(const std::string& path) con
         }
         messages.push_back(m);
     }
+    j["messages"] = std::move(messages);
 
-    try {
-        std::filesystem::path p(path);
-        if (p.has_parent_path()) {
-            std::filesystem::create_directories(p.parent_path());
-        }
-
-        std::ofstream file(path);
-        if (!file.is_open()) {
-            return Result<void, std::string>::err(
-                std::format("Failed to create file: {}", path)
-            );
-        }
-        file << j.dump(2);
-        file.close();
-        return Result<void, std::string>::ok();
-
-    } catch (const std::exception& e) {
-        return Result<void, std::string>::err(
-            std::format("Error saving session: {}", e.what())
-        );
-    }
+    return j;
 }
 
-Result<void, std::string> ChatSession::load_session(const std::string& path) {
-    if (!std::filesystem::exists(path)) {
-        return Result<void, std::string>::err(
-            std::format("File not found: {}", path)
-        );
-    }
+// C-1：改为真正纯函数——不修改任何成员状态，仅解析 j 返回 (messages, system_prompt)
+Result<std::pair<std::vector<ChatMessage>, std::string>, std::string>
+ChatSession::deserialize_state(const nlohmann::json& j) {
+    std::vector<ChatMessage> new_messages;
+    std::string new_system_prompt;
 
     try {
-        std::ifstream file(path);
-        if (!file.is_open()) {
-            return Result<void, std::string>::err(
-                std::format("Failed to open file: {}", path)
-            );
-        }
-
-        nlohmann::json j;
-        file >> j;
-        file.close();
-
-        std::vector<ChatMessage> new_messages;
-
-        std::string new_system_prompt;
         if (j.contains("system_prompt")) {
             new_system_prompt = j["system_prompt"].get<std::string>();
         }
@@ -482,11 +484,26 @@ Result<void, std::string> ChatSession::load_session(const std::string& path) {
         if (j.contains("messages")) {
             for (const auto& m : j["messages"]) {
                 ChatMessage msg;
+
+                // H-6：const operator[] 在 missing key 上触发 assert，必须先 contains 检查
+                if (!m.contains("role")) {
+                    return Result<std::pair<std::vector<ChatMessage>, std::string>, std::string>::err(
+                        "Message missing 'role' field");
+                }
+                if (!m.contains("content")) {
+                    return Result<std::pair<std::vector<ChatMessage>, std::string>, std::string>::err(
+                        "Message missing 'content' field");
+                }
+
                 std::string role_str = m["role"].get<std::string>();
-                if (role_str == "system")       msg.role = ChatMessage::Role::System;
-                else if (role_str == "user")    msg.role = ChatMessage::Role::User;
-                else if (role_str == "assistant") msg.role = ChatMessage::Role::Assistant;
-                else if (role_str == "tool")    msg.role = ChatMessage::Role::Tool;
+                if (role_str == "system")          msg.role = ChatMessage::Role::System;
+                else if (role_str == "user")       msg.role = ChatMessage::Role::User;
+                else if (role_str == "assistant")  msg.role = ChatMessage::Role::Assistant;
+                else if (role_str == "tool")       msg.role = ChatMessage::Role::Tool;
+                else {
+                    return Result<std::pair<std::vector<ChatMessage>, std::string>, std::string>::err(
+                        std::format("Unknown role: {}", role_str));
+                }
 
                 msg.content = m["content"].get<std::string>();
                 if (m.contains("reasoning_content")) {
@@ -503,32 +520,94 @@ Result<void, std::string> ChatSession::load_session(const std::string& path) {
                 new_messages.push_back(std::move(msg));
             }
         }
+    } catch (const nlohmann::json::parse_error& e) {
+        return Result<std::pair<std::vector<ChatMessage>, std::string>, std::string>::err(
+            std::format("JSON parse error: {}", e.what()));
+    } catch (const nlohmann::json::type_error& e) {
+        return Result<std::pair<std::vector<ChatMessage>, std::string>, std::string>::err(
+            std::format("JSON type error: {}", e.what()));
+    } catch (const std::exception& e) {
+        return Result<std::pair<std::vector<ChatMessage>, std::string>, std::string>::err(
+            std::format("Error deserializing session: {}", e.what()));
+    }
 
-        // 一次性加锁写入
-        {
-            std::lock_guard<std::mutex> lock(m_state_mutex);
-            m_messages = std::move(new_messages);
-            m_system_prompt = std::move(new_system_prompt);
+    return Result<std::pair<std::vector<ChatMessage>, std::string>, std::string>::ok(
+        std::make_pair(std::move(new_messages), std::move(new_system_prompt)));
+}
+
+// C-1：一次性加锁提交状态到成员
+void ChatSession::commit_state(std::vector<ChatMessage> messages,
+                                std::string system_prompt) {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    m_messages = std::move(messages);
+    m_system_prompt = std::move(system_prompt);
+}
+
+// ============================================================
+// H-6：save/load 仅做 I/O，序列化逻辑委托纯函数
+// ============================================================
+
+Result<void, std::string> ChatSession::save_session(const std::string& path) const {
+    try {
+        nlohmann::json j = serialize_state();
+
+        std::filesystem::path p(path);
+        if (p.has_parent_path()) {
+            std::filesystem::create_directories(p.parent_path());
         }
 
+        std::ofstream file(path);
+        if (!file.is_open()) {
+            return Result<void, std::string>::err(
+                std::format("Failed to create file: {}", path));
+        }
+        file << j.dump(2);
+        file.close();
+        return Result<void, std::string>::ok();
+
+    } catch (const std::exception& e) {
+        return Result<void, std::string>::err(
+            std::format("Error saving session: {}", e.what()));
+    }
+}
+
+Result<void, std::string> ChatSession::load_session(const std::string& path) {
+    if (!std::filesystem::exists(path)) {
+        return Result<void, std::string>::err(
+            std::format("File not found: {}", path));
+    }
+
+    try {
+        std::ifstream file(path);
+        if (!file.is_open()) {
+            return Result<void, std::string>::err(
+                std::format("Failed to open file: {}", path));
+        }
+
+        nlohmann::json j;
+        file >> j;
+        file.close();
+
+        // C-1：deserialize_state 是纯函数，需通过 commit_state 提交到成员
+        auto parse_result = deserialize_state(j);
+        if (parse_result.isErr()) {
+            return Result<void, std::string>::err(parse_result.error());
+        }
+        auto [messages, system_prompt] = std::move(parse_result).unwrap();
+        commit_state(std::move(messages), std::move(system_prompt));
         return Result<void, std::string>::ok();
 
     } catch (const nlohmann::json::parse_error& e) {
         return Result<void, std::string>::err(
-            std::format("JSON parse error: {}", e.what())
-        );
+            std::format("JSON parse error: {}", e.what()));
     } catch (const std::exception& e) {
         return Result<void, std::string>::err(
-            std::format("Error loading session: {}", e.what())
-        );
+            std::format("Error loading session: {}", e.what()));
     }
 }
 
-IBackend* ChatSession::backend() const {
-    // L-1：通过 dynamic_cast 安全获取 IBackend 指针
-    // 若 provider 不是 IBackend（如本地推理核心），返回 nullptr
-    return dynamic_cast<IBackend*>(m_provider.get());
-}
+// H-8：backend() 方法已删除，UI 层通过 factory 注入的 IBackendAdmin* 调用管理接口。
+// 详见 factory.cpp 中 SessionResult.backend_admin 字段。
 
 // ============================================================
 // 事件订阅

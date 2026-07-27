@@ -85,6 +85,15 @@ public:
         FileReadStateTracker::instance().clear_for_test();
         FileHistory::instance().clear_for_test();
     }
+
+    /// @brief 为 ToolContext 注入 IConfigManager（H-5：强制 DI）
+    /// @details ToolContext 含 std::atomic 不可拷贝/移动，故采用填充引用方式。
+    ///          所有需要调用 validate_input/call 的测试用例都应使用此方法，
+    ///          避免 ToolContext::config_manager() 因 nullptr 抛 std::logic_error。
+    static ToolContext& setup_ctx(ToolContext& ctx) {
+        ctx.config_manager_ptr = &ConfigManager::instance();
+        return ctx;
+    }
 };
 
 /// @brief 构造 Edit 工具输入 JSON
@@ -255,7 +264,7 @@ TEST_CASE("secret_scanner error message", "[secret_scanner]") {
 TEST_CASE("FileEditTool validate_input missing fields", "[file_edit_tool]") {
     TestEnv env;
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
 
     SECTION("missing file_path") {
         auto input = nlohmann::json{
@@ -294,7 +303,7 @@ TEST_CASE("FileEditTool validate_input missing fields", "[file_edit_tool]") {
 TEST_CASE("FileEditTool validate_input error code 1 - old==new", "[file_edit_tool]") {
     TestEnv env;
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     auto r = tool.validate_input(make_edit_input("/tmp/foo", "abc", "abc"), ctx);
     REQUIRE(r.is_err());
     REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("same"));
@@ -303,7 +312,7 @@ TEST_CASE("FileEditTool validate_input error code 1 - old==new", "[file_edit_too
 TEST_CASE("FileEditTool validate_input error code 4 - file not exist", "[file_edit_tool]") {
     TestEnv env;
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     auto r = tool.validate_input(
         make_edit_input("/nonexistent/workx_test_path", "old", "new"), ctx
     );
@@ -314,7 +323,7 @@ TEST_CASE("FileEditTool validate_input error code 4 - file not exist", "[file_ed
 TEST_CASE("FileEditTool validate_input error code 5 - .ipynb", "[file_edit_tool]") {
     TestEnv env;
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     auto r = tool.validate_input(
         make_edit_input("/tmp/test.ipynb", "", "new content"), ctx
     );
@@ -327,7 +336,7 @@ TEST_CASE("FileEditTool validate_input error code 3 - file exists non-empty + ol
     TempDir tmp;
     auto fp = tmp.make_file("existing.txt", "existing content");
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     auto r = tool.validate_input(make_edit_input(fp.string(), "", "new content"), ctx);
     REQUIRE(r.is_err());
     REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("already exists"));
@@ -338,7 +347,7 @@ TEST_CASE("FileEditTool validate_input error code 6 - not pre-read", "[file_edit
     TempDir tmp;
     auto fp = tmp.make_file("unread.txt", "line1\nline2\n");
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     auto r = tool.validate_input(make_edit_input(fp.string(), "line1", "replaced"), ctx);
     REQUIRE(r.is_err());
     REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("not been read"));
@@ -358,7 +367,7 @@ TEST_CASE("FileEditTool validate_input error code 7 - staleness", "[file_edit_to
         false
     );
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     auto r = tool.validate_input(make_edit_input(fp.string(), "old content", "new"), ctx);
     REQUIRE(r.is_err());
     REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("modified since read"));
@@ -370,7 +379,7 @@ TEST_CASE("FileEditTool validate_input error code 8 - no match", "[file_edit_too
     auto fp = tmp.make_file("nomatch.txt", "hello world\n");
     record_file_read(fp, "hello world");
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     auto r = tool.validate_input(
         make_edit_input(fp.string(), "nonexistent string", "replacement"), ctx
     );
@@ -384,7 +393,7 @@ TEST_CASE("FileEditTool validate_input error code 9 - multiple matches, no repla
     auto fp = tmp.make_file("multi.txt", "foo\nfoo\nfoo\n");
     record_file_read(fp, "foo\nfoo\nfoo");
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     auto r = tool.validate_input(make_edit_input(fp.string(), "foo", "bar"), ctx);
     REQUIRE(r.is_err());
     REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("matches"));
@@ -396,7 +405,7 @@ TEST_CASE("FileEditTool validate_input error code 9 bypassed with replace_all", 
     auto fp = tmp.make_file("multi.txt", "foo\nfoo\nfoo\n");
     record_file_read(fp, "foo\nfoo\nfoo");
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     auto r = tool.validate_input(
         make_edit_input(fp.string(), "foo", "bar", true), ctx
     );
@@ -409,7 +418,7 @@ TEST_CASE("FileEditTool validate_input happy path single match", "[file_edit_too
     auto fp = tmp.make_file("ok.txt", "first\nsecond\nthird\n");
     record_file_read(fp, "first\nsecond\nthird");
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     auto r = tool.validate_input(
         make_edit_input(fp.string(), "second", "SECOND"), ctx
     );
@@ -421,7 +430,7 @@ TEST_CASE("FileEditTool validate_input create new file - old=empty, file not exi
     TempDir tmp;
     auto fp = tmp.path() / "newfile.txt";
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     auto r = tool.validate_input(make_edit_input(fp.string(), "", "new content"), ctx);
     REQUIRE(r.is_ok());
 }
@@ -440,7 +449,7 @@ TEST_CASE("FileEditTool validate_input error code 0 - secret scanning", "[file_e
     ConfigManager::instance().set(keys::EDIT_SCAN_SECRETS, true);
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     auto r = tool.validate_input(
         make_edit_input(fp.string(), "placeholder", "token = ghp_0123456789012345678901234567890123456"), ctx
     );
@@ -457,7 +466,7 @@ TEST_CASE("FileEditTool validate_input secret scan disabled by default", "[file_
 
     // 不开启扫描，默认放行（虽然内容含密钥，但 validate_input 不会拒绝）
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     auto r = tool.validate_input(
         make_edit_input(fp.string(), "placeholder", "token = ghp_0123456789012345678901234567890123456"), ctx
     );
@@ -477,7 +486,7 @@ TEST_CASE("FileEditTool validate_input error code 2 - deny rules", "[file_edit_t
     );
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     auto r = tool.validate_input(
         make_edit_input(fp.string(), "KEY=value", "KEY=other"), ctx
     );
@@ -497,7 +506,7 @@ TEST_CASE("FileEditTool validate_input deny rules not matching", "[file_edit_too
     );
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     auto r = tool.validate_input(make_edit_input(fp.string(), "hello", "world"), ctx);
     REQUIRE(r.is_ok());
 }
@@ -510,7 +519,7 @@ TEST_CASE("FileEditTool validate_input deny rules empty config", "[file_edit_too
 
     // 空配置：deny 检查跳过
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     auto r = tool.validate_input(make_edit_input(fp.string(), "hello", "world"), ctx);
     REQUIRE(r.is_ok());
 }
@@ -528,7 +537,7 @@ TEST_CASE("FileEditTool validate_input deny rules comments and whitespace", "[fi
     );
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     // normal.txt 不匹配 **/.env，应通过
     auto r = tool.validate_input(make_edit_input(fp.string(), "hello", "world"), ctx);
     REQUIRE(r.is_ok());
@@ -544,7 +553,7 @@ TEST_CASE("FileEditTool call create new file", "[file_edit_tool][call]") {
     auto fp = tmp.path() / "created.txt";
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     ctx.cwd = tmp.path().string();
 
     auto r = tool.call(make_edit_input(fp.string(), "", "new content\nline 2"), ctx);
@@ -569,7 +578,7 @@ TEST_CASE("FileEditTool call update existing file", "[file_edit_tool][call]") {
     record_file_read(fp, "old line\nkeep line");
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     ctx.cwd = tmp.path().string();
 
     auto r = tool.call(make_edit_input(fp.string(), "old line", "NEW LINE"), ctx);
@@ -591,7 +600,7 @@ TEST_CASE("FileEditTool call replace_all", "[file_edit_tool][call]") {
     record_file_read(fp, "foo\nfoo\nfoo");
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     ctx.cwd = tmp.path().string();
 
     auto r = tool.call(
@@ -611,7 +620,7 @@ TEST_CASE("FileEditTool call rejects when not pre-read", "[file_edit_tool][call]
     // 不调用 record_file_read，模拟未读取
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     ctx.cwd = tmp.path().string();
 
     auto r = tool.call(make_edit_input(fp.string(), "content", "new"), ctx);
@@ -737,7 +746,7 @@ TEST_CASE("FileEditTool preserves CRLF line endings", "[file_edit_tool][line_end
     record_file_read(fp, "old line\nkeep line");  // state 存 LF 规范化版本
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     ctx.cwd = tmp.path().string();
 
     auto r = tool.call(make_edit_input(fp.string(), "old line", "NEW LINE"), ctx);
@@ -764,7 +773,7 @@ TEST_CASE("FileEditTool preserves LF line endings", "[file_edit_tool][line_endin
     record_file_read(fp, "old line\nkeep line");
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     ctx.cwd = tmp.path().string();
 
     auto r = tool.call(make_edit_input(fp.string(), "old line", "NEW LINE"), ctx);
@@ -783,7 +792,7 @@ TEST_CASE("FileEditTool preserves CR line endings", "[file_edit_tool][line_endin
     record_file_read(fp, "old line\nkeep line");
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     ctx.cwd = tmp.path().string();
 
     auto r = tool.call(make_edit_input(fp.string(), "old line", "NEW LINE"), ctx);
@@ -802,7 +811,7 @@ TEST_CASE("FileEditTool replace_all preserves CRLF", "[file_edit_tool][line_endi
     record_file_read(fp, "foo\nfoo\nfoo");
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     ctx.cwd = tmp.path().string();
 
     auto r = tool.call(make_edit_input(fp.string(), "foo", "bar", true), ctx);
@@ -820,7 +829,7 @@ TEST_CASE("FileEditTool no newline file preserves no-newline", "[file_edit_tool]
     record_file_read(fp, "only one line no newline");
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     ctx.cwd = tmp.path().string();
 
     auto r = tool.call(make_edit_input(fp.string(), "one line", "two lines"), ctx);
@@ -1009,7 +1018,7 @@ TEST_CASE("FileEditTool smart quote matching", "[file_edit_tool][quote_normalize
     record_file_read(fp, "hello " + kSmartDoubleLeft + "world" + kSmartDoubleRight + "!");
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     ctx.cwd = tmp.path().string();
 
     // LLM 提供直引号，应能匹配文件中的弯引号
@@ -1029,7 +1038,7 @@ TEST_CASE("FileEditTool exact quote match - no normalization", "[file_edit_tool]
     record_file_read(fp, "hello \"world\"!");
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     ctx.cwd = tmp.path().string();
 
     // LLM 提供直引号，精确匹配
@@ -1049,7 +1058,7 @@ TEST_CASE("FileEditTool smart quote matching validate_input", "[file_edit_tool][
     record_file_read(fp, "function " + kSmartDoubleLeft + "test" + kSmartDoubleRight + "() {}");
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
 
     // LLM 提供直引号，validate_input 应通过（引号规范化匹配成功）
     auto r = tool.validate_input(make_edit_input(fp.string(), "\"test\"", "\"prod\""), ctx);
@@ -1064,7 +1073,7 @@ TEST_CASE("FileEditTool smart quote no match returns error", "[file_edit_tool][q
     record_file_read(fp, "hello " + kSmartDoubleLeft + "world" + kSmartDoubleRight + "!");
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
 
     // LLM 提供的字符串在文件中不存在（即使引号规范化后也不匹配）
     auto r = tool.validate_input(make_edit_input(fp.string(), "\"nonexistent\"", "\"x\""), ctx);
@@ -1243,7 +1252,7 @@ TEST_CASE("FileEditTool preserves UTF-16LE encoding", "[file_edit_tool][encoding
     record_file_read(fp, "hello world\nfoo bar");
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     ctx.cwd = tmp.path().string();
 
     // 编辑文件
@@ -1271,7 +1280,7 @@ TEST_CASE("FileEditTool preserves UTF-16BE encoding", "[file_edit_tool][encoding
     record_file_read(fp, "function test() {}");
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     ctx.cwd = tmp.path().string();
 
     auto r = tool.call(make_edit_input(fp.string(), "test", "prod"), ctx);
@@ -1299,7 +1308,7 @@ TEST_CASE("FileEditTool UTF-16LE with multibyte content", "[file_edit_tool][enco
     record_file_read(fp, "hello \xE4\xBD\xA0\xE5\xA5\xBD");
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     ctx.cwd = tmp.path().string();
 
     // 替换 "hello" 为 "hi"
@@ -1327,7 +1336,7 @@ TEST_CASE("FileEditTool UTF-16LE validate_input matching", "[file_edit_tool][enc
     record_file_read(fp, "hello world\nfoo bar");
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
 
     // validate_input 应能正确匹配 UTF-16LE 文件中的子串
     auto r = tool.validate_input(make_edit_input(fp.string(), "world", "C++"), ctx);
@@ -1342,7 +1351,7 @@ TEST_CASE("FileEditTool UTF-8 with BOM preserves no BOM on write", "[file_edit_t
     record_file_read(fp, "hello world");
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     ctx.cwd = tmp.path().string();
 
     auto r = tool.call(make_edit_input(fp.string(), "world", "C++"), ctx);
@@ -1490,7 +1499,7 @@ TEST_CASE("FileEditTool saves version to history before edit", "[file_edit_tool]
     record_file_read(fp, "hello world\nfoo bar");
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     ctx.cwd = tmp.path().string();
 
     // 执行编辑
@@ -1511,7 +1520,7 @@ TEST_CASE("FileEditTool multiple edits create multiple versions", "[file_edit_to
     record_file_read(fp, "alpha\nbeta\ngamma");
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     ctx.cwd = tmp.path().string();
 
     // 第一次编辑
@@ -1542,7 +1551,7 @@ TEST_CASE("FileEditTool history enables undo to previous version", "[file_edit_t
     record_file_read(fp, "original content");
 
     FileEditTool tool;
-    ToolContext ctx;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
     ctx.cwd = tmp.path().string();
 
     // 编辑文件

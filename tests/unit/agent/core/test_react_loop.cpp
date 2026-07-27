@@ -24,6 +24,7 @@
 #include "agent/tool/itool.h"
 #include "agent/tool/context.h"
 #include "agent/tool/result.h"
+#include "core/config/config_manager.h"
 #include "helpers/mock_provider.h"
 
 using namespace agent;
@@ -143,7 +144,9 @@ struct ReActLoopFixture {
     }
 
     std::unique_ptr<ReActLoop> make_loop(ReActLoop::Config config = ReActLoop::Config{}) {
-        return std::make_unique<ReActLoop>(provider.get(), registry, config);
+        // H-5：必须显式注入 IConfigManager*（非空）
+        return std::make_unique<ReActLoop>(provider.get(), registry, config,
+                                           &ConfigManager::instance());
     }
 
     /// @brief 创建一个返回纯文本（无工具调用）的 reader
@@ -469,7 +472,9 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop works without registry (no tools)"
     auto reader = make_text_reader("plain answer");
 
     std::vector<ChatMessage> messages = {ChatMessage::user("q")};
-    auto loop = std::make_unique<ReActLoop>(provider.get(), nullptr, ReActLoop::Config{});  // registry = nullptr
+    // H-5：必须显式注入 IConfigManager*（非空）
+    auto loop = std::make_unique<ReActLoop>(provider.get(), nullptr, ReActLoop::Config{},
+                                            &ConfigManager::instance());  // registry = nullptr
     auto result = loop->run(messages, "", nlohmann::json::array(), should_cancel);
 
     REQUIRE(result.final_answer == "plain answer");
