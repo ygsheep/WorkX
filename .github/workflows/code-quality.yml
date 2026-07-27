@@ -1,0 +1,139 @@
+name: Code Quality
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [develop]
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format
+      - name: Check C++ formatting
+        run: |
+          find src lib tests example -name '*.cpp' -o -name '*.hpp' -o -name '*.h' 2>/dev/null | \
+            xargs clang-format --dry-run --Werror || true
+
+  clang-tidy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-tidy cmake curl pkg-config ninja-build
+
+      - name: Restore vcpkg cache
+        uses: actions/cache@v4
+        id: vcpkg-cache
+        with:
+          path: vcpkg
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+
+      - name: Bootstrap vcpkg
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git vcpkg
+          ./vcpkg/bootstrap-vcpkg.sh
+          ./vcpkg/vcpkg install --triplet x64-linux
+
+      - name: Configure CMake (generate compile_commands.json)
+        run: |
+          cmake -B build -G Ninja -S . \
+            -DCMAKE_TOOLCHAIN_FILE=$PWD/vcpkg/scripts/buildsystems/vcpkg.cmake \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DWORKX_BUILD_TESTS=OFF \
+            -DWORKX_BUILD_EXAMPLES=OFF \
+            -DWORKX_FETCH_GRAMMARS=OFF \
+            -DWORKX_WITH_TREE_SITTER=OFF \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: Create .clang-tidy config
+        run: |
+          cat > .clang-tidy << 'EOF'
+          ---
+          Checks: >
+            -*,
+            cppcoreguidelines*,
+            modernize*,
+            performance*,
+            bugprone*,
+            -cppcoreguidelines-avoid-magic-numbers,
+            -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+            -cppcoreguidelines-pro-type-vararg,
+            -modernize-use-trailing-return-type,
+            -modernize-avoid-c-arrays
+          HeaderFilterRegex: '.*'
+          FormatStyle: google
+          EOF
+
+      - name: Run clang-tidy
+        run: |
+          find src lib -name '*.cpp' 2>/dev/null | \
+            xargs clang-tidy -p build --config-file=.clang-tidy || true
+
+  cppcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cppcheck
+        run: sudo apt-get update && sudo apt-get install -y cppcheck
+
+      - name: Run cppcheck
+        run: |
+          cppcheck --enable=all --inconclusive --xml --xml-version=2 \
+            --suppress=missingIncludeSystem \
+            src lib tests 2> cppcheck-results.xml || true
+
+      - name: Upload cppcheck results
+        uses: actions/upload-artifact@v4
+        with:
+          name: cppcheck-results
+          path: cppcheck-results.xml
+          retention-days: 30
+
+  complexity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install lizard
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip
+          pip3 install lizard
+
+      - name: Run complexity analysis
+        run: |
+          lizard src lib tests --lizard_limit=15 --CCN --length 50 --warnings_only > complexity-report.txt || true
+
+      - name: Display complexity summary
+        run: |
+          echo "=== Complexity Report ==="
+          cat complexity-report.txt || echo "No high-complexity functions found"
+          echo ""
+          echo "=== Statistics ==="
+          lizard src lib tests --CCN || true
+
+      - name: Check for high complexity
+        run: |
+          if [ -s complexity-report.txt ]; then
+            echo "Warning: High complexity functions detected (CCN > 15)!"
+            cat complexity-report.txt
+            exit 1
+          else
+            echo "All functions within complexity limits"
+          fi
+
+      - name: Upload complexity report
+        uses: actions/upload-artifact@v4
+        with:
+          name: complexity-report
+          path: complexity-report.txt
+          retention-days: 30

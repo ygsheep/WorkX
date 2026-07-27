@@ -11,6 +11,7 @@
 #include "agent/api/backend_factory.h"
 #include "agent/api/backend_types.h"
 #include "agent/message/types.h"  // BackendStatusEvent
+#include "core/events/event_bus.h"  // H-A：验证未污染全局单例
 #include "helpers/mock_event_bus.h"
 
 using namespace agent;
@@ -114,19 +115,28 @@ TEST_CASE("RemoteBackend event content correctness", "[backend][remote][h-1]") {
 
 TEST_CASE("RemoteBackend nullptr event_bus skips publishing - backward compat", "[backend][remote][h-1]") {
     // H-1：event_bus=nullptr 时不发布，保持向后兼容
+    // H-A：扩展验证未污染全局单例（Closed AI Loop 防护）
+    EventBus::instance().clear();
+
     RemoteBackend backend(nullptr);
 
-    SECTION("initialize 不发布事件") {
+    SECTION("initialize 不发布事件，不污染全局单例") {
         auto result = backend.initialize(make_remote_config());
         REQUIRE(result.is_ok());
-        // 无从验证 publish（无 bus），仅确保不崩溃
         REQUIRE(backend.is_ready());
+
+        // H-A：验证全局单例未被污染——这是 C-1 回归的检测点
+        EventBus::instance().process_async_events();
+        REQUIRE(EventBus::instance().async_queue_size() == 0);
     }
 
-    SECTION("shutdown 不发布事件") {
+    SECTION("shutdown 不发布事件，不污染全局单例") {
         backend.initialize(make_remote_config());
         backend.shutdown();
         REQUIRE_FALSE(backend.is_ready());
+
+        EventBus::instance().process_async_events();
+        REQUIRE(EventBus::instance().async_queue_size() == 0);
     }
 }
 
@@ -167,11 +177,17 @@ TEST_CASE("BackendFactory propagates event_bus to RemoteBackend", "[backend][fac
         REQUIRE(bus.published_count<BackendStatusEvent>() == 1);
     }
 
-    SECTION("factory create 默认 nullptr 不发布") {
+    SECTION("factory create 默认 nullptr 不发布，不污染全局单例") {
+        // H-A：扩展验证未污染全局单例——这是 C-1 回归的核心检测点
+        EventBus::instance().clear();
+
         auto backend = BackendFactory::create(make_remote_config(), nullptr);
         REQUIRE(backend != nullptr);
         backend->initialize(make_remote_config());
-        // 无 bus，不崩溃即可
         REQUIRE(backend->is_ready());
+
+        // 验证 BackendStatusEvent 未发布到全局单例
+        EventBus::instance().process_async_events();
+        REQUIRE(EventBus::instance().async_queue_size() == 0);
     }
 }

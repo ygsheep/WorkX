@@ -11,6 +11,7 @@ set(UNIT_TEST_SOURCES
     agent/api/test_remote_backend.cpp
     agent/api/test_retry_policy.cpp
     agent/api/test_sse_parser.cpp
+    agent/api/test_client.cpp
     agent/core/test_chat_session.cpp
     agent/core/test_react_loop.cpp
     agent/command/test_command_system.cpp
