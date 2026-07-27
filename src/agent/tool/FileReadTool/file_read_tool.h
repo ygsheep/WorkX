@@ -65,7 +65,7 @@ public:
     /// @param input 输入 JSON 对象（符合 input_schema）
     /// @param ctx 工具执行上下文（用于获取 cwd 解析相对路径）
     /// @return 工具结果：成功返回带行号的文本，失败返回错误信息
-    ToolResult call(
+    ResultV2<ToolResult> call(
         const nlohmann::json& input,
         const ToolContext& ctx
     ) const override;

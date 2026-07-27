@@ -97,27 +97,27 @@ ValidationResult FileReadTool::validate_input(
 ) const {
     // 检查必填字段 file_path
     if (!input.contains("file_path") || !input["file_path"].is_string()) {
-        return ValidationResult::err("Missing required field: file_path");
+        return ValidationResult::err(Error::Code::MissingArgument, "Missing required field: file_path");
     }
     if (input["file_path"].get<std::string>().empty()) {
-        return ValidationResult::err("file_path must not be empty");
+        return ValidationResult::err(Error::Code::InvalidInput, "file_path must not be empty");
     }
     // 可选字段 offset：必须为正整数（1-based 行号）
     if (input.contains("offset")) {
         if (!input["offset"].is_number_integer()) {
-            return ValidationResult::err("offset must be an integer");
+            return ValidationResult::err(Error::Code::InvalidInput, "offset must be an integer");
         }
         if (input["offset"].get<int>() < 1) {
-            return ValidationResult::err("offset must be >= 1");
+            return ValidationResult::err(Error::Code::InvalidInput, "offset must be >= 1");
         }
     }
     // 可选字段 limit：必须为正整数
     if (input.contains("limit")) {
         if (!input["limit"].is_number_integer()) {
-            return ValidationResult::err("limit must be an integer");
+            return ValidationResult::err(Error::Code::InvalidInput, "limit must be an integer");
         }
         if (input["limit"].get<int>() <= 0) {
-            return ValidationResult::err("limit must be > 0");
+            return ValidationResult::err(Error::Code::InvalidInput, "limit must be > 0");
         }
     }
     return ValidationResult::ok();
@@ -205,7 +205,7 @@ ToolResult FileReadTool::read_directory(const fs::path& dir_path) {
 // 执行
 // ============================================================
 
-ToolResult FileReadTool::call(
+ResultV2<ToolResult> FileReadTool::call(
     const nlohmann::json& input,
     const ToolContext& ctx
 ) const {
@@ -214,7 +214,8 @@ ToolResult FileReadTool::call(
     try {
         read_input = input.get<FileReadInput>();
     } catch (const nlohmann::json::exception& e) {
-        return ToolResult::error(std::format("Input parse failed: {}", e.what()));
+        return ResultV2<ToolResult>::err(Error::Code::InvalidInput,
+                                         std::format("Input parse failed: {}", e.what()));
     }
 
     // 读取可配置参数（回退到 constants.h 编译期默认值）
@@ -258,23 +259,26 @@ ToolResult FileReadTool::call(
 
     // 3. 检查路径存在性
     if (!fs::exists(file_path, ec)) {
-        return ToolResult::error("File does not exist: " + read_input.file_path);
+        return ResultV2<ToolResult>::err(Error::Code::ResourceNotFound,
+                                         "File does not exist: " + read_input.file_path);
     }
 
     // 4. 目录处理：路径指向目录时列举内容
     if (fs::is_directory(file_path, ec)) {
-        return read_directory(file_path);
+        return ResultV2<ToolResult>::ok(read_directory(file_path));
     }
 
     // 5. 非常规文件（如设备文件、管道）拒绝读取
     if (!fs::is_regular_file(file_path, ec)) {
-        return ToolResult::error("Path is not a regular file: " + read_input.file_path);
+        return ResultV2<ToolResult>::err(Error::Code::InvalidInput,
+                                         "Path is not a regular file: " + read_input.file_path);
     }
 
     // 6. 文件大小检查：超过 max_file_size 拒绝（需用 offset/limit 分段）
     const auto file_size = fs::file_size(file_path, ec);
     if (!ec && file_size > max_file_size) {
-        return ToolResult::error(std::format(
+        return ResultV2<ToolResult>::err(Error::Code::InvalidInput,
+                                         std::format(
             "File size {} bytes exceeds maximum {} bytes; use offset and limit for larger files",
             file_size, max_file_size
         ));
@@ -283,7 +287,8 @@ ToolResult FileReadTool::call(
     // 7. 编码检测（替代原 is_binary_file，更精确：UTF-16 不会被误判为二进制）
     const Encoding encoding = detect_encoding(file_path);
     if (encoding == Encoding::Binary) {
-        return ToolResult::error("File appears to be binary, cannot display: " + read_input.file_path);
+        return ResultV2<ToolResult>::err(Error::Code::InvalidInput,
+                                         "File appears to be binary, cannot display: " + read_input.file_path);
     }
 
     const int offset = read_input.offset.value_or(1);
@@ -298,7 +303,8 @@ ToolResult FileReadTool::call(
         // 8a. UTF-8/ASCII：流式读取（仅存储目标范围行，避免全部加载到内存）
         std::ifstream file(file_path);
         if (!file.is_open()) {
-            return ToolResult::error("Failed to open file: " + read_input.file_path);
+            return ResultV2<ToolResult>::err(Error::Code::InternalError,
+                                             "Failed to open file: " + read_input.file_path);
         }
 
         // 跳过 UTF-8 BOM（若存在）
@@ -349,12 +355,13 @@ ToolResult FileReadTool::call(
             mtime_ec ? std::filesystem::file_time_type{} : mtime,
             false  // 空文件视为完整视图
         );
-        return ToolResult::ok(std::string{"<system-reminder>File exists but has empty contents.</system-reminder>"});
+        return ResultV2<ToolResult>::ok(ToolResult::ok(std::string{"<system-reminder>File exists but has empty contents.</system-reminder>"}));
     }
 
     // offset 超出范围（不记录状态，读取实际失败）
     if (offset > total_lines) {
-        return ToolResult::error(std::format(
+        return ResultV2<ToolResult>::err(Error::Code::InvalidInput,
+                                         std::format(
             "offset {} is beyond the file's {} lines", offset, total_lines
         ));
     }
@@ -397,7 +404,7 @@ ToolResult FileReadTool::call(
                    + std::to_string(total_lines) + " lines shown)";
     }
 
-    return ToolResult::ok(std::move(formatted));
+    return ResultV2<ToolResult>::ok(ToolResult::ok(std::move(formatted)));
 }
 
 } // namespace agent::tool

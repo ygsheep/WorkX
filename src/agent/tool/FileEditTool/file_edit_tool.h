@@ -73,7 +73,7 @@ namespace agent::tool {
 ///    └─ 返回 "File has been updated" + diff
 ///
 /// @par 错误处理
-/// 所有错误通过 ToolResult::error() 返回，不抛异常。
+/// 所有错误通过 ResultV2<ToolResult>::err(Error) 返回，不抛异常。
 /// 所有 filesystem 操作使用 std::error_code 重载。
 class FileEditTool : public ITool {
 public:
@@ -110,8 +110,8 @@ public:
     /// @return 工具结果：
     ///         - 新建成功："File created successfully at: <path>"
     ///         - 更新成功："The file <path> has been updated successfully.\n" + diff 文本
-    ///         - 失败：ToolResult::error（含 pre-read / staleness / 匹配失败 / 备份失败等）
-    ToolResult call(
+    ///         - 失败：ResultV2::err（含 pre-read / staleness / 匹配失败 / 备份失败等）
+    ResultV2<ToolResult> call(
         const nlohmann::json& input,
         const ToolContext& ctx
     ) const override;

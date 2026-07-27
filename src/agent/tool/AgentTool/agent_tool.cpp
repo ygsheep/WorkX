@@ -40,12 +40,12 @@ nlohmann::json AgentTool::input_schema() const {
     };
 }
 
-ToolResult AgentTool::call(
+ResultV2<ToolResult> AgentTool::call(
     const nlohmann::json& /*input*/,
     const ToolContext& /*ctx*/
 ) const {
     // TODO: 实现子 Agent 调度逻辑
-    return ToolResult::error("AgentTool not implemented");
+    return ResultV2<ToolResult>::err(Error::Code::NotImplemented, "AgentTool not implemented");
 }
 
 } // namespace agent::tool

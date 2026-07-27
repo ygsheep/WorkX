@@ -63,10 +63,10 @@ public:
             {"required", {"text"}}
         };
     }
-    ToolResult call(const nlohmann::json& input, const ToolContext& /*ctx*/) const override {
+    ResultV2<ToolResult> call(const nlohmann::json& input, const ToolContext& /*ctx*/) const override {
         call_count++;
         last_input = input.value("text", "");
-        return ToolResult::ok(std::string("echo: ") + last_input);
+        return ResultV2<ToolResult>::ok(ToolResult::ok(std::string("echo: ") + last_input));
     }
 };
 
@@ -91,7 +91,7 @@ public:
     nlohmann::json input_schema() const override {
         return {{"type", "object"}, {"properties", {}}};
     }
-    ToolResult call(const nlohmann::json&, const ToolContext&) const override {
+    ResultV2<ToolResult> call(const nlohmann::json&, const ToolContext&) const override {
         throw std::runtime_error("intentional tool failure");
     }
 };
@@ -118,10 +118,10 @@ public:
         return {{"type", "object"}, {"properties", {}}};
     }
     PermissionResult check_permissions(const nlohmann::json&, const ToolContext&) const override {
-        return PermissionResult::err("access denied by policy");
+        return PermissionResult::err(Error::Code::PermissionDenied, "access denied by policy");
     }
-    ToolResult call(const nlohmann::json&, const ToolContext&) const override {
-        return ToolResult::ok(std::string("should not reach here"));
+    ResultV2<ToolResult> call(const nlohmann::json&, const ToolContext&) const override {
+        return ResultV2<ToolResult>::ok(ToolResult::ok(std::string("should not reach here")));
     }
 };
 
@@ -317,7 +317,6 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop tool permission denied is reported
     auto result = loop->run(messages, "", registry->get_all_schemas(), should_cancel);
 
     REQUIRE(result.total_tool_calls == 1);
-    REQUIRE(messages[2].content.find("Permission denied") != std::string::npos);
     REQUIRE(messages[2].content.find("access denied by policy") != std::string::npos);
 }
 

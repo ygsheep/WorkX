@@ -223,13 +223,13 @@ ValidationResult FileEditTool::validate_input(
 ) const {
     // 字段存在性与类型检查
     if (!input.contains("file_path") || !input["file_path"].is_string()) {
-        return ValidationResult::err("Missing required field: file_path");
+        return ValidationResult::err(Error::Code::MissingArgument, "Missing required field: file_path");
     }
     if (!input.contains("old_string") || !input["old_string"].is_string()) {
-        return ValidationResult::err("Missing required field: old_string");
+        return ValidationResult::err(Error::Code::MissingArgument, "Missing required field: old_string");
     }
     if (!input.contains("new_string") || !input["new_string"].is_string()) {
-        return ValidationResult::err("Missing required field: new_string");
+        return ValidationResult::err(Error::Code::MissingArgument, "Missing required field: new_string");
     }
 
     const auto& file_path_str = input["file_path"].get<std::string>();
@@ -237,7 +237,7 @@ ValidationResult FileEditTool::validate_input(
     const auto& new_string = input["new_string"].get<std::string>();
 
     if (file_path_str.empty()) {
-        return ValidationResult::err("file_path must not be empty");
+        return ValidationResult::err(Error::Code::InvalidInput, "file_path must not be empty");
     }
 
     // 路径解析（提前做，用于后续 deny / 存在性检查）
@@ -260,13 +260,13 @@ ValidationResult FileEditTool::validate_input(
     if (scan_secrets) {
         std::string secret_error = scan_for_secret_error(new_string);
         if (!secret_error.empty()) {
-            return ValidationResult::err(secret_error);
+            return ValidationResult::err(Error::Code::InvalidInput, secret_error);
         }
     }
 
     // === 错误码 1: old_string === new_string ===
     if (old_string == new_string) {
-        return ValidationResult::err(
+        return ValidationResult::err(Error::Code::InvalidInput,
             "No changes to make: old_string and new_string are exactly the same."
         );
     }
@@ -280,7 +280,7 @@ ValidationResult FileEditTool::validate_input(
     if (!deny_raw.empty()) {
         auto patterns = parse_deny_patterns(deny_raw);
         if (!patterns.empty() && matches_any_pattern(posix_path, patterns)) {
-            return ValidationResult::err(
+            return ValidationResult::err(Error::Code::PermissionDenied,
                 "File is in a directory that is denied by your permission settings."
             );
         }
@@ -288,13 +288,13 @@ ValidationResult FileEditTool::validate_input(
 
     // replace_all 类型检查（可选字段，存在则必须是布尔）
     if (input.contains("replace_all") && !input["replace_all"].is_boolean()) {
-        return ValidationResult::err("replace_all must be a boolean");
+        return ValidationResult::err(Error::Code::InvalidInput, "replace_all must be a boolean");
     }
 
     // 错误码 5: .ipynb 后缀拒绝
     if (file_path_str.size() >= 6 &&
         file_path_str.compare(file_path_str.size() - 6, 6, ".ipynb") == 0) {
-        return ValidationResult::err(
+        return ValidationResult::err(Error::Code::InvalidInput,
             "File is a Jupyter Notebook. Use the NotebookEditTool instead."
         );
     }
@@ -305,7 +305,7 @@ ValidationResult FileEditTool::validate_input(
     if (exists) {
         auto file_size = fs::file_size(canonical, ec);
         if (!ec && file_size > MAX_EDIT_FILE_SIZE_BYTES) {
-            return ValidationResult::err(std::format(
+            return ValidationResult::err(Error::Code::InvalidInput, std::format(
                 "File is too large to edit (size: {} bytes, max: {} bytes).",
                 file_size, MAX_EDIT_FILE_SIZE_BYTES
             ));
@@ -314,7 +314,7 @@ ValidationResult FileEditTool::validate_input(
 
     // 错误码 4: 文件不存在且 old_string != ""
     if (!exists && !old_string.empty()) {
-        return ValidationResult::err(std::format(
+        return ValidationResult::err(Error::Code::ResourceNotFound, std::format(
             "File does not exist: {}. Use the Write tool to create new files.",
             file_path_str
         ));
@@ -324,7 +324,7 @@ ValidationResult FileEditTool::validate_input(
     if (exists && old_string.empty()) {
         auto file_size = fs::file_size(canonical, ec);
         if (!ec && file_size > 0) {
-            return ValidationResult::err(
+            return ValidationResult::err(Error::Code::InvalidInput,
                 "Cannot create new file - file already exists: " + file_path_str
             );
         }
@@ -335,8 +335,8 @@ ValidationResult FileEditTool::validate_input(
         auto check = check_pre_read_and_staleness(
             canonical.generic_string(), canonical
         );
-        if (!check.isOk()) {
-            return check;
+        if (check.is_err()) {
+            return check.error();
         }
     }
 
@@ -350,7 +350,7 @@ ValidationResult FileEditTool::validate_input(
 
         // 错误码 8: 未匹配（精确匹配 + 引号规范化匹配均失败）
         if (match_count == 0) {
-            return ValidationResult::err(
+            return ValidationResult::err(Error::Code::ResourceNotFound,
                 "String to replace not found in file: " + file_path_str + "\n"
                 "Ensure the old_string matches exactly, including whitespace and newlines."
             );
@@ -358,7 +358,7 @@ ValidationResult FileEditTool::validate_input(
 
         // 错误码 9: 多匹配但 replace_all=false
         if (match_count > 1 && !replace_all) {
-            return ValidationResult::err(std::format(
+            return ValidationResult::err(Error::Code::InvalidInput, std::format(
                 "Found {} matches for old_string in file, but replace_all is false. "
                 "Either provide a more specific old_string with more surrounding context, "
                 "or set replace_all=true to replace all occurrences.",
@@ -381,12 +381,12 @@ ValidationResult FileEditTool::check_pre_read_and_staleness(
     // 1. Pre-read 强制检查
     auto state = FileReadStateTracker::instance().get_state(canonical_path);
     if (!state.has_value()) {
-        return ValidationResult::err(
+        return ValidationResult::err(Error::Code::PermissionDenied,
             "File has not been read yet. Read it first before editing it."
         );
     }
     if (state->is_partial_view) {
-        return ValidationResult::err(
+        return ValidationResult::err(Error::Code::PermissionDenied,
             "File was only partially read. Read the full file before editing it."
         );
     }
@@ -405,7 +405,7 @@ ValidationResult FileEditTool::check_pre_read_and_staleness(
         // 两侧统一剥离末尾 \n 后比较（FileReadStateTracker 约定不含末尾 \n）。
         const auto current_content = read_file_lf_normalized(file_path);
         if (strip_trailing_newline(current_content) != strip_trailing_newline(state->content)) {
-            return ValidationResult::err(
+            return ValidationResult::err(Error::Code::InternalError,
                 "File has been modified since read, either by the user or by a linter. "
                 "Read it again before attempting to edit it."
             );
@@ -427,7 +427,7 @@ ValidationResult FileEditTool::create_backup(const fs::path& file_path) {
     std::error_code ec;
     fs::copy_file(file_path, bak_path, fs::copy_options::overwrite_existing, ec);
     if (ec) {
-        return ValidationResult::err(
+        return ValidationResult::err(Error::Code::InternalError,
             std::format("Failed to create backup '{}': {}",
                         bak_path.string(), ec.message())
         );
@@ -439,7 +439,7 @@ ValidationResult FileEditTool::create_backup(const fs::path& file_path) {
 // 执行管道
 // ============================================================
 
-ToolResult FileEditTool::call(
+ResultV2<ToolResult> FileEditTool::call(
     const nlohmann::json& input,
     const ToolContext& ctx
 ) const {
@@ -448,7 +448,8 @@ ToolResult FileEditTool::call(
     try {
         edit_input = input.get<FileEditInput>();
     } catch (const nlohmann::json::exception& e) {
-        return ToolResult::error(std::format("Input parse failed: {}", e.what()));
+        return ResultV2<ToolResult>::err(Error::Code::InvalidInput,
+                                         std::format("Input parse failed: {}", e.what()));
     }
 
     // 2. 路径解析：相对路径基于 ctx.cwd 解析，再规范化为绝对路径
@@ -482,7 +483,7 @@ ToolResult FileEditTool::call(
             if (!parent_exists) {
                 fs::create_directories(parent_dir, ec);
                 if (ec) {
-                    return ToolResult::error(
+                    return ResultV2<ToolResult>::err(Error::Code::InternalError,
                         std::format("Failed to create directory '{}': {}",
                                     parent_dir.string(), ec.message())
                     );
@@ -493,7 +494,7 @@ ToolResult FileEditTool::call(
         // 写入文件（binary 模式，避免平台自动转换行尾）
         std::ofstream out(file_path, std::ios::binary | std::ios::trunc);
         if (!out.is_open()) {
-            return ToolResult::error(
+            return ResultV2<ToolResult>::err(Error::Code::InternalError,
                 std::format("Failed to open file for writing: {}", edit_input.file_path)
             );
         }
@@ -501,7 +502,7 @@ ToolResult FileEditTool::call(
         out.flush();
         out.close();
         if (out.fail()) {
-            return ToolResult::error(
+            return ResultV2<ToolResult>::err(Error::Code::InternalError,
                 std::format("Failed to write file: {}", edit_input.file_path)
             );
         }
@@ -516,16 +517,16 @@ ToolResult FileEditTool::call(
             false
         );
 
-        return ToolResult::ok(
+        return ResultV2<ToolResult>::ok(ToolResult::ok(
             std::format("File created successfully at: {}", file_path.string())
-        );
+        ));
     }
 
     // 5. 更新模式
     // 5a. Pre-read + Staleness 检查（validate_input 已检查，这里再查一次以防 call 直接调用）
     auto check = check_pre_read_and_staleness(canonical_key, file_path);
-    if (!check.isOk()) {
-        return ToolResult::error(check.error());
+    if (check.is_err()) {
+        return check.error();
     }
 
     // 5b. 检测编码 + 读取 UTF-8 内容 + 检测原文件行尾风格（LF / CRLF / CR）
@@ -549,7 +550,7 @@ ToolResult FileEditTool::call(
 
         // 错误码 8: 未匹配（精确匹配 + 引号规范化匹配均失败）
         if (!actual_old_opt.has_value()) {
-            return ToolResult::error(
+            return ResultV2<ToolResult>::err(Error::Code::ResourceNotFound,
                 "String to replace not found in file: " + file_path.string() + "\n"
                 "Ensure the old_string matches exactly, including whitespace and newlines."
             );
@@ -562,7 +563,7 @@ ToolResult FileEditTool::call(
 
         // 错误码 9: 多匹配但 replace_all=false
         if (match_count > 1 && !edit_input.replace_all) {
-            return ToolResult::error(std::format(
+            return ResultV2<ToolResult>::err(Error::Code::InvalidInput, std::format(
                 "Found {} matches for old_string in file, but replace_all is false. "
                 "Either provide a more specific old_string with more surrounding context, "
                 "or set replace_all=true to replace all occurrences.",
@@ -588,8 +589,8 @@ ToolResult FileEditTool::call(
 
     // 5d. .bak 备份（安全优先，失败则中止写入）
     auto backup = create_backup(file_path);
-    if (!backup.isOk()) {
-        return ToolResult::error(backup.error());
+    if (backup.is_err()) {
+        return backup.error();
     }
 
     // 5d-bis. 保存版本到 FileHistory（多版本备份，支持 undo/多步回滚）
@@ -599,7 +600,7 @@ ToolResult FileEditTool::call(
     // 5e. 写入文件（保留原行尾风格 + 原编码 + BOM）
     std::string write_content = apply_line_ending(new_content, original_ending);
     if (!write_file_with_encoding(file_path, write_content, original_encoding)) {
-        return ToolResult::error(
+        return ResultV2<ToolResult>::err(Error::Code::InternalError,
             std::format("Failed to write file: {}", edit_input.file_path)
         );
     }
@@ -628,7 +629,7 @@ ToolResult FileEditTool::call(
     } else {
         result_text += "(no content changes)";
     }
-    return ToolResult::ok(std::move(result_text));
+    return ResultV2<ToolResult>::ok(ToolResult::ok(std::move(result_text)));
 }
 
 } // namespace agent::tool

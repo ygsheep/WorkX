@@ -2,7 +2,8 @@
  * @file executor.h
  * @brief ToolExecutor — 工具执行器
  * @details 负责查找工具、权限检查、输入验证、执行工具并返回结果
- * @version 1.1.0
+ *          V2-4：execute() 返回 ResultV2<ExecutionResult>，错误携带 Error
+ * @version 2.0.0
  * @date 2026-07
  */
 
@@ -13,6 +14,8 @@
 #include <filesystem>
 #include <nlohmann/json.hpp>
 #include "liblogger/logger.h"
+#include "core/utils/result_v2.h"
+#include "core/utils/error.h"
 #include "itool.h"
 #include "registry.h"
 #include "result.h"
@@ -25,38 +28,17 @@ namespace agent::tool {
 ///          截断策略：保留头部和尾部（通常包含错误信息和总结），省略中间。
 constexpr size_t MAX_TOOL_RESULT_LENGTH = 8000;
 
-/// @brief 工具执行结果（E-5：字段语义清晰化）
+/// @brief 工具执行结果（V2：成功载荷）
 /// @details
-/// 字段语义说明（消除原 E-5 字段重叠歧义）：
+/// V2-4 迁移：移除 is_error 字段，错误状态由 ResultV2<ExecutionResult> 承载。
+/// 字段语义：
 /// - `tool_name`：上下文信息，标识本次执行调用的工具（用于日志/UI 展示）
-/// - `result`：工具实际返回结果（含 ToolResult.is_error 字段）
-/// - `is_error`：**冗余缓存**，始终等于 `result.is_error`。
-///                保留是为了 UI 渲染层（chat_renderer/session_log）无需深入访问
-///                `result.is_error`，但调用方应优先使用 `is_ok()` / `is_error()` 便捷方法。
-/// - `was_truncated`：结果元信息，标记 `result.text` 是否被截断过。
-///                    ARCH_REFACTOR_PLAN.md V2 计划将其并入 ToolResult，
-///                    当前保留独立字段以维持向后兼容。
-///
-/// 推荐用法：
-/// @code
-///   auto r = executor.execute(name, input, ctx);
-///   if (r.is_ok()) {
-///       // 使用 r.result
-///   } else {
-///       // 错误处理，r.result.text 包含错误信息
-///   }
-///   if (r.is_truncated()) {
-///       LOG_WARN("result was truncated");
-///   }
-/// @endcode
+/// - `result`：工具实际返回的成功结果（ToolResult）
+/// - `was_truncated`：结果元信息，标记 `result.text` 是否被截断过
 struct ExecutionResult {
     std::string tool_name;                  ///< 上下文：工具名称
-    ToolResult result;                      ///< 工具返回结果（权威错误状态来源）
-    bool is_error{false};                   ///< 冗余缓存：= result.is_error
+    ToolResult result;                      ///< 工具返回结果（成功载荷）
     bool was_truncated{false};              ///< 元信息：result.text 是否被截断
-
-    /// @brief 是否成功（与 `!is_error` 等价）
-    bool is_ok() const noexcept { return !is_error; }
 
     /// @brief 结果是否被截断
     bool is_truncated() const noexcept { return was_truncated; }
@@ -99,8 +81,8 @@ public:
     /// @param tool_name 工具名称
     /// @param input 工具输入参数
     /// @param ctx 工具执行上下文
-    /// @return 执行结果
-    inline ExecutionResult execute(
+    /// @return 执行结果（V2：ResultV2<ExecutionResult>，错误携带 Error）
+    inline ResultV2<ExecutionResult> execute(
         const std::string& tool_name,
         const nlohmann::json& input,
         const ToolContext& ctx
@@ -115,76 +97,80 @@ public:
         auto tool = registry_->find_by_name(tool_name);
         if (!tool) {
             LOG_WARN("[tool_executor] tool not found: {}", tool_name);
-            exec_result.result = ToolResult::error("Tool not found: " + tool_name);
-            exec_result.is_error = true;
-            return exec_result;
+            return Error{Error::Code::ResourceNotFound,
+                         "Tool not found: " + tool_name,
+                         tool_name};
         }
 
         // 2. 检查取消
         if (ctx.is_cancelled()) {
             LOG_INFO("[tool_executor] tool={} cancelled before execution", tool_name);
-            exec_result.result = ToolResult::error("Tool execution cancelled");
-            exec_result.is_error = true;
-            return exec_result;
+            return Error{Error::Code::Cancelled,
+                         "Tool execution cancelled",
+                         tool_name};
         }
 
         // 3. 权限检查
         auto perm = tool->check_permissions(input, ctx);
-        if (perm.isErr()) {
+        if (perm.is_err()) {
             LOG_WARN("[tool_executor] tool={} permission denied: {}",
-                     tool_name, perm.error());
-            exec_result.result = ToolResult::error("Permission denied: " + perm.error());
-            exec_result.is_error = true;
-            return exec_result;
+                     tool_name, perm.error().message);
+            return perm.error();
         }
 
         // 4. 输入验证
         auto validation = tool->validate_input(input, ctx);
-        if (validation.isErr()) {
+        if (validation.is_err()) {
             LOG_WARN("[tool_executor] tool={} invalid input: {}",
-                     tool_name, validation.error());
-            exec_result.result = ToolResult::error("Invalid input: " + validation.error());
-            exec_result.is_error = true;
-            return exec_result;
+                     tool_name, validation.error().message);
+            return validation.error();
         }
 
         // 5. 执行工具（try-catch 防止异常逃逸致 Agent 崩溃）
         auto t0 = std::chrono::steady_clock::now();
         try {
-            exec_result.result = tool->call(input, ctx);
-            exec_result.is_error = exec_result.result.is_error;
+            auto call_result = tool->call(input, ctx);
+            if (call_result.is_err()) {
+                // 工具返回错误，直接传播
+                auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - t0).count();
+                LOG_INFO("[tool_executor] tool={} end, error, duration={}ms",
+                         tool_name, ms);
+                return call_result.error();
+            }
+            exec_result.result = std::move(call_result).value();
             auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - t0).count();
-            LOG_INFO("[tool_executor] tool={} end, is_error={}, duration={}ms",
-                     tool_name, exec_result.is_error, ms);
+            LOG_INFO("[tool_executor] tool={} end, ok, duration={}ms",
+                     tool_name, ms);
         } catch (const nlohmann::json::exception& e) {
             LOG_ERROR("[tool_executor] tool={} JSON exception: {}",
                       tool_name, e.what());
-            exec_result.result = ToolResult::error(
-                std::string{"JSON error in tool '"} + tool_name + "': " + e.what());
-            exec_result.is_error = true;
+            return Error{Error::Code::ToolExecutionFailed,
+                         std::string{"JSON error in tool '"} + tool_name + "': " + e.what(),
+                         tool_name};
         } catch (const std::filesystem::filesystem_error& e) {
             LOG_ERROR("[tool_executor] tool={} filesystem exception: {}",
                       tool_name, e.what());
-            exec_result.result = ToolResult::error(
-                std::string{"Filesystem error in tool '"} + tool_name + "': " + e.what());
-            exec_result.is_error = true;
+            return Error{Error::Code::ToolExecutionFailed,
+                         std::string{"Filesystem error in tool '"} + tool_name + "': " + e.what(),
+                         tool_name};
         } catch (const std::bad_alloc& e) {
             LOG_ERROR("[tool_executor] tool={} bad_alloc: {}", tool_name, e.what());
-            exec_result.result = ToolResult::error(
-                std::string{"Out of memory in tool '"} + tool_name + "': " + e.what());
-            exec_result.is_error = true;
+            return Error{Error::Code::InternalError,
+                         std::string{"Out of memory in tool '"} + tool_name + "': " + e.what(),
+                         tool_name};
         } catch (const std::exception& e) {
             LOG_ERROR("[tool_executor] tool={} std::exception: {}",
                       tool_name, e.what());
-            exec_result.result = ToolResult::error(
-                std::string{"Error in tool '"} + tool_name + "': " + e.what());
-            exec_result.is_error = true;
+            return Error{Error::Code::ToolExecutionFailed,
+                         std::string{"Error in tool '"} + tool_name + "': " + e.what(),
+                         tool_name};
         } catch (...) {
             LOG_ERROR("[tool_executor] tool={} unknown exception", tool_name);
-            exec_result.result = ToolResult::error(
-                std::string{"Unknown exception in tool '"} + tool_name + "'");
-            exec_result.is_error = true;
+            return Error{Error::Code::Unknown,
+                         std::string{"Unknown exception in tool '"} + tool_name + "'",
+                         tool_name};
         }
 
         // 3.4：结果截断（防止 grep/bash 长输出撑爆上下文）
@@ -194,7 +180,7 @@ public:
             LOG_INFO("[tool_executor] tool={} result truncated, new_len={}",
                      tool_name, exec_result.result.text.length());
         }
-        return exec_result;
+        return ResultV2<ExecutionResult>::ok(std::move(exec_result));
     }
 
 private:

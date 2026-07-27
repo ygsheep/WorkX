@@ -35,7 +35,7 @@ public:
         const ToolContext& ctx
     ) const override;
 
-    ToolResult call(
+    ResultV2<ToolResult> call(
         const nlohmann::json& input,
         const ToolContext& ctx
     ) const override;

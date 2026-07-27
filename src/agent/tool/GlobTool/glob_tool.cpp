@@ -60,10 +60,10 @@ ValidationResult GlobTool::validate_input(
     const ToolContext& /*ctx*/
 ) const {
     if (!input.contains("pattern") || !input["pattern"].is_string()) {
-        return ValidationResult::err("Missing required field: pattern");
+        return ValidationResult::err(Error::Code::MissingArgument, "Missing required field: pattern");
     }
     if (input["pattern"].get<std::string>().empty()) {
-        return ValidationResult::err("pattern must not be empty");
+        return ValidationResult::err(Error::Code::InvalidInput, "pattern must not be empty");
     }
     return ValidationResult::ok();
 }
@@ -182,7 +182,7 @@ bool GlobTool::glob_match(std::string_view pattern, std::string_view text) {
 // 执行
 // ============================================================
 
-ToolResult GlobTool::call(
+ResultV2<ToolResult> GlobTool::call(
     const nlohmann::json& input,
     const ToolContext& ctx
 ) const {
@@ -191,7 +191,8 @@ ToolResult GlobTool::call(
     try {
         glob_input = input.get<GlobInput>();
     } catch (const nlohmann::json::exception& e) {
-        return ToolResult::error(std::format("Input parse failed: {}", e.what()));
+        return ResultV2<ToolResult>::err(Error::Code::InvalidInput,
+                                         std::format("Input parse failed: {}", e.what()));
     }
 
     // 2. 确定搜索目录
@@ -203,10 +204,12 @@ ToolResult GlobTool::call(
     fs::path search_dir(cwd);
     std::error_code ec;
     if (!fs::exists(search_dir, ec)) {
-        return ToolResult::error("Directory does not exist: " + cwd);
+        return ResultV2<ToolResult>::err(Error::Code::ResourceNotFound,
+                                         "Directory does not exist: " + cwd);
     }
     if (!fs::is_directory(search_dir, ec)) {
-        return ToolResult::error("Path is not a directory: " + cwd);
+        return ResultV2<ToolResult>::err(Error::Code::InvalidInput,
+                                         "Path is not a directory: " + cwd);
     }
 
     // 3. 规范化 pattern（手写 glob matcher，避免 std::regex 编译开销）
@@ -262,7 +265,7 @@ ToolResult GlobTool::call(
 
     // 6. 格式化输出
     if (matches.empty()) {
-        return ToolResult::ok("No files matched pattern: " + glob_input.pattern);
+        return ResultV2<ToolResult>::ok(ToolResult::ok("No files matched pattern: " + glob_input.pattern));
     }
 
     std::string result;
@@ -277,7 +280,7 @@ ToolResult GlobTool::call(
         result.pop_back();
     }
 
-    return ToolResult::ok(std::move(result));
+    return ResultV2<ToolResult>::ok(ToolResult::ok(std::move(result)));
 }
 
 } // namespace agent::tool

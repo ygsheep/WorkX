@@ -41,12 +41,12 @@ nlohmann::json MCPTool::input_schema() const {
     };
 }
 
-ToolResult MCPTool::call(
+ResultV2<ToolResult> MCPTool::call(
     const nlohmann::json& /*input*/,
     const ToolContext& /*ctx*/
 ) const {
     // TODO: 实现 MCP 工具调用逻辑
-    return ToolResult::error("MCPTool not implemented");
+    return ResultV2<ToolResult>::err(Error::Code::NotImplemented, "MCPTool not implemented");
 }
 
 } // namespace agent::tool

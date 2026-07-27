@@ -178,14 +178,14 @@ ValidationResult FileWriteTool::validate_input(
 ) const {
     // file_path 校验
     if (!input.contains("file_path") || !input["file_path"].is_string()) {
-        return ValidationResult::err("Missing required field: file_path");
+        return ValidationResult::err(Error::Code::MissingArgument, "Missing required field: file_path");
     }
     if (input["file_path"].get<std::string>().empty()) {
-        return ValidationResult::err("file_path must not be empty");
+        return ValidationResult::err(Error::Code::InvalidInput, "file_path must not be empty");
     }
     // content 校验（允许空字符串，空文件合法）
     if (!input.contains("content") || !input["content"].is_string()) {
-        return ValidationResult::err("Missing required field: content");
+        return ValidationResult::err(Error::Code::MissingArgument, "Missing required field: content");
     }
     return ValidationResult::ok();
 }
@@ -201,12 +201,12 @@ ValidationResult FileWriteTool::check_pre_read_and_staleness(
     // 1. Pre-read 强制检查
     auto state = FileReadStateTracker::instance().get_state(canonical_path);
     if (!state.has_value()) {
-        return ValidationResult::err(
+        return ValidationResult::err(Error::Code::PermissionDenied,
             "File has not been read yet. Read it first before writing to it."
         );
     }
     if (state->is_partial_view) {
-        return ValidationResult::err(
+        return ValidationResult::err(Error::Code::PermissionDenied,
             "File was only partially read. Read the full file before writing to it."
         );
     }
@@ -224,7 +224,7 @@ ValidationResult FileWriteTool::check_pre_read_and_staleness(
         // Windows 下云同步/杀毒等可能改 mtime 但内容未变，避免误判
         const auto current_content = read_file_lf_normalized(file_path);
         if (current_content != state->content) {
-            return ValidationResult::err(
+            return ValidationResult::err(Error::Code::InternalError,
                 "File has been modified since read, either by the user or by a linter. "
                 "Read it again before attempting to write it."
             );
@@ -246,7 +246,7 @@ ValidationResult FileWriteTool::create_backup(const fs::path& file_path) {
     std::error_code ec;
     fs::copy_file(file_path, bak_path, fs::copy_options::overwrite_existing, ec);
     if (ec) {
-        return ValidationResult::err(
+        return ValidationResult::err(Error::Code::InternalError,
             std::format("Failed to create backup '{}': {}",
                         bak_path.string(), ec.message())
         );
@@ -258,7 +258,7 @@ ValidationResult FileWriteTool::create_backup(const fs::path& file_path) {
 // 执行管道
 // ============================================================
 
-ToolResult FileWriteTool::call(
+ResultV2<ToolResult> FileWriteTool::call(
     const nlohmann::json& input,
     const ToolContext& ctx
 ) const {
@@ -267,7 +267,8 @@ ToolResult FileWriteTool::call(
     try {
         write_input = input.get<FileWriteInput>();
     } catch (const nlohmann::json::exception& e) {
-        return ToolResult::error(std::format("Input parse failed: {}", e.what()));
+        return ResultV2<ToolResult>::err(Error::Code::InvalidInput,
+                                         std::format("Input parse failed: {}", e.what()));
     }
 
     // 2. 路径解析：相对路径基于 ctx.cwd 解析，再规范化为绝对路径
@@ -294,7 +295,7 @@ ToolResult FileWriteTool::call(
         if (!parent_exists) {
             fs::create_directories(parent_dir, ec);
             if (ec) {
-                return ToolResult::error(
+                return ResultV2<ToolResult>::err(Error::Code::InternalError,
                     std::format("Failed to create directory '{}': {}",
                                 parent_dir.string(), ec.message())
                 );
@@ -305,7 +306,7 @@ ToolResult FileWriteTool::call(
     // 4. 判断 create/update（fs::exists 失败时返回错误，避免绕过 pre-read 检查）
     bool is_update = fs::exists(file_path, ec);
     if (ec) {
-        return ToolResult::error(
+        return ResultV2<ToolResult>::err(Error::Code::InternalError,
             std::format("Failed to check file existence '{}': {}",
                         file_path.string(), ec.message())
         );
@@ -317,14 +318,14 @@ ToolResult FileWriteTool::call(
         auto check = check_pre_read_and_staleness(
             file_path.generic_string(), file_path
         );
-        if (!check.isOk()) {
-            return ToolResult::error(check.error());
+        if (check.is_err()) {
+            return check.error();
         }
 
         // 5b. 创建 .bak 备份（安全优先，失败则中止写入）
         auto backup = create_backup(file_path);
-        if (!backup.isOk()) {
-            return ToolResult::error(backup.error());
+        if (backup.is_err()) {
+            return backup.error();
         }
     }
 
@@ -361,7 +362,7 @@ ToolResult FileWriteTool::call(
                 // 写入失败，删除临时文件
                 std::error_code rm_ec;
                 fs::remove(tmp_path, rm_ec);
-                return ToolResult::error(
+                return ResultV2<ToolResult>::err(Error::Code::InternalError,
                     std::format("Failed to write file: {}", write_input.file_path)
                 );
             }
@@ -390,7 +391,7 @@ ToolResult FileWriteTool::call(
         // 回退路径：直接写入（保留原 .bak 备份兜底）
         std::ofstream out(file_path, std::ios::binary | std::ios::trunc);
         if (!out.is_open()) {
-            return ToolResult::error(
+            return ResultV2<ToolResult>::err(Error::Code::InternalError,
                 std::format("Failed to open file for writing: {}", write_input.file_path)
             );
         }
@@ -399,7 +400,7 @@ ToolResult FileWriteTool::call(
         out.close();
 
         if (out.fail()) {
-            return ToolResult::error(
+            return ResultV2<ToolResult>::err(Error::Code::InternalError,
                 std::format("Failed to write file: {}", write_input.file_path)
             );
         }
@@ -434,13 +435,13 @@ ToolResult FileWriteTool::call(
             // 内容无变化
             result_text += "(no content changes)";
         }
-        return ToolResult::ok(std::move(result_text));
+        return ResultV2<ToolResult>::ok(ToolResult::ok(std::move(result_text)));
     }
 
     // create 模式
-    return ToolResult::ok(
+    return ResultV2<ToolResult>::ok(ToolResult::ok(
         std::format("File created successfully at: {}", file_path.string())
-    );
+    ));
 }
 
 } // namespace agent::tool

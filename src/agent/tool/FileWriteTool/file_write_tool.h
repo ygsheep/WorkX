@@ -90,8 +90,8 @@ public:
     /// @return 工具结果：
     ///         - 创建成功："File created successfully at: <path>"
     ///         - 更新成功："File <path> has been updated.\n" + diff 文本
-    ///         - 失败：ToolResult::error（含 pre-read / staleness / 备份失败等）
-    ToolResult call(
+    ///         - 失败：ResultV2::err（含 pre-read / staleness / 备份失败等）
+    ResultV2<ToolResult> call(
         const nlohmann::json& input,
         const ToolContext& ctx
     ) const override;

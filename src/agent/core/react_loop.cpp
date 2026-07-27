@@ -548,7 +548,11 @@ ReActResult ReActLoop::run(
                 [this, &ctx, &tu]() -> std::pair<std::string, bool> {
                     try {
                         auto exec_result = m_executor->execute(tu.name, tu.input, ctx);
-                        return {exec_result.result.to_string(), exec_result.is_error};
+                        if (exec_result.is_err()) {
+                            // V2-4：错误由 ResultV2 承载，message 用于 LLM 可读反馈
+                            return {std::format("Error: {}", exec_result.error().message), true};
+                        }
+                        return {exec_result.value().result.to_string(), false};
                     } catch (const std::exception& e) {
                         return {std::format("Error: tool '{}' threw exception: {}",
                                             tu.name, e.what()), true};

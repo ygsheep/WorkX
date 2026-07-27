@@ -2,6 +2,7 @@
  * @file test_tool_executor.cpp
  * @brief ToolExecutor 单元测试
  * @details 覆盖 execute 全流程：查找、取消、权限检查、输入验证、执行、异常捕获
+ *          V2-4：所有工具返回 ResultV2<ToolResult>，execute 返回 ResultV2<ExecutionResult>
  */
 
 #include <catch2/catch_test_macros.hpp>
@@ -14,6 +15,7 @@
 #include "agent/tool/itool.h"
 #include "agent/tool/context.h"
 #include "agent/tool/result.h"
+#include "core/utils/error.h"
 
 using namespace agent;
 using namespace agent::tool;
@@ -22,7 +24,7 @@ using namespace std::chrono_literals;
 namespace {
 
 // ============================================================
-// 测试工具
+// 测试工具（V2-4：所有 call/validate/permissions 返回 ResultV2）
 // ============================================================
 
 class EchoTool : public ITool {
@@ -48,10 +50,10 @@ public:
             {"properties", {{"text", {{"type", "string"}}}}}
         };
     }
-    ToolResult call(const nlohmann::json& input, const ToolContext&) const override {
+    ResultV2<ToolResult> call(const nlohmann::json& input, const ToolContext&) const override {
         call_count++;
         last_input = input.value("text", "");
-        return ToolResult::ok(std::string("echo: ") + last_input);
+        return ResultV2<ToolResult>::ok(ToolResult::ok(std::string("echo: ") + last_input));
     }
 };
 
@@ -64,7 +66,7 @@ public:
     const std::string& description() const override { static const std::string d; return d; }
     const std::string& prompt() const override { static const std::string p; return p; }
     nlohmann::json input_schema() const override { return {{"type", "object"}}; }
-    ToolResult call(const nlohmann::json&, const ToolContext&) const override {
+    ResultV2<ToolResult> call(const nlohmann::json&, const ToolContext&) const override {
         throw std::runtime_error("intentional failure");
     }
 };
@@ -79,10 +81,10 @@ public:
     const std::string& prompt() const override { static const std::string p; return p; }
     nlohmann::json input_schema() const override { return {{"type", "object"}}; }
     PermissionResult check_permissions(const nlohmann::json&, const ToolContext&) const override {
-        return PermissionResult::err("policy denied");
+        return PermissionResult::err(Error::Code::PermissionDenied, "policy denied");
     }
-    ToolResult call(const nlohmann::json&, const ToolContext&) const override {
-        return ToolResult::ok(std::string("should not reach"));
+    ResultV2<ToolResult> call(const nlohmann::json&, const ToolContext&) const override {
+        return ResultV2<ToolResult>::ok(ToolResult::ok(std::string("should not reach")));
     }
 };
 
@@ -99,12 +101,13 @@ public:
     }
     ValidationResult validate_input(const nlohmann::json& input, const ToolContext&) const override {
         if (!input.contains("value")) {
-            return ValidationResult::err("missing 'value' field");
+            return ValidationResult::err(Error::Code::MissingArgument, "missing 'value' field");
         }
         return ValidationResult::ok();
     }
-    ToolResult call(const nlohmann::json& input, const ToolContext&) const override {
-        return ToolResult::ok(std::string("got: ") + input["value"].get<std::string>());
+    ResultV2<ToolResult> call(const nlohmann::json& input, const ToolContext&) const override {
+        return ResultV2<ToolResult>::ok(ToolResult::ok(
+            std::string("got: ") + input["value"].get<std::string>()));
     }
 };
 
@@ -117,7 +120,7 @@ public:
     const std::string& description() const override { static const std::string d; return d; }
     const std::string& prompt() const override { static const std::string p; return p; }
     nlohmann::json input_schema() const override { return {{"type", "object"}}; }
-    ToolResult call(const nlohmann::json&, const ToolContext&) const override {
+    ResultV2<ToolResult> call(const nlohmann::json&, const ToolContext&) const override {
         throw nlohmann::json::type_error::create(302, "intentional json error", nullptr);
     }
 };
@@ -131,7 +134,7 @@ public:
     const std::string& description() const override { static const std::string d; return d; }
     const std::string& prompt() const override { static const std::string p; return p; }
     nlohmann::json input_schema() const override { return {{"type", "object"}}; }
-    ToolResult call(const nlohmann::json&, const ToolContext&) const override {
+    ResultV2<ToolResult> call(const nlohmann::json&, const ToolContext&) const override {
         throw std::filesystem::filesystem_error(
             "intentional fs error",
             std::make_error_code(std::errc::no_such_file_or_directory)
@@ -148,7 +151,7 @@ public:
     const std::string& description() const override { static const std::string d; return d; }
     const std::string& prompt() const override { static const std::string p; return p; }
     nlohmann::json input_schema() const override { return {{"type", "object"}}; }
-    ToolResult call(const nlohmann::json&, const ToolContext&) const override {
+    ResultV2<ToolResult> call(const nlohmann::json&, const ToolContext&) const override {
         throw 42;  // non-std exception
     }
 };
@@ -162,8 +165,8 @@ public:
     const std::string& description() const override { static const std::string d; return d; }
     const std::string& prompt() const override { static const std::string p; return p; }
     nlohmann::json input_schema() const override { return {{"type", "object"}}; }
-    ToolResult call(const nlohmann::json&, const ToolContext&) const override {
-        return ToolResult::error("business logic error");
+    ResultV2<ToolResult> call(const nlohmann::json&, const ToolContext&) const override {
+        return ResultV2<ToolResult>::err(Error::Code::ToolExecutionFailed, "business logic error");
     }
 };
 
@@ -196,17 +199,17 @@ struct ToolExecutorFixture {
 TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor executes registered tool", "[tool_executor][basic]") {
     auto result = executor->execute("Echo", R"({"text":"hello"})"_json, ctx);
 
-    REQUIRE(result.tool_name == "Echo");
-    REQUIRE_FALSE(result.is_error);
-    REQUIRE(result.result.is_ok());
-    REQUIRE(result.result.text == "echo: hello");
+    REQUIRE(result.is_ok());
+    REQUIRE(result.value().tool_name == "Echo");
+    REQUIRE(result.value().result.text == "echo: hello");
     REQUIRE(echo->call_count == 1);
 }
 
 TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor returns Json result type for json output", "[tool_executor][basic]") {
     // EchoTool 返回文本，验证 type 正确
     auto result = executor->execute("Echo", R"({"text":"x"})"_json, ctx);
-    REQUIRE(result.result.type == ToolResult::Type::Text);
+    REQUIRE(result.is_ok());
+    REQUIRE(result.value().result.type == ToolResult::Type::Text);
 }
 
 // ============================================================================
@@ -216,11 +219,11 @@ TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor returns Json result type for
 TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor returns error for unknown tool", "[tool_executor][not_found]") {
     auto result = executor->execute("NonExistent", R"({})"_json, ctx);
 
-    REQUIRE(result.tool_name == "NonExistent");
-    REQUIRE(result.is_error);
-    REQUIRE(result.result.is_error);
-    REQUIRE(result.result.text.find("Tool not found") != std::string::npos);
-    REQUIRE(result.result.text.find("NonExistent") != std::string::npos);
+    REQUIRE(result.is_err());
+    REQUIRE(result.error().code == Error::Code::ResourceNotFound);
+    REQUIRE(result.error().message.find("Tool not found") != std::string::npos);
+    REQUIRE(result.error().message.find("NonExistent") != std::string::npos);
+    REQUIRE(result.error().context == "NonExistent");
 }
 
 // ============================================================================
@@ -232,9 +235,9 @@ TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor respects cancellation", "[to
 
     auto result = executor->execute("Echo", R"({"text":"x"})"_json, ctx);
 
-    REQUIRE(result.is_error);
-    REQUIRE(result.result.is_error);
-    REQUIRE(result.result.text.find("cancelled") != std::string::npos);
+    REQUIRE(result.is_err());
+    REQUIRE(result.error().code == Error::Code::Cancelled);
+    REQUIRE(result.error().message.find("cancelled") != std::string::npos);
     REQUIRE(echo->call_count == 0);  // 工具未被调用
 }
 
@@ -247,9 +250,9 @@ TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor denies on permission failure
 
     auto result = executor->execute("Denied", R"({})"_json, ctx);
 
-    REQUIRE(result.is_error);
-    REQUIRE(result.result.text.find("Permission denied") != std::string::npos);
-    REQUIRE(result.result.text.find("policy denied") != std::string::npos);
+    REQUIRE(result.is_err());
+    REQUIRE(result.error().code == Error::Code::PermissionDenied);
+    REQUIRE(result.error().message.find("policy denied") != std::string::npos);
 }
 
 // ============================================================================
@@ -261,15 +264,15 @@ TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor validates input before execu
 
     SECTION("valid input passes validation") {
         auto result = executor->execute("Validating", R"({"value":"test"})"_json, ctx);
-        REQUIRE_FALSE(result.is_error);
-        REQUIRE(result.result.text == "got: test");
+        REQUIRE(result.is_ok());
+        REQUIRE(result.value().result.text == "got: test");
     }
 
     SECTION("invalid input fails validation") {
         auto result = executor->execute("Validating", R"({})"_json, ctx);
-        REQUIRE(result.is_error);
-        REQUIRE(result.result.text.find("Invalid input") != std::string::npos);
-        REQUIRE(result.result.text.find("missing 'value' field") != std::string::npos);
+        REQUIRE(result.is_err());
+        REQUIRE(result.error().code == Error::Code::MissingArgument);
+        REQUIRE(result.error().message.find("missing 'value' field") != std::string::npos);
     }
 }
 
@@ -282,9 +285,10 @@ TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor catches std::exception from 
 
     auto result = executor->execute("Failing", R"({})"_json, ctx);
 
-    REQUIRE(result.is_error);
-    REQUIRE(result.result.text.find("Error in tool 'Failing'") != std::string::npos);
-    REQUIRE(result.result.text.find("intentional failure") != std::string::npos);
+    REQUIRE(result.is_err());
+    REQUIRE(result.error().code == Error::Code::ToolExecutionFailed);
+    REQUIRE(result.error().message.find("Error in tool 'Failing'") != std::string::npos);
+    REQUIRE(result.error().message.find("intentional failure") != std::string::npos);
 }
 
 TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor catches nlohmann::json::exception", "[tool_executor][exception]") {
@@ -292,8 +296,9 @@ TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor catches nlohmann::json::exce
 
     auto result = executor->execute("JsonException", R"({})"_json, ctx);
 
-    REQUIRE(result.is_error);
-    REQUIRE(result.result.text.find("JSON error in tool") != std::string::npos);
+    REQUIRE(result.is_err());
+    REQUIRE(result.error().code == Error::Code::ToolExecutionFailed);
+    REQUIRE(result.error().message.find("JSON error in tool") != std::string::npos);
 }
 
 TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor catches std::filesystem::filesystem_error", "[tool_executor][exception]") {
@@ -301,8 +306,9 @@ TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor catches std::filesystem::fil
 
     auto result = executor->execute("FsError", R"({})"_json, ctx);
 
-    REQUIRE(result.is_error);
-    REQUIRE(result.result.text.find("Filesystem error in tool") != std::string::npos);
+    REQUIRE(result.is_err());
+    REQUIRE(result.error().code == Error::Code::ToolExecutionFailed);
+    REQUIRE(result.error().message.find("Filesystem error in tool") != std::string::npos);
 }
 
 TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor catches unknown exception", "[tool_executor][exception]") {
@@ -310,22 +316,23 @@ TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor catches unknown exception", 
 
     auto result = executor->execute("Unknown", R"({})"_json, ctx);
 
-    REQUIRE(result.is_error);
-    REQUIRE(result.result.text.find("Unknown exception in tool") != std::string::npos);
+    REQUIRE(result.is_err());
+    REQUIRE(result.error().code == Error::Code::Unknown);
+    REQUIRE(result.error().message.find("Unknown exception in tool") != std::string::npos);
 }
 
 // ============================================================================
-// 业务错误（ToolResult::error）
+// 业务错误（ResultV2<ToolResult>::err）
 // ============================================================================
 
-TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor propagates ToolResult::error as is_error", "[tool_executor][business_error]") {
+TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor propagates tool error as ResultV2 err", "[tool_executor][business_error]") {
     registry->register_tool(std::make_shared<ErrorResultTool>());
 
     auto result = executor->execute("ErrorResult", R"({})"_json, ctx);
 
-    REQUIRE(result.is_error);
-    REQUIRE(result.result.is_error);
-    REQUIRE(result.result.text == "business logic error");
+    REQUIRE(result.is_err());
+    REQUIRE(result.error().code == Error::Code::ToolExecutionFailed);
+    REQUIRE(result.error().message == "business logic error");
 }
 
 // ============================================================================
@@ -339,7 +346,7 @@ TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor passes ToolContext to tool",
 
     auto result = executor->execute("Echo", R"({"text":"ctx"})"_json, ctx);
 
-    REQUIRE_FALSE(result.is_error);
+    REQUIRE(result.is_ok());
     // ToolContext 通过 call() 传入，EchoTool 忽略它，但能验证调用未崩溃
 }
 
@@ -352,6 +359,6 @@ TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor execute is const method (par
     const ToolExecutor& const_executor = *executor;
     auto result = const_executor.execute("Echo", R"({"text":"const"})"_json, ctx);
 
-    REQUIRE_FALSE(result.is_error);
+    REQUIRE(result.is_ok());
     REQUIRE(echo->call_count == 1);
 }

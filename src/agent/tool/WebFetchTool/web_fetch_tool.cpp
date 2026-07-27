@@ -40,12 +40,12 @@ nlohmann::json WebFetchTool::input_schema() const {
     };
 }
 
-ToolResult WebFetchTool::call(
+ResultV2<ToolResult> WebFetchTool::call(
     const nlohmann::json& /*input*/,
     const ToolContext& /*ctx*/
 ) const {
     // TODO: 实现网页抓取逻辑
-    return ToolResult::error("WebFetchTool not implemented");
+    return ResultV2<ToolResult>::err(Error::Code::NotImplemented, "WebFetchTool not implemented");
 }
 
 } // namespace agent::tool

@@ -26,8 +26,8 @@ public:
     const std::string& description() const override { return desc_; }
     const std::string& prompt() const override { static const std::string p; return p; }
     nlohmann::json input_schema() const override { return schema_; }
-    ToolResult call(const nlohmann::json&, const ToolContext&) const override {
-        return ToolResult::ok(std::string("ok"));
+    ResultV2<ToolResult> call(const nlohmann::json&, const ToolContext&) const override {
+        return ResultV2<ToolResult>::ok(ToolResult::ok(std::string("ok")));
     }
 
 private:

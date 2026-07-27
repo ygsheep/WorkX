@@ -42,12 +42,12 @@ nlohmann::json BashTool::input_schema() const {
     };
 }
 
-ToolResult BashTool::call(
+ResultV2<ToolResult> BashTool::call(
     const nlohmann::json& /*input*/,
     const ToolContext& /*ctx*/
 ) const {
     // TODO: 实现 shell 执行逻辑
-    return ToolResult::error("BashTool not implemented");
+    return ResultV2<ToolResult>::err(Error::Code::NotImplemented, "BashTool not implemented");
 }
 
 } // namespace agent::tool

@@ -263,8 +263,8 @@ TEST_CASE("FileEditTool validate_input missing fields", "[file_edit_tool]") {
             {"new_string", "b"}
         };
         auto r = tool.validate_input(input, ctx);
-        REQUIRE(r.isErr());
-        REQUIRE_THAT(r.error(), Catch::Matchers::ContainsSubstring("file_path"));
+        REQUIRE(r.is_err());
+        REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("file_path"));
     }
     SECTION("missing old_string") {
         auto input = nlohmann::json{
@@ -272,8 +272,8 @@ TEST_CASE("FileEditTool validate_input missing fields", "[file_edit_tool]") {
             {"new_string", "b"}
         };
         auto r = tool.validate_input(input, ctx);
-        REQUIRE(r.isErr());
-        REQUIRE_THAT(r.error(), Catch::Matchers::ContainsSubstring("old_string"));
+        REQUIRE(r.is_err());
+        REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("old_string"));
     }
     SECTION("missing new_string") {
         auto input = nlohmann::json{
@@ -281,13 +281,13 @@ TEST_CASE("FileEditTool validate_input missing fields", "[file_edit_tool]") {
             {"old_string", "a"}
         };
         auto r = tool.validate_input(input, ctx);
-        REQUIRE(r.isErr());
-        REQUIRE_THAT(r.error(), Catch::Matchers::ContainsSubstring("new_string"));
+        REQUIRE(r.is_err());
+        REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("new_string"));
     }
     SECTION("empty file_path") {
         auto r = tool.validate_input(make_edit_input("", "a", "b"), ctx);
-        REQUIRE(r.isErr());
-        REQUIRE_THAT(r.error(), Catch::Matchers::ContainsSubstring("empty"));
+        REQUIRE(r.is_err());
+        REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("empty"));
     }
 }
 
@@ -296,8 +296,8 @@ TEST_CASE("FileEditTool validate_input error code 1 (old==new)", "[file_edit_too
     FileEditTool tool;
     ToolContext ctx;
     auto r = tool.validate_input(make_edit_input("/tmp/foo", "abc", "abc"), ctx);
-    REQUIRE(r.isErr());
-    REQUIRE_THAT(r.error(), Catch::Matchers::ContainsSubstring("same"));
+    REQUIRE(r.is_err());
+    REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("same"));
 }
 
 TEST_CASE("FileEditTool validate_input error code 4 (file not exist)", "[file_edit_tool]") {
@@ -307,8 +307,8 @@ TEST_CASE("FileEditTool validate_input error code 4 (file not exist)", "[file_ed
     auto r = tool.validate_input(
         make_edit_input("/nonexistent/workx_test_path", "old", "new"), ctx
     );
-    REQUIRE(r.isErr());
-    REQUIRE_THAT(r.error(), Catch::Matchers::ContainsSubstring("does not exist"));
+    REQUIRE(r.is_err());
+    REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("does not exist"));
 }
 
 TEST_CASE("FileEditTool validate_input error code 5 (.ipynb)", "[file_edit_tool]") {
@@ -318,8 +318,8 @@ TEST_CASE("FileEditTool validate_input error code 5 (.ipynb)", "[file_edit_tool]
     auto r = tool.validate_input(
         make_edit_input("/tmp/test.ipynb", "", "new content"), ctx
     );
-    REQUIRE(r.isErr());
-    REQUIRE_THAT(r.error(), Catch::Matchers::ContainsSubstring("Jupyter"));
+    REQUIRE(r.is_err());
+    REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("Jupyter"));
 }
 
 TEST_CASE("FileEditTool validate_input error code 3 (file exists non-empty + old=empty)", "[file_edit_tool]") {
@@ -329,8 +329,8 @@ TEST_CASE("FileEditTool validate_input error code 3 (file exists non-empty + old
     FileEditTool tool;
     ToolContext ctx;
     auto r = tool.validate_input(make_edit_input(fp.string(), "", "new content"), ctx);
-    REQUIRE(r.isErr());
-    REQUIRE_THAT(r.error(), Catch::Matchers::ContainsSubstring("already exists"));
+    REQUIRE(r.is_err());
+    REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("already exists"));
 }
 
 TEST_CASE("FileEditTool validate_input error code 6 (not pre-read)", "[file_edit_tool]") {
@@ -340,8 +340,8 @@ TEST_CASE("FileEditTool validate_input error code 6 (not pre-read)", "[file_edit
     FileEditTool tool;
     ToolContext ctx;
     auto r = tool.validate_input(make_edit_input(fp.string(), "line1", "replaced"), ctx);
-    REQUIRE(r.isErr());
-    REQUIRE_THAT(r.error(), Catch::Matchers::ContainsSubstring("not been read"));
+    REQUIRE(r.is_err());
+    REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("not been read"));
 }
 
 TEST_CASE("FileEditTool validate_input error code 7 (staleness)", "[file_edit_tool]") {
@@ -360,8 +360,8 @@ TEST_CASE("FileEditTool validate_input error code 7 (staleness)", "[file_edit_to
     FileEditTool tool;
     ToolContext ctx;
     auto r = tool.validate_input(make_edit_input(fp.string(), "old content", "new"), ctx);
-    REQUIRE(r.isErr());
-    REQUIRE_THAT(r.error(), Catch::Matchers::ContainsSubstring("modified since read"));
+    REQUIRE(r.is_err());
+    REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("modified since read"));
 }
 
 TEST_CASE("FileEditTool validate_input error code 8 (no match)", "[file_edit_tool]") {
@@ -374,8 +374,8 @@ TEST_CASE("FileEditTool validate_input error code 8 (no match)", "[file_edit_too
     auto r = tool.validate_input(
         make_edit_input(fp.string(), "nonexistent string", "replacement"), ctx
     );
-    REQUIRE(r.isErr());
-    REQUIRE_THAT(r.error(), Catch::Matchers::ContainsSubstring("not found"));
+    REQUIRE(r.is_err());
+    REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("not found"));
 }
 
 TEST_CASE("FileEditTool validate_input error code 9 (multiple matches, no replace_all)", "[file_edit_tool]") {
@@ -386,8 +386,8 @@ TEST_CASE("FileEditTool validate_input error code 9 (multiple matches, no replac
     FileEditTool tool;
     ToolContext ctx;
     auto r = tool.validate_input(make_edit_input(fp.string(), "foo", "bar"), ctx);
-    REQUIRE(r.isErr());
-    REQUIRE_THAT(r.error(), Catch::Matchers::ContainsSubstring("matches"));
+    REQUIRE(r.is_err());
+    REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("matches"));
 }
 
 TEST_CASE("FileEditTool validate_input error code 9 bypassed with replace_all", "[file_edit_tool]") {
@@ -400,7 +400,7 @@ TEST_CASE("FileEditTool validate_input error code 9 bypassed with replace_all", 
     auto r = tool.validate_input(
         make_edit_input(fp.string(), "foo", "bar", true), ctx
     );
-    REQUIRE(r.isOk());
+    REQUIRE(r.is_ok());
 }
 
 TEST_CASE("FileEditTool validate_input happy path single match", "[file_edit_tool]") {
@@ -413,7 +413,7 @@ TEST_CASE("FileEditTool validate_input happy path single match", "[file_edit_too
     auto r = tool.validate_input(
         make_edit_input(fp.string(), "second", "SECOND"), ctx
     );
-    REQUIRE(r.isOk());
+    REQUIRE(r.is_ok());
 }
 
 TEST_CASE("FileEditTool validate_input create new file (old=empty, file not exist)", "[file_edit_tool]") {
@@ -423,7 +423,7 @@ TEST_CASE("FileEditTool validate_input create new file (old=empty, file not exis
     FileEditTool tool;
     ToolContext ctx;
     auto r = tool.validate_input(make_edit_input(fp.string(), "", "new content"), ctx);
-    REQUIRE(r.isOk());
+    REQUIRE(r.is_ok());
 }
 
 // ============================================================
@@ -444,9 +444,9 @@ TEST_CASE("FileEditTool validate_input error code 0 (secret scanning)", "[file_e
     auto r = tool.validate_input(
         make_edit_input(fp.string(), "placeholder", "token = ghp_0123456789012345678901234567890123456"), ctx
     );
-    REQUIRE(r.isErr());
-    REQUIRE_THAT(r.error(), Catch::Matchers::ContainsSubstring("secrets"));
-    REQUIRE_THAT(r.error(), Catch::Matchers::ContainsSubstring("GitHub PAT"));
+    REQUIRE(r.is_err());
+    REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("secrets"));
+    REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("GitHub PAT"));
 }
 
 TEST_CASE("FileEditTool validate_input secret scan disabled by default", "[file_edit_tool][secret]") {
@@ -461,7 +461,7 @@ TEST_CASE("FileEditTool validate_input secret scan disabled by default", "[file_
     auto r = tool.validate_input(
         make_edit_input(fp.string(), "placeholder", "token = ghp_0123456789012345678901234567890123456"), ctx
     );
-    REQUIRE(r.isOk());
+    REQUIRE(r.is_ok());
 }
 
 TEST_CASE("FileEditTool validate_input error code 2 (deny rules)", "[file_edit_tool][deny]") {
@@ -481,8 +481,8 @@ TEST_CASE("FileEditTool validate_input error code 2 (deny rules)", "[file_edit_t
     auto r = tool.validate_input(
         make_edit_input(fp.string(), "KEY=value", "KEY=other"), ctx
     );
-    REQUIRE(r.isErr());
-    REQUIRE_THAT(r.error(), Catch::Matchers::ContainsSubstring("denied"));
+    REQUIRE(r.is_err());
+    REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("denied"));
 }
 
 TEST_CASE("FileEditTool validate_input deny rules not matching", "[file_edit_tool][deny]") {
@@ -499,7 +499,7 @@ TEST_CASE("FileEditTool validate_input deny rules not matching", "[file_edit_too
     FileEditTool tool;
     ToolContext ctx;
     auto r = tool.validate_input(make_edit_input(fp.string(), "hello", "world"), ctx);
-    REQUIRE(r.isOk());
+    REQUIRE(r.is_ok());
 }
 
 TEST_CASE("FileEditTool validate_input deny rules empty config", "[file_edit_tool][deny]") {
@@ -512,7 +512,7 @@ TEST_CASE("FileEditTool validate_input deny rules empty config", "[file_edit_too
     FileEditTool tool;
     ToolContext ctx;
     auto r = tool.validate_input(make_edit_input(fp.string(), "hello", "world"), ctx);
-    REQUIRE(r.isOk());
+    REQUIRE(r.is_ok());
 }
 
 TEST_CASE("FileEditTool validate_input deny rules comments and whitespace", "[file_edit_tool][deny]") {
@@ -531,7 +531,7 @@ TEST_CASE("FileEditTool validate_input deny rules comments and whitespace", "[fi
     ToolContext ctx;
     // normal.txt 不匹配 **/.env，应通过
     auto r = tool.validate_input(make_edit_input(fp.string(), "hello", "world"), ctx);
-    REQUIRE(r.isOk());
+    REQUIRE(r.is_ok());
 }
 
 // ============================================================
@@ -550,7 +550,7 @@ TEST_CASE("FileEditTool call create new file", "[file_edit_tool][call]") {
     auto r = tool.call(make_edit_input(fp.string(), "", "new content\nline 2"), ctx);
     REQUIRE(r.is_ok());
     REQUIRE(fs::exists(fp));
-    REQUIRE_THAT(r.to_string(), Catch::Matchers::ContainsSubstring("created successfully"));
+    REQUIRE_THAT(r.value().to_string(), Catch::Matchers::ContainsSubstring("created successfully"));
 
     // 验证文件内容
     std::ifstream in(fp);
@@ -615,8 +615,8 @@ TEST_CASE("FileEditTool call rejects when not pre-read", "[file_edit_tool][call]
     ctx.cwd = tmp.path().string();
 
     auto r = tool.call(make_edit_input(fp.string(), "content", "new"), ctx);
-    REQUIRE(r.is_error);
-    REQUIRE_THAT(r.text, Catch::Matchers::ContainsSubstring("not been read"));
+    REQUIRE(r.is_err());
+    REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("not been read"));
 }
 
 // ============================================================
@@ -1053,7 +1053,7 @@ TEST_CASE("FileEditTool smart quote matching validate_input", "[file_edit_tool][
 
     // LLM 提供直引号，validate_input 应通过（引号规范化匹配成功）
     auto r = tool.validate_input(make_edit_input(fp.string(), "\"test\"", "\"prod\""), ctx);
-    REQUIRE(r.isOk());
+    REQUIRE(r.is_ok());
 }
 
 TEST_CASE("FileEditTool smart quote no match returns error", "[file_edit_tool][quote_normalizer]") {
@@ -1068,8 +1068,8 @@ TEST_CASE("FileEditTool smart quote no match returns error", "[file_edit_tool][q
 
     // LLM 提供的字符串在文件中不存在（即使引号规范化后也不匹配）
     auto r = tool.validate_input(make_edit_input(fp.string(), "\"nonexistent\"", "\"x\""), ctx);
-    REQUIRE(r.isErr());
-    REQUIRE_THAT(r.error(), Catch::Matchers::ContainsSubstring("not found"));
+    REQUIRE(r.is_err());
+    REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("not found"));
 }
 
 // ============================================================
@@ -1331,7 +1331,7 @@ TEST_CASE("FileEditTool UTF-16LE validate_input matching", "[file_edit_tool][enc
 
     // validate_input 应能正确匹配 UTF-16LE 文件中的子串
     auto r = tool.validate_input(make_edit_input(fp.string(), "world", "C++"), ctx);
-    REQUIRE(r.isOk());
+    REQUIRE(r.is_ok());
 }
 
 TEST_CASE("FileEditTool UTF-8 with BOM preserves no BOM on write", "[file_edit_tool][encoding]") {

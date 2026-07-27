@@ -27,7 +27,7 @@ public:
     const std::string& prompt() const override;
     nlohmann::json input_schema() const override;
 
-    ToolResult call(
+    ResultV2<ToolResult> call(
         const nlohmann::json& input,
         const ToolContext& ctx
     ) const override;

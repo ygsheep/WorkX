@@ -2,7 +2,8 @@
  * @file itool.h
  * @brief ITool 接口 — 工具抽象基类
  * @details 所有 Agent 可调用工具的统一接口：名称、描述、参数 schema、权限检查、输入验证、执行
- * @version 1.1.0
+ *          V2-4：PermissionResult/ValidationResult/call 返回类型迁移到 ResultV2
+ * @version 2.0.0
  * @date 2026-07
  */
 
@@ -10,17 +11,18 @@
 
 #include <string>
 #include <nlohmann/json.hpp>
-#include "core/utils/result.h"
+#include "core/utils/result_v2.h"
+#include "core/utils/error.h"
 #include "agent/tool/result.h"
 #include "agent/tool/context.h"
 
 namespace agent::tool {
 
-/// @brief 权限检查结果类型
-using PermissionResult = Result<void, std::string>;
+/// @brief 权限检查结果类型（V2）
+using PermissionResult = ResultV2<void>;
 
-/// @brief 输入验证结果类型
-using ValidationResult = Result<void, std::string>;
+/// @brief 输入验证结果类型（V2）
+using ValidationResult = ResultV2<void>;
 
 /// @brief ITool 接口 — 工具抽象基类
 ///
@@ -51,7 +53,7 @@ public:
     /// @brief 检查工具调用权限（默认允许，子类可覆盖）
     /// @param input 工具输入参数
     /// @param ctx 工具执行上下文
-    /// @return 权限检查结果
+    /// @return 权限检查结果（错误码建议 PermissionDenied）
     virtual PermissionResult check_permissions(
         const nlohmann::json& /*input*/,
         const ToolContext& /*ctx*/
@@ -62,7 +64,7 @@ public:
     /// @brief 验证工具输入（默认通过，子类可覆盖）
     /// @param input 工具输入参数
     /// @param ctx 工具执行上下文
-    /// @return 验证结果
+    /// @return 验证结果（错误码建议 InvalidInput / MissingArgument）
     virtual ValidationResult validate_input(
         const nlohmann::json& /*input*/,
         const ToolContext& /*ctx*/
@@ -73,13 +75,13 @@ public:
     /// @brief 执行工具
     /// @param input 工具输入参数
     /// @param ctx 工具执行上下文
-    /// @return 工具执行结果
+    /// @return 工具执行结果（V2：ResultV2<ToolResult>，错误携带 Error）
     /// @par 线程安全保证（K-1 / Phase 3）
     /// `call()` 标注为 `const`：工具实例本身无可观察副作用，可被多个线程
     /// 并行调用同一实例。需要缓存可变状态的工具用 `mutable` + mutex 保护。
     /// 跨工具共享状态通过单例（如 FileHistory / FileReadStateTracker）访问，
     /// 这些单例内部已用 mutex 保护。
-    virtual ToolResult call(
+    virtual ResultV2<ToolResult> call(
         const nlohmann::json& input,
         const ToolContext& ctx
     ) const = 0;
