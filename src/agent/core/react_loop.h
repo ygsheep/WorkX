@@ -181,16 +181,17 @@ public:
     /// @param provider 推理提供者（非拥有，ChatSession 拥有）
     /// @param registry 工具注册表（可为 nullptr，表示无工具）
     /// @param config 循环配置
-    /// @param config_manager 配置管理器（D-5 注入，nullptr 时工具回退单例）
+    /// @param config_manager 配置管理器（H-5：必须非空，注入到 ToolContext）
     ReActLoop(ICompletionProvider* provider,
               std::shared_ptr<tool::ToolRegistry> registry,
               Config config,
-              IConfigManager* config_manager = nullptr);
+              IConfigManager* config_manager);
 
     /// @brief 构造（使用默认配置）
+    /// @param config_manager 配置管理器（H-5：必须非空，注入到 ToolContext）
     ReActLoop(ICompletionProvider* provider,
               std::shared_ptr<tool::ToolRegistry> registry,
-              IConfigManager* config_manager = nullptr)
+              IConfigManager* config_manager)
         : ReActLoop(provider, std::move(registry), Config{}, config_manager) {}
 
     ~ReActLoop() = default;
@@ -307,7 +308,7 @@ private:
     std::unique_ptr<tool::ToolExecutor> m_executor; ///< 工具执行器
     Config m_config;                              ///< 循环配置
     ContextCompressor m_compressor;               ///< 3.3 上下文压缩器
-    IConfigManager* m_config_manager = nullptr;   ///< D-5：配置管理器（非拥有，注入到 ToolContext）
+    IConfigManager* m_config_manager = nullptr;   ///< H-5：配置管理器（非拥有，注入到 ToolContext，必须非空）
 };
 
 } // namespace agent

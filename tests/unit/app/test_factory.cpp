@@ -181,3 +181,14 @@ TEST_CASE("IBackendAdmin is base of IBackend", "[factory][ibackend_admin]") {
     static_assert(std::is_base_of_v<ICompletionProvider, IBackend>,
                   "IBackend must inherit from ICompletionProvider");
 }
+
+// ============================================================
+// H-8: SessionResult 携带 backend_admin 字段
+// ============================================================
+
+TEST_CASE("SessionResult has backend_admin field (H-8)", "[factory][h8]") {
+    // 编译期验证：SessionResult 包含 backend_admin 字段，类型为 IBackendAdmin*
+    // （H-8：UI 层通过此字段调用 list_models/set_model_name，不再依赖 ChatSession::backend()）
+    SessionResult result;
+    REQUIRE(result.backend_admin == nullptr);  // 默认 nullptr
+}

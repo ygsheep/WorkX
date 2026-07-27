@@ -115,6 +115,11 @@ SessionResult create_session(IConfigManager& cfg, const ProviderPreset* preset) 
         return result;  // session 保持 nullptr
     }
 
+    // H-8：在 backend 移动到 ChatSession 之前提取 IBackendAdmin* 句柄。
+    // backend 由 ChatSession 持有（unique_ptr<ICompletionProvider>），
+    // session 存活期间 backend_admin 始终有效；session 析构后禁止使用。
+    result.backend_admin = backend.get();  // IBackend* → IBackendAdmin* 隐式向上转型
+
     // 构造 ChatSession（DI 三件套）
     int default_retry_delay = preset && preset->retry_delay_ms > 0 ? preset->retry_delay_ms : 1000;
     result.session = std::make_unique<ChatSession>(

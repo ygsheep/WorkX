@@ -32,6 +32,21 @@ namespace agent {
 /// @brief 后端接口前向声明（供 ChatSession::backend() 返回类型使用）
 class IBackend;
 
+/// @brief H-7：重试决策动作
+/// @details compute_retry() 纯函数的返回类型，描述下一步动作
+enum class RetryAction {
+    Continue,   ///< 不重试，继续执行（无错误或不可重试错误）
+    Stop,       ///< 不可重试错误，发布终止事件
+    Sleep       ///< 可重试，sleep delay_ms 后递归调用 run_completion
+};
+
+/// @brief H-7：重试决策
+/// @details 纯函数 compute_retry() 的返回值，分离纯逻辑与 I/O 副作用
+struct RetryDecision {
+    RetryAction action = RetryAction::Stop;  ///< 决策动作
+    int delay_ms = 0;                        ///< Sleep 时的退避时长（毫秒）
+};
+
 /// @brief 对话会话
 /// @details 由外部驱动（main.cpp），通过 send_message() 提交文本，
 ///          后台 Task 调用 ICompletionProvider，发布 StreamTokenEvent/StepDoneEvent/StreamDoneEvent。
@@ -99,14 +114,44 @@ public:
     void send_message(const std::string& text);
 
     /// @brief 保存对话历史到文件
+    /// @details H-6：仅做 serialize_state() → ofstream，序列化逻辑在 serialize_state() 中
     Result<void, std::string> save_session(const std::string& path) const;
 
     /// @brief 从文件加载对话历史
+    /// @details H-6：仅做 ifstream → deserialize_state()，反序列化逻辑在 deserialize_state() 中
     Result<void, std::string> load_session(const std::string& path);
 
-    /// @brief 获取底层 backend（供 UI 层获取模型列表等）
-    /// @return IBackend 指针，若 provider 不是 IBackend 则返回 nullptr
-    IBackend* backend() const;
+    /// @brief H-6：序列化会话状态为 JSON（纯函数，不触碰文件系统）
+    /// @details 拷贝 system_prompt 与 messages 后构建 JSON，调用方无需加锁。
+    ///          公开为 public 以便单元测试直接验证序列化格式。
+    /// @return 包含 system_prompt（可选）和 messages 数组的 JSON 对象
+    nlohmann::json serialize_state() const;
+
+    /// @brief H-6：从 JSON 反序列化会话状态（纯函数，不触碰文件系统）
+    /// @details 解析 system_prompt 与 messages，校验字段完整性。
+    ///          调用方负责加锁提交到 m_system_prompt / m_messages。
+    ///          公开为 public 以便单元测试直接验证反序列化逻辑。
+    /// @param j JSON 对象（来自 load_session 读取的文件）
+    /// @return 成功返回 void；失败返回错误信息（字段缺失/类型错误等）
+    Result<void, std::string> deserialize_state(const nlohmann::json& j);
+
+    /// @brief H-7：纯函数计算重试决策
+    /// @details 分离 5 类关注点中的纯逻辑部分：
+    ///          ①可重试判定 ②退避延迟计算。
+    ///          run_completion 仅按决策执行 I/O（事件发布/sleep/递归调用）。
+    ///          公开为 public 以便单元测试直接验证决策。
+    /// @param react_result ReAct 循环结果（只读 was_error / error_message）
+    /// @param retry_policy HTTP 重试策略（提供 max_retries / is_retryable / delay_ms）
+    /// @param attempt 当前重试次数（0=首次请求失败后的第一次重试判定）
+    /// @return RetryDecision：Continue（无错误）/ Sleep（可重试）/ Stop（不可重试或超上限）
+    static RetryDecision compute_retry(const ReActResult& react_result,
+                                       const HttpRetryPolicy& retry_policy,
+                                       int attempt) noexcept;
+
+    // H-8：移除 backend() 方法。
+    // 原设计暴露完整 IBackend* 给 UI 层，违反接口隔离（UI 可误调 shutdown() 等
+    // IBackendAdmin 方法）。UI 层应通过 factory 独立注入的 IBackendAdmin* 调用
+    // list_models / set_model_name 等管理方法。
 
 private:
     /// @brief 执行推理（在后台线程中运行，含 agent 循环）
