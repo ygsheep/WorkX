@@ -44,8 +44,12 @@ struct TestServerFixture {
 
             // 连通性测试
             HttpClient check_client;
-            auto resp = check_client.get(s_base_url + "/v1/models", {}, 5000);
-            if (!resp.error.empty() || resp.status_code != 200) {
+            auto result = check_client.get(s_base_url + "/v1/models", {}, 5000);
+            bool ok = false;
+            if (result.is_ok() && result.value().status_code == 200) {
+                ok = true;
+            }
+            if (!ok) {
                 FAIL("测试服务器未就绪: " + s_base_url);
             }
             initialized = true;
@@ -106,17 +110,17 @@ TEST_CASE_METHOD(TestServerFixture, "HttpClient sync GET", "[http][client]") {
     HttpClient client;
 
     SECTION("GET /v1/models returns 200") {
-        auto resp = client.get(s_base_url + "/v1/models", {}, 5000);
-        REQUIRE(resp.error.empty());
-        REQUIRE(resp.status_code == 200);
+        auto result = client.get(s_base_url + "/v1/models", {}, 5000);
+        REQUIRE(result.is_ok());
+        REQUIRE(result.value().status_code == 200);
     }
 
     SECTION("GET /v1/models returns valid JSON") {
-        auto resp = client.get(s_base_url + "/v1/models", {}, 5000);
-        REQUIRE(resp.error.empty());
-        REQUIRE(resp.status_code == 200);
-        REQUIRE(resp.body.find("id") != std::string::npos);
-        REQUIRE(resp.body.find("object") != std::string::npos);
+        auto result = client.get(s_base_url + "/v1/models", {}, 5000);
+        REQUIRE(result.is_ok());
+        REQUIRE(result.value().status_code == 200);
+        REQUIRE(result.value().body.find("id") != std::string::npos);
+        REQUIRE(result.value().body.find("object") != std::string::npos);
     }
 
     SECTION("GET with custom headers") {
@@ -124,26 +128,26 @@ TEST_CASE_METHOD(TestServerFixture, "HttpClient sync GET", "[http][client]") {
             {"Authorization", "Bearer lm-studio"},
             {"X-Custom", "value"}
         };
-        auto resp = client.get(s_base_url + "/v1/models", headers, 5000);
-        REQUIRE(resp.error.empty());
-        REQUIRE(resp.status_code == 200);
+        auto result = client.get(s_base_url + "/v1/models", headers, 5000);
+        REQUIRE(result.is_ok());
+        REQUIRE(result.value().status_code == 200);
     }
 
     SECTION("GET invalid LM Studio API path returns error") {
         // LM Studio 只路由已知端点，未知路径可能返回 200（回退到 LLM）
         // 改为测试无效 URL 情况
-        auto resp = client.get("http://127.0.0.1:16543/v1/nonexistent", {}, 1000);
-        REQUIRE_FALSE(resp.error.empty());
+        auto result = client.get("http://127.0.0.1:16543/v1/nonexistent", {}, 1000);
+        REQUIRE(result.is_err());
     }
 
     SECTION("GET invalid URL returns error") {
-        auto resp = client.get("http://192.0.2.1:1/nonexistent", {}, 1000);
-        REQUIRE_FALSE(resp.error.empty());
+        auto result = client.get("http://192.0.2.1:1/nonexistent", {}, 1000);
+        REQUIRE(result.is_err());
     }
 
     SECTION("GET timeout returns error") {
-        auto resp = client.get("http://203.0.113.1:1/slow", {}, 1000);
-        REQUIRE_FALSE(resp.error.empty());
+        auto result = client.get("http://203.0.113.1:1/slow", {}, 1000);
+        REQUIRE(result.is_err());
     }
 }
 

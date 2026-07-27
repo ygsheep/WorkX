@@ -7,7 +7,9 @@
 #include <memory>
 #include <chrono>
 
-#include "core/utils/result.h"
+#include "core/utils/result.h"          // 旧 Result（过渡期保留）
+#include "core/utils/result_v2.h"       // V2-2：新 ResultV2
+#include "core/utils/error.h"           // V2-2：Error 类型
 
 namespace agent {
 
@@ -83,9 +85,15 @@ public:
     HttpClient(const HttpClient&) = delete;
     HttpClient& operator=(const HttpClient&) = delete;
 
-    HttpResponse get(const std::string& url,
-                     const std::vector<std::pair<std::string, std::string>>& headers,
-                     int timeout_ms = 15000);
+    /// @brief 同步 GET 请求
+    /// @return 成功返回 HttpResponse（含 2xx/4xx/5xx 状态码）；
+    ///         失败返回 Error（仅限网络错误，HTTP 4xx/5xx 仍通过 HttpResponse 返回）
+    /// @details V2-2：签名从 HttpResponse 改为 ResultV2<HttpResponse>，
+    ///          网络错误（curl 失败、无法到达服务器）通过 Error 携带错误码；
+    ///          HTTP 4xx/5xx 仍通过 HttpResponse 返回，调用方可通过 is_http_error() 判断
+    ResultV2<HttpResponse> get(const std::string& url,
+                               const std::vector<std::pair<std::string, std::string>>& headers,
+                               int timeout_ms = 15000);
 
     void async_post_stream(const std::string& url,
                            const std::vector<std::pair<std::string, std::string>>& headers,

@@ -136,19 +136,20 @@ static size_t write_cb(void* ptr, size_t size, size_t nmemb, void* userdata) {
 }
 
 // ============================================================
-// Sync GET
+// Sync GET（V2-2：返回 ResultV2<HttpResponse>）
 // ============================================================
 
-HttpResponse HttpClient::get(const std::string& url,
-                             const std::vector<std::pair<std::string, std::string>>& headers,
-                             int timeout_ms) {
-    HttpResponse resp;
+ResultV2<HttpResponse> HttpClient::get(const std::string& url,
+                                       const std::vector<std::pair<std::string, std::string>>& headers,
+                                       int timeout_ms) {
     LOG_DEBUG("[http] GET {} timeout={}ms", url, timeout_ms);
     CURL* curl = curl_easy_init();
     if (!curl) {
-        resp.error = "curl init failed";
         LOG_ERROR("[http] GET {} curl_easy_init failed", url);
-        return resp;
+        return ResultV2<HttpResponse>::err(
+            Error::Code::InternalError,
+            "curl_easy_init failed",
+            url);
     }
 
     std::string body;
@@ -176,22 +177,28 @@ HttpResponse HttpClient::get(const std::string& url,
 
     CURLcode rc = curl_easy_perform(curl);
     if (rc != CURLE_OK) {
-        resp.error = curl_easy_strerror(rc);
-        LOG_ERROR("[http] GET {} failed: {} (rc={})", url, resp.error, static_cast<int>(rc));
+        // V2-2：网络错误通过 Error 携带错误码
+        std::string err_msg = curl_easy_strerror(rc);
+        LOG_ERROR("[http] GET {} failed: {} (rc={})", url, err_msg, static_cast<int>(rc));
+        if (hl) curl_slist_free_all(hl);
+        curl_easy_cleanup(curl);
+        return ResultV2<HttpResponse>::err(
+            Error::from_curl_code(static_cast<int>(rc), url));
+    }
+
+    HttpResponse resp;
+    long code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+    resp.status_code = static_cast<unsigned int>(code);
+    resp.body = std::move(body);
+    if (code >= 400) {
+        LOG_WARN("[http] GET {} returned HTTP {} body_len={}", url, code, resp.body.size());
     } else {
-        long code = 0;
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
-        resp.status_code = static_cast<unsigned int>(code);
-        resp.body = std::move(body);
-        if (code >= 400) {
-            LOG_WARN("[http] GET {} returned HTTP {} body_len={}", url, code, resp.body.size());
-        } else {
-            LOG_DEBUG("[http] GET {} -> {} bytes={}", url, code, resp.body.size());
-        }
+        LOG_DEBUG("[http] GET {} -> {} bytes={}", url, code, resp.body.size());
     }
     if (hl) curl_slist_free_all(hl);
     curl_easy_cleanup(curl);
-    return resp;
+    return ResultV2<HttpResponse>::ok(std::move(resp));
 }
 
 // ============================================================

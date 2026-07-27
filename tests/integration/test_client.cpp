@@ -50,8 +50,8 @@ struct LmStudioFixture {
 
         // 连通性测试：确保 LM Studio 已启动
         HttpClient check_client;
-        auto resp = check_client.get(s_base_url + "/v1/models", {}, 5000);
-        if (!resp.error.empty() || resp.status_code != 200) {
+        auto result = check_client.get(s_base_url + "/v1/models", {}, 5000);
+        if (!result.is_ok() || result.value().status_code != 200) {
             FAIL("LM Studio 未启动或无法连接。请先启动 LM Studio 服务器 (lms server start)");
         }
         initialized = true;

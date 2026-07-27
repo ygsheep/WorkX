@@ -26,6 +26,8 @@
 #include <string>
 #include <string_view>
 
+#include "core/utils/error.h"           // V2-2：基于 Error::code 的重载
+
 namespace agent {
 
 /// @brief HTTP 重试策略
@@ -57,6 +59,14 @@ struct HttpRetryPolicy {
         if (http_status >= 500 && http_status <= 599) return true;  // 服务器错误
         if (http_status == 0 && !error_msg.empty()) return true;    // 网络错误（无 HTTP 响应）
         return false;
+    }
+
+    /// @brief V2-2：基于 Error::code 判断是否可重试
+    /// @details 直接委托 Error::is_retryable()，与 Error::Code 体系对齐
+    ///          可重试：NetworkTimeout/NetworkDisconnected/NetworkUnreachable/
+    ///                 HttpRateLimited/HttpServerDown/StreamError
+    static bool is_retryable(const Error& error) noexcept {
+        return error.is_retryable();
     }
 
     /// @brief 计算第 N 次重试的延迟（指数退避 + 上限）

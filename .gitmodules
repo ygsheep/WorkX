@@ -1,0 +1,3 @@
+[submodule ".skills/qa-skills"]
+	path = .skills/qa-skills
+	url = https://github.com/petrkindlmann/qa-skills.git

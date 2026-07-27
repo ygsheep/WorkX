@@ -10,6 +10,7 @@
 #include <catch2/matchers/catch_matchers.hpp>
 
 #include "agent/api/retry.h"
+#include "core/utils/error.h"
 
 #include <chrono>
 
@@ -113,4 +114,35 @@ TEST_CASE("HttpRetryPolicy default values", "[retry][defaults]") {
     REQUIRE(policy.max_retries == 3);
     REQUIRE(policy.base_delay_ms == 1000);
     REQUIRE(policy.max_delay_ms == 60000);
+}
+
+// ============================================================
+// V2-2：基于 Error::code 的 is_retryable 重载
+// ============================================================
+
+TEST_CASE("HttpRetryPolicy is_retryable(Error) network errors", "[retry][v2]") {
+    REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::NetworkTimeout}) == true);
+    REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::NetworkDisconnected}) == true);
+    REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::NetworkUnreachable}) == true);
+}
+
+TEST_CASE("HttpRetryPolicy is_retryable(Error) HTTP errors", "[retry][v2]") {
+    REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::HttpRateLimited}) == true);
+    REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::HttpServerDown}) == true);
+    // 普通HttpError（4xx）不可重试
+    REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::HttpError}) == false);
+}
+
+TEST_CASE("HttpRetryPolicy is_retryable(Error) stream errors", "[retry][v2]") {
+    REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::StreamError}) == true);
+    REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::StreamCancelled}) == false);
+}
+
+TEST_CASE("HttpRetryPolicy is_retryable(Error) non-retryable errors", "[retry][v2]") {
+    REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::InvalidInput}) == false);
+    REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::PermissionDenied}) == false);
+    REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::AuthenticationFailed}) == false);
+    REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::ResourceNotFound}) == false);
+    REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::ConfigInvalid}) == false);
+    REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::NotImplemented}) == false);
 }

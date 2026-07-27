@@ -204,15 +204,20 @@ Result<std::vector<ModelInfo>, std::string> RemoteBackend::list_models() {
         LOG_INFO("[debug/models]  {}:{} ", k, val);
     }
 
-    // 同步 GET 请求
-    auto response = m_http_client->get(url, header_pairs, 15000);
+    // 同步 GET 请求（V2-2：get 返回 ResultV2<HttpResponse>）
+    auto result = m_http_client->get(url, header_pairs, 15000);
 
-    // E-6：用便捷方法判断错误类型，语义清晰
-    if (response.is_network_error()) {
+    // V2-2：网络错误（curl 失败、无法到达服务器）通过 Error 携带错误码
+    if (result.is_err()) {
+        const auto& err = result.error();
+        LOG_ERROR("[backend] list_models network error: {}", err.to_string());
         return Result<std::vector<ModelInfo>, std::string>::err(
-            std::format("HTTP request failed: {}", response.error));
+            std::format("HTTP request failed: [{}] {}", err.code_string(), err.message));
     }
 
+    const auto& response = result.value();
+
+    // HTTP 4xx/5xx 错误（已到达服务器，但服务端返回错误状态码）
     if (response.is_http_error()) {
         return Result<std::vector<ModelInfo>, std::string>::err(
             std::format("HTTP error: {} ({})", response.status_code, response.body));
