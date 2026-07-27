@@ -59,17 +59,15 @@ void ChatSession::ReActEventPublisher::on_thought(const ReActStep& step) {
         .step_number = step.step_number,
         .description = "(thinking)"
     });
-    // 有 tool_use 时发布中间 StreamDoneEvent，
-    // 让 UI 知道本轮 LLM 流式输出结束
+    // P3：有 tool_use 时发布 StepDoneEvent（而非 StreamDoneEvent），
+    // 让 UI 知道本轮 LLM 流式输出结束，但不触发会话级结束动作。
+    // 原实现发布 StreamDoneEvent 导致语义污染：UI 误显示完成、
+    // token 统计被 0 值覆盖、状态机错误转 IDLE、光标错位。
     if (!step.tool_uses.empty()) {
-        m_bus.publish_async(StreamDoneEvent{
+        m_bus.publish_async(StepDoneEvent{
             .session_id = m_session_id,
             .full_content = step.thought_text,
             .full_reasoning = step.reasoning,
-            .was_interrupted = false,
-            .prompt_tokens = 0,
-            .generated_tokens = 0,
-            .prompt_ms = 0.0,
             .generation_ms = step.duration_ms
         });
     }

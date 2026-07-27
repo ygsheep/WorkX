@@ -471,7 +471,35 @@ void ChatRenderer::start() {
         })
     );
 
-    // ---- StreamDoneEvent → 完成 ----
+    // ---- StepDoneEvent → 单步结束（P3 新增，ReAct 中间步骤）----
+    // 轻量收尾：spinner 停止、formatter flush、思考标记输出
+    // 不触发会话级动作（token 统计、状态转 IDLE、光标复位）
+    m_token_step_done = std::make_unique<EventToken>(
+        bus.subscribe<StepDoneEvent>([this](const StepDoneEvent& /*e*/) {
+            if (m_spinner_active.load()) {
+                m_terminal->spinner_stop();
+                m_spinner_active.store(false);
+            }
+
+            // 刷新 StreamingBuffer 和 OutputFormatter
+            m_formatter->flush();
+            m_stream_buf->stop();
+
+            // 如果还在思考状态且有推理内容，输出 ● 思考 Ns 标记
+            if (m_state_machine.current() == TuiState::THINKING && !m_reasoning_buffer.empty()) {
+                m_terminal->set_color(ColorRole::Success);
+                m_terminal->write(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83 ");  // ● (绿色)
+                m_terminal->write(std::to_string(m_thinking_seconds.load()));
+                m_terminal->write("s (ctrl+o \xe6\x9f\xa5\xe7\x9c\x8b)\n");
+                m_terminal->reset_color();
+            }
+            // 不输出换行、不显示 token 统计、不更新 token_stats、
+            // 不 increment_message_count、不转 IDLE、不光标复位
+            // —— 这些是会话级结束动作，由 StreamDoneEvent 处理
+        })
+    );
+
+    // ---- StreamDoneEvent → 会话完成（整个推理结束）----
     m_token_done = std::make_unique<EventToken>(
         bus.subscribe<StreamDoneEvent>([this](const StreamDoneEvent& e) {
             if (m_spinner_active.load()) {
@@ -691,6 +719,9 @@ void ChatRenderer::stop() {
     }
     if (m_token_done && m_token_done->is_valid()) {
         bus.unsubscribe<StreamDoneEvent>(*m_token_done);
+    }
+    if (m_token_step_done && m_token_step_done->is_valid()) {
+        bus.unsubscribe<StepDoneEvent>(*m_token_step_done);
     }
     if (m_token_error && m_token_error->is_valid()) {
         bus.unsubscribe<StreamErrorEvent>(*m_token_error);

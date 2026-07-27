@@ -34,7 +34,7 @@ class IBackend;
 
 /// @brief 对话会话
 /// @details 由外部驱动（main.cpp），通过 send_message() 提交文本，
-///          后台 Task 调用 ICompletionProvider，发布 StreamTokenEvent/StreamDoneEvent。
+///          后台 Task 调用 ICompletionProvider，发布 StreamTokenEvent/StepDoneEvent/StreamDoneEvent。
 ///          支持工具调用（function calling）：LLM 返回 tool_use → 执行工具 → tool_result → 继续推理
 class ChatSession {
 public:

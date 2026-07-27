@@ -66,6 +66,7 @@ private:
     std::unique_ptr<agent::EventToken> m_token_status;
     std::unique_ptr<agent::EventToken> m_token_stream;
     std::unique_ptr<agent::EventToken> m_token_done;
+    std::unique_ptr<agent::EventToken> m_token_step_done;  ///< P3: 单步结束（ReAct 中间步骤）
     std::unique_ptr<agent::EventToken> m_token_error;
     std::unique_ptr<agent::EventToken> m_token_step;
     std::unique_ptr<agent::EventToken> m_token_tool_call;

@@ -58,7 +58,11 @@ struct StreamProgressEvent {
     int32_t processed = 0;
 };
 
-/// @brief 流式完成
+/// @brief 流式完成（整个会话/本轮推理结束）
+/// @details 语义：LLM 推理完全结束（含 ReAct 多步全部完成），
+///          UI 应执行完整结束流程：token 统计、状态转 IDLE、光标复位等。
+///          注意：ReAct 循环中单步 LLM 输出结束（仍有 tool_use 待执行）
+///          应发布 StepDoneEvent 而非本事件，避免触发会话级结束动作。
 struct StreamDoneEvent {
     std::string session_id;
     std::string full_content;
@@ -72,6 +76,18 @@ struct StreamDoneEvent {
     int32_t cache_read_input_tokens = 0;
     double prompt_ms = 0.0;
     double generation_ms = 0.0;
+};
+
+/// @brief 单步 LLM 输出结束（P3 新增，清理 StreamDoneEvent 语义污染）
+/// @details 语义：ReAct 循环中一轮 LLM 流式输出结束，但仍有 tool_use 待执行，
+///          后续还会有更多 LLM 调用。UI 应执行轻量收尾（spinner 停止、
+///          formatter flush），但不应触发会话级结束动作（token 统计、
+///          状态转 IDLE、光标复位）。
+struct StepDoneEvent {
+    std::string session_id;
+    std::string full_content;       ///< 本步 LLM 输出的完整正文
+    std::string full_reasoning;     ///< 本步 LLM 输出的完整推理内容
+    double generation_ms = 0.0;     ///< 本步生成耗时（用于思考标记显示）
 };
 
 /// @brief 推理错误
