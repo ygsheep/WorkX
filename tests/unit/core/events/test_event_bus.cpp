@@ -4,6 +4,7 @@
  * @details 覆盖 subscribe/unsubscribe/publish/publish_async/process_async_events/clear
  *          以及异常安全、多订阅者、跨线程发布等场景。
  *          H-2：EventGuard<T> 模板已删除，相关测试用例同步移除。
+ *          L-2：不再覆盖 RAII 守卫（H-2 删除），如需 RAII 请使用 EventToken + 手动 unsubscribe。
  */
 
 #include <catch2/catch_test_macros.hpp>

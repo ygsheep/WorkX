@@ -28,8 +28,8 @@ class RemoteBackend : public IBackend {
 public:
     /// @brief 构造
     /// @param event_bus 事件总线（H-1 DI：nullptr 时不发布后端状态事件，
-    ///                   由调用方 BackendFactory 显式注入）
-    explicit RemoteBackend(IEventBus* event_bus = nullptr)
+    ///                   由调用方显式注入；M-2：移除默认实参强制显式传参）
+    explicit RemoteBackend(IEventBus* event_bus)
         : m_event_bus(event_bus) {}
     ~RemoteBackend() override;
 

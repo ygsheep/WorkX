@@ -9,6 +9,7 @@
 
 #include <chrono>
 #include <cassert>
+#include <stdexcept>
 #include <thread>
 
 #include "agent/api/i_backend.h"
@@ -73,25 +74,38 @@ ResultV2<Client> Client::create(ClientConfig cfg) {
         }
     }
 
-    // 4. 创建后端（H-1：透传 cfg.event_bus；为 nullptr 时回退 EventBus::instance()
-    //    以保留 BackendStatusEvent 发布，与 Client::event_bus() 行为一致）
-    IEventBus* backend_bus = cfg.event_bus ? cfg.event_bus : &EventBus::instance();
-    auto backend = BackendFactory::create(cfg.backend, backend_bus);
+    // 4. H-4：校验 event_bus 与 enable_event_bus 一致性
+    //    - enable_event_bus=true 必须提供 event_bus（否则构造期 *nullptr）
+    //    - enable_event_bus=false 时 event_bus 应为 nullptr（避免误用）
+    //    不再回退 EventBus::instance()，确保测试不污染全局单例（C-1 修复）
+    if (cfg.enable_event_bus && cfg.event_bus == nullptr) {
+        return ResultV2<Client>::err(
+            Error::Code::InvalidInput,
+            "enable_event_bus=true requires non-null event_bus");
+    }
+
+    // 5. 创建后端（H-1：透传 cfg.event_bus；nullptr 时 RemoteBackend 不发布
+    //    BackendStatusEvent，符合 H-1 语义——不发布 ≠ 回退单例发布）
+    auto backend = BackendFactory::create(cfg.backend, cfg.event_bus);
     if (!backend) {
         return ResultV2<Client>::err(
             Error::Code::InternalError, "Failed to create backend");
     }
 
-    // 5. 初始化后端（V2-3：backend->initialize 返回 ResultV2）
+    // 6. 初始化后端（V2-3：backend->initialize 返回 ResultV2）
     auto init_result = backend->initialize(cfg.backend);
     if (init_result.is_err()) {
         return ResultV2<Client>::err(init_result.error());
     }
 
-    // 6. 构造 Client（H-4：显式注入 TaskManager::instance()，不再依赖默认实参）
-    Client client(std::move(backend), cfg.system_prompt,
-                  cfg.retry_count, cfg.retry_delay_ms, cfg.enable_event_bus,
-                  cfg.event_bus, TaskManager::instance());
+    // 7. 构造 Client（M-1：DI 参数前置；H-4：显式注入 TaskManager::instance()）
+    Client client(std::move(backend),
+                  TaskManager::instance(),
+                  cfg.event_bus,
+                  cfg.enable_event_bus,
+                  std::move(cfg.system_prompt),
+                  cfg.retry_count,
+                  cfg.retry_delay_ms);
     return ResultV2<Client>::ok(std::move(client));
 }
 
@@ -99,13 +113,16 @@ ResultV2<Client> Client::create(ClientConfig cfg) {
 // 构造 / 析构 / 移动
 // ============================================================
 
+// M-1：参数顺序调整为 DI 必需参数在前、可选参数在后
+//      （backend, task_manager, event_bus, publish_events 为 DI；
+//       system_prompt, retry_count, retry_delay_ms 为业务配置）
 Client::Client(std::unique_ptr<IBackend> backend,
+               ITaskManager& task_manager,
+               IEventBus* event_bus,
+               bool publish_events,
                std::string system_prompt,
                int retry_count,
-               int retry_delay_ms,
-               bool publish_events,
-               IEventBus* event_bus,
-               ITaskManager& task_manager)
+               int retry_delay_ms)
     : m_backend(std::move(backend))
     , m_system_prompt(std::move(system_prompt))
     // H-3：委托给 HttpRetryPolicy 统一管理
@@ -114,9 +131,13 @@ Client::Client(std::unique_ptr<IBackend> backend,
     , m_task_manager(&task_manager)
     , m_event_bus(event_bus)
 {
+    // C-2：构造期强制校验契约——与 PR #7 ToolContext 策略一致
+    if (m_publish_events && m_event_bus == nullptr) {
+        throw std::logic_error(
+            "Client: publish_events=true requires non-null event_bus");
+    }
     if (m_publish_events) {
         // 订阅 InterruptEvent → 自动中断
-        // 注意：构造函数体内 event_bus 与参数名冲突，用 this-> 明确调用成员函数
         m_interrupt_token = this->event_bus().subscribe<InterruptEvent>(
             [this](const InterruptEvent&) {
                 if (m_backend) {
@@ -128,7 +149,9 @@ Client::Client(std::unique_ptr<IBackend> backend,
 }
 
 // H-4：依赖解析（不再回退单例；m_publish_events=true 时要求 m_event_bus 非空）
+// C-2：Debug 不变量断言（仅 Debug 编译期检查，Release 无开销）
 IEventBus& Client::event_bus() const {
+    assert(m_event_bus && "Client::event_bus() called with null m_event_bus");
     return *m_event_bus;
 }
 
@@ -168,10 +191,13 @@ Client::Client(Client&& other) noexcept
     , m_interrupt_token(std::move(other.m_interrupt_token))
     , m_subscribed(other.m_subscribed)
 {
+    // C-3：移动后源对象必须处于"不发布"状态，否则在源对象上调用
+    // submit/on_*/析构 等路径会触发 *m_event_bus（已被置 nullptr）
     other.m_subscribed = false;
     other.m_generating.store(false);
     other.m_task_manager = nullptr;
     other.m_event_bus = nullptr;
+    other.m_publish_events = false;
 }
 
 Client& Client::operator=(Client&& other) noexcept {
@@ -199,10 +225,12 @@ Client& Client::operator=(Client&& other) noexcept {
         m_interrupt_token = std::move(other.m_interrupt_token);
         m_subscribed = other.m_subscribed;
 
+        // C-3：同步重置源对象状态
         other.m_subscribed = false;
         other.m_generating.store(false);
         other.m_task_manager = nullptr;
         other.m_event_bus = nullptr;
+        other.m_publish_events = false;
     }
     return *this;
 }
