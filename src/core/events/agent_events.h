@@ -11,7 +11,7 @@
 
 #include <string>
 
-#include "agent/tool/tool_kind.h"
+#include "core/tool_kind.h"  // C-3：直接引用 core 层规范位置，避免 core→agent 分层越界
 
 namespace agent {
 

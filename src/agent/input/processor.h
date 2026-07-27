@@ -23,9 +23,9 @@ class InputProcessor {
 public:
     /// @brief 构造（H-11：注入 IFileLoader 隔离文件副作用）
     /// @param registry 命令注册表
-    /// @param file_loader 文件加载器（默认 LocalFileLoader；测试可注入 InMemoryFileLoader）
+    /// @param file_loader 文件加载器（H-C：显式注入，无默认实参回退，避免调用方误用）
     explicit InputProcessor(std::shared_ptr<command::CommandRegistry> registry,
-                            std::shared_ptr<IFileLoader> file_loader = std::make_shared<LocalFileLoader>())
+                            std::shared_ptr<IFileLoader> file_loader)
         : m_command_executor(std::make_shared<command::CommandExecutor>(registry))
         , m_file_loader(std::move(file_loader)) {}
 
@@ -102,11 +102,14 @@ private:
 
     std::string read_file_content(const std::string& path) {
         // H-11：通过 IFileLoader 接口读文件，可注入 mock 测试
-        std::string content = m_file_loader->load(path);
-        if (content.empty()) {
+        // C-2：load 返回 std::optional<std::string>，区分失败与空文件
+        auto content = m_file_loader->load(path);
+        if (!content.has_value()) {
+            // 失败：文件不存在 / 无权限 / 无法打开
             return std::format("[Could not read file: {}]", path);
         }
-        return std::format("<file path=\"{}\">\n{}\n</file>", path, content);
+        // 空文件（content->empty()）属于合法文件，正常包裹返回 <file> 标签
+        return std::format("<file path=\"{}\">\n{}\n</file>", path, *content);
     }
 
     InputParser m_parser;

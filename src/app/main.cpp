@@ -177,7 +177,9 @@ static int run(int argc, char* argv[]) {
 
     // ---- 命令系统 ----
     registry = std::make_shared<command::CommandRegistry>();
-    input_processor = std::make_unique<agent::input::InputProcessor>(registry);
+    // H-C：显式构造 LocalFileLoader，避免依赖 InputProcessor 构造函数默认实参
+    input_processor = std::make_unique<agent::input::InputProcessor>(
+        registry, std::make_shared<agent::input::LocalFileLoader>());
 
     // ---- 启动时模型选择（model_name 为空时触发） ----
     // H-8：使用 factory 注入的 backend_admin 替代 session->backend()

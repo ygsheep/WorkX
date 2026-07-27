@@ -261,12 +261,14 @@ private:
     ~TaskManager() override;
 
     std::vector<std::shared_ptr<Task>> m_entries;
-    mutable std::mutex m_tasks_mutex;
-    std::condition_variable m_tasks_cv;
+    mutable std::mutex m_tasks_mutex;       // 保护 m_entries / 任务状态查询
+    std::condition_variable m_tasks_cv;     // waitForAll 等待用
+    std::mutex m_wait_mutex;                // H-D：wait(task) 独立锁，避免与 m_tasks_mutex 死锁
+    std::condition_variable m_wait_cv;      // H-D：wait(task) 独立 cv，由 m_on_finished notify
     ThreadPool m_pool;
     IEventBus& m_event_bus;
 
-    friend class Task;  // Task::execute 结束时通知 m_tasks_cv
+    friend class Task;  // Task::execute 结束时通知 m_tasks_cv / m_wait_cv
 };
 
 } // namespace agent
