@@ -59,20 +59,17 @@ public:
     };
     /// @brief 构造
     /// @param provider 推理提供者（IBackend 或 IAgentCore）
+    /// @param task_manager 任务管理器（H-4：DI 必须显式注入，无默认实参回退单例）
+    /// @param event_bus 事件总线（H-4：DI 必须显式注入，无默认实参回退单例）
+    /// @param config_manager 配置管理器（H-4：DI 必须显式注入，无默认实参回退单例）
     /// @param retry_delay_ms 重试初始延迟（毫秒），会被 backend.retry_delay_ms 覆盖
     /// @param session_id 会话标识（用于事件流区分多会话，默认 "default"）
-    /// @param task_manager 任务管理器（D-1 DI 注入，默认全局单例；
-    ///                     测试可传入 MockTaskManager）
-    /// @param event_bus 事件总线（D-1 DI 注入，默认全局单例；
-    ///                  测试可传入 MockEventBus）
-    /// @param config_manager 配置管理器（C-1 DI 注入，默认全局单例；
-    ///                       测试可传入 MockConfigManager）
     explicit ChatSession(std::unique_ptr<ICompletionProvider> provider,
+                         ITaskManager& task_manager,
+                         IEventBus& event_bus,
+                         IConfigManager& config_manager,
                          int retry_delay_ms = 1000,
-                         std::string session_id = "default",
-                         ITaskManager& task_manager = TaskManager::instance(),
-                         IEventBus& event_bus = EventBus::instance(),
-                         IConfigManager& config_manager = ConfigManager::instance());
+                         std::string session_id = "default");
 
     ~ChatSession();
 

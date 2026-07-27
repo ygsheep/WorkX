@@ -77,10 +77,13 @@ struct ClientConfig {
     int retry_delay_ms = 1000;
 
     /// 开启后：订阅 InterruptEvent 自动中断 + 发布 StreamToken/Done/Error
+    /// C-1：enable_event_bus=true 时 event_bus 必须非空，否则 Client::create 返回 err
     bool enable_event_bus = false;
 
-    /// D-4：事件总线注入（nullptr 时回退 EventBus::instance()，向后兼容）
-    /// @details 仅当 enable_event_bus=true 时使用
+    /// H-4：事件总线注入（C-1：不再回退单例）
+    /// @details - enable_event_bus=true 时必须非空，否则 Client::create 返回 InvalidInput
+    ///          - enable_event_bus=false 时可为 nullptr，RemoteBackend 也不发布
+    ///            BackendStatusEvent（"不发布" ≠ "回退单例发布"）
     IEventBus* event_bus = nullptr;
 };
 
@@ -151,13 +154,14 @@ public:
     ~Client();
 
 private:
+    // M-1：参数顺序调整为 DI 必需参数在前、可选参数在后
     Client(std::unique_ptr<IBackend> backend,
+           ITaskManager& task_manager,
+           IEventBus* event_bus,
+           bool publish_events,
            std::string system_prompt,
            int retry_count,
-           int retry_delay_ms,
-           bool publish_events,
-           IEventBus* event_bus,
-           ITaskManager& task_manager = TaskManager::instance());
+           int retry_delay_ms);
 
     /// 构造 CompletionRequest（含 system_prompt + history + 新消息）
     CompletionRequest build_request(const std::string& user_text);
@@ -208,10 +212,12 @@ private:
     // D-1：任务管理器指针（非拥有；Client 可移动，用指针避免引用无法重新绑定）
     ITaskManager* m_task_manager = nullptr;
 
-    // D-4：事件总线指针（非拥有；nullptr 时回退单例，向后兼容）
+    // H-4：事件总线指针（非拥有；m_publish_events=true 时必须非空，
+    //     由 Client::create 显式注入，nullptr 时不应触发事件发布路径）
     IEventBus* m_event_bus = nullptr;
 
-    /// @brief 解析事件总线（nullptr 时回退单例）
+    /// @brief 解析事件总线（H-4：不再回退单例，要求 m_publish_events=true 时 m_event_bus 非空）
+    /// C-2：Debug 编译期通过 assert 检查不变量；构造期通过 throw std::logic_error 强制
     IEventBus& event_bus() const;
 
     /// 保护 m_messages 和 m_system_prompt 的互斥量

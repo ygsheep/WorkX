@@ -1,8 +1,9 @@
 /**
  * @file event_bus.h
- * @brief 类型安全的事件总线 + RAII 事件守卫
+ * @brief 类型安全的事件总线
  * @details Header-only，无外部依赖。继承 IEventBus 支持 DI 注入。
- * @version 2.0.0
+ *          H-2：已删除 EventGuard<T> 模板（已被 EventToken + subscribe() 模式取代）。
+ * @version 2.1.0
  */
 
 #pragma once
@@ -182,44 +183,11 @@ private:
     std::vector<std::function<void()>> m_async_queue;
 };
 
-template<typename T>
-class EventGuard {
-public:
-    using CallbackType = std::function<void(const T&)>;
-
-    explicit EventGuard(CallbackType callback)
-        : m_token(EventBus::instance().subscribe<T>(std::move(callback)))
-    {}
-
-    ~EventGuard() {
-        EventBus::instance().unsubscribe<T>(m_token);
-    }
-
-    EventGuard(const EventGuard&) = delete;
-    EventGuard& operator=(const EventGuard&) = delete;
-
-    EventGuard(EventGuard&& other) noexcept
-        : m_token(std::move(other.m_token))
-    {
-        other.m_token.invalidate();
-    }
-
-    EventGuard& operator=(EventGuard&& other) noexcept {
-        if (this != &other) {
-            EventBus::instance().unsubscribe<T>(m_token);
-            m_token = std::move(other.m_token);
-            other.m_token.invalidate();
-        }
-        return *this;
-    }
-
-private:
-    EventToken m_token;
-};
-
-template<typename T>
-[[nodiscard]] EventGuard<T> make_event_guard(std::function<void(const T&)> callback) {
-    return EventGuard<T>(std::move(callback));
-}
+// H-2：EventGuard<T> 模板已删除（硬编码 EventBus::instance() 绕过 DI）。
+// 请使用 EventToken + IEventBus::subscribe() 模式：
+//   auto token = bus.subscribe<T>(callback);
+//   // ... 作用域内使用 ...
+//   bus.unsubscribe<T>(token);
+// 或在 RAII 容器中持有 EventToken 并在析构时调用 bus.unsubscribe()。
 
 } // namespace agent

@@ -9,7 +9,7 @@
 #include "agent/api/remote/remote_backend.h"
 #include "agent/api/provider/openai_adapter.h"
 #include "agent/api/provider/anthropic_adapter.h"
-#include "core/events/event_bus.h"
+// H-1：不再 include core/events/event_bus.h，避免重新引入 EventBus::instance() 依赖
 #include "agent/message/types.h"
 
 #include <nlohmann/json.hpp>
@@ -62,11 +62,15 @@ ResultV2<void> RemoteBackend::initialize(const BackendConfig& config) {
     m_http_client = std::make_unique<HttpClient>();
     m_ready.store(true);
 
-    EventBus::instance().publish_async(BackendStatusEvent{
-        .status = BackendStatusEvent::Connected,
-        .backend_name = name(),
-        .error = {}
-    });
+    // H-1：通过 DI 注入的 m_event_bus 发布，不再调用 EventBus::instance()；
+    // 为 nullptr 时跳过发布（保持向后兼容）
+    if (m_event_bus) {
+        m_event_bus->publish_async(BackendStatusEvent{
+            .status = BackendStatusEvent::Connected,
+            .backend_name = name(),
+            .error = {}
+        });
+    }
 
     return ResultV2<void>::ok();
 #else
@@ -84,11 +88,14 @@ void RemoteBackend::shutdown() {
         }
         m_ready.store(false);
 
-        EventBus::instance().publish_async(BackendStatusEvent{
-            .status = BackendStatusEvent::Disconnected,
-            .backend_name = name(),
-            .error = {}
-        });
+        // H-1：通过 DI 注入的 m_event_bus 发布
+        if (m_event_bus) {
+            m_event_bus->publish_async(BackendStatusEvent{
+                .status = BackendStatusEvent::Disconnected,
+                .backend_name = name(),
+                .error = {}
+            });
+        }
     }
 }
 

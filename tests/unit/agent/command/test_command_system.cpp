@@ -12,6 +12,8 @@
 #include "agent/core/chat_session.h"
 #include "agent/api/i_backend.h"
 #include "core/config/config_manager.h"
+#include "core/events/event_bus.h"
+#include "core/task/task_manager.h"
 #include "helpers/mock_provider.h"
 
 using namespace agent;
@@ -20,9 +22,13 @@ using namespace agent::command;
 namespace {
 
 /// @brief 创建测试用 ChatSession（使用共享 MockCompletionProvider）
+/// @details H-4：DI 三件套必须显式注入，使用单例满足测试需求
 std::unique_ptr<ChatSession> make_test_session() {
     return std::make_unique<ChatSession>(
-        std::unique_ptr<ICompletionProvider>(new test::MockCompletionProvider())
+        std::unique_ptr<ICompletionProvider>(new test::MockCompletionProvider()),
+        TaskManager::instance(),
+        EventBus::instance(),
+        ConfigManager::instance()
     );
 }
 

@@ -32,7 +32,7 @@ TEST_CASE("HttpRetryPolicy is_retryable HTTP 5xx", "[retry][is_retryable]") {
     REQUIRE(HttpRetryPolicy::is_retryable(599, "") == true);
 }
 
-TEST_CASE("HttpRetryPolicy is_retryable HTTP 4xx (except 429)", "[retry][is_retryable]") {
+TEST_CASE("HttpRetryPolicy is_retryable HTTP 4xx except 429", "[retry][is_retryable]") {
     REQUIRE(HttpRetryPolicy::is_retryable(400, "") == false);
     REQUIRE(HttpRetryPolicy::is_retryable(401, "") == false);
     REQUIRE(HttpRetryPolicy::is_retryable(403, "") == false);
@@ -45,7 +45,7 @@ TEST_CASE("HttpRetryPolicy is_retryable HTTP 2xx", "[retry][is_retryable]") {
     REQUIRE(HttpRetryPolicy::is_retryable(204, "") == false);
 }
 
-TEST_CASE("HttpRetryPolicy is_retryable network error (status=0)", "[retry][is_retryable]") {
+TEST_CASE("HttpRetryPolicy is_retryable network error - status=0", "[retry][is_retryable]") {
     // status=0 + 非空 error_msg 表示网络错误（curl 错误），可重试
     REQUIRE(HttpRetryPolicy::is_retryable(0, "Connection timed out") == true);
     REQUIRE(HttpRetryPolicy::is_retryable(0, "DNS resolution failed") == true);
@@ -120,25 +120,25 @@ TEST_CASE("HttpRetryPolicy default values", "[retry][defaults]") {
 // V2-2：基于 Error::code 的 is_retryable 重载
 // ============================================================
 
-TEST_CASE("HttpRetryPolicy is_retryable(Error) network errors", "[retry][v2]") {
+TEST_CASE("HttpRetryPolicy is_retryable Error network errors", "[retry][v2]") {
     REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::NetworkTimeout}) == true);
     REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::NetworkDisconnected}) == true);
     REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::NetworkUnreachable}) == true);
 }
 
-TEST_CASE("HttpRetryPolicy is_retryable(Error) HTTP errors", "[retry][v2]") {
+TEST_CASE("HttpRetryPolicy is_retryable Error HTTP errors", "[retry][v2]") {
     REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::HttpRateLimited}) == true);
     REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::HttpServerDown}) == true);
     // 普通HttpError（4xx）不可重试
     REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::HttpError}) == false);
 }
 
-TEST_CASE("HttpRetryPolicy is_retryable(Error) stream errors", "[retry][v2]") {
+TEST_CASE("HttpRetryPolicy is_retryable Error stream errors", "[retry][v2]") {
     REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::StreamError}) == true);
     REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::StreamCancelled}) == false);
 }
 
-TEST_CASE("HttpRetryPolicy is_retryable(Error) non-retryable errors", "[retry][v2]") {
+TEST_CASE("HttpRetryPolicy is_retryable Error non-retryable errors", "[retry][v2]") {
     REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::InvalidInput}) == false);
     REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::PermissionDenied}) == false);
     REQUIRE(HttpRetryPolicy::is_retryable(Error{Error::Code::AuthenticationFailed}) == false);

@@ -16,14 +16,21 @@
 #include "agent/api/remote/sse_stream_reader.h"
 #include "agent/api/remote/http_client.h"
 #include "agent/api/provider/i_provider_adapter.h"
+#include "core/events/i_event_bus.h"
 
 namespace agent {
 
 /// @brief 远程后端
-/// @details 连接 OpenAI 兼容或 Anthropic API，支持流式推理
+/// @details 连接 OpenAI 兼容或 Anthropic API，支持流式推理。
+///          H-1：构造接收 IEventBus* 解除对 EventBus::instance() 的硬依赖；
+///          为 nullptr 时不发布 BackendStatusEvent（保持向后兼容）。
 class RemoteBackend : public IBackend {
 public:
-    RemoteBackend() = default;
+    /// @brief 构造
+    /// @param event_bus 事件总线（H-1 DI：nullptr 时不发布后端状态事件，
+    ///                   由调用方显式注入；M-2：移除默认实参强制显式传参）
+    explicit RemoteBackend(IEventBus* event_bus)
+        : m_event_bus(event_bus) {}
     ~RemoteBackend() override;
 
     // IBackend 接口
@@ -55,6 +62,9 @@ private:
     // m_active_mutex 保护 m_active_reader 的读写，避免与 interrupt 并发竞态
     mutable std::mutex m_active_mutex;
     std::shared_ptr<SSEStreamReader> m_active_reader;
+
+    /// @brief H-1：DI 注入的事件总线（nullptr 时不发布后端状态事件）
+    IEventBus* m_event_bus = nullptr;
 };
 
 } // namespace agent

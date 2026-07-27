@@ -133,7 +133,7 @@ TEST_CASE("SSEParser anthropic message_stop event", "[sse]") {
     REQUIRE(events[0].data == "{\"type\":\"message_stop\"}");
 }
 
-TEST_CASE("SSEParser event with data and no event field (OpenAI style)", "[sse]") {
+TEST_CASE("SSEParser event with data and no event field - OpenAI style", "[sse]") {
     std::vector<SSEEvent> events;
 
     SSEParser parser([&](const SSEEvent& event) {
