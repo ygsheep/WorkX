@@ -2,14 +2,13 @@
 
 > 本文档整合 `PHASE3_LONG_TERM_REFACTOR.md`（详细方案）与历史登记，作为技术债的唯一索引。
 > 详细重构方案请参考 `plan/PHASE3_LONG_TERM_REFACTOR.md`。
-> 最后更新：2026-07-27（P3 E-5/E-6 错误处理类型安全完成）
+> 最后更新：2026-07-27（P3 Q-2 性能基准测试 + Q-5 集成测试文档完成）
 
 ## 状态总览
 
-- 已修复：24 项（L-1 / L-2 / L-3 / L-6 / T-4 / T-6 / G-2 / G-3 / G-4 / D-2 / D-3 / D-4 / D-5 / D-6 / Q-1 / C-2 / C-3 / C-4 / H-1 / H-2 / H-3 / H-4 / E-5 / E-6）
+- 已修复：26 项（L-1 / L-2 / L-3 / L-6 / T-4 / T-6 / G-2 / G-3 / G-4 / D-2 / D-3 / D-4 / D-5 / D-6 / Q-1 / Q-2 / Q-5 / C-2 / C-3 / C-4 / H-1 / H-2 / H-3 / H-4 / E-5 / E-6）
 - 已安全：1 项（T-5 PHASE3 判定无需修复）
-- 待修复：5 项（L-5 / E-1 / Q-2 / Q-3 / Q-4）
-- 文档化即可：1 项（Q-5）
+- 待修复：4 项（L-5 / E-1 / Q-3 / Q-4）
 - 详细方案：见 `PHASE3_LONG_TERM_REFACTOR.md`
 
 ---
@@ -110,10 +109,10 @@
 | 编号 | 现象 | 影响 | 状态 |
 |------|------|------|------|
 | Q-1 | MockConfigManager/MockEventBus/MockTaskManager 缺失 | ~~中（无法隔离测试）~~ | ✅ 已修复（`tests/unit/helpers/mock_*.h` 三个 Mock + `test_mock_helpers.cpp` 自测试） |
-| Q-2 | 性能基准测试缺失 | 低 | ⬜ 未修复 |
+| Q-2 | 性能基准测试缺失 | ~~低~~ | ✅ 已修复（新增 `tests/benchmarks/` 目录，含 EventBus/TokenCount/ConfigManager 三个 benchmark 文件，共 7 个 BENCHMARK 用例；通过 `-DWORKX_BUILD_BENCHMARKS=ON` 启用独立可执行文件 `workx_benchmarks`，默认不编译以避免拖慢 CI） |
 | Q-3 | Linux 平台编译未验证 | 中（CI 风险） | ⬜ 未修复 |
 | Q-4 | AutoTestServer 在 Linux 上未实测 | 中 | ⬜ 未修复 |
-| Q-5 | LM Studio LLM 推理测试需手动启动 | 低 | ⬜ 文档化即可 |
+| Q-5 | LM Studio LLM 推理测试需手动启动 | ~~低~~ | ✅ 已修复（新增 `docs/INTEGRATION_TESTING.md`，详细说明自动模式（Python mock 服务器 RAII 启停）与手动模式（LM Studio 环境变量配置）两种集成测试运行方式、CI 集成示例和故障排查指南） |
 
 **说明**：Q 类整合了旧 TECH_DEBT_REGISTRY.md 的 T-4/T-5/T-6/I-1/I-2，避免与 PHASE3 的 T 类（线程安全）编号冲突
 
@@ -134,7 +133,8 @@
 | ~~**P3**~~ | ~~H-1 + H-2 + H-3 + H-4~~ | ~~HTTP 客户端演进~~ | ✅ 已完成 |
 | ~~**P3**~~ | ~~D-2 + D-3~~ | ~~main.cpp 工厂 + IBackendAdmin 拆分~~ | ✅ 已完成 |
 | ~~**P3**~~ | ~~E-5 + E-6~~ | ~~错误处理类型安全~~ | ✅ 已完成（commit ef3d295） |
-| **P3** | Q-2 + Q-5 | 性能基准 + 文档 | 2 天 |
+| ~~**P3**~~ | ~~Q-2~~ | ~~性能基准测试~~ | ✅ 已完成 |
+| ~~**P3**~~ | ~~Q-5~~ | ~~集成测试文档化~~ | ✅ 已完成 |
 | **V2** | E-1 | 错误处理统一（独立立项） | — |
 
 **总预估**：约 4-6 周（与 PHASE3 §9 路线图一致），可与业务需求并行推进
