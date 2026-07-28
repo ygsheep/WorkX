@@ -180,6 +180,10 @@ public:
     /// @brief 结束覆盖层：按行重发快照内容恢复输出区，恢复 DisplayBuffer feed
     void end_overlay();
 
+    /// @brief 查询覆盖层是否激活（线程安全，无锁原子读）
+    /// @details M-1: 统一 overlay 状态查询入口，消除 ChatRenderer 与 Terminal 间的状态非原子窗口
+    bool is_overlay_active() const { return m_overlay_active.load(std::memory_order_acquire); }
+
     /// @brief 获取底部区域管理器
     BottomBarManager& bottom_bar() { return *m_bottom_bar; }
     const BottomBarManager& bottom_bar() const { return *m_bottom_bar; }
@@ -223,7 +227,8 @@ private:
     std::atomic<bool> m_event_pump_running{false};  ///< 事件泵运行标志
 
     std::unique_ptr<DisplayBuffer> m_display_buffer;
-    bool m_overlay_active = false;
+    // M-1: atomic 保证 ChatRenderer 后台线程查询 is_overlay_active() 时的内存可见性
+    std::atomic<bool> m_overlay_active{false};
     std::vector<std::string> m_overlay_snapshot;
     int m_overlay_top = 0;
     int m_overlay_bottom = 0;

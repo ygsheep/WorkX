@@ -252,7 +252,7 @@ void Terminal::echo_input(const std::string& text) {
     m_current_color = ColorRole::Default;
     m_cursor_in_output = true;
 
-    if (m_display_buffer && !m_overlay_active) {
+    if (m_display_buffer && !m_overlay_active.load(std::memory_order_acquire)) {
         m_display_buffer->feed("\x1b[0m");
         m_display_buffer->feed(get_color_ansi(ColorRole::UserInput));
         m_display_buffer->feed(cmd);
@@ -368,7 +368,7 @@ void Terminal::set_color(ColorRole role) {
     m_platform->write_output("\x1b[0m");
     m_platform->write_output(get_color_ansi(role));
     m_current_color = role;
-    if (m_display_buffer && !m_overlay_active) {
+    if (m_display_buffer && !m_overlay_active.load(std::memory_order_acquire)) {
         m_display_buffer->feed("\x1b[0m");
         m_display_buffer->feed(std::string(get_color_ansi(role)));
     }
@@ -381,7 +381,7 @@ void Terminal::reset_color() {
     std::lock_guard<std::mutex> lock(m_output_mutex);
     m_platform->write_output(get_color_ansi(ColorRole::Default));
     m_current_color = ColorRole::Default;
-    if (m_display_buffer && !m_overlay_active) {
+    if (m_display_buffer && !m_overlay_active.load(std::memory_order_acquire)) {
         m_display_buffer->feed("\x1b[0m");
     }
 }
@@ -406,7 +406,7 @@ void Terminal::write(std::string_view text) {
         m_platform->write_output(text);
         m_platform->flush();
     }
-    if (m_display_buffer && !m_overlay_active) {
+    if (m_display_buffer && !m_overlay_active.load(std::memory_order_acquire)) {
         m_display_buffer->feed(text);
     }
 }
@@ -418,7 +418,7 @@ void Terminal::write_safe(std::string_view text, bool feed_buffer) {
     m_platform->write_output(text);
     m_platform->write_output("\x1b" "8");  // DECRC (VT100 标准，兼容性优于 \x1b[u)
     m_platform->flush();
-    if (feed_buffer && m_display_buffer && !m_overlay_active) {
+    if (feed_buffer && m_display_buffer && !m_overlay_active.load(std::memory_order_acquire)) {
         m_display_buffer->feed(text);
     }
 }
@@ -655,17 +655,17 @@ void Terminal::set_completion_callback(CompletionCallback cb) {
 
 void Terminal::begin_overlay(int top_row, int bottom_row) {
     std::lock_guard<std::mutex> lock(m_output_mutex);
-    if (m_overlay_active || !m_display_buffer) return;
+    if (m_overlay_active.load(std::memory_order_acquire) || !m_display_buffer) return;
     m_overlay_top = top_row;
     m_overlay_bottom = bottom_row;
     m_overlay_snapshot = m_display_buffer->snapshot(top_row, bottom_row);
-    m_overlay_active = true;
+    m_overlay_active.store(true, std::memory_order_release);
 }
 
 void Terminal::end_overlay() {
     std::lock_guard<std::mutex> lock(m_output_mutex);
-    if (!m_overlay_active) return;
-    m_overlay_active = false;
+    if (!m_overlay_active.load(std::memory_order_acquire)) return;
+    m_overlay_active.store(false, std::memory_order_release);
 
     // 保存当前光标位置，恢复覆盖层内容后还原
     m_platform->write_output("\x1b" "7");  // DECSC (VT100 标准，兼容性优于 \x1b[s)

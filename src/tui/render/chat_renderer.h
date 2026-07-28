@@ -84,8 +84,13 @@ private:
     std::atomic<bool> m_spinner_active{false};
     std::string m_reasoning_buffer;          ///< 缓存的思考内容（仅在 main loop 访问，单线程）
     std::chrono::steady_clock::time_point m_thinking_start_time;
-    std::atomic<bool> m_viewing_thinking{false};         ///< 是否在思考视图
+    // M-1: 移除 m_viewing_thinking，统一通过 Terminal::is_overlay_active() 查询 overlay 状态
+    // 消除 ChatRenderer 与 Terminal 间状态非原子窗口
     std::atomic<int32_t> m_thinking_seconds{0};          ///< 思考持续秒数（Spinner 线程写）
+
+    // H-1 修复：overlay 期间缓冲流式内容，收起时统一 flush 到 formatter
+    // 避免流式输出直接写入终端破坏思考视图显示，且收起后内容丢失
+    std::string m_pending_content;            ///< overlay 期间累积的正文内容（单线程访问）
 
     // P2: 提取的状态管理模型
     TokenStatsModel m_token_stats;            ///< 会话 token 统计
