@@ -239,6 +239,12 @@ ValidationResult FileEditTool::validate_input(
     if (file_path_str.empty()) {
         return ValidationResult::err(Error::Code::InvalidInput, "file_path must not be empty");
     }
+    // issue #13: 强制校验绝对路径，与 prompt/schema 描述保持一致
+    if (fs::path(file_path_str).is_relative()) {
+        return ValidationResult::err(Error::Code::InvalidInput,
+            "file_path must be an absolute path. Received relative path: '" + file_path_str +
+            "'. Please provide an absolute path like '/home/user/file.txt' or 'C:\\Users\\user\\file.txt'.");
+    }
 
     // 路径解析（提前做，用于后续 deny / 存在性检查）
     fs::path file_path(file_path_str);
@@ -452,13 +458,9 @@ ResultV2<ToolResult> FileEditTool::call(
                                          std::format("Input parse failed: {}", e.what()));
     }
 
-    // 2. 路径解析：相对路径基于 ctx.cwd 解析，再规范化为绝对路径
+    // 2. 路径解析：validate_input 已校验绝对路径，直接规范化
+    // issue #13: 移除相对路径容错，与 prompt/schema 保持一致
     fs::path file_path(edit_input.file_path);
-    if (file_path.is_relative()) {
-        if (!ctx.cwd.empty()) {
-            file_path = fs::path(ctx.cwd) / file_path;
-        }
-    }
     std::error_code ec;
     file_path = fs::weakly_canonical(file_path, ec);
     if (ec) {
