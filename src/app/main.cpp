@@ -13,6 +13,8 @@
  */
 
 #include <algorithm>
+#include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <format>
 #include <iostream>
@@ -123,13 +125,39 @@ static int run(int argc, char* argv[]) {
     }
 
     // ---- 文件索引构建（TUI 启动时扫描工作目录）----
+    // issue #15-D: 从用户主目录启动时跳过 FileIndex 扫描，避免扫描海量文件导致卡顿
     {
         namespace fs = std::filesystem;
         std::string cwd = fs::current_path().string();
+
+        // 检测 cwd 是否为用户主目录（Windows: USERPROFILE/APPDATA，POSIX: HOME）
+        bool is_home_dir = false;
+        const char* home_envs[] = {
+#ifdef _WIN32
+            "USERPROFILE", "APPDATA"
+#else
+            "HOME"
+#endif
+        };
+        for (const char* env : home_envs) {
+            if (const char* home = std::getenv(env)) {
+                std::error_code ec;
+                if (fs::equivalent(cwd, home, ec)) {
+                    is_home_dir = true;
+                    break;
+                }
+            }
+        }
+
         auto& index = global_file_index();
-        index.build(cwd);
-        if (verbose) {
-            std::cerr << "[debug] File index built: " << index.size() << " files\n";
+        if (is_home_dir) {
+            std::cerr << "[warn] Running from home directory; skipping file index. "
+                         "Use a project directory for full indexing.\n";
+        } else {
+            index.build(cwd);
+            if (verbose) {
+                std::cerr << "[debug] File index built: " << index.size() << " files\n";
+            }
         }
     }
 
@@ -251,8 +279,28 @@ static int run(int argc, char* argv[]) {
     if (auto* sb = renderer.status_bar()) {
         bottom_bar.set_status_bar(sb);
         sb->set_model_name(model_name.empty() ? "unknown" : model_name);
+        // issue #15-D: cwd 为用户主目录时显示 "（无项目）" 而非目录名（如 "young"）
         namespace fs = std::filesystem;
-        sb->set_project_name(fs::current_path().filename().string());
+        std::string cwd = fs::current_path().string();
+        bool is_home_dir = false;
+        const char* home_envs[] = {
+#ifdef _WIN32
+            "USERPROFILE", "APPDATA"
+#else
+            "HOME"
+#endif
+        };
+        for (const char* env : home_envs) {
+            if (const char* home = std::getenv(env)) {
+                std::error_code ec;
+                if (fs::equivalent(cwd, home, ec)) {
+                    is_home_dir = true;
+                    break;
+                }
+            }
+        }
+        sb->set_project_name(is_home_dir ? "\xEF\xBC\x88\xE6\x97\xA0\xE9\xA1\xB9\xE7\x9B\xAE\xEF\xBC\x89"
+                                          : fs::current_path().filename().string());
 
         // 上下文窗口：统一通过 resolver 解析（优先级：provider→user cfg→capability→preset→default）
         // 启动初始化时无 selector 返回值，sel_context_length 传 0；
@@ -429,7 +477,7 @@ static int run(int argc, char* argv[]) {
     terminal.run();
 
     // ---- 清理 ----
-    // 顺序：unsubscribe → cancelAll → waitForAll → renderer.stop → clear EventBus → restore
+    // 顺序：unsubscribe → cancelAll → waitForAll → renderer.stop → reset session → clear EventBus → restore
     // 先取消订阅，避免 cancelAll 触发的事件进入已失效的回调
     EventBus::instance().unsubscribe<UserInputEvent>(input_token);
     EventBus::instance().unsubscribe<ShutdownEvent>(shutdown_token);
@@ -443,6 +491,11 @@ static int run(int argc, char* argv[]) {
     // 和 Terminal 仍可用时完成 join + flush，避免栈析构时触发 CRT 断点
     renderer.stop();
 
+    // issue #15-C: 显式 reset session，确保 ~ChatSession / ~backend 在 EventBus
+    // 仍可用时析构，避免 clear() 后 on_complete 回调访问已失效订阅导致 abort
+    // 注意：backend_admin 是裸指针，由 session 持有，session.reset() 后不可再使用
+    session.reset();
+
     // 清空 EventBus 订阅，防止后续异步事件触发已失效的回调
     EventBus::instance().clear();
 
@@ -455,5 +508,25 @@ static int run(int argc, char* argv[]) {
 } // namespace agent
 
 int main(int argc, char* argv[]) {
+    // issue #15-E: Debug 构建注册 std::set_terminate 提供未捕获异常诊断
+    // 避免 abort() 弹窗无任何上下文信息，便于定位线程异常逃逸根因
+#ifndef NDEBUG
+    std::set_terminate([]() noexcept {
+        try {
+            std::cerr << "\n[FATAL] std::terminate called. ";
+            if (auto ptr = std::current_exception()) {
+                std::rethrow_exception(ptr);
+            } else {
+                std::cerr << "No active exception.\n";
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "Uncaught exception: " << e.what() << "\n";
+        } catch (...) {
+            std::cerr << "Uncaught unknown exception.\n";
+        }
+        std::cerr.flush();
+        std::abort();
+    });
+#endif
     return agent::run(argc, argv);
 }

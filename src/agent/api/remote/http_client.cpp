@@ -401,63 +401,72 @@ struct HttpClient::Impl {
 
     void poll_loop() {
         while (running.load()) {
-            int still_running = 0;
-            curl_multi_perform(multi, &still_running);
+            // issue #15-B: 线程函数必须捕获所有异常，否则 std::terminate → abort()
+            // 与 Task::execute / ThreadPool::worker_loop 保持一致的异常防御
+            try {
+                int still_running = 0;
+                curl_multi_perform(multi, &still_running);
 
-            int msgs_left = 0;
-            CURLMsg* msg;
-            while ((msg = curl_multi_info_read(multi, &msgs_left)) != nullptr) {
-                if (msg->msg == CURLMSG_DONE) {
-                    std::shared_ptr<StreamSession> session;
+                int msgs_left = 0;
+                CURLMsg* msg;
+                while ((msg = curl_multi_info_read(multi, &msgs_left)) != nullptr) {
+                    if (msg->msg == CURLMSG_DONE) {
+                        std::shared_ptr<StreamSession> session;
+                        {
+                            std::lock_guard<std::mutex> lock(sessions_mutex);
+                            auto it = sessions_by_handle.find(msg->easy_handle);
+                            if (it != sessions_by_handle.end()) {
+                                session = it->second;
+                                sessions_by_handle.erase(it);
+                            }
+                            // 也从 reader map 清理（C.4：完善 sessions_by_reader 清理路径）
+                            // expired 的 weak_ptr 在此统一回收，避免长生命周期下 map 无限增长
+                            for (auto rit = sessions_by_reader.begin(); rit != sessions_by_reader.end(); ) {
+                                if (rit->second.expired()) rit = sessions_by_reader.erase(rit);
+                                else ++rit;
+                            }
+                        }
+                        if (session)
+                            session->on_transfer_done(msg->data.result);
+                    }
+                }
+
+                // H-2：总时长超时检查
+                // 遍历所有活跃 session，若超时则 cancel + finish_with_error
+                // 注意：必须在 sessions_mutex 锁外调用 finish_with_error，避免
+                // on_complete 回调内再次访问 HttpClient 造成死锁
+                {
+                    std::vector<std::shared_ptr<StreamSession>> timed_out;
                     {
                         std::lock_guard<std::mutex> lock(sessions_mutex);
-                        auto it = sessions_by_handle.find(msg->easy_handle);
-                        if (it != sessions_by_handle.end()) {
-                            session = it->second;
-                            sessions_by_handle.erase(it);
-                        }
-                        // 也从 reader map 清理（C.4：完善 sessions_by_reader 清理路径）
-                        // expired 的 weak_ptr 在此统一回收，避免长生命周期下 map 无限增长
-                        for (auto rit = sessions_by_reader.begin(); rit != sessions_by_reader.end(); ) {
-                            if (rit->second.expired()) rit = sessions_by_reader.erase(rit);
-                            else ++rit;
+                        for (auto& [handle, session] : sessions_by_handle) {
+                            if (session->is_total_timeout()) {
+                                timed_out.push_back(session);
+                            }
                         }
                     }
-                    if (session)
-                        session->on_transfer_done(msg->data.result);
-                }
-            }
-
-            // H-2：总时长超时检查
-            // 遍历所有活跃 session，若超时则 cancel + finish_with_error
-            // 注意：必须在 sessions_mutex 锁外调用 finish_with_error，避免
-            // on_complete 回调内再次访问 HttpClient 造成死锁
-            {
-                std::vector<std::shared_ptr<StreamSession>> timed_out;
-                {
-                    std::lock_guard<std::mutex> lock(sessions_mutex);
-                    for (auto& [handle, session] : sessions_by_handle) {
-                        if (session->is_total_timeout()) {
-                            timed_out.push_back(session);
-                        }
+                    for (auto& session : timed_out) {
+                        LOG_WARN("[http][stream] total timeout exceeded, cancelling session");
+                        session->cancel();
+                        session->finish_with_error("Total request timeout exceeded");
+                        // 从 sessions map 移除（cancel 后不再有 DONE 事件）
+                        std::lock_guard<std::mutex> lock(sessions_mutex);
+                        sessions_by_handle.erase(session->easy_handle());
+                        // reader map 的清理交给下次 poll_loop 的 expired 回收
                     }
                 }
-                for (auto& session : timed_out) {
-                    LOG_WARN("[http][stream] total timeout exceeded, cancelling session");
-                    session->cancel();
-                    session->finish_with_error("Total request timeout exceeded");
-                    // 从 sessions map 移除（cancel 后不再有 DONE 事件）
-                    std::lock_guard<std::mutex> lock(sessions_mutex);
-                    sessions_by_handle.erase(session->easy_handle());
-                    // reader map 的清理交给下次 poll_loop 的 expired 回收
-                }
-            }
 
-            // C.3：用 curl_multi_wait 替代 sleep_for(10ms) 忙等
-            // curl_multi_wait 内部用 select/poll，无传输时阻塞等待（最多 100ms），
-            // CPU 占用近零；有数据时立即返回。libcurl 官方推荐 API。
-            // 即便 still_running == 0 也用 curl_multi_wait 短轮询，避免空转
-            curl_multi_wait(multi, nullptr, 0, 100, nullptr);
+                // C.3：用 curl_multi_wait 替代 sleep_for(10ms) 忙等
+                // curl_multi_wait 内部用 select/poll，无传输时阻塞等待（最多 100ms），
+                // CPU 占用近零；有数据时立即返回。libcurl 官方推荐 API。
+                // 即便 still_running == 0 也用 curl_multi_wait 短轮询，避免空转
+                curl_multi_wait(multi, nullptr, 0, 100, nullptr);
+            } catch (const std::exception& e) {
+                // 记录日志但不让异常逃逸线程函数，避免 std::terminate → abort()
+                LOG_ERROR("[http] poll_loop exception: {}", e.what());
+            } catch (...) {
+                LOG_ERROR("[http] poll_loop unknown exception");
+            }
         }
     }
 
