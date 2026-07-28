@@ -26,7 +26,7 @@
 #include "tui/render/markdown_renderer.h"
 #include "tui/utils/utf8_utils.h"
 
-using namespace agent;
+using namespace tui;
 
 // ============================================================================
 // ANSI / Box-drawing 辅助
