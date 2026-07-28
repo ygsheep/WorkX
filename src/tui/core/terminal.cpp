@@ -289,6 +289,14 @@ void Terminal::run_advanced() {
         }
 
         if (result.stream_end) {
+            // Ctrl+D：与 Ctrl+C 双击等价，主动发布 InterruptEvent 取消在途 HTTP 流，
+            // 避免 ~ChatSession 析构时才被动处理导致竞态 abort（issue #15）
+            set_color(ColorRole::System);
+            write("Exit (Ctrl+D).\n");
+            reset_color();
+            event_bus().publish(InterruptEvent{.force = true});
+            event_bus().publish(ShutdownEvent{.force = true});
+            event_bus().process_async_events();
             m_running = false;
             break;
         }

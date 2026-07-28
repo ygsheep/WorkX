@@ -13,6 +13,7 @@
 
 #include <cctype>
 #include <cassert>
+#include <stdexcept>
 #include <filesystem>
 #include <format>
 #include <future>
@@ -35,9 +36,15 @@ ReActLoop::ReActLoop(ICompletionProvider* provider,
     , m_compressor(m_config.compressor_cfg)
     , m_config_manager(config_manager)
 {
-    assert(provider != nullptr && "ReActLoop: provider must not be null");
-    assert(m_config_manager != nullptr &&
-           "ReActLoop: config_manager must not be null (H-5: explicit DI required)");
+    // issue #15-F: 构造函数不变量从 assert 改为 throw，避免 Debug 构建直接 abort
+    // 构造失败抛 std::invalid_argument 是 C++ 标准模式，调用方可用 try/catch 处理
+    if (provider == nullptr) {
+        throw std::invalid_argument("ReActLoop: provider must not be null");
+    }
+    if (m_config_manager == nullptr) {
+        throw std::invalid_argument(
+            "ReActLoop: config_manager must not be null (H-5: explicit DI required)");
+    }
     if (m_registry) {
         m_executor = std::make_unique<tool::ToolExecutor>(m_registry);
     }

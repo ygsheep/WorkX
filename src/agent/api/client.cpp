@@ -149,17 +149,21 @@ Client::Client(std::unique_ptr<IBackend> backend,
 }
 
 // H-4：依赖解析（不再回退单例；m_publish_events=true 时要求 m_event_bus 非空）
-// C-2：Debug 不变量断言（仅 Debug 编译期检查，Release 无开销）
+// issue #15-F: 从 assert 改为 throw，避免 Debug 构建直接 abort
 IEventBus& Client::event_bus() const {
-    assert(m_event_bus && "Client::event_bus() called with null m_event_bus");
+    if (!m_event_bus) {
+        throw std::runtime_error("Client::event_bus() called with null m_event_bus");
+    }
     return *m_event_bus;
 }
 
 Client::~Client() {
     // L-6：移动后 m_task_manager 可能为 nullptr，正常析构不应出现
     // 若 m_backend 存在却无 task_manager，说明对象状态异常
-    assert((!m_backend || m_task_manager != nullptr) &&
-           "Client::~Client: m_task_manager null but m_backend alive (moved-from?)");
+    // issue #15-F: 析构函数中不抛异常（否则触发 std::terminate），改为日志记录
+    if (m_backend && m_task_manager == nullptr) {
+        LOG_ERROR("Client::~Client: m_task_manager null but m_backend alive (moved-from?)");
+    }
 
     if (m_subscribed && m_interrupt_token.is_valid()) {
         // H-4：m_subscribed=true 隐含 m_publish_events=true，m_event_bus 必须非空
