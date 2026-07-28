@@ -188,10 +188,17 @@ ValidationResult FileWriteTool::validate_input(
     }
     // issue #13: 强制校验绝对路径，与 prompt/schema 描述保持一致
     // 弱模型在 prompt 要求绝对路径但代码容错相对路径时会反复纠结导致超时
+    // H-2: 错误信息示例平台相关，避免 Windows 上建议 POSIX 风格路径形成死循环
     if (fs::path(path_str).is_relative()) {
         return ValidationResult::err(Error::Code::InvalidInput,
             "file_path must be an absolute path. Received relative path: '" + path_str +
-            "'. Please provide an absolute path like '/home/user/hello.cpp' or 'C:\\Users\\user\\hello.cpp'.");
+            "'. Please provide an absolute path like "
+#ifdef _WIN32
+            "'C:\\Users\\user\\hello.cpp'."
+#else
+            "'/home/user/hello.cpp'."
+#endif
+        );
     }
     // content 校验（允许空字符串，空文件合法）
     if (!input.contains("content") || !input["content"].is_string()) {

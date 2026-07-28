@@ -304,7 +304,9 @@ TEST_CASE("FileEditTool validate_input error code 1 - old==new", "[file_edit_too
     TestEnv env;
     FileEditTool tool;
     ToolContext ctx; TestEnv::setup_ctx(ctx);
-    auto r = tool.validate_input(make_edit_input("/tmp/foo", "abc", "abc"), ctx);
+    // H-1: 使用 fs::temp_directory_path() 构造跨平台绝对路径，避免 POSIX 风格在 Windows 上被误判为相对路径
+    std::string abs_path = (fs::temp_directory_path() / "workx_test_dummy").string();
+    auto r = tool.validate_input(make_edit_input(abs_path, "abc", "abc"), ctx);
     REQUIRE(r.is_err());
     REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("same"));
 }
@@ -313,8 +315,10 @@ TEST_CASE("FileEditTool validate_input error code 4 - file not exist", "[file_ed
     TestEnv env;
     FileEditTool tool;
     ToolContext ctx; TestEnv::setup_ctx(ctx);
+    // H-1: 跨平台绝对路径
+    std::string abs_path = (fs::temp_directory_path() / "nonexistent_workx_test_path").string();
     auto r = tool.validate_input(
-        make_edit_input("/nonexistent/workx_test_path", "old", "new"), ctx
+        make_edit_input(abs_path, "old", "new"), ctx
     );
     REQUIRE(r.is_err());
     REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("does not exist"));
@@ -324,11 +328,60 @@ TEST_CASE("FileEditTool validate_input error code 5 - .ipynb", "[file_edit_tool]
     TestEnv env;
     FileEditTool tool;
     ToolContext ctx; TestEnv::setup_ctx(ctx);
+    // H-1: 跨平台绝对路径
+    std::string abs_path = (fs::temp_directory_path() / "test.ipynb").string();
     auto r = tool.validate_input(
-        make_edit_input("/tmp/test.ipynb", "", "new content"), ctx
+        make_edit_input(abs_path, "", "new content"), ctx
     );
     REQUIRE(r.is_err());
     REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("Jupyter"));
+}
+
+// ============================================================
+// M-2: issue #13 绝对路径校验测试
+// ============================================================
+
+TEST_CASE("FileEditTool validate_input rejects relative path", "[file_edit_tool][issue-13]") {
+    TestEnv env;
+    FileEditTool tool;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
+
+    SECTION("simple relative path is rejected") {
+        auto r = tool.validate_input(make_edit_input("foo.txt", "a", "b"), ctx);
+        REQUIRE(r.is_err());
+        REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("absolute path"));
+        REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("foo.txt"));
+    }
+    SECTION("subdir relative path is rejected") {
+        auto r = tool.validate_input(make_edit_input("subdir/foo.txt", "a", "b"), ctx);
+        REQUIRE(r.is_err());
+        REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("absolute path"));
+    }
+    SECTION("POSIX-style /tmp path is rejected on Windows but accepted on POSIX") {
+        // 在 Windows 上 /tmp/foo 被视为相对路径；在 Linux 上是绝对路径
+        auto r = tool.validate_input(make_edit_input("/tmp/foo", "a", "b"), ctx);
+#ifdef _WIN32
+        REQUIRE(r.is_err());
+        REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("absolute path"));
+#else
+        // POSIX 上 /tmp/foo 是绝对路径，会走到后续的 "does not exist" 检查
+        REQUIRE(r.is_err());
+        REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("does not exist"));
+#endif
+    }
+}
+
+TEST_CASE("FileEditTool validate_input accepts absolute path", "[file_edit_tool][issue-13]") {
+    TestEnv env;
+    FileEditTool tool;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
+    // 跨平台绝对路径：不会触发 "absolute path" 错误，而是走到后续校验
+    std::string abs_path = (fs::temp_directory_path() / "workx_abs_test.txt").string();
+    auto r = tool.validate_input(make_edit_input(abs_path, "a", "b"), ctx);
+    REQUIRE(r.is_err());
+    // 绝对路径通过了 is_relative() 校验，错误应该是 "does not exist" 而非 "absolute path"
+    REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("does not exist"));
+    REQUIRE_FALSE(r.error().message.find("absolute path") != std::string::npos);
 }
 
 TEST_CASE("FileEditTool validate_input error code 3 - file exists non-empty + old=empty", "[file_edit_tool]") {

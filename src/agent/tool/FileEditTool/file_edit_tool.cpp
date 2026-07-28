@@ -180,7 +180,8 @@ const std::string& FileEditTool::prompt() const {
         "To make it unique, include more surrounding context in old_string.\n"
         "- Use replace_all to replace all occurrences of old_string with new_string. "
         "This is useful for renaming variables or making sweeping changes across a file.\n"
-        "- The file_path parameter must be an absolute path, not a relative path."
+        "- The file_path parameter must be an absolute path (e.g., /home/user/file.txt or C:\\Users\\user\\file.txt). "
+        "Relative paths will be rejected."
     };
     return p;
 }
@@ -240,10 +241,17 @@ ValidationResult FileEditTool::validate_input(
         return ValidationResult::err(Error::Code::InvalidInput, "file_path must not be empty");
     }
     // issue #13: 强制校验绝对路径，与 prompt/schema 描述保持一致
+    // H-2: 错误信息示例平台相关，避免 Windows 上建议 POSIX 风格路径形成死循环
     if (fs::path(file_path_str).is_relative()) {
         return ValidationResult::err(Error::Code::InvalidInput,
             "file_path must be an absolute path. Received relative path: '" + file_path_str +
-            "'. Please provide an absolute path like '/home/user/file.txt' or 'C:\\Users\\user\\file.txt'.");
+            "'. Please provide an absolute path like "
+#ifdef _WIN32
+            "'C:\\Users\\user\\file.txt'."
+#else
+            "'/home/user/file.txt'."
+#endif
+        );
     }
 
     // 路径解析（提前做，用于后续 deny / 存在性检查）
