@@ -104,13 +104,23 @@ void StatusBar::render() {
     auto bar = format_bar();
     if (bar.empty()) return;
 
-    if (bar == m_last_bar) return;
-    m_last_bar = bar;
-
     int height = m_terminal->get_terminal_height();
 
     int status_row = height - 2;
     if (status_row < 1) return;
+
+    // 行号变化（resize）：先擦除旧行，再强制重新渲染（绕过 dedup）
+    bool row_changed = (m_last_rendered_row != 0 && m_last_rendered_row != status_row);
+    if (row_changed) {
+        char erase_cmd[32];
+        snprintf(erase_cmd, sizeof(erase_cmd), "\x1b[%d;1H\x1b[2K", m_last_rendered_row);
+        m_terminal->write_safe(erase_cmd);
+    }
+
+    // dedup：行号相同且内容相同 → 跳过（仅在非 resize 路径生效）
+    if (!row_changed && bar == m_last_bar) return;
+    m_last_bar = bar;
+    m_last_rendered_row = status_row;
 
     char pos_cmd[32];
     snprintf(pos_cmd, sizeof(pos_cmd), "\x1b[%d;1H", status_row);
@@ -130,7 +140,15 @@ void StatusBar::clear() {
     int status_row = height - 2;
     if (status_row < 1) return;
 
+    // 擦除上次渲染的行（可能因 resize 而与当前 status_row 不同）
+    if (m_last_rendered_row != 0 && m_last_rendered_row != status_row) {
+        char erase_cmd[32];
+        snprintf(erase_cmd, sizeof(erase_cmd), "\x1b[%d;1H\x1b[2K", m_last_rendered_row);
+        m_terminal->write_safe(erase_cmd);
+    }
+
     m_last_bar.clear();
+    m_last_rendered_row = 0;
 
     char pos_cmd[32];
     snprintf(pos_cmd, sizeof(pos_cmd), "\x1b[%d;1H", status_row);

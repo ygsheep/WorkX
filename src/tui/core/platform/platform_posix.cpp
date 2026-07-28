@@ -9,6 +9,7 @@
 #include <termios.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include <csignal>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -30,6 +31,15 @@ static constexpr char32_t KEY_CTRL_ARROW_RIGHT = 0xE007;
 static constexpr char32_t KEY_DELETE           = 0xE008;
 static constexpr char32_t KEY_CTRL_C           = 0xE009;
 static constexpr char32_t KEY_CTRL_O           = 0xE00A;
+static constexpr char32_t KEY_RESIZE           = 0xE00B;  // 终端尺寸变更（SIGWINCH）
+
+// SIGWINCH 到 KEY_RESIZE 的桥接：信号处理器只置 flag，read_char() 检测后返回 KEY_RESIZE。
+// 使用 sig_atomic_t 保证信号上下文写入的原子性。
+static volatile sig_atomic_t g_resize_pending = 0;
+
+static void sigwinch_handler(int /*signum*/) {
+    g_resize_pending = 1;
+}
 
 class PosixPlatform : public IPlatform {
 public:
@@ -50,21 +60,41 @@ public:
             return Result<void, std::string>::err("Failed to set raw mode");
         }
 
+        // 注册 SIGWINCH 处理器：终端尺寸变更时置 flag，read_char() 据此返回 KEY_RESIZE。
+        // 保存旧 handler 以便 disable_raw_mode 恢复。
+        m_sigwinch_installed = (signal(SIGWINCH, sigwinch_handler) != SIG_ERR);
+
         m_raw_mode_enabled = true;
         return Result<void, std::string>::ok();
     }
 
     void disable_raw_mode() override {
         if (!m_raw_mode_enabled) return;
+        if (m_sigwinch_installed) {
+            signal(SIGWINCH, SIG_DFL);
+            m_sigwinch_installed = false;
+        }
         tcsetattr(STDIN_FILENO, TCSAFLUSH, &m_original);
         m_raw_mode_enabled = false;
     }
 
     char32_t read_char() override {
+        // 优先检查 resize flag：捕获两次 read() 之间到达的 SIGWINCH（避免丢失字节）
+        if (g_resize_pending) {
+            g_resize_pending = 0;
+            return KEY_RESIZE;
+        }
+
         unsigned char buf[4];
         ssize_t n;
         do {
             n = read(STDIN_FILENO, buf, 1);
+            // SIGWINCH 打断 read() 返回 EINTR 时，检查 resize flag：
+            // 若 resize 待处理，优先返回 KEY_RESIZE，不再重试 read()。
+            if (n < 0 && errno == EINTR && g_resize_pending) {
+                g_resize_pending = 0;
+                return KEY_RESIZE;
+            }
         } while (n < 0 && errno == EINTR);
         if (n <= 0) return WEOF;
 
@@ -229,6 +259,7 @@ public:
 private:
     struct termios m_original;
     bool m_raw_mode_enabled = false;
+    bool m_sigwinch_installed = false;  ///< SIGWINCH 处理器是否已注册
 };
 
 std::unique_ptr<IPlatform> create_platform() {

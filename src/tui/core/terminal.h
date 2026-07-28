@@ -149,6 +149,10 @@ public:
     using InputChangedCallback = std::function<void(const std::string&)>;
     void set_input_changed_callback(InputChangedCallback cb);
 
+    /// @brief 处理终端尺寸变更（由 LineEditor 的 resize 回调触发）
+    /// @details 刷新 scroll region、重放 DisplayBuffer、发布 TerminalResizeEvent
+    void handle_resize();
+
     /// @brief 获取历史管理器
     History& history() { return m_history; }
 
@@ -219,6 +223,10 @@ private:
     std::vector<std::string> m_overlay_snapshot;
     int m_overlay_top = 0;
     int m_overlay_bottom = 0;
+
+    // 最近已知的终端尺寸（用于 resize 事件发布时计算 old/new 差值）
+    int m_last_width = 80;
+    int m_last_height = 24;
 
     // D-4/D-5/D-6：DI 注入的依赖（H-4：不再回退单例，构造时必须显式注入）
     agent::IEventBus* m_event_bus = nullptr;        ///< 事件总线（非拥有）

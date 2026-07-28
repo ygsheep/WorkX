@@ -107,6 +107,11 @@ Result<void, std::string> Terminal::initialize() {
     m_display_buffer = std::make_unique<DisplayBuffer>(1000);
     m_display_buffer->set_width(get_terminal_width());
     m_display_buffer->set_height(get_terminal_height());
+    m_last_width = get_terminal_width();
+    m_last_height = get_terminal_height();
+
+    // 注册 LineEditor 的 resize 回调：终端尺寸变更时刷新 scroll region / 重放 DisplayBuffer / 发布事件
+    m_editor->set_resize_callback([this]() { handle_resize(); });
 
     // 后台事件泵线程：确保异步事件（如流式输出）能被及时派发
     // 同时驱动 TaskManager::update() 清理已完成任务（修复 1.2 / 2.1）
@@ -531,6 +536,83 @@ void Terminal::set_input_changed_callback(InputChangedCallback cb) {
     if (m_editor) {
         m_editor->set_input_changed_callback(std::move(cb));
     }
+}
+
+void Terminal::handle_resize() {
+    int new_w = get_terminal_width();
+    int new_h = get_terminal_height();
+    int old_w = m_last_width;
+    int old_h = m_last_height;
+
+    // 尺寸未变则跳过（避免虚假 resize 事件）
+    if (new_w == old_w && new_h == old_h) return;
+
+    // 1. 快照旧滚动区域的可见内容（使用旧 DisplayBuffer 尺寸）
+    std::vector<std::string> visible;
+    if (m_display_buffer) {
+        int old_scroll_h = old_h - 3;
+        if (old_scroll_h < 1) old_scroll_h = 1;
+        visible = m_display_buffer->snapshot(1, old_scroll_h);
+    }
+
+    // 2. 清屏 + 重置 scroll region（在新尺寸下重新建立布局）
+    {
+        std::lock_guard<std::mutex> lock(m_output_mutex);
+        m_platform->write_output("\x1b[r");          // 重置 scroll region
+        m_platform->write_output("\x1b[2J\x1b[H");   // 清屏 + 光标归位
+        m_platform->flush();
+        m_scroll_region_active = false;
+        m_cursor_in_output = true;
+    }
+
+    // 3. 设置新 scroll region（基于新高度）
+    setup_scroll_region();
+
+    // 4. 更新 DisplayBuffer 尺寸
+    if (m_display_buffer) {
+        m_display_buffer->set_width(new_w);
+        m_display_buffer->set_height(new_h);
+    }
+
+    // 5. 重放快照内容到新滚动区域（底部对齐）
+    if (!visible.empty()) {
+        int new_scroll_h = new_h - 3;
+        if (new_scroll_h < 1) new_scroll_h = 1;
+        int visible_count = static_cast<int>(visible.size());
+        // 底部对齐：跳过顶部多余行
+        int skip = visible_count - new_scroll_h;
+        if (skip < 0) skip = 0;
+        int rows_to_write = visible_count - skip;
+        int empty_top = new_scroll_h - rows_to_write;
+        if (empty_top < 0) empty_top = 0;
+
+        std::lock_guard<std::mutex> lock(m_output_mutex);
+        // 光标已在 scroll region 顶部（setup_scroll_region 设置）
+        // 写入顶部空行（保持底部对齐）
+        for (int i = 0; i < empty_top; ++i) {
+            m_platform->write_output("\r\n");
+        }
+        // 写入快照行
+        for (int i = skip; i < visible_count; ++i) {
+            m_platform->write_output("\x1b[2K");  // 清行
+            if (!visible[i].empty()) {
+                m_platform->write_output(visible[i]);
+            }
+            m_platform->write_output("\r\n");
+        }
+        m_platform->flush();
+    }
+
+    // 6. 发布 TerminalResizeEvent（StatusBar / ChatRenderer 等据此强制重绘）
+    event_bus().publish(TerminalResizeEvent{
+        .old_width = old_w,
+        .old_height = old_h,
+        .new_width = new_w,
+        .new_height = new_h
+    });
+
+    m_last_width = new_w;
+    m_last_height = new_h;
 }
 
 void Terminal::set_completion_callback(CompletionCallback cb) {

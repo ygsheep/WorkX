@@ -46,6 +46,12 @@ public:
     /// @brief 当前缓冲区已记录的物理行总数
     int row_count() const { return m_total_rows; }
 
+    /// @brief 当前终端宽度
+    int width() const { return m_width; }
+
+    /// @brief 当前终端高度
+    int height() const { return m_height; }
+
 private:
     /// @brief 终结当前物理行，推入环形缓冲
     void finalize_row();

@@ -26,6 +26,7 @@ static constexpr char32_t KEY_CTRL_ARROW_RIGHT = 0xE007;
 static constexpr char32_t KEY_DELETE           = 0xE008;
 static constexpr char32_t KEY_CTRL_C           = 0xE009;
 static constexpr char32_t KEY_CTRL_O           = 0xE00A;
+static constexpr char32_t KEY_RESIZE           = 0xE00B;  // 终端尺寸变更
 
 LineEditor::LineEditor(IPlatform* platform)
     : m_platform(platform)
@@ -54,6 +55,10 @@ void LineEditor::set_cursor_left_output_callback(CursorLeftOutputCallback cb) {
 
 void LineEditor::set_editing_changed_callback(EditingChangedCallback cb) {
     m_editing_changed_cb = std::move(cb);
+}
+
+void LineEditor::set_resize_callback(ResizeCallback cb) {
+    m_resize_cb = std::move(cb);
 }
 
 void LineEditor::load_history(const std::vector<std::string>& entries) {
@@ -448,6 +453,36 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
             // Ctrl+O 切换思考视图
             if (input_char == KEY_CTRL_O) {
                 return {std::string(), false, false, false, true};
+            }
+
+            // 终端 resize：通知 Terminal 刷新 scroll region / 重放 DisplayBuffer，
+            // 然后重新定位输入行并重绘当前编辑内容，继续读取用户输入（不丢失已输入文本）
+            if (input_char == KEY_RESIZE) {
+                if (m_resize_cb) {
+                    m_resize_cb();
+                }
+                // 重新定位光标到新输入行
+                int term_h = m_platform->get_terminal_height();
+                int input_row = term_h - 1;
+                if (input_row < 1) input_row = 1;
+                char goto_input[32];
+                snprintf(goto_input, sizeof(goto_input), "\x1b[%d;1H", input_row);
+                m_platform->write_output(goto_input);
+                m_platform->write_output("\x1b[2K");
+                m_platform->write_output(is_continuation ? "\xe2\x94\x82 " : prompt);
+                if (!m_line.empty()) {
+                    m_platform->write_output(m_line);
+                }
+                // 将光标移回编辑位置
+                int chars_after_cursor = 0;
+                for (size_t i = m_char_pos; i < m_widths.size(); ++i) {
+                    chars_after_cursor += m_widths[i];
+                }
+                if (chars_after_cursor > 0) {
+                    m_platform->move_cursor(-chars_after_cursor);
+                }
+                m_platform->flush();
+                continue;
             }
 
             // 反斜杠/斜杠特殊标记（续行和命令）
