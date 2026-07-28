@@ -51,7 +51,9 @@
 
 namespace agent {
 
-using namespace tui;  // P0: tui→agent 类型引用过渡方案，后续 P2/P3 收紧到显式前缀
+// L-4：移除 `using namespace tui;`（namespace agent 内的命名空间污染）。
+// 改为显式 `tui::` 前缀引用 TUI 层类型（Terminal / Screen / SetupWizard /
+// ChatRenderer / BottomBarMode / ColorRole / CommandEntry 等）。
 
 // ============================================================
 // 主函数
@@ -108,7 +110,7 @@ static int run(int argc, char* argv[]) {
     }
 
     // ---- Terminal（D-2：委托工厂构建 config；H-4：显式注入三大依赖）----
-    Terminal terminal(&EventBus::instance(),
+    tui::Terminal terminal(&EventBus::instance(),
                       &ConfigManager::instance(),
                       &TaskManager::instance(),
                       make_terminal_config(cfg));
@@ -137,11 +139,11 @@ static int run(int argc, char* argv[]) {
                      && cfg.get_or<std::string>(keys::API_KEY, "").empty()
                      && cfg.get_or<std::string>(keys::REMOTE_URL, "").empty();
     // ---- 差分渲染引擎（供向导等交互式 UI 使用） ----
-    Screen screen(&terminal);
+    tui::Screen screen(&terminal);
 
     if (needs_wizard) {
         // H-A：SetupWizard 仅依赖 IConfigWriter + IConfigPersistence（M-4 ISP）
-        SetupWizard wizard(terminal.platform(), &terminal, &screen, cfg, cfg);
+        tui::SetupWizard wizard(terminal.platform(), &terminal, &screen, cfg, cfg);
         bool ok = wizard.run_wizard();
         if (!ok) {
             terminal.restore();
@@ -232,7 +234,7 @@ static int run(int argc, char* argv[]) {
     );
 
     // ---- ChatRenderer ----
-    ChatRenderer renderer(&terminal);
+    tui::ChatRenderer renderer(&terminal);
     renderer.start();
 
     // ---- Ctrl+O 回调：切换思考视图 ----
@@ -273,7 +275,7 @@ static int run(int argc, char* argv[]) {
     sys_ctx.on_model_select = [&terminal, &screen, &backend_admin, &cfg, &renderer, &preset]() {
         // H-8：使用 factory 注入的 backend_admin 替代 session->backend()
         if (!backend_admin) {
-            terminal.set_color(ColorRole::Error);
+            terminal.set_color(tui::ColorRole::Error);
             terminal.write("No backend configured. Use --provider first.\n");
             terminal.reset_color();
             return;
@@ -299,7 +301,7 @@ static int run(int argc, char* argv[]) {
                 }
             }
             cfg.save_to_file(default_config_path());
-            terminal.set_color(ColorRole::System);
+            terminal.set_color(tui::ColorRole::System);
             terminal.write(std::format("Model set to: {}\n", sel.name));
             terminal.reset_color();
         }
@@ -309,7 +311,7 @@ static int run(int argc, char* argv[]) {
     // CommandPanel 初始化（从 CommandRegistry 获取命令列表）
     // registry 由 make_shared 创建，保证非空，无需空检查
     {
-        std::vector<CommandEntry> entries;
+        std::vector<tui::CommandEntry> entries;
         for (const auto& cmd : registry->get_user_invocable_commands()) {
             const auto& hint = cmd->argument_hint();
             entries.push_back({
@@ -324,7 +326,7 @@ static int run(int argc, char* argv[]) {
     // ---- 状态栏定期刷新 ----
     terminal.set_status_refresh_callback([&renderer, &bottom_bar]() {
         // 仅在 StatusBar 模式下刷新状态栏；CommandPanel/SelectPanel 模式下跳过
-        if (bottom_bar.mode() != BottomBarMode::STATUS_BAR) return;
+        if (bottom_bar.mode() != tui::BottomBarMode::STATUS_BAR) return;
         if (auto* sb = renderer.status_bar()) {
             // 推进动画帧（仅在非 IDLE 状态）
             if (sb->is_active_state()) {

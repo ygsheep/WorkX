@@ -15,6 +15,7 @@
 #include <memory>
 #include <chrono>
 #include <filesystem>
+#include <utility>
 #include <nlohmann/json.hpp>
 #include "liblogger/logger.h"
 #include "core/utils/result_v2.h"
@@ -51,19 +52,25 @@ struct ExecutionResult {
 };
 
 /// @brief 截断工具结果文本（保留头尾，省略中间）
-/// @param text 待截断文本（in-out）
+/// @param text 待截断文本
 /// @param max_length 最大保留长度
-/// @return 是否发生了截断
-inline bool truncate_result(std::string& text, size_t max_length = MAX_TOOL_RESULT_LENGTH) {
-    if (text.length() <= max_length) return false;
+/// @return {截断后的文本, 是否发生了截断}
+/// @details L-2：原签名 `bool truncate_result(std::string& text, ...)` 直接修改入参，
+///          违反纯函数原则。现改为返回 std::pair，无副作用，可独立测试与复用。
+inline std::pair<std::string, bool> truncate_result(std::string_view text, size_t max_length = MAX_TOOL_RESULT_LENGTH) {
+    if (text.length() <= max_length) {
+        return {std::string{text}, false};
+    }
     const size_t half = max_length / 2;
     const size_t omitted = text.length() - max_length;
-    text = text.substr(0, half)
-         + "\n\n... [output truncated, "
-         + std::to_string(omitted)
-         + " characters omitted] ...\n\n"
-         + text.substr(text.length() - half);
-    return true;
+    std::string result;
+    result.reserve(max_length + 64);
+    result.append(text.substr(0, half));
+    result.append("\n\n... [output truncated, ");
+    result.append(std::to_string(omitted));
+    result.append(" characters omitted] ...\n\n");
+    result.append(text.substr(text.length() - half));
+    return {result, true};
 }
 
 // M-B：ExecutionTrace 已删除（Round 1 审查指出为死代码）。
@@ -224,7 +231,9 @@ private:
         // 3.4：结果截断（防止 grep/bash 长输出撑爆上下文）
         if (!exec_result.result.text.empty() &&
             exec_result.result.text.length() > MAX_TOOL_RESULT_LENGTH) {
-            exec_result.was_truncated = truncate_result(exec_result.result.text);
+            auto [truncated_text, was_truncated] = truncate_result(exec_result.result.text);
+            exec_result.result.text = std::move(truncated_text);
+            exec_result.was_truncated = was_truncated;
             LOG_INFO("[tool_executor] tool={} result truncated, new_len={}",
                      tool_name, exec_result.result.text.length());
         }

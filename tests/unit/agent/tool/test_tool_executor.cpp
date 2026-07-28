@@ -365,47 +365,67 @@ TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor execute is const method (par
 }
 
 // ============================================================================
-// H-B / M-3：truncate_result 截断逻辑独立测试
+// H-B / M-3 / L-2：truncate_result 截断逻辑独立测试
+// L-2：原 in-out 参数改为返回 std::pair，验证纯函数行为
 // ============================================================================
 
-TEST_CASE("truncate_result keeps short text unchanged", "[tool_executor][m3][truncation]") {
+TEST_CASE("truncate_result keeps short text unchanged", "[tool_executor][m3][truncation][l2]") {
     std::string text = "short text";
-    bool truncated = truncate_result(text, 100);
+    auto [result, truncated] = truncate_result(text, 100);
 
     REQUIRE_FALSE(truncated);
+    REQUIRE(result == "short text");
+    // L-2：原入参不被修改（纯函数）
     REQUIRE(text == "short text");
 }
 
-TEST_CASE("truncate_result truncates long text with marker", "[tool_executor][m3][truncation]") {
+TEST_CASE("truncate_result truncates long text with marker", "[tool_executor][m3][truncation][l2]") {
     // 构造超长文本（2000 字节），最大保留 1000 字节
     std::string text(2000, 'x');
-    bool truncated = truncate_result(text, 1000);
+    auto [result, truncated] = truncate_result(text, 1000);
 
     REQUIRE(truncated);
     // 截断后包含截断标记
-    REQUIRE(text.find("[output truncated,") != std::string::npos);
-    REQUIRE(text.find("characters omitted]") != std::string::npos);
+    REQUIRE(result.find("[output truncated,") != std::string::npos);
+    REQUIRE(result.find("characters omitted]") != std::string::npos);
     // 头尾各保留 max_length/2
-    REQUIRE(text.find("xxxx") != std::string::npos);
+    REQUIRE(result.find("xxxx") != std::string::npos);
+    // L-2：原入参不被修改
+    REQUIRE(text.size() == 2000);
 }
 
-TEST_CASE("truncate_result preserves head and tail of long text", "[tool_executor][m3][truncation]") {
+TEST_CASE("truncate_result preserves head and tail of long text", "[tool_executor][m3][truncation][l2]") {
     // 头部为 "HEADHEAD"，尾部为 "TAILTAIL"，中间填充 2000 个 'M'
     std::string text = "HEADHEAD";
     text.append(std::string(2000, 'M'));
     text.append("TAILTAIL");
 
-    bool truncated = truncate_result(text, 100);
+    auto [result, truncated] = truncate_result(text, 100);
     REQUIRE(truncated);
 
     // 头尾内容应保留
-    REQUIRE(text.find("HEADHEAD") == 0);
-    REQUIRE(text.find("TAILTAIL") != std::string::npos);
+    REQUIRE(result.find("HEADHEAD") == 0);
+    REQUIRE(result.find("TAILTAIL") != std::string::npos);
     // 中间内容应被省略：原始 2000 个 'M' 仅剩头尾各 half=50 字节中的部分
     // 头部 50 字节 = "HEADHEAD"(8) + 42 个 'M'，尾部同理，共约 84 个 'M'
-    const size_t m_count = std::count(text.begin(), text.end(), 'M');
+    const size_t m_count = static_cast<size_t>(std::count(result.begin(), result.end(), 'M'));
     REQUIRE(m_count < 2000);
     REQUIRE(m_count <= 100);  // 远少于原始 2000 个
+    // L-2：原入参不被修改
+    REQUIRE(text.size() == 2000 + 8 + 8);
+}
+
+TEST_CASE("truncate_result default max_length uses MAX_TOOL_RESULT_LENGTH", "[tool_executor][m3][truncation][l2]") {
+    // L-2：验证默认参数 max_length = MAX_TOOL_RESULT_LENGTH
+    std::string text(MAX_TOOL_RESULT_LENGTH, 'a');
+    auto [result_eq, truncated_eq] = truncate_result(text);
+    REQUIRE_FALSE(truncated_eq);
+    REQUIRE(result_eq.size() == MAX_TOOL_RESULT_LENGTH);
+
+    std::string long_text(MAX_TOOL_RESULT_LENGTH + 1, 'a');
+    auto [result_long, truncated_long] = truncate_result(long_text);
+    REQUIRE(truncated_long);
+    REQUIRE(result_long.find("[output truncated,") != std::string::npos);
 }
 
 // ============================================================================

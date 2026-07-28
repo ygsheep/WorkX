@@ -12,6 +12,8 @@
 
 #pragma once
 
+#include <string_view>
+
 namespace agent::tool {
 
 /// @brief 工具类型分类（用于 UI 渲染分组）
@@ -24,5 +26,12 @@ enum class ToolType {
     Agent,          ///< 子代理
     Other           ///< 其他/未知
 };
+
+/// @brief 根据工具名推断 ToolType（用于 ToolCallEvent）
+/// @details L-1：原位于 chat_session.cpp 匿名命名空间，无法被其他模块或测试复用。
+///          现提升为 tool_kind.h/.cpp 的公共纯函数，调用方可直接使用。
+/// @param name 工具名（如 "Read"/"Write"/"Bash"/"Grep" 等）
+/// @return 对应的 ToolType；未知工具名返回 ToolType::Other
+ToolType infer_tool_type(std::string_view name);
 
 } // namespace agent::tool

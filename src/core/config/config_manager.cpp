@@ -282,11 +282,8 @@ void ConfigManager::clear() {
     m_metas.clear();
 }
 
-void ConfigManager::clear_for_test() {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_values.clear();
-    m_metas.clear();
-}
+// L-5：clear_for_test() 已移除（补丁式 API，生产接口不应含测试专用方法）。
+//      其实现与 clear() 完全一致，测试代码改为调用 clear()。
 
 std::vector<std::string> ConfigManager::get_all_keys() const {
     std::lock_guard<std::mutex> lock(m_mutex);

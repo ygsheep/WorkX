@@ -374,10 +374,10 @@ ResultV2<void> Client::run_stream(
 // B.3：拆分出的子方法实现
 // ============================================================
 
-int64_t Client::compute_backoff_delay_ms(int attempt) const {
-    // H-3：委托给 HttpRetryPolicy，统一退避算法
-    return m_retry_policy.delay_ms(attempt);
-}
+// L-3：compute_backoff_delay_ms 已删除（冗余封装）。
+//      原实现仅委托 m_retry_policy.delay_ms(attempt)，且从未被调用
+//      （重试退避由 handle_submit_failure/handle_stream_error 内部直接使用
+//       HttpRetryPolicy）。如需退避延迟，直接调用 HttpRetryPolicy::delay_ms()。
 
 bool Client::handle_submit_failure(int attempt, int64_t delay_ms, const ChatCallbacks& cbs,
                                    const std::function<bool()>& should_stop) {

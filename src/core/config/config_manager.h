@@ -136,7 +136,6 @@ public:
     );
     void clear_change_callbacks();
     void clear();
-    void clear_for_test();
 
 private:
     ConfigManager() = default;

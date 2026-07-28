@@ -208,7 +208,7 @@ TEST_CASE("register_system_commands registers 6 commands", "[command]") {
 
 TEST_CASE("builtin help command returns command list", "[command]") {
     auto& cfg = ConfigManager::instance();
-    cfg.clear_for_test();
+    cfg.clear();
     cfg.set("backend.retry_count", 0);
 
     auto registry = std::make_shared<CommandRegistry>();
@@ -225,7 +225,7 @@ TEST_CASE("builtin help command returns command list", "[command]") {
     REQUIRE(result.result.text.find("help") != std::string::npos);
     REQUIRE(result.result.text.find("exit") != std::string::npos);
 
-    cfg.clear_for_test();
+    cfg.clear();
 }
 
 TEST_CASE("builtin exit command calls on_exit callback", "[command]") {
@@ -275,7 +275,7 @@ TEST_CASE("builtin model command calls on_model_select callback", "[command]") {
 
 TEST_CASE("builtin clear command clears session history", "[command]") {
     auto& cfg = ConfigManager::instance();
-    cfg.clear_for_test();
+    cfg.clear();
     cfg.set("backend.retry_count", 0);
 
     auto session = make_test_session();
@@ -293,7 +293,7 @@ TEST_CASE("builtin clear command clears session history", "[command]") {
     REQUIRE_FALSE(result.result.is_error);
     REQUIRE(result.result.text.find("cleared") != std::string::npos);
 
-    cfg.clear_for_test();
+    cfg.clear();
 }
 
 TEST_CASE("builtin clear command errors without session", "[command]") {

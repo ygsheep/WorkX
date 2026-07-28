@@ -76,12 +76,12 @@ private:
 class TestEnv {
 public:
     TestEnv() {
-        ConfigManager::instance().clear_for_test();
+        ConfigManager::instance().clear();  // L-5：原 clear_for_test() 已移除，改用语义相同的 clear()
         FileReadStateTracker::instance().clear_for_test();
         FileHistory::instance().clear_for_test();
     }
     ~TestEnv() {
-        ConfigManager::instance().clear_for_test();
+        ConfigManager::instance().clear();  // L-5：原 clear_for_test() 已移除，改用语义相同的 clear()
         FileReadStateTracker::instance().clear_for_test();
         FileHistory::instance().clear_for_test();
     }
