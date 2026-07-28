@@ -436,6 +436,8 @@ void ChatRenderer::start() {
 
                 m_reasoning_buffer += e.reasoning_delta;
 
+                // H-1 修复：overlay 期间不写入终端（避免破坏思考视图显示）
+                // 思考内容已追加到 m_reasoning_buffer，用户下次展开时可看到完整内容
                 if (m_viewing_thinking.load()) {
                     m_terminal->set_color(ColorRole::Reasoning);
                     m_terminal->write(e.reasoning_delta);
@@ -461,7 +463,11 @@ void ChatRenderer::start() {
                     m_formatter->reset();
                 }
 
-                if (!m_viewing_thinking.load()) {
+                if (m_viewing_thinking.load()) {
+                    // H-1 修复：overlay 期间缓冲到 m_pending_content，收起时统一 flush
+                    // 避免直接 feed() 导致内容写入终端破坏思考视图显示
+                    m_pending_content += e.content_delta;
+                } else {
                     m_formatter->feed(e.content_delta);
                 }
             }
@@ -803,13 +809,24 @@ void ChatRenderer::toggle_thinking_view() {
         // ---- 收起思考视图：从快照恢复对话区 ----
         m_viewing_thinking.store(false);
 
-        // 恢复 scroll region（end_overlay 使用 platform->write_output 直接写入，
-        // 不受 scroll region 影响，但后续 write() 需要 scroll region 处于活跃状态）
+        // H-2 修复：先 end_overlay 恢复对话内容，再 setup_scroll_region
+        // end_overlay() 使用 platform->write_output 直接写入，不受 scroll region 影响
+        // 若先 setup_scroll_region() 会将光标定位到 (1,1)，end_overlay() 的 DECSC 会
+        // 保存这个错误的光标位置，导致收起后光标停在左上角而非对话末尾
+        m_terminal->end_overlay();
+
+        // 恢复 scroll region（在对话内容恢复之后）
         m_terminal->setup_scroll_region();
 
-        // 从 overlay 快照恢复对话内容（逐行清行 + 写回快照）
-        // 替代旧的 \x1b[2J\x1b[H 全屏清空，保留完整对话历史
-        m_terminal->end_overlay();
+        // 光标归位到输出区底部（对话末尾），确保下次输入时光标位置正确
+        m_terminal->cursor_to_output();
+
+        // H-1 修复：flush overlay 期间缓冲的正文内容到 formatter
+        // 此时 scroll region 已恢复，feed() 会正确写入终端并进入 DisplayBuffer
+        if (!m_pending_content.empty()) {
+            m_formatter->feed(m_pending_content);
+            m_pending_content.clear();
+        }
 
         // 流式输出进行中时附加提示
         if (m_state_machine.current() == TuiState::STREAMING) {
