@@ -179,8 +179,14 @@ std::shared_ptr<IStreamReader> RemoteBackend::submit_completion(const Completion
         url, header_pairs, body, reader,
         [this]() {
             std::lock_guard<std::mutex> lock(m_active_mutex);
-            // M-7：生成完成，回到 Ready 态
-            m_state.store(BackendState::Ready, std::memory_order_release);
+            // M-N1：仅当仍为 Generating 时才回到 Ready，避免覆盖 Shutdown 终态。
+            // 边界场景：shutdown() 持锁 CAS Generating→Shutdown 并清理 reader 后释放锁，
+            // 被取消的请求触发 on_complete 时若用 store(Ready) 会覆盖 Shutdown，导致
+            // backend 回到 Ready 但 http_client 已 shutdown，后续请求接受但失败。
+            // CAS 失败（状态非 Generating，如已被 shutdown 转为 Shutdown）则保持终态。
+            BackendState expected = BackendState::Generating;
+            m_state.compare_exchange_strong(expected, BackendState::Ready,
+                std::memory_order_acq_rel, std::memory_order_acquire);
             m_active_reader.reset();
         },
         m_config.timeout_ms);

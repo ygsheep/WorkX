@@ -363,3 +363,47 @@ TEST_CASE("RemoteBackend state machine: single enum eliminates illegal combinati
         REQUIRE_FALSE(backend.is_generating());
     }
 }
+
+// ============================================================================
+// H-B / M-N1：on_complete CAS 契约测试
+// M-N1 修复：on_complete 回调改用 CAS `Generating→Ready` 而非 store(Ready)，
+// 避免边界场景下覆盖 Shutdown 终态。
+// 由于 HttpClient 为具体类无法 mock，on_complete 回调和 interrupt_locked()
+// 使用相同的 CAS 模式，通过 interrupt() 间接验证 CAS 在非 Generating 态下
+// 不覆盖状态。
+// ============================================================================
+
+TEST_CASE("RemoteBackend interrupt on Shutdown keeps Shutdown (M-N1 CAS contract)", "[backend][remote][m-n1]") {
+    // M-N1：验证 CAS `Generating→Ready` 在 Shutdown 态下失败，不覆盖终态
+    // on_complete 回调与 interrupt_locked() 使用相同 CAS 模式：
+    //   BackendState expected = Generating;
+    //   m_state.compare_exchange_strong(expected, Ready, ...);
+    // 当状态为 Shutdown 时 CAS 失败，保持 Shutdown 不变。
+    MockEventBus bus;
+    RemoteBackend backend(&bus);
+    backend.initialize(make_remote_config());
+    backend.shutdown();
+    REQUIRE(backend.state() == BackendState::Shutdown);
+
+    // interrupt() 内部调用 interrupt_locked()，其 CAS Generating→Ready 会失败
+    backend.interrupt();
+
+    // Shutdown 终态不被覆盖
+    REQUIRE(backend.state() == BackendState::Shutdown);
+    REQUIRE_FALSE(backend.is_ready());
+    REQUIRE_FALSE(backend.is_generating());
+}
+
+TEST_CASE("RemoteBackend interrupt on Idle keeps Idle (M-N1 CAS contract)", "[backend][remote][m-n1]") {
+    // M-N1：验证 CAS `Generating→Ready` 在 Idle 态下也失败，不覆盖状态
+    MockEventBus bus;
+    RemoteBackend backend(&bus);
+    REQUIRE(backend.state() == BackendState::Idle);
+
+    backend.interrupt();
+
+    // Idle 态不被覆盖（CAS Generating→Ready 失败）
+    REQUIRE(backend.state() == BackendState::Idle);
+    REQUIRE_FALSE(backend.is_ready());
+    REQUIRE_FALSE(backend.is_generating());
+}
