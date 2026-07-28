@@ -32,6 +32,7 @@ set(UNIT_TEST_SOURCES
     core/utils/test_error.cpp
     core/utils/test_result_v2.cpp
     tui/core/test_display_buffer.cpp
+    tui/core/test_terminal_overlay.cpp
     tui/core/test_tui_state.cpp
     tui/model/test_token_stats_model.cpp
     tui/model/test_tool_call_tracker.cpp

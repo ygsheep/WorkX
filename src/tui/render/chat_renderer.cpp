@@ -438,7 +438,8 @@ void ChatRenderer::start() {
 
                 // H-1 修复：overlay 期间不写入终端（避免破坏思考视图显示）
                 // 思考内容已追加到 m_reasoning_buffer，用户下次展开时可看到完整内容
-                if (m_viewing_thinking.load()) {
+                // M-1: 统一通过 is_overlay_active() 查询，消除与 Terminal::write() 的状态非原子窗口
+                if (m_terminal->is_overlay_active()) {
                     m_terminal->set_color(ColorRole::Reasoning);
                     m_terminal->write(e.reasoning_delta);
                     m_terminal->reset_color();
@@ -463,9 +464,10 @@ void ChatRenderer::start() {
                     m_formatter->reset();
                 }
 
-                if (m_viewing_thinking.load()) {
+                if (m_terminal->is_overlay_active()) {
                     // H-1 修复：overlay 期间缓冲到 m_pending_content，收起时统一 flush
                     // 避免直接 feed() 导致内容写入终端破坏思考视图显示
+                    // M-1: 统一通过 is_overlay_active() 查询，保证与 Terminal::write() 状态一致
                     m_pending_content += e.content_delta;
                 } else {
                     m_formatter->feed(e.content_delta);
@@ -759,10 +761,9 @@ void ChatRenderer::transition_to(TuiState new_state) {
 void ChatRenderer::toggle_thinking_view() {
     if (m_reasoning_buffer.empty()) return;
 
-    if (!m_viewing_thinking.load()) {
+    if (!m_terminal->is_overlay_active()) {
         // ---- 展开思考视图：快照对话区 + 轻量样式渲染 ----
-        m_viewing_thinking.store(true);
-
+        // M-1: 状态由 begin_overlay() 原子设置，无需单独维护 m_viewing_thinking
         int height = m_terminal->get_terminal_height();
         int scroll_bottom = height - 3;
         if (scroll_bottom < 1) scroll_bottom = 1;
@@ -785,16 +786,15 @@ void ChatRenderer::toggle_thinking_view() {
 
         // 思考内容：缩进式块，走 markdown 渲染
         std::string rendered = render_markdown_block(m_reasoning_buffer);
-        // 每行添加 2 空格缩进，与标题区分（替代硬边框的视觉分隔）
+        // L-1: 每行添加 2 空格缩进，与标题区分（替代硬边框的视觉分隔）
         std::string indented;
         indented.reserve(rendered.size() + 64);
-        bool at_line_start = true;
-        for (char c : rendered) {
-            if (at_line_start && c != '\n') {
-                indented += "  ";
-            }
-            indented += c;
-            at_line_start = (c == '\n');
+        std::istringstream iss(rendered);
+        std::string line;
+        while (std::getline(iss, line)) {
+            if (!line.empty()) indented += "  ";
+            indented += line;
+            indented += "\n";
         }
         m_terminal->set_color(ColorRole::Reasoning);
         m_terminal->write(indented);
@@ -807,7 +807,7 @@ void ChatRenderer::toggle_thinking_view() {
         m_terminal->reset_color();
     } else {
         // ---- 收起思考视图：从快照恢复对话区 ----
-        m_viewing_thinking.store(false);
+        // M-1: 状态由 end_overlay() 原子清除，无需单独维护 m_viewing_thinking
 
         // H-2 修复：先 end_overlay 恢复对话内容，再 setup_scroll_region
         // end_overlay() 使用 platform->write_output 直接写入，不受 scroll region 影响
