@@ -50,7 +50,8 @@ const std::string& FileReadTool::prompt() const {
         "When you already know which part of the file you need, only read that part. "
         "This can be important for larger files. "
         "Files larger than {} bytes will return an error; use offset and limit for larger files. "
-        "The file_path parameter must be an absolute path, not a relative path. "
+        "The file_path parameter must be an absolute path (e.g., /home/user/file.txt or C:\\Users\\user\\file.txt). "
+        "Relative paths will be rejected. "
         "Assume this tool is able to read all files on the machine. "
         "If the User provides a path to a file assume that path is valid. "
         "It is okay to read a file that does not exist; an error will be returned.",
@@ -99,8 +100,23 @@ ValidationResult FileReadTool::validate_input(
     if (!input.contains("file_path") || !input["file_path"].is_string()) {
         return ValidationResult::err(Error::Code::MissingArgument, "Missing required field: file_path");
     }
-    if (input["file_path"].get<std::string>().empty()) {
+    // L-1: 复用 path_str 变量，避免重复 get
+    const std::string path_str = input["file_path"].get<std::string>();
+    if (path_str.empty()) {
         return ValidationResult::err(Error::Code::InvalidInput, "file_path must not be empty");
+    }
+    // issue #13: 强制校验绝对路径，与 prompt/schema 描述保持一致
+    // H-2: 错误信息示例平台相关，避免 Windows 上建议 POSIX 风格路径形成死循环
+    if (fs::path(path_str).is_relative()) {
+        return ValidationResult::err(Error::Code::InvalidInput,
+            "file_path must be an absolute path. Received relative path: '" + path_str +
+            "'. Please provide an absolute path like "
+#ifdef _WIN32
+            "'C:\\Users\\user\\file.txt'."
+#else
+            "'/home/user/file.txt'."
+#endif
+        );
     }
     // 可选字段 offset：必须为正整数（1-based 行号）
     if (input.contains("offset")) {
@@ -244,13 +260,9 @@ ResultV2<ToolResult> FileReadTool::call(
         max_lines = constants::MAX_LINES_TO_READ;
     }
 
-    // 2. 路径解析：相对路径基于 ctx.cwd 解析，再规范化为绝对路径
+    // 2. 路径解析：validate_input 已校验绝对路径，直接规范化
+    // issue #13: 移除相对路径容错，与 prompt/schema 保持一致
     fs::path file_path(read_input.file_path);
-    if (file_path.is_relative()) {
-        if (!ctx.cwd.empty()) {
-            file_path = fs::path(ctx.cwd) / file_path;
-        }
-    }
     std::error_code ec;
     file_path = fs::weakly_canonical(file_path, ec);
     if (ec) {
