@@ -42,16 +42,17 @@ namespace {
 /// @brief 测试用 ConfigManager 包装（H-A）
 /// @details ConfigManager 构造函数为 private（单例模式），只能用 ::instance()。
 ///          register_config_defaults 需要 ConfigManager&（非 IConfigManager&），
-///          无法直接用 MockConfigManager。此处封装单例的 clear_for_test() +
+///          无法直接用 MockConfigManager。此处封装单例的 clear() +
 ///          register_config_defaults 调用，确保每个用例独立、状态干净。
 ///          TaskManager / EventBus 已改用 Mock 注入（消除主要单例依赖）。
+///          L-5：原 clear_for_test() 已移除（补丁式 API），改用语义相同的 clear()。
 struct TestCfg {
     ConfigManager& cfg;
     TestCfg() : cfg(ConfigManager::instance()) {
-        cfg.clear_for_test();
+        cfg.clear();
         register_config_defaults(cfg);
     }
-    ~TestCfg() { cfg.clear_for_test(); }
+    ~TestCfg() { cfg.clear(); }
     operator ConfigManager&() { return cfg; }
 };
 

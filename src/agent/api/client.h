@@ -181,9 +181,6 @@ private:
     bool interruptible_sleep(std::chrono::milliseconds duration,
                              const std::function<bool()>& should_stop);
 
-    /// @brief B.3：计算指数退避延迟（含 60s 上限保护）
-    int64_t compute_backoff_delay_ms(int attempt) const;
-
     /// @brief B.3：处理 submit 失败的错误回调与事件发布
     /// @return true 表示已触发重试（调用方应 continue 重试循环）；false 表示重试耗尽（调用方应返回 err）
     bool handle_submit_failure(int attempt, int64_t delay_ms, const ChatCallbacks& cbs,

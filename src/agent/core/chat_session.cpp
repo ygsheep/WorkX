@@ -26,21 +26,8 @@ namespace agent {
 // 内部辅助
 // ============================================================
 
-namespace {
-
-/// @brief 根据工具名推断 ToolType（用于 ToolCallEvent）
-agent::tool::ToolType infer_tool_type(const std::string& name) {
-    using namespace agent::tool;
-    if (name == "Read")  return ToolType::ReadFile;
-    if (name == "Write") return ToolType::WriteFile;
-    if (name == "Edit")  return ToolType::EditFile;
-    if (name == "Bash")  return ToolType::Execute;
-    if (name == "Grep" || name == "Glob") return ToolType::Search;
-    if (name == "Agent") return ToolType::Agent;
-    return ToolType::Other;
-}
-
-} // anonymous namespace
+// L-1：infer_tool_type 已提升至 core/tool_kind.h/.cpp 作为公共纯函数，
+//      此处不再保留匿名命名空间副本，直接使用 agent::tool::infer_tool_type。
 
 // ============================================================
 // ChatSession::ReActEventPublisher — 3.2 IReActObserver 实现
@@ -78,7 +65,7 @@ void ChatSession::ReActEventPublisher::on_action(const ReActStep& step) {
         .tool_name = step.tool_name,
         .arguments = step.tool_input.dump(),
         .call_id = "",
-        .tool_type = infer_tool_type(step.tool_name)
+        .tool_type = tool::infer_tool_type(step.tool_name)
     });
 }
 

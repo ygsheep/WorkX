@@ -13,7 +13,7 @@ using namespace agent::test;  // H-B：MockConfigManager
 
 TEST_CASE("ConfigManager basic set/get", "[config]") {
     auto& cfg = ConfigManager::instance();
-    cfg.clear_for_test();
+    cfg.clear();
 
     SECTION("set and get int") {
         auto result = cfg.set("test.int_val", 42);
@@ -44,12 +44,12 @@ TEST_CASE("ConfigManager basic set/get", "[config]") {
         REQUIRE_THAT(val.value(), Catch::Matchers::WithinAbs(3.14, 0.001));
     }
 
-    cfg.clear_for_test();
+    cfg.clear();
 }
 
 TEST_CASE("ConfigManager get_or", "[config]") {
     auto& cfg = ConfigManager::instance();
-    cfg.clear_for_test();
+    cfg.clear();
 
     SECTION("existing key returns value") {
         cfg.set("test.exists", 99);
@@ -60,12 +60,12 @@ TEST_CASE("ConfigManager get_or", "[config]") {
         REQUIRE(cfg.get_or<int>("test.missing", 42) == 42);
     }
 
-    cfg.clear_for_test();
+    cfg.clear();
 }
 
 TEST_CASE("ConfigManager validation", "[config]") {
     auto& cfg = ConfigManager::instance();
-    cfg.clear_for_test();
+    cfg.clear();
 
     cfg.register_meta("test.validated", ConfigMeta{
         .description = "Test validated key",
@@ -92,12 +92,12 @@ TEST_CASE("ConfigManager validation", "[config]") {
         REQUIRE(result.error().code == Error::Code::ConfigInvalid);
     }
 
-    cfg.clear_for_test();
+    cfg.clear();
 }
 
 TEST_CASE("ConfigManager has and remove", "[config]") {
     auto& cfg = ConfigManager::instance();
-    cfg.clear_for_test();
+    cfg.clear();
 
     cfg.set("test.temp", 1);
     REQUIRE(cfg.has("test.temp"));
@@ -105,12 +105,12 @@ TEST_CASE("ConfigManager has and remove", "[config]") {
     cfg.remove("test.temp");
     REQUIRE_FALSE(cfg.has("test.temp"));
 
-    cfg.clear_for_test();
+    cfg.clear();
 }
 
 TEST_CASE("ConfigManager change callback", "[config]") {
     auto& cfg = ConfigManager::instance();
-    cfg.clear_for_test();
+    cfg.clear();
 
     std::string changed_key;
     int old_val = 0;
@@ -132,12 +132,12 @@ TEST_CASE("ConfigManager change callback", "[config]") {
     REQUIRE(new_val == 20);
 
     cfg.clear_change_callbacks();
-    cfg.clear_for_test();
+    cfg.clear();
 }
 
 TEST_CASE("ConfigScope", "[config]") {
     auto& cfg = ConfigManager::instance();
-    cfg.clear_for_test();
+    cfg.clear();
 
     // H-A：ConfigScope 仅依赖 IConfigReader + IConfigWriter（M-4 ISP）
     // ConfigManager 同时实现三者，传同一对象即可
@@ -148,7 +148,7 @@ TEST_CASE("ConfigScope", "[config]") {
     REQUIRE(scope.get_or<int>("width", 0) == 800);
     REQUIRE(cfg.get_or<int>("myapp.width", 0) == 800);
 
-    cfg.clear_for_test();
+    cfg.clear();
 }
 
 // C-3：ConfigScope DI 化测试（H-4：移除默认实参，所有调用方需显式注入）
@@ -194,7 +194,7 @@ TEST_CASE("ConfigScope DI injection", "[config][di]") {
 // C-2：ConfigSchema 测试
 TEST_CASE("ConfigSchema validation", "[config][schema]") {
     auto& cfg = ConfigManager::instance();
-    cfg.clear_for_test();
+    cfg.clear();
 
     SECTION("Int 范围校验") {
         cfg.register_schema(ConfigSchema{
@@ -254,13 +254,13 @@ TEST_CASE("ConfigSchema validation", "[config][schema]") {
         REQUIRE_FALSE(all.empty());
     }
 
-    cfg.clear_for_test();
+    cfg.clear();
 }
 
 // C-4：环境变量加载测试
 TEST_CASE("ConfigSchema load_from_env", "[config][env]") {
     auto& cfg = ConfigManager::instance();
-    cfg.clear_for_test();
+    cfg.clear();
 
     SECTION("环境变量自动加载") {
         cfg.register_schema(ConfigSchema{
@@ -315,7 +315,7 @@ TEST_CASE("ConfigSchema load_from_env", "[config][env]") {
         #endif
     }
 
-    cfg.clear_for_test();
+    cfg.clear();
 }
 
 // ============================================================
@@ -324,7 +324,7 @@ TEST_CASE("ConfigSchema load_from_env", "[config][env]") {
 
 TEST_CASE("ConfigManager V2-1 Error::Code", "[config][v2]") {
     auto& cfg = ConfigManager::instance();
-    cfg.clear_for_test();
+    cfg.clear();
 
     SECTION("get 缺失键返回 ConfigMissing") {
         auto result = cfg.get<int>("nonexistent.key");
@@ -391,5 +391,5 @@ TEST_CASE("ConfigManager V2-1 Error::Code", "[config][v2]") {
         REQUIRE(result.error().code == Error::Code::ResourceNotFound);
     }
 
-    cfg.clear_for_test();
+    cfg.clear();
 }
