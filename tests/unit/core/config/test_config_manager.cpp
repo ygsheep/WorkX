@@ -139,8 +139,9 @@ TEST_CASE("ConfigScope", "[config]") {
     auto& cfg = ConfigManager::instance();
     cfg.clear_for_test();
 
-    // H-4：ConfigScope 不再提供默认实参，需显式注入
-    ConfigScope scope("myapp", cfg);
+    // H-A：ConfigScope 仅依赖 IConfigReader + IConfigWriter（M-4 ISP）
+    // ConfigManager 同时实现三者，传同一对象即可
+    ConfigScope scope("myapp", cfg, cfg);
     scope.set("width", 800);
 
     REQUIRE(cfg.has("myapp.width"));
@@ -155,9 +156,10 @@ TEST_CASE("ConfigScope", "[config]") {
 TEST_CASE("ConfigScope DI injection", "[config][di]") {
     SECTION("注入 MockConfigManager 写入只进 mock，不进单例") {
         // H-B：使用 MockConfigManager 替代 ConfigManager::instance()
+        // H-A：ConfigScope 仅依赖 IConfigReader + IConfigWriter，MockConfigManager 实现两者即可
         // 若 ConfigScope 内部偷偷调单例，本测试会失败
         MockConfigManager mock;
-        ConfigScope scope("default", mock);
+        ConfigScope scope("default", mock, mock);
 
         scope.set("key", 42);
 
@@ -165,7 +167,8 @@ TEST_CASE("ConfigScope DI injection", "[config][di]") {
         REQUIRE(mock.has("default.key"));
         REQUIRE(mock.get_or<int>("default.key", 0) == 42);
         REQUIRE(scope.get_or<int>("key", 0) == 42);
-        REQUIRE(&scope.config_manager() == &mock);
+        REQUIRE(&scope.config_reader() == &mock);
+        REQUIRE(&scope.config_writer() == &mock);
 
         // 验证全局单例未被污染（DI 解耦的核心证据）
         REQUIRE_FALSE(ConfigManager::instance().has("default.key"));
@@ -175,8 +178,8 @@ TEST_CASE("ConfigScope DI injection", "[config][di]") {
         MockConfigManager mock_a;
         MockConfigManager mock_b;
 
-        ConfigScope scope_a("app.a", mock_a);
-        ConfigScope scope_b("app.b", mock_b);
+        ConfigScope scope_a("app.a", mock_a, mock_a);
+        ConfigScope scope_b("app.b", mock_b, mock_b);
 
         scope_a.set("x", 1);
         scope_b.set("x", 2);

@@ -57,6 +57,11 @@ private:
     //      消除"m_ready=false 但 m_generating=true"等非法组合，原子读写保证状态一致
     std::atomic<BackendState> m_state{BackendState::Idle};
 
+    /// @brief interrupt 内部实现（M-A：调用方必须已持有 m_active_mutex）
+    /// @details 拆出 interrupt_locked 以便 shutdown() 在持锁状态下复用清理逻辑，
+    ///          避免 interrupt() 内部再次加锁导致死锁，并消除 shutdown 与 interrupt 间的 TOCTOU 竞态。
+    void interrupt_locked();
+
     /// @brief Provider 特定协议适配器
     std::unique_ptr<IProviderAdapter> m_adapter;
 

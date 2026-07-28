@@ -154,9 +154,14 @@ class ConfigScope {
 public:
     /// @brief 构造 ConfigScope
     /// @param prefix 键前缀（如 "backend."）
-    /// @param cm 配置管理器引用（H-4：DI 必须显式注入，无默认实参回退单例）
+    /// @param reader 只读配置访问接口（M-4 ISP：ConfigScope 仅需读能力）
+    /// @param writer 内存写入接口（M-4 ISP：ConfigScope 仅需内存写能力，不需持久化）
+    /// @note H-A：原签名接收 IConfigManager&（胖接口），现拆为 IConfigReader& + IConfigWriter&，
+    ///       明确 ConfigScope 不依赖 IConfigPersistence（无法 save_to_file / load_from_file）。
+    ///       ConfigManager 同时实现三者，调用方仍可传同一对象。
     explicit ConfigScope(const std::string& prefix,
-                         IConfigManager& cm);
+                         IConfigReader& reader,
+                         IConfigWriter& writer);
     ~ConfigScope();
 
     ConfigScope(const ConfigScope&) = delete;
@@ -164,27 +169,30 @@ public:
 
     [[nodiscard]] std::string make_key(const std::string& key) const;
 
-    /// @brief 获取底层配置管理器引用（供需要直接访问的场景使用）
-    [[nodiscard]] IConfigManager& config_manager() const { return m_config.get(); }
+    /// @brief 获取底层配置读取器引用（M-4：暴露窄接口，供需要只读访问的场景使用）
+    [[nodiscard]] IConfigReader& config_reader() const { return m_reader.get(); }
+    /// @brief 获取底层配置写入器引用（M-4：暴露窄接口，供需要内存写的场景使用）
+    [[nodiscard]] IConfigWriter& config_writer() const { return m_writer.get(); }
 
     template<typename T>
     ResultV2<void> set(const std::string& key, T value) {
-        return m_config.get().set(make_key(key), std::move(value));
+        return m_writer.get().set(make_key(key), std::move(value));
     }
 
     template<typename T>
     [[nodiscard]] ResultV2<T> get(const std::string& key) const {
-        return m_config.get().get<T>(make_key(key));
+        return m_reader.get().get<T>(make_key(key));
     }
 
     template<typename T>
     [[nodiscard]] T get_or(const std::string& key, T default_value) const {
-        return m_config.get().get_or(make_key(key), default_value);
+        return m_reader.get().get_or(make_key(key), default_value);
     }
 
 private:
     std::string m_prefix;
-    std::reference_wrapper<IConfigManager> m_config;
+    std::reference_wrapper<IConfigReader> m_reader;   // M-4 ISP：只读访问
+    std::reference_wrapper<IConfigWriter> m_writer;   // M-4 ISP：内存写访问
 };
 
 } // namespace agent

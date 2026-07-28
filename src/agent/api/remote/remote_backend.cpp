@@ -81,16 +81,20 @@ ResultV2<void> RemoteBackend::initialize(const BackendConfig& config) {
 }
 
 void RemoteBackend::shutdown() {
-    // M-7：仅当处于 Ready / Generating 时执行 shutdown 流程
+    // M-A：全程持有 m_active_mutex，消除 interrupt() 与 store(Shutdown) 之间的 TOCTOU 竞态。
+    //      原实现：interrupt() 释放锁后、store(Shutdown) 前另一线程可 CAS Ready→Generating
+    //      创建新 reader，随后 store(Shutdown) 覆盖但新 reader 未清理。
+    //      现实现：持锁后 CAS 状态，interrupt_locked() 在同一锁内清理 reader，无窗口。
+    std::lock_guard<std::mutex> lock(m_active_mutex);
+
+    // 尝试 Ready → Shutdown（常见路径：空闲时关闭）
     BackendState expected = BackendState::Ready;
-    // CAS：若 Ready 则转 Idle 执行 shutdown；若 Generating 先转 Shutdown 再走 interrupt
     if (m_state.compare_exchange_strong(expected, BackendState::Shutdown,
         std::memory_order_acq_rel, std::memory_order_acquire)) {
+        // Ready 态无 active_reader，直接 shutdown http client
         if (m_http_client) {
             m_http_client->shutdown();
         }
-
-        // H-1：通过 DI 注入的 m_event_bus 发布
         if (m_event_bus) {
             m_event_bus->publish_async(BackendStatusEvent{
                 .status = BackendStatusEvent::Disconnected,
@@ -100,10 +104,13 @@ void RemoteBackend::shutdown() {
         }
         return;
     }
-    // Generating 态：先 interrupt（内部会清理 active_reader），再 shutdown
-    if (m_state.load(std::memory_order_acquire) == BackendState::Generating) {
-        interrupt();  // 会把 Generating 之外的 active_reader 清掉
-        m_state.store(BackendState::Shutdown, std::memory_order_release);
+
+    // 尝试 Generating → Shutdown（生成中关闭：先清理 reader 再 shutdown）
+    expected = BackendState::Generating;
+    if (m_state.compare_exchange_strong(expected, BackendState::Shutdown,
+        std::memory_order_acq_rel, std::memory_order_acquire)) {
+        // CAS 成功：状态已转 Shutdown，此时不会有新 submit_completion 进入（非 Ready）
+        interrupt_locked();  // 在同一锁内清理 active_reader
         if (m_http_client) {
             m_http_client->shutdown();
         }
@@ -114,7 +121,12 @@ void RemoteBackend::shutdown() {
                 .error = {}
             });
         }
+        return;
     }
+
+    // 其他状态（Idle / Shutdown）：不做任何操作
+    // - Idle：未初始化，无资源需清理
+    // - Shutdown：已 shutdown，幂等返回
 }
 
 ModelInfo RemoteBackend::get_model_info() const {
@@ -184,6 +196,11 @@ std::shared_ptr<IStreamReader> RemoteBackend::submit_completion(const Completion
 
 void RemoteBackend::interrupt() {
     std::lock_guard<std::mutex> lock(m_active_mutex);
+    interrupt_locked();
+}
+
+void RemoteBackend::interrupt_locked() {
+    // M-A：interrupt 的无锁实现，调用方必须已持有 m_active_mutex
     if (m_active_reader) {
         m_active_reader->cancel();
         if (m_http_client) {

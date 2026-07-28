@@ -140,7 +140,8 @@ static int run(int argc, char* argv[]) {
     Screen screen(&terminal);
 
     if (needs_wizard) {
-        SetupWizard wizard(terminal.platform(), &terminal, &screen, cfg);
+        // H-A：SetupWizard 仅依赖 IConfigWriter + IConfigPersistence（M-4 ISP）
+        SetupWizard wizard(terminal.platform(), &terminal, &screen, cfg, cfg);
         bool ok = wizard.run_wizard();
         if (!ok) {
             terminal.restore();

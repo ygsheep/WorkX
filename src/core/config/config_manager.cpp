@@ -457,9 +457,12 @@ void ConfigManager::load_from_env() {
     }
 }
 
-ConfigScope::ConfigScope(const std::string& prefix, IConfigManager& cm)
+ConfigScope::ConfigScope(const std::string& prefix,
+                         IConfigReader& reader,
+                         IConfigWriter& writer)
     : m_prefix(prefix)
-    , m_config(cm) {
+    , m_reader(reader)
+    , m_writer(writer) {
     if (!m_prefix.empty() && m_prefix.back() != '.') {
         m_prefix += '.';
     }

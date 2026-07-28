@@ -66,16 +66,8 @@ inline bool truncate_result(std::string& text, size_t max_length = MAX_TOOL_RESU
     return true;
 }
 
-/// @brief 工具执行器内部使用的执行轨迹（M-3）
-/// @details run_with_safety 填充，finalize_result 消费。
-///          将"执行阶段"与"日志/截断阶段"解耦，便于未来注入 IToolExecutorObserver
-///          或返回 ExecutionTrace 让调用方决定是否记录日志。
-struct ExecutionTrace {
-    std::string tool_name;
-    std::chrono::steady_clock::time_point start_time;
-    std::chrono::milliseconds duration{0};
-    bool ok{false};
-};
+// M-B：ExecutionTrace 已删除（Round 1 审查指出为死代码）。
+// M-3 的"日志策略可替换"目标留待后续 issue 引入 IToolExecutorObserver 时实现。
 
 /// @brief ToolExecutor — 工具执行器
 ///
@@ -112,6 +104,7 @@ public:
         // 1. 查找工具
         auto tool = lookup_tool(tool_name);
         if (!tool) {
+            LOG_WARN("[tool_executor] tool not found: {}", tool_name);
             return Error{Error::Code::ResourceNotFound,
                          "Tool not found: " + tool_name,
                          tool_name};
@@ -154,22 +147,20 @@ public:
 private:
     std::shared_ptr<ToolRegistry> registry_;
 
-    /// @brief 查找工具（纯查找，无副作用）
+    /// @brief 查找工具（L-B：纯查找，无日志副作用）
     /// @param tool_name 工具名称
-    /// @return 工具实例（未找到返回 nullptr）
+    /// @return 工具实例（未找到返回 nullptr；日志由 execute() 入口统一记录）
     inline std::shared_ptr<ITool> lookup_tool(const std::string& tool_name) const {
-        auto tool = registry_->find_by_name(tool_name);
-        if (!tool) {
-            LOG_WARN("[tool_executor] tool not found: {}", tool_name);
-        }
-        return tool;
+        return registry_->find_by_name(tool_name);
     }
 
     /// @brief 在 try-catch 包装下执行工具调用
     /// @details 捕获 json/filesystem/bad_alloc/std::exception/未知异常，统一转为 Error
+    /// @note H-A：参数类型改为 IToolCallable&（M-5 ISP），明确本方法仅需执行能力，
+    ///       不访问元信息或 Guard。ITool 继承 IToolCallable，调用方传 ITool& 可隐式绑定。
     /// @return 成功返回 ToolResult；失败返回 Error
     inline ResultV2<ToolResult> run_with_safety(
-        ITool& tool,
+        IToolCallable& tool,
         const std::string& tool_name,
         const nlohmann::json& input,
         const ToolContext& ctx
