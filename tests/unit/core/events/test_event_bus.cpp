@@ -357,6 +357,96 @@ TEST_CASE("EventToken move transfers ownership", "[event_bus][token]") {
     REQUIRE_FALSE(token_a.is_valid());  // moved-from
 }
 
+// ============================================================
+// M-8: drain_async_events 排空 API
+// ============================================================
+
+TEST_CASE("drain_async_events processes all queued events (M-8)", "[event_bus][m8][drain]") {
+    auto& bus = EventBus::instance();
+    bus.clear();
+
+    std::atomic<int> received{0};
+    auto token = bus.subscribe<TestEvent>([&received](const TestEvent&) {
+        received.fetch_add(1, std::memory_order_relaxed);
+    });
+
+    // 入队 5 个异步事件
+    for (int i = 0; i < 5; ++i) {
+        bus.publish_async(TestEvent{.value = i});
+    }
+    REQUIRE(bus.async_queue_size() == 5);
+    REQUIRE(received.load() == 0);  // 未 drain，不应派发
+
+    // drain：应处理完所有事件
+    size_t iterations = bus.drain_async_events();
+    REQUIRE(iterations == 1);          // 单批次即可排空（5 个事件一次性处理）
+    REQUIRE(bus.async_queue_size() == 0);
+    REQUIRE(received.load() == 5);
+
+    bus.unsubscribe<TestEvent>(token);
+    bus.clear();
+}
+
+TEST_CASE("drain_async_events handles chained publish_async (M-8)", "[event_bus][m8][drain]") {
+    // 场景：回调中再次 publish_async，drain 应多批次排空直到无积压
+    auto& bus = EventBus::instance();
+    bus.clear();
+
+    std::atomic<int> received{0};
+    std::atomic<int> depth{0};
+    constexpr int TARGET_DEPTH = 3;
+
+    auto token = bus.subscribe<TestEvent>([&](const TestEvent&) {
+        received.fetch_add(1, std::memory_order_relaxed);
+        int d = depth.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (d < TARGET_DEPTH) {
+            bus.publish_async(TestEvent{.value = d});  // 链式入队
+        }
+    });
+
+    bus.publish_async(TestEvent{.value = 0});
+    REQUIRE(bus.async_queue_size() == 1);
+
+    // drain：链式 publish_async 需要多次批次排空
+    size_t iterations = bus.drain_async_events();
+    REQUIRE(iterations >= TARGET_DEPTH);  // 至少 TARGET_DEPTH 批次
+    REQUIRE(bus.async_queue_size() == 0);
+    REQUIRE(received.load() == TARGET_DEPTH);
+    REQUIRE(depth.load() == TARGET_DEPTH);
+
+    bus.unsubscribe<TestEvent>(token);
+    bus.clear();
+}
+
+TEST_CASE("drain_async_events respects max_iterations bound (M-8)", "[event_bus][m8][drain]") {
+    // 场景：回调无限 publish_async，drain 应在 max_iterations 兜底返回
+    auto& bus = EventBus::instance();
+    bus.clear();
+
+    std::atomic<int> received{0};
+    auto token = bus.subscribe<TestEvent>([&](const TestEvent&) {
+        received.fetch_add(1, std::memory_order_relaxed);
+        bus.publish_async(TestEvent{});  // 永远再入队一个
+    });
+
+    bus.publish_async(TestEvent{});
+    size_t iterations = bus.drain_async_events(4);
+    REQUIRE(iterations == 4);
+    REQUIRE(bus.async_queue_size() > 0);  // 仍有积压（兜底退出）
+    REQUIRE(received.load() == 4);
+
+    bus.unsubscribe<TestEvent>(token);
+    bus.clear();
+}
+
+TEST_CASE("drain_async_events on empty queue is no-op (M-8)", "[event_bus][m8][drain]") {
+    auto& bus = EventBus::instance();
+    bus.clear();
+    REQUIRE(bus.async_queue_size() == 0);
+    REQUIRE(bus.drain_async_events() == 0);  // 空队列，0 次迭代
+    bus.clear();
+}
+
 // ============================================================================
 // 诊断接口（G-1）：测试失败时可用于输出 EventBus 内部状态
 // ============================================================================

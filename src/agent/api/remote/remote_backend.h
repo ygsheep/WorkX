@@ -37,7 +37,7 @@ public:
     std::string name() const override { return "remote"; }
     ResultV2<void> initialize(const BackendConfig& config) override;
     void shutdown() override;
-    bool is_ready() const override { return m_ready.load(); }
+    bool is_ready() const override { return m_state.load() == BackendState::Ready; }
     ModelInfo get_model_info() const override;
     ResultV2<std::vector<ModelInfo>> list_models() override;
     void set_model_name(const std::string& name) override { m_config.model_name = name; }
@@ -45,12 +45,22 @@ public:
     // ICompletionProvider 接口
     std::shared_ptr<IStreamReader> submit_completion(const CompletionRequest& request) override;
     void interrupt() override;
-    bool is_generating() const override { return m_generating.load(); }
+    bool is_generating() const override { return m_state.load() == BackendState::Generating; }
+
+    /// @brief 获取当前后端状态（M-7：诊断 / 测试用）
+    /// @details 替代原有的两个 bool 查询，单一原子读取保证状态一致快照
+    [[nodiscard]] BackendState state() const noexcept { return m_state.load(std::memory_order_acquire); }
 
 private:
     BackendConfig m_config;
-    std::atomic<bool> m_ready{false};
-    std::atomic<bool> m_generating{false};
+    // M-7：合并 m_ready / m_generating 两个 atomic<bool> 为单一 atomic<BackendState>，
+    //      消除"m_ready=false 但 m_generating=true"等非法组合，原子读写保证状态一致
+    std::atomic<BackendState> m_state{BackendState::Idle};
+
+    /// @brief interrupt 内部实现（M-A：调用方必须已持有 m_active_mutex）
+    /// @details 拆出 interrupt_locked 以便 shutdown() 在持锁状态下复用清理逻辑，
+    ///          避免 interrupt() 内部再次加锁导致死锁，并消除 shutdown 与 interrupt 间的 TOCTOU 竞态。
+    void interrupt_locked();
 
     /// @brief Provider 特定协议适配器
     std::unique_ptr<IProviderAdapter> m_adapter;

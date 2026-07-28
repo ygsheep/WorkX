@@ -6,6 +6,7 @@
  */
 
 #include <catch2/catch_test_macros.hpp>
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <filesystem>
@@ -361,4 +362,161 @@ TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor execute is const method (par
 
     REQUIRE(result.is_ok());
     REQUIRE(echo->call_count == 1);
+}
+
+// ============================================================================
+// H-B / M-3：truncate_result 截断逻辑独立测试
+// ============================================================================
+
+TEST_CASE("truncate_result keeps short text unchanged", "[tool_executor][m3][truncation]") {
+    std::string text = "short text";
+    bool truncated = truncate_result(text, 100);
+
+    REQUIRE_FALSE(truncated);
+    REQUIRE(text == "short text");
+}
+
+TEST_CASE("truncate_result truncates long text with marker", "[tool_executor][m3][truncation]") {
+    // 构造超长文本（2000 字节），最大保留 1000 字节
+    std::string text(2000, 'x');
+    bool truncated = truncate_result(text, 1000);
+
+    REQUIRE(truncated);
+    // 截断后包含截断标记
+    REQUIRE(text.find("[output truncated,") != std::string::npos);
+    REQUIRE(text.find("characters omitted]") != std::string::npos);
+    // 头尾各保留 max_length/2
+    REQUIRE(text.find("xxxx") != std::string::npos);
+}
+
+TEST_CASE("truncate_result preserves head and tail of long text", "[tool_executor][m3][truncation]") {
+    // 头部为 "HEADHEAD"，尾部为 "TAILTAIL"，中间填充 2000 个 'M'
+    std::string text = "HEADHEAD";
+    text.append(std::string(2000, 'M'));
+    text.append("TAILTAIL");
+
+    bool truncated = truncate_result(text, 100);
+    REQUIRE(truncated);
+
+    // 头尾内容应保留
+    REQUIRE(text.find("HEADHEAD") == 0);
+    REQUIRE(text.find("TAILTAIL") != std::string::npos);
+    // 中间内容应被省略：原始 2000 个 'M' 仅剩头尾各 half=50 字节中的部分
+    // 头部 50 字节 = "HEADHEAD"(8) + 42 个 'M'，尾部同理，共约 84 个 'M'
+    const size_t m_count = std::count(text.begin(), text.end(), 'M');
+    REQUIRE(m_count < 2000);
+    REQUIRE(m_count <= 100);  // 远少于原始 2000 个
+}
+
+// ============================================================================
+// H-B / M-3：finalize_result 通过 execute() 截断行为验证
+// ============================================================================
+
+namespace {
+
+/// @brief 返回超长文本的工具，用于测试 finalize_result 的截断行为
+class LongTextTool : public ITool {
+public:
+    explicit LongTextTool(size_t length) : length_(length) {}
+
+    const std::string& name() const override {
+        static const std::string n = "LongText";
+        return n;
+    }
+    const std::string& description() const override { static const std::string d; return d; }
+    const std::string& prompt() const override { static const std::string p; return p; }
+    nlohmann::json input_schema() const override { return {{"type", "object"}}; }
+
+    ResultV2<ToolResult> call(const nlohmann::json&, const ToolContext&) const override {
+        return ResultV2<ToolResult>::ok(
+            ToolResult::ok(std::string(length_, 'A')));
+    }
+
+private:
+    size_t length_;
+};
+
+} // namespace
+
+TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor truncates long result via finalize_result", "[tool_executor][m3][finalize]") {
+    // 构造超过 MAX_TOOL_RESULT_LENGTH 的输出
+    const size_t long_len = MAX_TOOL_RESULT_LENGTH + 1000;
+    registry->register_tool(std::make_shared<LongTextTool>(long_len));
+
+    auto result = executor->execute("LongText", R"({})"_json, ctx);
+
+    REQUIRE(result.is_ok());
+    REQUIRE(result.value().tool_name == "LongText");
+    // 截断标记位为 true
+    REQUIRE(result.value().is_truncated());
+    // 截断后文本应小于原始长度
+    REQUIRE(result.value().result.text.length() < long_len);
+    // 截断标记文本应存在
+    REQUIRE(result.value().result.text.find("[output truncated,") != std::string::npos);
+    REQUIRE(result.value().result.text.find("characters omitted]") != std::string::npos);
+    // 头尾仍保留 'A' 字符
+    REQUIRE(result.value().result.text.front() == 'A');
+    REQUIRE(result.value().result.text.back() == 'A');
+}
+
+TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor does not truncate short result", "[tool_executor][m3][finalize]") {
+    // 短于 MAX_TOOL_RESULT_LENGTH 的输出不应被截断
+    const size_t short_len = 100;
+    registry->register_tool(std::make_shared<LongTextTool>(short_len));
+
+    auto result = executor->execute("LongText", R"({})"_json, ctx);
+
+    REQUIRE(result.is_ok());
+    REQUIRE_FALSE(result.value().is_truncated());
+    REQUIRE(result.value().result.text.length() == short_len);
+    REQUIRE(result.value().result.text.find("[output truncated,") == std::string::npos);
+}
+
+// ============================================================================
+// H-B / M-3：run_with_safety 异常分类测试（通过 execute 入口验证）
+// 注意：基础异常分类已在 "[tool_executor][exception]" 测试覆盖，这里补充
+//       M-3 拆分后的契约：所有异常分支统一返回 ToolExecutionFailed/Unknown
+// ============================================================================
+
+TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor run_with_safety classifies all exception types", "[tool_executor][m3][exception_classification]") {
+    // 验证 M-3 拆分后 run_with_safety 的异常分类契约：
+    // - std::exception 子类 → ToolExecutionFailed
+    // - 未知异常 → Unknown
+    // - 业务错误（ResultV2::err）→ 原错误透传
+
+    SECTION("std::runtime_error 映射为 ToolExecutionFailed") {
+        registry->register_tool(std::make_shared<FailingTool>());
+        auto result = executor->execute("Failing", R"({})"_json, ctx);
+        REQUIRE(result.is_err());
+        REQUIRE(result.error().code == Error::Code::ToolExecutionFailed);
+    }
+
+    SECTION("nlohmann::json::exception 映射为 ToolExecutionFailed") {
+        registry->register_tool(std::make_shared<JsonExceptionTool>());
+        auto result = executor->execute("JsonException", R"({})"_json, ctx);
+        REQUIRE(result.is_err());
+        REQUIRE(result.error().code == Error::Code::ToolExecutionFailed);
+    }
+
+    SECTION("std::filesystem::filesystem_error 映射为 ToolExecutionFailed") {
+        registry->register_tool(std::make_shared<FilesystemErrorTool>());
+        auto result = executor->execute("FsError", R"({})"_json, ctx);
+        REQUIRE(result.is_err());
+        REQUIRE(result.error().code == Error::Code::ToolExecutionFailed);
+    }
+
+    SECTION("非 std::exception 异常映射为 Unknown") {
+        registry->register_tool(std::make_shared<UnknownExceptionTool>());
+        auto result = executor->execute("Unknown", R"({})"_json, ctx);
+        REQUIRE(result.is_err());
+        REQUIRE(result.error().code == Error::Code::Unknown);
+    }
+
+    SECTION("业务 ResultV2::err 透传原错误码 ToolExecutionFailed") {
+        registry->register_tool(std::make_shared<ErrorResultTool>());
+        auto result = executor->execute("ErrorResult", R"({})"_json, ctx);
+        REQUIRE(result.is_err());
+        REQUIRE(result.error().code == Error::Code::ToolExecutionFailed);
+        REQUIRE(result.error().message == "business logic error");
+    }
 }

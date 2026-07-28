@@ -84,11 +84,13 @@ static std::filesystem::path default_config_path() {
 // ============================================================
 
 SetupWizard::SetupWizard(IPlatform* platform, Terminal* terminal, Screen* screen,
-                         agent::IConfigManager& cfg)
+                         agent::IConfigWriter& writer,
+                         agent::IConfigPersistence& persistence)
     : m_platform(platform)
     , m_terminal(terminal)
     , m_screen(screen)
-    , m_cfg(cfg)
+    , m_writer(writer)
+    , m_persistence(persistence)
 {
 }
 
@@ -396,15 +398,14 @@ void SetupWizard::save_and_confirm(const std::string& provider_name,
                                     const std::string& api_key,
                                     const std::string& model_name,
                                     const std::string& remote_url) {
-    auto& cfg = m_cfg;  // M-2：使用构造注入的 IConfigManager&
-
-    cfg.set("backend.provider", provider_name);
-    cfg.set("backend.api_key", api_key);
-    if (!model_name.empty()) cfg.set("backend.model_name", model_name);
-    if (!remote_url.empty()) cfg.set("backend.remote_url", remote_url);
+    // H-A：使用 IConfigWriter 写配置，IConfigPersistence 持久化
+    m_writer.set("backend.provider", provider_name);
+    m_writer.set("backend.api_key", api_key);
+    if (!model_name.empty()) m_writer.set("backend.model_name", model_name);
+    if (!remote_url.empty()) m_writer.set("backend.remote_url", remote_url);
 
     auto save_path = default_config_path();
-    auto result = cfg.save_to_file(save_path);
+    auto result = m_persistence.save_to_file(save_path);
 
     m_cursor_row++;
     int r = m_cursor_row;

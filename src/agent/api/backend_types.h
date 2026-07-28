@@ -53,4 +53,21 @@ struct ModelInfo {
     int32_t context_length = 0;
 };
 
+// ============================================================
+// BackendState (M-7)
+// ============================================================
+
+/// @brief 后端运行态（M-7：合并 m_ready/m_generating 两个 bool 为单一 enum）
+/// @details 原 RemoteBackend 用两个 std::atomic<bool> 分别表示"已初始化"与"生成中"，
+///          存在状态组合歧义（如 m_ready=false 但 m_generating=true 属于非法态）。
+///          M-7 合并为单一枚举，原子读写保证状态一致性，消除非法组合。
+enum class BackendState {
+    /// @brief 初始未初始化态（L-A：仅用于构造初始值；shutdown 后转 Shutdown 而非 Idle）
+    /// @details 状态转换图：Idle →(initialize)→ Ready →(submit)→ Generating →(完成)→ Ready →(shutdown)→ Shutdown
+    Idle,
+    Ready,        ///< 已初始化，可接受请求
+    Generating,   ///< 正在生成推理结果
+    Shutdown      ///< 已显式 shutdown，不可恢复（与 Idle 区别：Idle 可 initialize，Shutdown 不可）
+};
+
 } // namespace agent

@@ -60,7 +60,7 @@ ResultV2<void> RemoteBackend::initialize(const BackendConfig& config) {
 
 #ifdef WORKX_HAS_CURL
     m_http_client = std::make_unique<HttpClient>();
-    m_ready.store(true);
+    m_state.store(BackendState::Ready, std::memory_order_release);
 
     // H-1：通过 DI 注入的 m_event_bus 发布，不再调用 EventBus::instance()；
     // 为 nullptr 时跳过发布（保持向后兼容）
@@ -81,14 +81,20 @@ ResultV2<void> RemoteBackend::initialize(const BackendConfig& config) {
 }
 
 void RemoteBackend::shutdown() {
-    if (m_ready.load()) {
-        interrupt();
+    // M-A：全程持有 m_active_mutex，消除 interrupt() 与 store(Shutdown) 之间的 TOCTOU 竞态。
+    //      原实现：interrupt() 释放锁后、store(Shutdown) 前另一线程可 CAS Ready→Generating
+    //      创建新 reader，随后 store(Shutdown) 覆盖但新 reader 未清理。
+    //      现实现：持锁后 CAS 状态，interrupt_locked() 在同一锁内清理 reader，无窗口。
+    std::lock_guard<std::mutex> lock(m_active_mutex);
+
+    // 尝试 Ready → Shutdown（常见路径：空闲时关闭）
+    BackendState expected = BackendState::Ready;
+    if (m_state.compare_exchange_strong(expected, BackendState::Shutdown,
+        std::memory_order_acq_rel, std::memory_order_acquire)) {
+        // Ready 态无 active_reader，直接 shutdown http client
         if (m_http_client) {
             m_http_client->shutdown();
         }
-        m_ready.store(false);
-
-        // H-1：通过 DI 注入的 m_event_bus 发布
         if (m_event_bus) {
             m_event_bus->publish_async(BackendStatusEvent{
                 .status = BackendStatusEvent::Disconnected,
@@ -96,7 +102,31 @@ void RemoteBackend::shutdown() {
                 .error = {}
             });
         }
+        return;
     }
+
+    // 尝试 Generating → Shutdown（生成中关闭：先清理 reader 再 shutdown）
+    expected = BackendState::Generating;
+    if (m_state.compare_exchange_strong(expected, BackendState::Shutdown,
+        std::memory_order_acq_rel, std::memory_order_acquire)) {
+        // CAS 成功：状态已转 Shutdown，此时不会有新 submit_completion 进入（非 Ready）
+        interrupt_locked();  // 在同一锁内清理 active_reader
+        if (m_http_client) {
+            m_http_client->shutdown();
+        }
+        if (m_event_bus) {
+            m_event_bus->publish_async(BackendStatusEvent{
+                .status = BackendStatusEvent::Disconnected,
+                .backend_name = name(),
+                .error = {}
+            });
+        }
+        return;
+    }
+
+    // 其他状态（Idle / Shutdown）：不做任何操作
+    // - Idle：未初始化，无资源需清理
+    // - Shutdown：已 shutdown，幂等返回
 }
 
 ModelInfo RemoteBackend::get_model_info() const {
@@ -109,7 +139,9 @@ ModelInfo RemoteBackend::get_model_info() const {
 
 std::shared_ptr<IStreamReader> RemoteBackend::submit_completion(const CompletionRequest& request) {
 #ifdef WORKX_HAS_CURL
-    if (!m_ready.load() || !m_adapter || !m_http_client) {
+    // M-7：单一状态判断，Ready 才接受请求
+    if (m_state.load(std::memory_order_acquire) != BackendState::Ready ||
+        !m_adapter || !m_http_client) {
         return nullptr;
     }
 
@@ -120,7 +152,12 @@ std::shared_ptr<IStreamReader> RemoteBackend::submit_completion(const Completion
         return nullptr;
     }
 
-    m_generating.store(true);
+    // M-7：CAS Ready → Generating
+    BackendState expected = BackendState::Ready;
+    if (!m_state.compare_exchange_strong(expected, BackendState::Generating,
+        std::memory_order_acq_rel, std::memory_order_acquire)) {
+        return nullptr;
+    }
 
     // 创建 SSE 流读取器，传入 Provider 特定的解析回调
     auto parse_cb = [this](const std::string& event_type,
@@ -142,7 +179,14 @@ std::shared_ptr<IStreamReader> RemoteBackend::submit_completion(const Completion
         url, header_pairs, body, reader,
         [this]() {
             std::lock_guard<std::mutex> lock(m_active_mutex);
-            m_generating.store(false);
+            // M-N1：仅当仍为 Generating 时才回到 Ready，避免覆盖 Shutdown 终态。
+            // 边界场景：shutdown() 持锁 CAS Generating→Shutdown 并清理 reader 后释放锁，
+            // 被取消的请求触发 on_complete 时若用 store(Ready) 会覆盖 Shutdown，导致
+            // backend 回到 Ready 但 http_client 已 shutdown，后续请求接受但失败。
+            // CAS 失败（状态非 Generating，如已被 shutdown 转为 Shutdown）则保持终态。
+            BackendState expected = BackendState::Generating;
+            m_state.compare_exchange_strong(expected, BackendState::Ready,
+                std::memory_order_acq_rel, std::memory_order_acquire);
             m_active_reader.reset();
         },
         m_config.timeout_ms);
@@ -158,6 +202,11 @@ std::shared_ptr<IStreamReader> RemoteBackend::submit_completion(const Completion
 
 void RemoteBackend::interrupt() {
     std::lock_guard<std::mutex> lock(m_active_mutex);
+    interrupt_locked();
+}
+
+void RemoteBackend::interrupt_locked() {
+    // M-A：interrupt 的无锁实现，调用方必须已持有 m_active_mutex
     if (m_active_reader) {
         m_active_reader->cancel();
         if (m_http_client) {
@@ -165,7 +214,10 @@ void RemoteBackend::interrupt() {
         }
         m_active_reader.reset();
     }
-    m_generating.store(false);
+    // M-7：若处于 Generating，回到 Ready；其他状态不变
+    BackendState expected = BackendState::Generating;
+    m_state.compare_exchange_strong(expected, BackendState::Ready,
+        std::memory_order_acq_rel, std::memory_order_acquire);
 }
 
 // ============================================================
@@ -174,7 +226,9 @@ void RemoteBackend::interrupt() {
 
 ResultV2<std::vector<ModelInfo>> RemoteBackend::list_models() {
 #ifdef WORKX_HAS_CURL
-    if (!m_ready.load() || !m_adapter || !m_http_client) {
+    // M-7：Ready 态才允许查询模型列表
+    if (m_state.load(std::memory_order_acquire) != BackendState::Ready ||
+        !m_adapter || !m_http_client) {
         return ResultV2<std::vector<ModelInfo>>::err(
             Error::Code::InternalError, "Backend not ready");
     }

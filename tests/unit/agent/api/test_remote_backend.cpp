@@ -191,3 +191,219 @@ TEST_CASE("BackendFactory propagates event_bus to RemoteBackend", "[backend][fac
         REQUIRE(EventBus::instance().async_queue_size() == 0);
     }
 }
+
+// ============================================================================
+// H-B / M-7：BackendState 状态机测试
+// 验证单一 atomic<BackendState> 消除非法组合，状态转换符合：
+//   Idle →(initialize)→ Ready →(submit)→ Generating →(完成)→ Ready →(shutdown)→ Shutdown
+// Shutdown 为终态，幂等。非 Ready 态拒绝 submit_completion / list_models。
+// ============================================================================
+
+TEST_CASE("RemoteBackend state machine: initial state is Idle", "[backend][remote][m7][state_machine]") {
+    // M-7：构造后未 initialize 前，状态为 Idle（不是 Ready / Generating / Shutdown）
+    MockEventBus bus;
+    RemoteBackend backend(&bus);
+
+    REQUIRE(backend.state() == BackendState::Idle);
+    REQUIRE_FALSE(backend.is_ready());
+    REQUIRE_FALSE(backend.is_generating());
+}
+
+TEST_CASE("RemoteBackend state machine: Idle -> Ready via initialize", "[backend][remote][m7][state_machine]") {
+    MockEventBus bus;
+    RemoteBackend backend(&bus);
+
+    auto result = backend.initialize(make_remote_config());
+    REQUIRE(result.is_ok());
+
+    // M-7：initialize 成功后状态转为 Ready
+    REQUIRE(backend.state() == BackendState::Ready);
+    REQUIRE(backend.is_ready());
+    REQUIRE_FALSE(backend.is_generating());
+
+    bus.process_async_events();
+    REQUIRE(bus.published_count<BackendStatusEvent>() == 1);
+}
+
+TEST_CASE("RemoteBackend state machine: Ready -> Shutdown via shutdown", "[backend][remote][m7][state_machine]") {
+    MockEventBus bus;
+    RemoteBackend backend(&bus);
+    backend.initialize(make_remote_config());
+    bus.process_async_events();
+    REQUIRE(backend.state() == BackendState::Ready);
+
+    backend.shutdown();
+
+    // M-7：shutdown 后转为 Shutdown 终态
+    REQUIRE(backend.state() == BackendState::Shutdown);
+    REQUIRE_FALSE(backend.is_ready());
+    REQUIRE_FALSE(backend.is_generating());
+
+    bus.process_async_events();
+    // 初始化 1 次 Connected + shutdown 1 次 Disconnected
+    REQUIRE(bus.published_count<BackendStatusEvent>() == 2);
+}
+
+TEST_CASE("RemoteBackend state machine: shutdown is idempotent", "[backend][remote][m7][state_machine]") {
+    // M-7：Shutdown 是终态，重复 shutdown 应为 no-op（幂等）
+    MockEventBus bus;
+    RemoteBackend backend(&bus);
+    backend.initialize(make_remote_config());
+    bus.process_async_events();
+
+    backend.shutdown();
+    REQUIRE(backend.state() == BackendState::Shutdown);
+
+    // 第二次 shutdown 不应崩溃，状态保持 Shutdown
+    backend.shutdown();
+    REQUIRE(backend.state() == BackendState::Shutdown);
+
+    // 第三次 shutdown 仍幂等
+    backend.shutdown();
+    REQUIRE(backend.state() == BackendState::Shutdown);
+
+    // 仍只发布 1 次 Disconnected（重复 shutdown 不再发布）
+    bus.process_async_events();
+    REQUIRE(bus.published_count<BackendStatusEvent>() == 2);
+}
+
+TEST_CASE("RemoteBackend state machine: shutdown on Idle is no-op", "[backend][remote][m7][state_machine]") {
+    // M-7：Idle 态（未 initialize）shutdown 应为 no-op，不发布事件
+    MockEventBus bus;
+    RemoteBackend backend(&bus);
+
+    REQUIRE(backend.state() == BackendState::Idle);
+
+    backend.shutdown();
+
+    // 仍为 Idle（shutdown 对 Idle 态不做任何操作）
+    // 注：根据 shutdown() 实现，Idle 不在任何 CAS 分支中，状态保持不变
+    REQUIRE(backend.state() == BackendState::Idle);
+    REQUIRE(bus.async_queue_size() == 0);
+}
+
+TEST_CASE("RemoteBackend state machine: non-Ready rejects submit_completion", "[backend][remote][m7][state_machine]") {
+    // M-7：非 Ready 态（Idle / Shutdown）拒绝 submit_completion
+    MockEventBus bus;
+    RemoteBackend backend(&bus);
+
+    SECTION("Idle 态拒绝 submit_completion") {
+        REQUIRE(backend.state() == BackendState::Idle);
+        CompletionRequest req;
+        auto reader = backend.submit_completion(req);
+        REQUIRE(reader == nullptr);
+        // 状态保持 Idle
+        REQUIRE(backend.state() == BackendState::Idle);
+    }
+
+    SECTION("Shutdown 态拒绝 submit_completion") {
+        backend.initialize(make_remote_config());
+        backend.shutdown();
+        REQUIRE(backend.state() == BackendState::Shutdown);
+
+        CompletionRequest req;
+        auto reader = backend.submit_completion(req);
+        REQUIRE(reader == nullptr);
+        // 状态保持 Shutdown
+        REQUIRE(backend.state() == BackendState::Shutdown);
+    }
+}
+
+TEST_CASE("RemoteBackend state machine: non-Ready rejects list_models", "[backend][remote][m7][state_machine]") {
+    // M-7：非 Ready 态（Idle / Shutdown）拒绝 list_models
+    MockEventBus bus;
+    RemoteBackend backend(&bus);
+
+    SECTION("Idle 态 list_models 返回 InternalError") {
+        REQUIRE(backend.state() == BackendState::Idle);
+        auto result = backend.list_models();
+        REQUIRE(result.is_err());
+        REQUIRE(result.error().code == Error::Code::InternalError);
+        REQUIRE(result.error().message.find("not ready") != std::string::npos);
+    }
+
+    SECTION("Shutdown 态 list_models 返回 InternalError") {
+        backend.initialize(make_remote_config());
+        backend.shutdown();
+        REQUIRE(backend.state() == BackendState::Shutdown);
+
+        auto result = backend.list_models();
+        REQUIRE(result.is_err());
+        REQUIRE(result.error().code == Error::Code::InternalError);
+    }
+}
+
+TEST_CASE("RemoteBackend state machine: single enum eliminates illegal combinations", "[backend][remote][m7][state_machine]") {
+    // M-7：验证单一 atomic<BackendState> 消除非法组合
+    // 原实现用两个 atomic<bool> m_ready/m_generating，可能出现：
+    //   - m_ready=false 但 m_generating=true（非法）
+    //   - m_ready=true 且 m_generating=true（语义冲突）
+    // 现实现用单一枚举，is_ready() 和 is_generating() 互斥
+    MockEventBus bus;
+    RemoteBackend backend(&bus);
+
+    SECTION("Idle 态：is_ready=false 且 is_generating=false") {
+        REQUIRE(backend.state() == BackendState::Idle);
+        REQUIRE_FALSE(backend.is_ready());
+        REQUIRE_FALSE(backend.is_generating());
+    }
+
+    SECTION("Ready 态：is_ready=true 且 is_generating=false") {
+        backend.initialize(make_remote_config());
+        REQUIRE(backend.state() == BackendState::Ready);
+        REQUIRE(backend.is_ready());
+        REQUIRE_FALSE(backend.is_generating());
+    }
+
+    SECTION("Shutdown 态：is_ready=false 且 is_generating=false") {
+        backend.initialize(make_remote_config());
+        backend.shutdown();
+        REQUIRE(backend.state() == BackendState::Shutdown);
+        REQUIRE_FALSE(backend.is_ready());
+        REQUIRE_FALSE(backend.is_generating());
+    }
+}
+
+// ============================================================================
+// H-B / M-N1：on_complete CAS 契约测试
+// M-N1 修复：on_complete 回调改用 CAS `Generating→Ready` 而非 store(Ready)，
+// 避免边界场景下覆盖 Shutdown 终态。
+// 由于 HttpClient 为具体类无法 mock，on_complete 回调和 interrupt_locked()
+// 使用相同的 CAS 模式，通过 interrupt() 间接验证 CAS 在非 Generating 态下
+// 不覆盖状态。
+// ============================================================================
+
+TEST_CASE("RemoteBackend interrupt on Shutdown keeps Shutdown (M-N1 CAS contract)", "[backend][remote][m-n1]") {
+    // M-N1：验证 CAS `Generating→Ready` 在 Shutdown 态下失败，不覆盖终态
+    // on_complete 回调与 interrupt_locked() 使用相同 CAS 模式：
+    //   BackendState expected = Generating;
+    //   m_state.compare_exchange_strong(expected, Ready, ...);
+    // 当状态为 Shutdown 时 CAS 失败，保持 Shutdown 不变。
+    MockEventBus bus;
+    RemoteBackend backend(&bus);
+    backend.initialize(make_remote_config());
+    backend.shutdown();
+    REQUIRE(backend.state() == BackendState::Shutdown);
+
+    // interrupt() 内部调用 interrupt_locked()，其 CAS Generating→Ready 会失败
+    backend.interrupt();
+
+    // Shutdown 终态不被覆盖
+    REQUIRE(backend.state() == BackendState::Shutdown);
+    REQUIRE_FALSE(backend.is_ready());
+    REQUIRE_FALSE(backend.is_generating());
+}
+
+TEST_CASE("RemoteBackend interrupt on Idle keeps Idle (M-N1 CAS contract)", "[backend][remote][m-n1]") {
+    // M-N1：验证 CAS `Generating→Ready` 在 Idle 态下也失败，不覆盖状态
+    MockEventBus bus;
+    RemoteBackend backend(&bus);
+    REQUIRE(backend.state() == BackendState::Idle);
+
+    backend.interrupt();
+
+    // Idle 态不被覆盖（CAS Generating→Ready 失败）
+    REQUIRE(backend.state() == BackendState::Idle);
+    REQUIRE_FALSE(backend.is_ready());
+    REQUIRE_FALSE(backend.is_generating());
+}

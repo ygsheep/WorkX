@@ -14,7 +14,10 @@
 #include "agent/model/provider_preset.h"
 #include "tui/core/screen.h"
 
-namespace agent { class IConfigManager; }
+namespace agent {
+class IConfigWriter;
+class IConfigPersistence;
+}
 
 namespace tui {
 
@@ -25,9 +28,16 @@ class Terminal;
 /// @details 当首次启动且未配置 Provider 时运行
 class SetupWizard {
 public:
-    /// @brief 构造（M-2：注入 IConfigManager 替代 ConfigManager::instance()）
+    /// @brief 构造（H-A：按 ISP 拆分依赖，仅需 IConfigWriter + IConfigPersistence）
+    /// @param platform 平台抽象
+    /// @param terminal 终端
+    /// @param screen 屏幕渲染引擎
+    /// @param writer 配置写入接口（写入 backend.* 键）
+    /// @param persistence 配置持久化接口（save_to_file）
+    /// @note M-4 ISP：SetupWizard 不依赖 IConfigReader（不读取配置），仅需写 + 持久化
     SetupWizard(IPlatform* platform, Terminal* terminal, Screen* screen,
-                agent::IConfigManager& cfg);
+                agent::IConfigWriter& writer,
+                agent::IConfigPersistence& persistence);
 
     /// @brief 运行设置向导
     /// @return true 配置成功，false 用户取消
@@ -71,7 +81,8 @@ private:
     IPlatform* m_platform;
     Terminal* m_terminal;
     Screen* m_screen;           ///< 差分渲染引擎
-    agent::IConfigManager& m_cfg;  ///< M-2：配置管理器（DI 注入）
+    agent::IConfigWriter& m_writer;          ///< H-A：配置写入（DI 注入）
+    agent::IConfigPersistence& m_persistence; ///< H-A：配置持久化（DI 注入）
 
     int m_cursor_row = 0;       ///< Screen 中当前写入行号
 };
