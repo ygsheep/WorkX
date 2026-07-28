@@ -76,6 +76,10 @@ public:
     /// @brief 设置 ANSI 滚动区域，保护底部输入行和状态栏
     void setup_scroll_region();
 
+    /// @brief setup_scroll_region 的不持锁版本（调用方必须已持有 m_output_mutex）
+    /// @details 供 handle_resize() 在单一锁内调用，避免分段加锁的窗口期
+    void setup_scroll_region_locked();
+
     /// @brief 重置滚动区域为全屏
     void reset_scroll_region();
 

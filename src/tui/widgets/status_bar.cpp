@@ -136,6 +136,7 @@ void StatusBar::render() {
 }
 
 void StatusBar::clear() {
+    std::lock_guard<std::mutex> lock(m_mutex);
     int height = m_terminal->get_terminal_height();
     int status_row = height - 2;
     if (status_row < 1) return;
