@@ -36,6 +36,7 @@ static constexpr char32_t KEY_CTRL_ARROW_RIGHT = 0xE007;
 static constexpr char32_t KEY_DELETE           = 0xE008;
 static constexpr char32_t KEY_CTRL_C           = 0xE009;
 static constexpr char32_t KEY_CTRL_O           = 0xE00A;
+static constexpr char32_t KEY_RESIZE           = 0xE00B;  // 终端尺寸变更
 
 class Win32Platform : public IPlatform {
 public:
@@ -95,6 +96,11 @@ public:
             DWORD count = 0;
             if (!ReadConsoleInputW(m_h_input, &record, 1, &count) || count == 0) {
                 return WEOF;
+            }
+
+            // 捕获终端 resize 事件（Windows Terminal 拖动边框/最大化时触发）
+            if (record.EventType == WINDOW_BUFFER_SIZE_EVENT) {
+                return KEY_RESIZE;
             }
 
             if (record.EventType == KEY_EVENT && record.Event.KeyEvent.bKeyDown) {

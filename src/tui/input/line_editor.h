@@ -51,6 +51,11 @@ public:
     /// @param editing true=开始编辑，false=结束编辑
     using EditingChangedCallback = std::function<void(bool editing)>;
 
+    /// @brief 终端尺寸变更通知（read_char 收到 KEY_RESIZE 时调用）
+    /// @details Terminal 在此回调中刷新 scroll region、重放 DisplayBuffer、
+    ///          发布 TerminalResizeEvent；回调返回后 LineEditor 重新定位输入行。
+    using ResizeCallback = std::function<void()>;
+
     explicit LineEditor(IPlatform* platform);
 
     /// @brief 设置 Tab 补全回调
@@ -70,6 +75,9 @@ public:
 
     /// @brief 设置编辑状态变化通知回调
     void set_editing_changed_callback(EditingChangedCallback cb);
+
+    /// @brief 设置终端尺寸变更回调
+    void set_resize_callback(ResizeCallback cb);
 
     /// @brief 批量加载历史条目（追加到现有历史）
     void load_history(const std::vector<std::string>& entries);
@@ -131,6 +139,7 @@ private:
     InputChangedCallback m_input_changed_cb;
     CursorLeftOutputCallback m_cursor_left_output_cb;
     EditingChangedCallback m_editing_changed_cb;
+    ResizeCallback m_resize_cb;
 };
 
 } // namespace tui

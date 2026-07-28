@@ -33,4 +33,14 @@ struct ShutdownEvent {
     bool force = false;
 };
 
+/// @brief 终端尺寸变更事件
+/// @details 由 Terminal 在主循环检测到平台层 resize 信号后发布，
+///          订阅方可据此刷新 scroll region、重绘动画组件、重放 DisplayBuffer 等。
+struct TerminalResizeEvent {
+    int old_width = 0;
+    int old_height = 0;
+    int new_width = 0;
+    int new_height = 0;
+};
+
 } // namespace agent

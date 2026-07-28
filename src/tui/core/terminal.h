@@ -76,6 +76,10 @@ public:
     /// @brief 设置 ANSI 滚动区域，保护底部输入行和状态栏
     void setup_scroll_region();
 
+    /// @brief setup_scroll_region 的不持锁版本（调用方必须已持有 m_output_mutex）
+    /// @details 供 handle_resize() 在单一锁内调用，避免分段加锁的窗口期
+    void setup_scroll_region_locked();
+
     /// @brief 重置滚动区域为全屏
     void reset_scroll_region();
 
@@ -149,6 +153,10 @@ public:
     using InputChangedCallback = std::function<void(const std::string&)>;
     void set_input_changed_callback(InputChangedCallback cb);
 
+    /// @brief 处理终端尺寸变更（由 LineEditor 的 resize 回调触发）
+    /// @details 刷新 scroll region、重放 DisplayBuffer、发布 TerminalResizeEvent
+    void handle_resize();
+
     /// @brief 获取历史管理器
     History& history() { return m_history; }
 
@@ -219,6 +227,10 @@ private:
     std::vector<std::string> m_overlay_snapshot;
     int m_overlay_top = 0;
     int m_overlay_bottom = 0;
+
+    // 最近已知的终端尺寸（用于 resize 事件发布时计算 old/new 差值）
+    int m_last_width = 80;
+    int m_last_height = 24;
 
     // D-4/D-5/D-6：DI 注入的依赖（H-4：不再回退单例，构造时必须显式注入）
     agent::IEventBus* m_event_bus = nullptr;        ///< 事件总线（非拥有）

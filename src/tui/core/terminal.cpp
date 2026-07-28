@@ -107,6 +107,11 @@ Result<void, std::string> Terminal::initialize() {
     m_display_buffer = std::make_unique<DisplayBuffer>(1000);
     m_display_buffer->set_width(get_terminal_width());
     m_display_buffer->set_height(get_terminal_height());
+    m_last_width = get_terminal_width();
+    m_last_height = get_terminal_height();
+
+    // 注册 LineEditor 的 resize 回调：终端尺寸变更时刷新 scroll region / 重放 DisplayBuffer / 发布事件
+    m_editor->set_resize_callback([this]() { handle_resize(); });
 
     // 后台事件泵线程：确保异步事件（如流式输出）能被及时派发
     // 同时驱动 TaskManager::update() 清理已完成任务（修复 1.2 / 2.1）
@@ -475,6 +480,21 @@ void Terminal::setup_scroll_region() {
     m_cursor_in_output = true;
 }
 
+void Terminal::setup_scroll_region_locked() {
+    // 调用方必须已持有 m_output_mutex
+    int height = get_terminal_height();
+    int scroll_bottom = height - 3;
+    if (scroll_bottom < 1) scroll_bottom = 1;
+
+    char cmd[32];
+    snprintf(cmd, sizeof(cmd), "\x1b[1;%dr", scroll_bottom);
+    m_platform->write_output(cmd);
+    m_platform->write_output("\x1b[1;1H");
+    m_platform->flush();
+    m_scroll_region_active = true;
+    m_cursor_in_output = true;
+}
+
 void Terminal::reset_scroll_region() {
     std::lock_guard<std::mutex> lock(m_output_mutex);
     // 重置为全屏滚动
@@ -531,6 +551,91 @@ void Terminal::set_input_changed_callback(InputChangedCallback cb) {
     if (m_editor) {
         m_editor->set_input_changed_callback(std::move(cb));
     }
+}
+
+void Terminal::handle_resize() {
+    int new_w = get_terminal_width();
+    int new_h = get_terminal_height();
+    int old_w = m_last_width;
+    int old_h = m_last_height;
+
+    // 尺寸未变则跳过（避免虚假 resize 事件）
+    if (new_w == old_w && new_h == old_h) return;
+
+    // 整个 resize 操作在单一锁内完成，消除分段加锁窗口期（M-4）
+    // 防止后台事件泵线程在清屏后、重放前插入 write() 导致输出位置错乱
+    {
+        std::lock_guard<std::mutex> lock(m_output_mutex);
+
+        // M-3：overlay 活动期间（CommandPanel/ModelSelector 打开）跳过快照重放，
+        // 仅更新尺寸记录，避免擦除面板显示
+        if (!m_overlay_active) {
+            // 1. 快照旧滚动区域的可见内容（持锁，消除与后台 feed() 的数据竞争 H-1）
+            std::vector<std::string> visible;
+            if (m_display_buffer) {
+                int old_scroll_h = old_h - 3;
+                if (old_scroll_h < 1) old_scroll_h = 1;
+                visible = m_display_buffer->snapshot(1, old_scroll_h);
+            }
+
+            // 2. 清屏 + 重置 scroll region
+            m_platform->write_output("\x1b[r");          // 重置 scroll region
+            m_platform->write_output("\x1b[2J\x1b[H");   // 清屏 + 光标归位
+            m_platform->flush();
+            m_scroll_region_active = false;
+            m_cursor_in_output = true;
+
+            // 3. 更新 DisplayBuffer 尺寸（H-2：在 setup_scroll_region 之前更新，
+            //    确保后台 feed() 使用新尺寸折行）
+            if (m_display_buffer) {
+                m_display_buffer->set_width(new_w);
+                m_display_buffer->set_height(new_h);
+            }
+
+            // 4. 设置新 scroll region（使用不持锁版本，避免死锁）
+            setup_scroll_region_locked();
+
+            // 5. 重放快照内容到新滚动区域（底部对齐）
+            if (!visible.empty()) {
+                int new_scroll_h = new_h - 3;
+                if (new_scroll_h < 1) new_scroll_h = 1;
+                int visible_count = static_cast<int>(visible.size());
+                // 底部对齐：跳过顶部多余行
+                int skip = visible_count - new_scroll_h;
+                if (skip < 0) skip = 0;
+                int rows_to_write = visible_count - skip;
+                int empty_top = new_scroll_h - rows_to_write;
+                if (empty_top < 0) empty_top = 0;
+
+                // 光标已在 scroll region 顶部（setup_scroll_region_locked 设置）
+                // 写入顶部空行（保持底部对齐）
+                for (int i = 0; i < empty_top; ++i) {
+                    m_platform->write_output("\r\n");
+                }
+                // 写入快照行
+                for (int i = skip; i < visible_count; ++i) {
+                    m_platform->write_output("\x1b[2K");  // 清行
+                    if (!visible[i].empty()) {
+                        m_platform->write_output(visible[i]);
+                    }
+                    m_platform->write_output("\r\n");
+                }
+                m_platform->flush();
+            }
+        }
+
+        m_last_width = new_w;
+        m_last_height = new_h;
+    }
+    // 锁已释放
+
+    // 6. 发布 TerminalResizeEvent（在锁外发布，避免回调中再次获取锁导致死锁）
+    event_bus().publish(TerminalResizeEvent{
+        .old_width = old_w,
+        .old_height = old_h,
+        .new_width = new_w,
+        .new_height = new_h
+    });
 }
 
 void Terminal::set_completion_callback(CompletionCallback cb) {

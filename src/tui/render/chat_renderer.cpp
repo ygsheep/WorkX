@@ -15,6 +15,7 @@
 #include "tui/render/streaming_buffer.h"
 #include "tui/render/syntax_highlighter.h"
 #include "core/events/event_bus.h"
+#include "core/events/system_events.h"
 #include "agent/message/types.h"
 
 #include <cassert>
@@ -698,6 +699,16 @@ void ChatRenderer::start() {
             m_tool_tracker.reset_indent();
         })
     );
+
+    // ---- TerminalResizeEvent ----
+    // resize 后：StatusBar 的 m_last_rendered_row 已失效，需擦除旧行并强制重绘
+    m_token_resize = std::make_unique<EventToken>(
+        bus.subscribe<TerminalResizeEvent>([this](const TerminalResizeEvent& /*e*/) {
+            // invalidate_last_row() 让下次 render() 擦除旧行（即使内容相同也强制重绘）
+            m_status_bar->invalidate_last_row();
+            m_status_bar->render();
+        })
+    );
 }
 
 void ChatRenderer::stop() {
@@ -740,6 +751,9 @@ void ChatRenderer::stop() {
     }
     if (m_token_user_input && m_token_user_input->is_valid()) {
         bus.unsubscribe<UserInputEvent>(*m_token_user_input);
+    }
+    if (m_token_resize && m_token_resize->is_valid()) {
+        bus.unsubscribe<TerminalResizeEvent>(*m_token_resize);
     }
 }
 

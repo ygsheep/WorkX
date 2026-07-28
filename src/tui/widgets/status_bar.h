@@ -48,6 +48,9 @@ public:
     void render();
     void clear();
 
+    /// @brief 清除上次渲染行号缓存（resize 后强制重新定位 + 擦除旧行）
+    void invalidate_last_row() { m_last_rendered_row = 0; }
+
     void advance_frame();
 
     bool is_active_state() const;
@@ -70,6 +73,7 @@ private:
     int32_t m_cache_read_tokens = 0;  // Anthropic prompt cache 命中 token 数（0 表示无命中）
     std::chrono::steady_clock::time_point m_session_start;
     mutable std::string m_last_bar;
+    mutable int m_last_rendered_row = 0;  ///< 上次渲染的状态栏行号（用于 resize 后擦除旧行）
     std::atomic<int> m_frame{0};
 
     static constexpr int SPINNER_FRAME_COUNT = 10;
