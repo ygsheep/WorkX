@@ -85,6 +85,8 @@ TEST_CASE("BashTool input_schema has command required", "[tool][bash][metadata]"
     REQUIRE(schema["properties"].contains("dangerously_disable_sandbox"));
     REQUIRE(schema["properties"].contains("timeout"));
     REQUIRE(schema["properties"].contains("description"));
+    // M-2 修复：cwd 字段应在 schema 中声明
+    REQUIRE(schema["properties"].contains("cwd"));
 }
 
 // ============================================================
@@ -255,4 +257,44 @@ TEST_CASE("BashTool clamps timeout to max", "[tool][bash][timeout]") {
     auto r = tool.call(input, ctx);
     REQUIRE(r.is_ok());
     REQUIRE(r.value().text.find("max_timeout") != std::string::npos);
+}
+
+// ============================================================
+// M-2 修复：cwd 字段从 input 读取
+// ============================================================
+
+TEST_CASE("BashTool accepts cwd field in input", "[tool][bash][cwd]") {
+    BashTool tool;
+    ToolContext ctx; fill_ctx(ctx);
+
+    // 通过 input 指定 cwd，应在该目录下执行
+    std::string temp_dir = std::filesystem::current_path().string();
+    nlohmann::json input = {
+        {"command", "echo cwd_test"},
+        {"cwd", temp_dir}
+    };
+
+    auto r = tool.call(input, ctx);
+    REQUIRE(r.is_ok());
+    REQUIRE(r.value().text.find("cwd_test") != std::string::npos);
+}
+
+// ============================================================
+// L-1 修复：strip_empty_lines 末尾不应有多余换行
+// ============================================================
+
+TEST_CASE("BashTool output has no trailing blank line in stdout", "[tool][bash][output]") {
+    BashTool tool;
+    ToolContext ctx; fill_ctx(ctx);
+
+    // echo 输出末尾自带换行，strip_empty_lines 应只保留一个
+    // 验证 </stdout> 紧跟在内容之后，不出现空行
+    nlohmann::json input = {{"command", "echo line1"}};
+
+    auto r = tool.call(input, ctx);
+    REQUIRE(r.is_ok());
+    // 不应出现 "\n</stdout>"（即 stdout 内容末尾有空行）
+    REQUIRE(r.value().text.find("\n\n</stdout>") == std::string::npos);
+    // 应出现 "line1\n</stdout>"
+    REQUIRE(r.value().text.find("line1\n</stdout>") != std::string::npos);
 }

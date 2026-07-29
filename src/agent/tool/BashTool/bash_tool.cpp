@@ -16,12 +16,17 @@
 #include "core/task/task_manager.h"
 #include "core/utils/error.h"
 
+#include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <format>
+#include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <sstream>
+#include <stdexcept>
 
 namespace agent::tool {
 
@@ -33,6 +38,49 @@ constexpr int kDefaultTimeoutMs = 120'000;
 constexpr int kMaxTimeoutMs = 600'000;
 /// 输出截断阈值（对齐 ToolExecutor::MAX_TOOL_RESULT_LENGTH）
 constexpr size_t kMaxOutputChars = 8'000;
+/// 后台任务输出注册表容量上限（防止内存膨胀）
+constexpr size_t kMaxRegistryEntries = 50;
+/// 后台任务名唯一 id 计数器（M-3：避免 task_name 重复）
+std::atomic<size_t> s_task_id_counter{0};
+
+/// @brief 后台任务输出注册表（M-1 修复）
+/// @details 保存后台任务的 ExecOutput，供 LLM 通过未来 GetBashOutputTool 查询。
+///          线程安全，容量上限 kMaxRegistryEntries，FIFO 淘汰最旧条目。
+class BashOutputRegistry {
+public:
+    static BashOutputRegistry& instance() {
+        static BashOutputRegistry inst;
+        return inst;
+    }
+
+    void store(const std::string& task_name, const process::ExecOutput& out) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_outputs[task_name] = out;
+        // 超容量时淘汰最旧条目（按插入顺序，std::map 按键排序不够精确，
+        // 但 task_name 含递增 id，按键排序近似 FIFO）
+        if (m_outputs.size() > kMaxRegistryEntries) {
+            m_outputs.erase(m_outputs.begin());
+        }
+    }
+
+    /// 查询并返回输出副本；不存在返回空 optional
+    std::optional<process::ExecOutput> get(const std::string& task_name) const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_outputs.find(task_name);
+        if (it == m_outputs.end()) return std::nullopt;
+        return it->second;
+    }
+
+    void clear() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_outputs.clear();
+    }
+
+private:
+    BashOutputRegistry() = default;
+    mutable std::mutex m_mutex;
+    std::map<std::string, process::ExecOutput> m_outputs;
+};
 
 /// 跨平台 shell 选择
 #ifdef _WIN32
@@ -56,6 +104,7 @@ std::string truncate_output(std::string s, size_t max_chars) {
 }
 
 /// @brief 去除连续空行（对齐 cc stripEmptyLines）
+/// @details L-1 修复：末尾仅保留单个换行，避免 </stdout> 前出现空行
 std::string strip_empty_lines(const std::string& s) {
     std::string out;
     out.reserve(s.size());
@@ -68,6 +117,10 @@ std::string strip_empty_lines(const std::string& s) {
         out += line;
         out += '\n';
         last_was_blank = blank;
+    }
+    // L-1：去掉末尾多余的连续换行，只保留一个
+    while (out.size() >= 2 && out.back() == '\n' && out[out.size() - 2] == '\n') {
+        out.pop_back();
     }
     return out;
 }
@@ -158,6 +211,10 @@ nlohmann::json BashTool::input_schema() const {
                 {"type", "integer"},
                 {"description", "Timeout in milliseconds (max 600000)"},
                 {"default", 120000}
+            }},
+            {"cwd", {
+                {"type", "string"},
+                {"description", "Working directory for the command (defaults to ctx.cwd). Use absolute paths."}
             }},
             {"run_in_background", {
                 {"type", "boolean"},
@@ -327,13 +384,14 @@ ResultV2<ToolResult> BashTool::execute_background(
     auto wrapped = process::sandbox::SandboxAdapter::wrap_command(
         kShell, {kShellFlag, command}, sb_config);
 
-    // 后台任务通过 TaskManager 异步执行
-    // TaskFunc 签名为 void(const std::atomic<bool>&)，内部捕获所需参数
-    std::string task_name = "bash:" + command.substr(0, 40);
+    // M-3 修复：task_name 拼接唯一递增 id，避免不同任务重名
+    // 格式：bash:<id>:<command 前 40 字符>
+    const size_t task_id = s_task_id_counter.fetch_add(1, std::memory_order_relaxed);
+    std::string task_name = "bash:" + std::to_string(task_id) + ":" + command.substr(0, 40);
 
     auto& tm = ctx.task_manager();
     auto task = tm.launch(task_name,
-        [command, cwd, timeout_ms, wrapped](const std::atomic<bool>& should_cancel) {
+        [command, cwd, timeout_ms, wrapped, task_name](const std::atomic<bool>& should_cancel) {
             process::ExecOptions opts;
             opts.cwd = cwd;
             opts.args = wrapped.args;
@@ -345,10 +403,17 @@ ResultV2<ToolResult> BashTool::execute_background(
             };
 
             auto exec_result = process::exec(wrapped.cmd, opts);
-            // 后台任务的输出通过 TaskCompletedEvent 通知 UI
-            // 当前简化实现：丢弃输出，仅通知完成状态
-            // 后续迭代可扩展 Task 结构以保存输出，供 LLM 查询
-            (void)exec_result;
+            // M-1 修复：
+            // 1. exec 启动失败（is_err）抛异常 → TaskManager 标记 Failed（发布 TaskFailedEvent）
+            //    原实现 (void)exec_result 会导致 TaskManager 错误地标记 Completed
+            if (exec_result.is_err()) {
+                const auto& err = exec_result.error();
+                throw std::runtime_error(
+                    "Failed to execute command: " + err.message);
+            }
+            // 2. exec 成功（即使非零退出/超时/取消）→ 保存输出到注册表，供 LLM 查询
+            //    非零退出/超时不视为 task 失败（命令执行了，只是结果非成功），符合 cc 行为
+            BashOutputRegistry::instance().store(task_name, exec_result.value());
         },
         TaskType::Background);
 
