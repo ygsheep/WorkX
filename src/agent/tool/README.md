@@ -202,3 +202,292 @@ public:
 - **工具隔离**：每个工具独立目录，互不依赖
 - **统一管道**：所有调用经 `ToolExecutor` 执行权限检查 → 验证 → 执行
 - **Result 类型**：错误处理使用 `Result<T, E>`，不抛异常
+
+## 外部工具集成
+
+### 为什么需要外部工具
+
+部分工具能力用 C++ 标准库实现成本高、性能差，而生态中有成熟的 CLI 工具可直接复用：
+
+| 场景 | 外部工具 | 替代的 C++ 实现 |
+|------|---------|---------------|
+| 文件名 glob 匹配 | ripgrep (`rg --files --glob`) | `fs::recursive_directory_iterator` |
+| 文件内容正则搜索 | ripgrep (`rg pattern`) | `std::regex` + 手写遍历 |
+| Shell 命令执行 | bash / cmd | 自实现 shell |
+
+ripgrep 等工具在大仓库下性能比 C++ 标准库遍历快一个数量级，且自带 `.gitignore` 支持、修改时间排序、多线程等能力。
+
+### subprocess 是什么
+
+**subprocess = "在程序里启动另一个外部程序，并捕获它的输出"**。
+
+WorkX 是 C++ 程序，但有时要调用 `rg.exe` / `git` / `bash` 等外部命令。直接用 `system()` 不行（拿不到输出、无法超时、无法取消），需要封装操作系统的进程 API：
+
+- **Windows**: `CreateProcessW` + `CreatePipe` + `ReadFile`
+- **POSIX**: `fork` + `execvp` + `pipe` + `poll`
+
+C++ 标准库没有 subprocess 能力，需自建封装。该封装是 BashTool / GlobTool(rg 模式) / GrepTool(rg 模式) 的共享地基。
+
+### 设计决策：不做"进程管理器"
+
+经调研 Claude Code CLI 的实现（`example/cc/`），CC **没有统一的进程管理器**，而是用"per-call 进程封装 + 路径缓存"的组合模式：
+
+| 关注点 | CC 的做法 | WorkX 对应设计 |
+|--------|-----------|--------------|
+| rg 路径解析与缓存 | `getRipgrepConfig = memoize(...)` | `ToolRegistry` 单例（只缓存路径，不管理进程） |
+| 单次进程执行 | per-call 的 `ShellCommand` 对象 | `subprocess::exec()` 函数（同步执行，无需类） |
+| 取消传播 | WeakRef 链式 `AbortController` | 复用项目已有的 `ToolContext::is_cancelled()` 回调 |
+| 进程池/复用 | 无，每次 spawn 新进程 | 无，每次 exec 新建进程 |
+
+**不做进程管理器的理由**：
+- 进程是 per-call 的，不池化不复用（CC 也是每次新建）
+- 取消用项目已有的 `ToolContext::is_cancelled()`，不需要单独的 AbortController 链
+- 孤儿进程防护由 subprocess 内部保证（超时/取消时一定 kill），不需要全局注册表
+
+### 架构分层
+
+```
+┌─────────────────────────────────────────────────┐
+│  Layer 3: 工具适配（tool/ 下各 Tool 目录）        │
+│  GlobTool / GrepTool / BashTool                  │
+│  - 优先用外部工具(rg)，失败回退 C++ 实现         │
+│  - 返回 ResultV2<ToolResult>（项目统一类型）     │
+├─────────────────────────────────────────────────┤
+│  Layer 2: 外部工具注册表（core/process/）        │
+│  - 发现 rg 位置（bundled > PATH > 配置）         │
+│  - 版本探测与缓存（只管路径，不管进程）          │
+├─────────────────────────────────────────────────┤
+│  Layer 1: subprocess 核心（core/process/）       │
+│  - 跨平台 exec：启动 + 管道 + 超时 + 取消        │
+│  - 返回 ResultV2<ExecOutput>（与项目风格一致）   │
+└─────────────────────────────────────────────────┘
+```
+
+**返回类型遵循项目约定**：
+- subprocess 层：`ResultV2<ExecOutput>`（`ExecOutput` 含 `stdout_text`/`stderr_text`/`exit_code`）
+- 工具层：`ResultV2<ToolResult>`（与 FileReadTool/FileWriteTool/FileEditTool 完全一致）
+- 工具 `call()` 内部把 `ExecOutput` 转成 `ToolResult::ok(text)` 返回给 LLM
+
+### subprocess 核心接口
+
+```cpp
+// core/process/subprocess.h
+namespace agent::process {
+
+struct ExecOutput {
+    int exit_code = -1;
+    std::string stdout_text;
+    std::string stderr_text;
+    bool timed_out = false;
+    bool cancelled = false;
+};
+
+struct ExecOptions {
+    std::string cwd;
+    std::vector<std::string> args;
+    std::optional<std::chrono::milliseconds> timeout;
+    std::function<bool()> is_cancelled;  // 接 ToolContext::is_cancelled
+};
+
+/// 同步执行，捕获输出。超时/取消时：
+/// - POSIX: kill(SIGTERM) → 5s 后 kill(SIGKILL)  (对齐 CC ripgrep.ts L174-182)
+/// - Windows: TerminateProcess（无 SIGTERM 概念，直接杀）
+/// 返回 ExecOutput，不抛异常。
+ResultV2<ExecOutput> exec(const std::string& cmd, const ExecOptions& opts);
+
+} // namespace agent::process
+```
+
+**关键设计点（对齐 CC）**：
+- **是函数不是类** — CC 的 `ShellCommand` 是类是因为它要支持 background/streaming，WorkX 初期只需同步执行，函数足够
+- **SIGTERM→SIGKILL 升级** — POSIX 独有，因为 rg 可能卡在不可中断 I/O（CC 注释明确说明）
+- **Windows 直接 TerminateProcess** — 无信号概念，CC 也是 `child.kill()` 无升级
+- **is_cancelled 轮询** — C++ 无标准 AbortSignal，复用项目已有的 `ToolContext` 回调最简单
+
+### ToolRegistry：路径缓存（非进程管理）
+
+```cpp
+// core/process/tool_registry.h
+namespace agent::process {
+
+class ToolRegistry {
+public:
+    static ToolRegistry& instance();
+
+    /// 查找 rg 路径，首次调用时探测，结果缓存
+    /// 顺序：config > bundled(<exe_dir>/tools/rg) > PATH
+    /// 全部失败返回 nullopt（工具层回退 C++ 实现）
+    std::optional<std::string> resolve_ripgrep() const;
+
+private:
+    ToolRegistry();
+    mutable std::mutex m_mutex;
+    mutable std::optional<std::string> m_rg_cache;  // 首次解析后缓存
+    // 对齐 CC ripgrep.ts L31 getRipgrepConfig = memoize(...)
+};
+
+} // namespace agent::process
+```
+
+**为什么是"路径缓存"不是"进程管理器"**：
+- 不管理进程生命周期（那是 `subprocess::exec` 的职责）
+- 不池化进程（每次 call 新建）
+- 只做一件事：rg 在哪？缓存答案
+
+### 目录结构（规划）
+
+```
+scripts/
+└── fetch-ripgrep.py             # 跨平台下载 ripgrep 二进制（开发期 + CI）
+
+src/core/process/                # subprocess 核心 + 工具注册表（跨模块共享）
+├── subprocess.h/.cpp            # 跨平台 exec 封装
+├── exec_output.h                # ExecOutput 结构体
+└── tool_registry.h/.cpp         # 外部工具发现与版本探测
+
+vendor/ripgrep/                  # ripgrep 预编译二进制（不入库，脚本下载）
+├── windows/rg.exe
+├── macos/rg
+└── linux/rg
+
+src/agent/tool/
+├── GlobTool/
+│   ├── glob_tool.h/.cpp         # ITool 实现：rg 优先 + C++ fallback
+│   └── glob_engine.h/.cpp       # C++ 标准库 fallback 实现
+└── GrepTool/
+    ├── grep_tool.h/.cpp         # ITool 实现：rg 优先 + C++ fallback
+    └── grep_engine.h/.cpp       # C++ 标准库 fallback 实现
+```
+
+### ripgrep 二进制获取：Python 脚本
+
+`vendor/ripgrep/` 下的二进制**不入 git 仓库**（体积大、平台相关），通过 `scripts/fetch-ripgrep.py` 获取。
+
+**为什么用 Python 而非 PowerShell/Bash**：一份代码跨平台运行，CI 和开发期统一调用，无需维护两套脚本。
+
+**开发期**：
+```bash
+python scripts/fetch-ripgrep.py
+# 或指定版本
+python scripts/fetch-ripgrep.py --version 14.1.1
+# 强制重新下载
+python scripts/fetch-ripgrep.py --force
+```
+
+脚本自动检测平台（Windows/macOS/Linux）和架构（x86_64/aarch64），下载对应 ripgrep Release，解压 `rg` 到 `vendor/ripgrep/<platform>/`。**幂等**：目标已存在则跳过。
+
+**CI（GitHub Actions）**：
+
+```yaml
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+          - os: macos-latest
+          - os: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch ripgrep
+        run: python scripts/fetch-ripgrep.py
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --config Release
+```
+
+### CMakeLists: 构建时自动拷贝 rg 到输出目录
+
+项目现状：`CMAKE_RUNTIME_OUTPUT_DIRECTORY = ${CMAKE_BINARY_DIR}/bin`，无 install 规则，用户直接运行 build 目录里的 binary。
+
+策略：`add_custom_command POST_BUILD` 把对应平台的 rg 拷贝到 binary 旁的 `tools/` 子目录，运行时从 `<exe_dir>/tools/rg` 查找。
+
+```cmake
+# ---- vendor/ripgrep: 构建时拷贝到输出目录 ----
+# 目录结构: vendor/ripgrep/{windows,macos,linux}/rg(.exe)
+# 由 scripts/fetch-ripgrep.py 下载
+set(WORKX_VENDOR_RIPGREP_DIR ${CMAKE_SOURCE_DIR}/vendor/ripgrep)
+
+if(WIN32)
+    set(WORKX_RG_SOURCE ${WORKX_VENDOR_RIPGREP_DIR}/windows/rg.exe)
+    set(WORKX_RG_DEST_NAME rg.exe)
+elseif(APPLE)
+    set(WORKX_RG_SOURCE ${WORKX_VENDOR_RIPGREP_DIR}/macos/rg)
+    set(WORKX_RG_DEST_NAME rg)
+else()
+    set(WORKX_RG_SOURCE ${WORKX_VENDOR_RIPGREP_DIR}/linux/rg)
+    set(WORKX_RG_DEST_NAME rg)
+endif()
+
+# 只有当 vendor 二进制实际存在时才拷贝（脚本下载或手动放入）
+if(EXISTS "${WORKX_RG_SOURCE}")
+    # 拷贝到 $<TARGET_FILE_DIR:workx>/tools/rg(.exe)，运行时从 <exe_dir>/tools/ 查找
+    add_custom_command(TARGET workx POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:workx>/tools"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${WORKX_RG_SOURCE}"
+            "$<TARGET_FILE_DIR:workx>/tools/${WORKX_RG_DEST_NAME}"
+        COMMENT "Bundling ripgrep: ${WORKX_RG_DEST_NAME}"
+    )
+    target_compile_definitions(workx PRIVATE WORKX_HAS_BUNDLED_RIPGREP=1)
+else()
+    message(STATUS "ripgrep: vendor binary not found at ${WORKX_RG_SOURCE}, fallback to C++ implementation")
+endif()
+```
+
+**关键点**：
+- `copy_if_different` 增量拷贝，不每次都复制
+- `EXISTS` 检查让缺失二进制时不报错，自动回退 C++ 实现
+- `WORKX_HAS_BUNDLED_RIPGREP` 编译宏让代码知道是否可用 bundled 版本
+
+### 运行时查找顺序（对齐 Claude Code）
+
+`ToolRegistry::resolve_ripgrep()` 按以下顺序查找，首个命中即缓存：
+
+1. **配置覆盖**：`config.tool_path.ripgrep`（用户显式指定）
+2. **bundled**：`<executable_dir>/tools/rg(.exe)`
+3. **PATH**：`which rg` / `where rg.exe`
+4. **全部失败**：返回 `nullopt`，工具层回退到 C++ 标准库实现
+
+### 工具层组合示例
+
+```cpp
+// GlobTool::call()
+ResultV2<ToolResult> GlobTool::call(const json& input, const ToolContext& ctx) const {
+    // 1. 查 rg 路径（缓存命中，几乎零开销）
+    if (auto rg = ToolRegistry::instance().resolve_ripgrep()) {
+        // 2. 用 subprocess 执行 rg
+        auto result = process::exec(*rg, {
+            .cwd = base_dir,
+            .args = {"--files", "--glob", pattern, "--sort=modified"},
+            .timeout = std::chrono::seconds(30),
+            .is_cancelled = [&ctx] { return ctx.is_cancelled(); },
+        });
+        if (result.is_ok()) {
+            return ResultV2<ToolResult>::ok(
+                ToolResult::ok(format_rg_output(result.value().stdout_text))
+            );
+        }
+        // rg 失败则回退 C++ 实现
+    }
+    // 3. fallback: C++ 标准库实现
+    return call_with_native(input, ctx);
+}
+```
+
+### 演进路线
+
+```
+阶段 1: core/process/subprocess 基础封装 + ToolRegistry
+        → BashTool 可直接复用，GlobTool/GrepTool 接入 rg
+阶段 2: ToolRegistry 完善
+        → 支持配置文件指定外部工具路径
+阶段 3: 内置工具适配器
+        → 接入 fd / bat / jq 等常用 CLI
+阶段 4: MCP 客户端
+        → 接入第三方 MCP server 工具生态（已有 MCPTool 占位）
+```
+
+阶段 1 是地基，后续所有外部工具集成都基于此。

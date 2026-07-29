@@ -54,3 +54,25 @@ add_subdirectory(app)
 # ============================================================
 add_executable(workx app/main.cpp)
 target_link_libraries(workx PRIVATE libworkx)
+
+# ============================================================
+# vendor/ripgrep: 构建时拷贝到 workx 输出目录的 tools/ 子目录
+# 二进制由 scripts/fetch-ripgrep.py 下载到 vendor/ripgrep/<platform>/
+# 运行时由 ToolRegistry 从 <exe_dir>/tools/rg 查找
+# 缺失时自动回退 C++ 标准库实现，不报错
+#
+# 注意：add_custom_command(TARGET workx POST_BUILD ...) 必须在 workx
+#       目标所在的目录调用（CMake 限制）。源/目标路径变量由根
+#       CMakeLists.txt 计算并通过普通变量传递（父作用域可见）。
+# ============================================================
+if(WORKX_HAS_VENDOR_RIPGREP)
+    add_custom_command(TARGET workx POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:workx>/tools"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${WORKX_RG_SOURCE}"
+            "$<TARGET_FILE_DIR:workx>/tools/${WORKX_RG_DEST_NAME}"
+        COMMENT "Bundling ripgrep: ${WORKX_RG_DEST_NAME}"
+    )
+    target_compile_definitions(workx PRIVATE WORKX_HAS_BUNDLED_RIPGREP=1)
+endif()

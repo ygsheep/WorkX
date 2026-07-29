@@ -338,36 +338,35 @@ TEST_CASE("FileEditTool validate_input error code 5 - .ipynb", "[file_edit_tool]
 }
 
 // ============================================================
-// M-2: issue #13 绝对路径校验测试
+// M-2: issue #13 路径展开测试
+// @details 原 issue #13 要求强制绝对路径校验，后改为 expand_path() 自动展开
+//          相对路径（基于 ctx.cwd），对齐 Claude Code CLI 行为。
+//          现在相对路径不再被拒绝，而是展开后走后续存在性校验。
 // ============================================================
 
-TEST_CASE("FileEditTool validate_input rejects relative path", "[file_edit_tool][issue-13]") {
+TEST_CASE("FileEditTool validate_input expands relative path", "[file_edit_tool][issue-13]") {
     TestEnv env;
     FileEditTool tool;
     ToolContext ctx; TestEnv::setup_ctx(ctx);
 
-    SECTION("simple relative path is rejected") {
+    SECTION("simple relative path is expanded and checked for existence") {
         auto r = tool.validate_input(make_edit_input("foo.txt", "a", "b"), ctx);
         REQUIRE(r.is_err());
-        REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("absolute path"));
+        // 相对路径已展开，文件不存在时返回 "does not exist" 而非 "absolute path"
+        REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("does not exist"));
         REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("foo.txt"));
     }
-    SECTION("subdir relative path is rejected") {
+    SECTION("subdir relative path is expanded and checked for existence") {
         auto r = tool.validate_input(make_edit_input("subdir/foo.txt", "a", "b"), ctx);
         REQUIRE(r.is_err());
-        REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("absolute path"));
+        REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("does not exist"));
     }
-    SECTION("POSIX-style /tmp path is rejected on Windows but accepted on POSIX") {
-        // 在 Windows 上 /tmp/foo 被视为相对路径；在 Linux 上是绝对路径
+    SECTION("POSIX-style /tmp path is expanded on all platforms") {
+        // /tmp/foo 在 POSIX 上是绝对路径，在 Windows 上由 expand_path 展开
+        // 两种情况下文件都不存在，都应返回 "does not exist"
         auto r = tool.validate_input(make_edit_input("/tmp/foo", "a", "b"), ctx);
-#ifdef _WIN32
-        REQUIRE(r.is_err());
-        REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("absolute path"));
-#else
-        // POSIX 上 /tmp/foo 是绝对路径，会走到后续的 "does not exist" 检查
         REQUIRE(r.is_err());
         REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("does not exist"));
-#endif
     }
 }
 

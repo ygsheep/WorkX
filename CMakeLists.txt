@@ -170,6 +170,38 @@ add_subdirectory(lib/liblogger)
 include_directories(${CMAKE_SOURCE_DIR}/lib)
 
 # ============================================================
+# vendor/ripgrep: 构建时拷贝到 workx 输出目录的 tools/ 子目录
+# 二进制由 scripts/fetch-ripgrep.py 下载到 vendor/ripgrep/<platform>/
+# 运行时由 ToolRegistry 从 <exe_dir>/tools/rg 查找
+# 缺失时自动回退 C++ 标准库实现，不报错
+#
+# 注意：add_custom_command(TARGET workx POST_BUILD ...) 必须在 workx
+#       目标所在的目录（src/CMakeLists.txt）调用（CMake 限制）。
+#       这里在 add_subdirectory(src) 之前计算源/目标路径变量，
+#       通过变量作用域传递给子目录。
+# ============================================================
+set(WORKX_VENDOR_RIPGREP_DIR ${CMAKE_SOURCE_DIR}/vendor/ripgrep)
+
+if(WIN32)
+    set(WORKX_RG_SOURCE ${WORKX_VENDOR_RIPGREP_DIR}/windows/rg.exe)
+    set(WORKX_RG_DEST_NAME rg.exe)
+elseif(APPLE)
+    set(WORKX_RG_SOURCE ${WORKX_VENDOR_RIPGREP_DIR}/macos/rg)
+    set(WORKX_RG_DEST_NAME rg)
+else()
+    set(WORKX_RG_SOURCE ${WORKX_VENDOR_RIPGREP_DIR}/linux/rg)
+    set(WORKX_RG_DEST_NAME rg)
+endif()
+
+if(EXISTS "${WORKX_RG_SOURCE}")
+    set(WORKX_HAS_VENDOR_RIPGREP TRUE)
+    message(STATUS "ripgrep: vendor binary found at ${WORKX_RG_SOURCE}")
+else()
+    set(WORKX_HAS_VENDOR_RIPGREP FALSE)
+    message(STATUS "ripgrep: vendor binary not found at ${WORKX_RG_SOURCE}, fallback to C++ implementation")
+endif()
+
+# ============================================================
 # 业务源码（src/ 下按 core/agent/tui/app 模块拆分，详见各 CMakeLists.txt）
 # ============================================================
 add_subdirectory(src)

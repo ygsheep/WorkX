@@ -47,3 +47,6 @@ config.json
 # Test outputs
 tests/*.log
 tests/*.out
+
+# Vendor external binaries (downloaded by scripts/fetch-ripgrep.py)
+vendor/ripgrep/
