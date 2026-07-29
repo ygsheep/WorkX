@@ -17,8 +17,11 @@ namespace agent {
 // 用户事件（TUI → Session）
 // ============================================================
 /// @brief 用户提交的原始文本（不含尾部换行）
+/// @details is_local_command=true 表示该输入是本地 slash 命令（如 /help、/clear），
+///          不会发送给 LLM，订阅方应跳过 token 统计累加。
 struct UserInputEvent {
     std::string text;
+    bool is_local_command = false;  ///< 是否为本地命令（不发送给 LLM）
 };
 
 /// @brief 中断请求（Ctrl+C）
@@ -51,11 +54,14 @@ struct StreamProgressEvent {
 ///          UI 应执行完整结束流程：token 统计、状态转 IDLE、光标复位等。
 ///          注意：ReAct 循环中单步 LLM 输出结束（仍有 tool_use 待执行）
 ///          应发布 StepDoneEvent 而非本事件，避免触发会话级结束动作。
+///          is_local_command=true 表示该事件源自本地命令输出（如 /help），
+///          订阅方应跳过 token 统计累加。
 struct StreamDoneEvent {
     std::string session_id;
     std::string full_content;
     std::string full_reasoning;
     bool was_interrupted = false;
+    bool is_local_command = false;  ///< 是否为本地命令输出（不累加 token 统计）
     int32_t prompt_tokens = 0;
     int32_t generated_tokens = 0;
     // 上下文管理：Anthropic cache usage（OpenAI adapter 留 0）

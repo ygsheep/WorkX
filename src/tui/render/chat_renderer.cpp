@@ -470,8 +470,10 @@ void ChatRenderer::start() {
     // 注意：此处只更新数据，不调用 render()。StatusBar 在用户输入行下方，
     // 立即 render 会把光标拉到 status_row 导致光标错位。
     // StreamDoneEvent / AgentDoneEvent 后会自然触发 render 刷新显示。
+    // 本地命令（is_local_command=true）不发送给 LLM，跳过 token 统计累加
     m_token_user_input = std::make_unique<EventToken>(
         bus.subscribe<UserInputEvent>([this](const UserInputEvent& e) {
+            if (e.is_local_command) return;
             m_token_stats.add_user_input(e.text);
             m_status_bar->set_token_count(m_token_stats.total_tokens());
         })
@@ -607,7 +609,11 @@ void ChatRenderer::start() {
             // - provider 返回 usage 时：用 prompt + cache 部分 + generated 覆盖（最准确）
             //   Anthropic 命中 prompt cache 时 prompt_tokens 不含 cache 部分，需单独累加
             // - provider 不返回 usage 时：用 compact::estimate_messages_tokens 估算响应内容
-            if (e.prompt_tokens > 0 || e.generated_tokens > 0) {
+            // - 本地命令（is_local_command=true）：跳过 token 统计累加，避免 /help 等命令
+            //   输出被误算作 LLM 响应
+            if (e.is_local_command) {
+                // 本地命令输出不累加 token，但仍需转 IDLE 状态和光标复位
+            } else if (e.prompt_tokens > 0 || e.generated_tokens > 0) {
                 m_token_stats.update_from_usage(e.prompt_tokens,
                                                 e.generated_tokens,
                                                 e.cache_creation_input_tokens,

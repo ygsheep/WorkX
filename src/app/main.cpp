@@ -416,6 +416,7 @@ static int run(int argc, char* argv[]) {
             }
 
             // 命令有输出文本 → 直接发布
+            // is_local_command=true：本地命令输出不累加 token 统计
             if (!result.output_text.empty()) {
                 EventBus::instance().publish_async(StreamTokenEvent{
                     .session_id = "default",
@@ -428,7 +429,8 @@ static int run(int argc, char* argv[]) {
                     .session_id = "default",
                     .full_content = result.output_text,
                     .full_reasoning = "",
-                    .was_interrupted = false
+                    .was_interrupted = false,
+                    .is_local_command = true
                 });
                 return;
             }

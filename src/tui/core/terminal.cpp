@@ -354,7 +354,8 @@ void Terminal::run_advanced() {
         }
 
         event_bus().publish(UserInputEvent{
-            .text = result.text
+            .text = result.text,
+            .is_local_command = result.is_command
         });
 
         if (m_input_callback) {

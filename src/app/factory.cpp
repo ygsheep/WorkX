@@ -24,6 +24,7 @@
 #include "agent/tool/FileEditTool/file_edit_tool.h"
 #include "agent/tool/FileReadTool/file_read_tool.h"
 #include "agent/tool/FileWriteTool/file_write_tool.h"
+#include "agent/tool/GlobTool/glob_tool.h"
 #include "agent/tool/registry.h"
 #include "core/config/config_manager.h"
 #include "core/events/event_bus.h"
@@ -165,6 +166,7 @@ void register_builtin_tools(tool::ToolRegistry& registry) {
     registry.register_tool(std::make_shared<tool::FileWriteTool>());
     registry.register_tool(std::make_shared<tool::FileEditTool>());
     registry.register_tool(std::make_shared<tool::BashTool>());
+    registry.register_tool(std::make_shared<tool::GlobTool>());
 }
 
 // ============================================================
