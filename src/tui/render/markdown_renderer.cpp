@@ -655,16 +655,28 @@ std::string render_code_block(std::string_view lang,
     (void)max_width;  // 当前实现未按宽度截断
     std::ostringstream os;
 
+    // 0. 剥离前导空行：LLM 输出代码块时常在 ``` 后插入一个空行，
+    //    若不剥离会导致行号从 2 开始（首行显示 │1 无内容）
+    size_t first_non_empty = 0;
+    while (first_non_empty < lines.size() && lines[first_non_empty].empty()) {
+        ++first_non_empty;
+    }
+    if (first_non_empty == lines.size()) {
+        // 全部为空行，按原样返回（不渲染空代码块）
+        return {};
+    }
+
     // 1. 整块交给语法高亮器（按 lang 选 grammar，未知 lang 原样返回）
     //    每行自包含 ANSI，不会跨行泄漏颜色，可安全按 \n split 后逐行渲染
     std::string joined;
-    for (size_t i = 0; i < lines.size(); ++i) {
-        if (i) joined.push_back('\n');
+    for (size_t i = first_non_empty; i < lines.size(); ++i) {
+        if (i > first_non_empty) joined.push_back('\n');
         joined += lines[i];
     }
     std::string highlighted = highlight_code(lang, joined);
 
     // 2. 按 \n 重新拆成行（高亮后行数应与原始一致）
+    const size_t effective_line_count = lines.size() - first_non_empty;
     std::vector<std::string> hl_lines;
     {
         std::string cur;
@@ -673,9 +685,12 @@ std::string render_code_block(std::string_view lang,
             else cur.push_back(c);
         }
         hl_lines.push_back(std::move(cur));
-        // 防御：若行数不一致（不应发生），回退到原始 lines
-        if (hl_lines.size() != lines.size()) {
-            hl_lines = lines;
+        // 防御：若行数不一致（不应发生），回退到原始 lines（剥离前导空行后）
+        if (hl_lines.size() != effective_line_count) {
+            hl_lines.clear();
+            for (size_t i = first_non_empty; i < lines.size(); ++i) {
+                hl_lines.push_back(lines[i]);
+            }
         }
     }
 

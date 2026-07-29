@@ -113,6 +113,53 @@ void split_fileread_line(const std::string& line, std::string& line_prefix, std:
     code_part = line.substr(arrow_end);
 }
 
+/// @brief 从 FileRead 行号前缀 (如 "  123→") 中提取数字行号
+/// @return 行号; 无法解析返回 -1
+int extract_fileread_line_number(const std::string& prefix) {
+    size_t i = 0;
+    while (i < prefix.size() && (prefix[i] == ' ' || prefix[i] == '\t')) ++i;
+    if (i >= prefix.size() || prefix[i] < '0' || prefix[i] > '9') return -1;
+    int num = 0;
+    while (i < prefix.size() && prefix[i] >= '0' && prefix[i] <= '9') {
+        num = num * 10 + (prefix[i] - '0');
+        ++i;
+    }
+    return num;
+}
+
+/// @brief 计算 │N│ 格式行号渲染所需的宽度 (按最大行号位数)
+/// @param max_line_num  最大行号 (若 <=0 则按 1 位处理)
+/// @return 行号字段的字符宽度 (最少 1)
+int calc_line_num_width(int max_line_num) {
+    if (max_line_num < 1) max_line_num = 1;
+    int width = 1;
+    for (int n = max_line_num; n >= 10; n /= 10) ++width;
+    return width;
+}
+
+/// @brief 渲染 │N  格式的行号前缀 (│ + 右对齐数字 + 两空格), 带 Dim 色
+/// @param line_num      行号 (1-based)
+/// @param num_width     行号字段宽度 (由 calc_line_num_width 计算)
+/// @param dim           Dim 色 ANSI 序列
+/// @param reset         RESET ANSI 序列
+std::string format_line_num_prefix(int line_num, int num_width,
+                                    std::string_view dim, std::string_view reset) {
+    const std::string box_v = "\xe2\x94\x82";  // │ U+2502
+    std::string num_str = std::to_string(line_num);
+    std::string padding;
+    if (static_cast<int>(num_str.size()) < num_width) {
+        padding.append(num_width - num_str.size(), ' ');
+    }
+    std::string out;
+    out += dim;
+    out += box_v;
+    out += padding;
+    out += num_str;
+    out += reset;
+    out += "  ";
+    return out;
+}
+
 /// @brief 判断一行是否是 FileRead 末尾的元数据行
 /// @details 匹配 file_read_tool.cpp 末尾追加的格式:
 ///          "(N of M lines shown)" / "(N lines shown, more available)"
@@ -134,10 +181,10 @@ bool is_fileread_metadata_line(const std::string& line) {
 
 /// @brief 渲染代码类工具的结果 (FileRead/Write/Edit)
 /// @details
-///   - FileRead: 剥离行号 → 整体高亮代码 → 加回行号 (行号用 Dim 色)
+///   - FileRead: 剥离行号 → 整体高亮代码 → 以 │N  格式重新加行号 (右对齐, Dim 色)
 ///               末尾元数据行 "(N of M lines shown)" 不高亮, 以 Dim 色输出
 ///   - Write/Edit: 结果格式为 "状态文本\n\n<diff>", 拆分:
-///       状态行原样输出 (Dim 色), diff 部分走 highlight_code("diff", ...)
+///       状态行原样输出 (Dim 色), diff 部分走 highlight_diff, 每行加 │N  序号
 ///   - 用 indent 缩进 + ⎿ 符号包裹, 限制最大行数避免刷屏
 std::string render_code_tool_result(
     const std::string& tool_name,
@@ -229,8 +276,13 @@ std::string render_code_tool_result(
         const bool truncated = static_cast<int>(diff_lines.size()) > MAX_DISPLAY_LINES;
         if (truncated) diff_lines.resize(MAX_DISPLAY_LINES);
 
-        for (const auto& l : diff_lines) {
-            os << indent << "  " << arrow << "  " << l;
+        // 每行加 │N  格式行号 (顺序编号, 右对齐) — 文件工具不用 ⎿ 包裹
+        const int num_width = calc_line_num_width(static_cast<int>(diff_lines.size()));
+        for (size_t i = 0; i < diff_lines.size(); ++i) {
+            const auto& l = diff_lines[i];
+            os << indent << "  "
+               << format_line_num_prefix(static_cast<int>(i + 1), num_width, dim, reset);
+            os << l;
             if (!l.empty()) os << reset;
             os << "\n";
         }
@@ -280,14 +332,17 @@ std::string render_code_tool_result(
     const bool truncated = static_cast<int>(lines.size()) > MAX_DISPLAY_LINES;
     if (truncated) lines.resize(MAX_DISPLAY_LINES);
 
-    // 剥离行号前缀, 拼成纯代码块
-    std::vector<std::string> line_prefixes;
-    line_prefixes.reserve(lines.size());
+    // 剥离行号前缀, 拼成纯代码块; 同时提取实际行号用于 │N  格式渲染
+    std::vector<int> line_nums;
+    line_nums.reserve(lines.size());
+    int max_line_num = 0;
     std::string code_blob;
     for (const auto& l : lines) {
         std::string prefix, code;
         split_fileread_line(l, prefix, code);
-        line_prefixes.push_back(prefix);
+        int n = extract_fileread_line_number(prefix);
+        line_nums.push_back(n);
+        if (n > max_line_num) max_line_num = n;
         if (!code_blob.empty()) code_blob.push_back('\n');
         code_blob += code;
     }
@@ -311,15 +366,17 @@ std::string render_code_tool_result(
         }
     }
 
-    // 组装代码行: indent + "  ⎿ " + [行号前缀(Dim)] + 高亮代码行 + RESET + "\n"
+    // 组装代码行: indent + "  " + │N(Dim,右对齐) + 两空格 + 高亮代码行 + RESET + "\n"
+    // 文件工具不用 ⎿ 包裹, 直接 │N  code
+    const int num_width = calc_line_num_width(max_line_num);
     for (size_t i = 0; i < hl_lines.size(); ++i) {
-        os << indent << "  " << arrow;
-        if (i < line_prefixes.size() && !line_prefixes[i].empty()) {
-            os << " " << dim << line_prefixes[i] << reset;
+        os << indent << "  ";
+        if (i < line_nums.size() && line_nums[i] > 0) {
+            os << format_line_num_prefix(line_nums[i], num_width, dim, reset);
             os << hl_lines[i];
             os << reset;
         } else {
-            os << "  " << hl_lines[i];
+            os << hl_lines[i];
             if (!hl_lines[i].empty()) os << reset;
         }
         os << "\n";
