@@ -55,8 +55,12 @@ std::string OpenAIAdapter::build_request_body(const CompletionRequest& request,
             case ChatMessage::Role::Tool:      m["role"] = "tool"; break;
         }
         // content：assistant 带 tool_calls 时 content 可能为空，用 null 而非空字符串
+        // Tool 角色 + is_error=true：用 <tool_use_error> 标签包裹，对齐 Claude Code 语义，
+        // 让模型明确感知工具失败（OpenAI 格式无 is_error 字段，只能通过文本标识）
         if (msg.role == ChatMessage::Role::Assistant && !msg.tool_uses.empty() && msg.content.empty()) {
             m["content"] = nullptr;
+        } else if (msg.role == ChatMessage::Role::Tool && msg.is_error) {
+            m["content"] = "<tool_use_error>" + msg.content + "</tool_use_error>";
         } else {
             m["content"] = msg.content;
         }

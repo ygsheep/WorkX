@@ -32,6 +32,8 @@ ChatMessage ContextCompressor::summarize_tool_result(const ChatMessage& msg) {
 
     ChatMessage summarized = msg;
     summarized.content = std::move(summary);
+    // 保留 is_error 标记：压缩不应丢失工具失败状态，否则模型会误以为之前的工具调用成功
+    summarized.is_error = msg.is_error;
     return summarized;
 }
 

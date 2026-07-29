@@ -500,7 +500,7 @@ ReActResult ReActLoop::run(
 
                 // Observation 步骤
                 std::string err_msg = "Error: tool executor not configured";
-                messages.push_back(ChatMessage::tool_result(tu.id, tu.name, err_msg));
+                messages.push_back(ChatMessage::tool_result(tu.id, tu.name, err_msg, true));
 
                 ReActStep obs_step;
                 obs_step.type = ReActStepType::Observation;
@@ -593,7 +593,7 @@ ReActResult ReActLoop::run(
 
             // 添加 tool_result 消息到对话历史
             messages.push_back(ChatMessage::tool_result(
-                exec.tool_use_id, exec.tool_name, result_text));
+                exec.tool_use_id, exec.tool_name, result_text, tool_error));
 
             // 记录 Observation 步骤
             {

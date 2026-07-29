@@ -48,6 +48,7 @@ struct ChatMessage {
     std::string tool_call_id;       ///< Tool 角色时的调用 ID（对应 tool_use_id）
     std::string tool_name;          ///< Tool 角色时的工具名
     std::vector<ToolUse> tool_uses; ///< Assistant 角色时的工具调用列表
+    bool is_error = false;          ///< Tool 角色时标记工具执行失败（对齐 Anthropic is_error）
 
     /// @brief 便捷构造
     static ChatMessage system(const std::string& text) {
@@ -64,14 +65,17 @@ struct ChatMessage {
     /// @param tool_use_id 对应的 tool_use ID
     /// @param tool_name 工具名
     /// @param result_content 工具执行结果文本
+    /// @param is_err 工具执行是否失败（true 时 Anthropic adapter 会输出 is_error 字段）
     static ChatMessage tool_result(const std::string& tool_use_id,
                                    const std::string& tool_name,
-                                   const std::string& result_content) {
+                                   const std::string& result_content,
+                                   bool is_err = false) {
         ChatMessage msg;
         msg.role = Role::Tool;
         msg.tool_call_id = tool_use_id;
         msg.tool_name = tool_name;
         msg.content = result_content;
+        msg.is_error = is_err;
         return msg;
     }
 };

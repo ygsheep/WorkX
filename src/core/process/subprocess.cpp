@@ -39,6 +39,132 @@
 #endif
 
 namespace agent::process {
+namespace {
+
+/// @brief 验证字节序列是否为合法 UTF-8
+/// @return true=合法 UTF-8（含纯 ASCII）；false=含非法字节
+/// @details 与 encoding.cpp 的 validate_utf8 同源逻辑，core 层独立实现以避免分层倒置
+bool is_valid_utf8(const std::string& s) noexcept {
+    const size_t n = s.size();
+    for (size_t i = 0; i < n; ) {
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        if (c < 0x80) {
+            ++i;
+        } else if (c < 0xC2) {
+            return false;  // 非法首字节
+        } else if (c < 0xE0) {
+            if (i + 1 >= n || (static_cast<unsigned char>(s[i + 1]) & 0xC0) != 0x80) return false;
+            i += 2;
+        } else if (c < 0xF0) {
+            if (i + 2 >= n
+                || (static_cast<unsigned char>(s[i + 1]) & 0xC0) != 0x80
+                || (static_cast<unsigned char>(s[i + 2]) & 0xC0) != 0x80) return false;
+            i += 3;
+        } else if (c < 0xF5) {
+            if (i + 3 >= n
+                || (static_cast<unsigned char>(s[i + 1]) & 0xC0) != 0x80
+                || (static_cast<unsigned char>(s[i + 2]) & 0xC0) != 0x80
+                || (static_cast<unsigned char>(s[i + 3]) & 0xC0) != 0x80) return false;
+            i += 4;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// @brief 把非法 UTF-8 字节序列清洗为合法 UTF-8（替换非法字节为 '?'）
+/// @details 仅在 is_valid_utf8 返回 false 时调用；
+///          逐字节扫描，遇到非法首字节或截断的多字节序列时替换为 '?'。
+///          策略保守：宁可替换也不引入错误解码，确保后续 JSON 序列化不再抛 type_error.316。
+std::string sanitize_invalid_utf8(std::string s) {
+    const size_t n = s.size();
+    size_t i = 0;
+    std::string out;
+    out.reserve(n);
+    while (i < n) {
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        if (c < 0x80) {
+            out += static_cast<char>(c);
+            ++i;
+        } else if (c < 0xC2) {
+            out += '?';
+            ++i;
+        } else if (c < 0xE0) {
+            if (i + 1 < n && (static_cast<unsigned char>(s[i + 1]) & 0xC0) == 0x80) {
+                out += s[i]; out += s[i + 1];
+                i += 2;
+            } else {
+                out += '?';
+                ++i;
+            }
+        } else if (c < 0xF0) {
+            if (i + 2 < n
+                && (static_cast<unsigned char>(s[i + 1]) & 0xC0) == 0x80
+                && (static_cast<unsigned char>(s[i + 2]) & 0xC0) == 0x80) {
+                out += s[i]; out += s[i + 1]; out += s[i + 2];
+                i += 3;
+            } else {
+                out += '?';
+                ++i;
+            }
+        } else if (c < 0xF5) {
+            if (i + 3 < n
+                && (static_cast<unsigned char>(s[i + 1]) & 0xC0) == 0x80
+                && (static_cast<unsigned char>(s[i + 2]) & 0xC0) == 0x80
+                && (static_cast<unsigned char>(s[i + 3]) & 0xC0) == 0x80) {
+                out += s[i]; out += s[i + 1]; out += s[i + 2]; out += s[i + 3];
+                i += 4;
+            } else {
+                out += '?';
+                ++i;
+            }
+        } else {
+            out += '?';
+            ++i;
+        }
+    }
+    return out;
+}
+
+/// @brief 清洗子进程输出为合法 UTF-8
+/// @details 策略（对齐文件头注释承诺的"按 UTF-8 解码，回退 CP_ACP"）：
+///          1. 合法 UTF-8：原样返回（最常见路径，零开销）
+///          2. 非法 UTF-8：
+///             - Windows：先尝试 CP_ACP（系统 ANSI 代码页，中文系统为 CP_936/GBK）
+///                       → UTF-16 → UTF-8 的转换；失败则回退到字节级 sanitize（替换非法字节为 '?'）
+///             - POSIX：直接字节级 sanitize（POSIX 系统通常已 UTF-8，走到这里属罕见情况）
+/// @note 必须确保返回值能被 nlohmann::json 序列化而不抛 type_error.316
+std::string sanitize_output_to_utf8(std::string s) {
+    if (s.empty() || is_valid_utf8(s)) return s;
+
+#ifdef _WIN32
+    // 尝试 CP_ACP（系统 ANSI 代码页）→ UTF-16 → UTF-8
+    const int wlen = MultiByteToWideChar(CP_ACP, 0, s.data(),
+                                         static_cast<int>(s.size()), nullptr, 0);
+    if (wlen > 0) {
+        std::wstring wstr(static_cast<size_t>(wlen), L'\0');
+        MultiByteToWideChar(CP_ACP, 0, s.data(), static_cast<int>(s.size()),
+                            wstr.data(), wlen);
+        const int ulen = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), wlen,
+                                             nullptr, 0, nullptr, nullptr);
+        if (ulen > 0) {
+            std::string result(static_cast<size_t>(ulen), '\0');
+            WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), wlen,
+                                result.data(), ulen, nullptr, nullptr);
+            // 转换成功则使用解码结果；转换结果仍含非法字节则再清洗一次（保险）
+            return is_valid_utf8(result) ? result : sanitize_invalid_utf8(std::move(result));
+        }
+    }
+#endif
+    // 最后的兜底：字节级清洗
+    return sanitize_invalid_utf8(std::move(s));
+}
+
+} // anonymous namespace
+} // namespace agent::process
+
+namespace agent::process {
 
 namespace {
 
@@ -510,10 +636,18 @@ ResultV2<ExecOutput> exec_posix(const std::string& cmd, const ExecOptions& opts)
 
 ResultV2<ExecOutput> exec(const std::string& cmd, const ExecOptions& opts) {
 #ifdef _WIN32
-    return exec_windows(cmd, opts);
+    auto result = exec_windows(cmd, opts);
 #else
-    return exec_posix(cmd, opts);
+    auto result = exec_posix(cmd, opts);
 #endif
+    // 统一对子进程输出做 UTF-8 清洗，避免 GBK 等非 UTF-8 字节导致
+    // 后续 nlohmann::json 序列化抛 type_error.316（如 Windows cmd 中文系统输出）
+    if (result.is_ok()) {
+        auto& out = result.value();
+        out.stdout_text = sanitize_output_to_utf8(std::move(out.stdout_text));
+        out.stderr_text = sanitize_output_to_utf8(std::move(out.stderr_text));
+    }
+    return result;
 }
 
 } // namespace agent::process

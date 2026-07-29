@@ -77,11 +77,17 @@ std::string AnthropicAdapter::build_request_body(const CompletionRequest& reques
 
         // Tool：累积到 pending_tool_results，遇到非 Tool 消息时再 flush
         if (msg.role == ChatMessage::Role::Tool) {
-            pending_tool_results.push_back({
+            nlohmann::json tr = {
                 {"type", "tool_result"},
                 {"tool_use_id", msg.tool_call_id},
                 {"content", msg.content}
-            });
+            };
+            // 工具执行失败时显式标记 is_error（对齐 Anthropic API 语义，
+            // 让模型明确感知错误以便决策重试 / 换工具 / 终止）
+            if (msg.is_error) {
+                tr["is_error"] = true;
+            }
+            pending_tool_results.push_back(std::move(tr));
             continue;
         }
 
