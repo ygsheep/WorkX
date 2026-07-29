@@ -89,14 +89,21 @@ TEST_CASE("make_terminal_config custom values", "[factory][terminal]") {
 // register_builtin_tools
 // ============================================================
 
-TEST_CASE("register_builtin_tools registers 5 tools", "[factory][tools]") {
+TEST_CASE("register_builtin_tools registers expected tools", "[factory][tools]") {
     tool::ToolRegistry registry;
     register_builtin_tools(registry);
 
     auto tools = registry.get_all_tools();
-    REQUIRE(tools.size() == 5);
 
-    // 验证工具名（FileReadTool / FileWriteTool / FileEditTool / BashTool / GlobTool）
+    // 基础工具数：5（Read/Write/Edit/Bash/Glob），Windows 额外注册 PowerShellTool
+#ifdef _WIN32
+    constexpr size_t kExpectedCount = 6;
+#else
+    constexpr size_t kExpectedCount = 5;
+#endif
+    REQUIRE(tools.size() == kExpectedCount);
+
+    // 验证工具名
     std::vector<std::string> names;
     for (const auto& t : tools) {
         names.push_back(t->name());
@@ -107,6 +114,11 @@ TEST_CASE("register_builtin_tools registers 5 tools", "[factory][tools]") {
     REQUIRE(std::find(names.begin(), names.end(), "Edit") != names.end());
     REQUIRE(std::find(names.begin(), names.end(), "Bash") != names.end());
     REQUIRE(std::find(names.begin(), names.end(), "Glob") != names.end());
+
+#ifdef _WIN32
+    // Windows 平台额外验证 PowerShellTool 已注册
+    REQUIRE(std::find(names.begin(), names.end(), "PowerShell") != names.end());
+#endif
 }
 
 // ============================================================
@@ -151,6 +163,24 @@ TEST_CASE("build_system_prompt appends tool prompts", "[factory][prompt]") {
             REQUIRE(prompt.find(tool_prompt) != std::string::npos);
         }
     }
+}
+
+TEST_CASE("build_system_prompt injects environment context", "[factory][prompt]") {
+    tool::ToolRegistry registry;
+    register_builtin_tools(registry);
+
+    std::string prompt = build_system_prompt("", registry);
+
+    // 应包含 # Environment 段
+    REQUIRE(prompt.find("# Environment") != std::string::npos);
+    // 应包含 Platform 行
+    REQUIRE(prompt.find("Platform:") != std::string::npos);
+    // 应包含 Working directory 行
+    REQUIRE(prompt.find("Working directory:") != std::string::npos);
+    // 应包含 git repo 检测
+    REQUIRE(prompt.find("Is directory a git repo:") != std::string::npos);
+    // 应包含 shell 信息
+    REQUIRE(prompt.find("Available shells:") != std::string::npos);
 }
 
 // ============================================================

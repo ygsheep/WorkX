@@ -7,8 +7,19 @@
  */
 
 #include <algorithm>
+#include <cstdlib>
+#include <filesystem>
 #include <format>
 #include <string>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX  // 防止 windows.h 定义 min/max 宏干扰 std::numeric_limits
+#endif
+#include <windows.h>
+#else
+#include <sys/utsname.h>
+#endif
 
 #include <liblogger/logger.h>
 
@@ -25,6 +36,8 @@
 #include "agent/tool/FileReadTool/file_read_tool.h"
 #include "agent/tool/FileWriteTool/file_write_tool.h"
 #include "agent/tool/GlobTool/glob_tool.h"
+#include "agent/tool/PowerShellTool/powershell_tool.h"
+#include "agent/tool/ShellTool/shell_detector.h"
 #include "agent/tool/registry.h"
 #include "core/config/config_manager.h"
 #include "core/events/event_bus.h"
@@ -167,15 +180,156 @@ void register_builtin_tools(tool::ToolRegistry& registry) {
     registry.register_tool(std::make_shared<tool::FileEditTool>());
     registry.register_tool(std::make_shared<tool::BashTool>());
     registry.register_tool(std::make_shared<tool::GlobTool>());
+
+    // Windows 平台额外注册 PowerShellTool（对齐 Claude Code 的条件注册策略）
+    // BashTool（cmd.exe）和 PowerShellTool 并存，由模型根据任务特征自行选用
+#ifdef _WIN32
+    registry.register_tool(std::make_shared<tool::PowerShellTool>());
+#endif
 }
 
 // ============================================================
 // build_system_prompt
 // ============================================================
 
+namespace {
+
+/// @brief 获取平台标识字符串（对齐 cc env.platform）
+std::string get_platform_string() {
+#ifdef _WIN32
+    return "win32";
+#elif defined(__APPLE__)
+    return "darwin";
+#else
+    return "linux";
+#endif
+}
+
+/// @brief 获取 OS 版本字符串（对齐 cc getUnameSR）
+std::string get_os_version_string() {
+#ifdef _WIN32
+    // Windows: 用 RtlGetVersion 获取友好的版本名（避免 GetVersionEx 的 lie 模式）
+    OSVERSIONINFOEXW osvi{};
+    osvi.dwOSVersionInfoSize = sizeof(osvi);
+    // RtlGetVersion 不受 manifest 影响，返回真实版本
+    typedef LONG(WINAPI* RtlGetVersionPtr)(OSVERSIONINFOEXW*);
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (ntdll) {
+        auto pRtlGetVersion = reinterpret_cast<RtlGetVersionPtr>(
+            GetProcAddress(ntdll, "RtlGetVersion"));
+        if (pRtlGetVersion && pRtlGetVersion(&osvi) == 0) {
+            // 粗略判定 Windows 版本名
+            const char* edition = "Windows";
+            if (osvi.dwMajorVersion == 10) {
+                edition = osvi.dwBuildNumber >= 22000 ? "Windows 11" : "Windows 10";
+            } else if (osvi.dwMajorVersion == 6 && osvi.dwMinorVersion == 3) {
+                edition = "Windows 8.1";
+            } else if (osvi.dwMajorVersion == 6 && osvi.dwMinorVersion == 2) {
+                edition = "Windows 8";
+            } else if (osvi.dwMajorVersion == 6 && osvi.dwMinorVersion == 1) {
+                edition = "Windows 7";
+            }
+            return std::format("{} (build {})", edition, osvi.dwBuildNumber);
+        }
+    }
+    return "Windows (unknown version)";
+#else
+    // POSIX: 用 uname -sr 等价信息
+    struct utsname buf;
+    if (uname(&buf) == 0) {
+        return std::format("{} {}", buf.sysname, buf.release);
+    }
+    return "Unknown";
+#endif
+}
+
+/// @brief 获取 shell 信息行（对齐 cc getShellInfoLine）
+/// @details 通过 shell_detector 获取 BashTool 实际使用的 shell，
+///          保证 env 段与 BashTool 的 prompt 完全一致
+std::string get_shell_info_line() {
+    const auto& sh = tool::shell_detect::detect();
+    std::string bash_desc;
+    if (sh.type == tool::shell_detect::ShellType::GitBash) {
+        bash_desc = "Git Bash (" + sh.cmd + ")";
+    } else if (sh.type == tool::shell_detect::ShellType::CmdExe) {
+        bash_desc = "cmd.exe (degraded — Git Bash not found)";
+    } else {
+        // UnixSh
+        bash_desc = sh.cmd;
+    }
+
+#ifdef _WIN32
+    return bash_desc + " + PowerShell (powershell.exe)";
+#else
+    return bash_desc;
+#endif
+}
+
+/// @brief 检测当前目录是否为 git 仓库
+bool is_git_repo() {
+    namespace fs = std::filesystem;
+    fs::path cwd = fs::current_path();
+    // 向上查找 .git 目录或文件
+    for (fs::path p = cwd; !p.empty(); p = p.parent_path()) {
+        if (fs::exists(p / ".git")) return true;
+        if (p == p.parent_path()) break;
+    }
+    return false;
+}
+
+/// @brief 构建环境上下文段（对齐 cc computeEnvInfo 的 <env> 块）
+std::string build_environment_context() {
+    namespace fs = std::filesystem;
+    std::string cwd = fs::current_path().string();
+    std::string platform = get_platform_string();
+    std::string os_version = get_os_version_string();
+    std::string shell_line = get_shell_info_line();
+    bool git_repo = is_git_repo();
+
+    std::string env_block = std::format(
+        "# Environment\n"
+        "You are running on {}.\n"
+        "- Platform: {}\n"
+        "- Working directory: {}\n"
+        "- Is directory a git repo: {}\n"
+        "- Available shells: {}\n",
+        os_version, platform, cwd,
+        git_repo ? "Yes" : "No",
+        shell_line);
+
+    // Windows 平台补充 shell 选择指引
+#ifdef _WIN32
+    const auto& sh = tool::shell_detect::detect();
+    if (sh.type == tool::shell_detect::ShellType::GitBash) {
+        env_block +=
+            "\n"
+            "## Shell selection on Windows\n"
+            "- **Bash tool** uses **Git Bash** — Unix commands (ls/grep/cat) are available.\n"
+            "- **PowerShell tool** uses **powershell.exe** — for Windows-specific APIs "
+            "(registry, WMI, .NET) and cmdlet pipelines.\n";
+    } else {
+        env_block +=
+            "\n"
+            "## Shell selection on Windows\n"
+            "- **Bash tool** uses **cmd.exe** (degraded — Git Bash not found). "
+            "Use Windows commands (dir, findstr, type, where). "
+            "Unix commands like `ls`/`grep`/`cat` will FAIL.\n"
+            "- **PowerShell tool** uses **powershell.exe** — supports aliases for "
+            "ls/cat/cp/mv/rm. Prefer PowerShell for Unix-style commands on Windows.\n";
+    }
+#endif
+    return env_block;
+}
+
+} // anonymous namespace
+
 std::string build_system_prompt(const std::string& user_prompt,
                                 const tool::ToolRegistry& registry) {
     std::string sys_prompt = user_prompt;
+
+    // 注入环境上下文（<env> 段，对齐 Claude Code）
+    sys_prompt += "\n\n";
+    sys_prompt += build_environment_context();
 
     // 拼接工具 prompt
     for (const auto& t : registry.get_all_tools()) {
