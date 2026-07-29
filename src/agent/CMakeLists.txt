@@ -46,6 +46,8 @@ target_sources(libworkx PRIVATE
     tool/GlobTool/glob_tool.cpp
     tool/GrepTool/grep_tool.cpp
     tool/BashTool/bash_tool.cpp
+    tool/PowerShellTool/powershell_tool.cpp
+    tool/ShellTool/shell_detector.cpp
     tool/AgentTool/agent_tool.cpp
     tool/MCPTool/mcp_tool.cpp
     tool/WebFetchTool/web_fetch_tool.cpp

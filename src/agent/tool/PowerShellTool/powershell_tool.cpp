@@ -1,14 +1,14 @@
 /**
- * @file bash_tool.cpp
- * @brief BashTool 实现
- * @details Shell 执行工具的具体实现，支持同步/后台/沙盒/超时/进度回调
- * @version 1.1.0
+ * @file powershell_tool.cpp
+ * @brief PowerShellTool 实现
+ * @details Windows PowerShell 命令执行工具的具体实现。
+ *          结构对齐 BashTool，复用 shell_tool_common 的辅助函数。
+ * @version 1.0.0
  * @date 2026-07
  */
 
-#include "agent/tool/BashTool/bash_tool.h"
+#include "agent/tool/PowerShellTool/powershell_tool.h"
 
-#include "agent/tool/ShellTool/shell_detector.h"
 #include "agent/tool/ShellTool/shell_tool_common.h"
 #include "core/process/subprocess.h"
 #include "core/process/exec_output.h"
@@ -36,32 +36,28 @@ namespace agent::tool {
 
 namespace {
 
-/// 后台任务输出注册表容量上限（防止内存膨胀）
+/// 后台任务输出注册表容量上限
 constexpr size_t kMaxRegistryEntries = 50;
-/// 后台任务名唯一 id 计数器（M-3：避免 task_name 重复）
+/// 后台任务名唯一 id 计数器
 std::atomic<size_t> s_task_id_counter{0};
 
-/// @brief 后台任务输出注册表（M-1 修复）
-/// @details 保存后台任务的 ExecOutput，供 LLM 通过未来 GetBashOutputTool 查询。
-///          线程安全，容量上限 kMaxRegistryEntries，FIFO 淘汰最旧条目。
-class BashOutputRegistry {
+/// @brief 后台任务输出注册表（PowerShell 专属）
+/// @details 与 BashOutputRegistry 结构一致，task_name 前缀用 "ps:" 区分
+class PSOutputRegistry {
 public:
-    static BashOutputRegistry& instance() {
-        static BashOutputRegistry inst;
+    static PSOutputRegistry& instance() {
+        static PSOutputRegistry inst;
         return inst;
     }
 
     void store(const std::string& task_name, const process::ExecOutput& out) {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_outputs[task_name] = out;
-        // 超容量时淘汰最旧条目（按插入顺序，std::map 按键排序不够精确，
-        // 但 task_name 含递增 id，按键排序近似 FIFO）
         if (m_outputs.size() > kMaxRegistryEntries) {
             m_outputs.erase(m_outputs.begin());
         }
     }
 
-    /// 查询并返回输出副本；不存在返回空 optional
     std::optional<process::ExecOutput> get(const std::string& task_name) const {
         std::lock_guard<std::mutex> lock(m_mutex);
         auto it = m_outputs.find(task_name);
@@ -75,17 +71,19 @@ public:
     }
 
 private:
-    BashOutputRegistry() = default;
+    PSOutputRegistry() = default;
     mutable std::mutex m_mutex;
     std::map<std::string, process::ExecOutput> m_outputs;
 };
 
-/// @brief 获取当前 shell（运行期检测，首次调用后缓存）
-/// @details Windows 上优先 Git Bash（支持 ls/grep/cat 等 Unix 命令），
-///          无 Git Bash 时降级 cmd.exe。非 Windows 用 /bin/sh。
-const shell_detect::ShellInfo& shell() {
-    return shell_detect::detect();
-}
+/// PowerShell shell 路径与参数
+/// @details -NoProfile：跳过用户 profile 加载，保证环境干净
+///          -NonInteractive：禁止交互式提示（Read-Host 等），避免阻塞
+///          -Command：执行后续字符串作为命令
+constexpr const char* kShell = "powershell.exe";
+constexpr const char* kNoProfileFlag = "-NoProfile";
+constexpr const char* kNonInteractiveFlag = "-NonInteractive";
+constexpr const char* kCommandFlag = "-Command";
 
 } // namespace
 
@@ -93,46 +91,54 @@ const shell_detect::ShellInfo& shell() {
 // 元信息
 // ============================================================
 
-const std::string& BashTool::name() const {
-    static const std::string n{"Bash"};
+const std::string& PowerShellTool::name() const {
+    static const std::string n{"PowerShell"};
     return n;
 }
 
-const std::string& BashTool::description() const {
+const std::string& PowerShellTool::description() const {
     static const std::string d{
-        "Executes a shell command and returns stdout, stderr, and exit code. "
+        "Executes a PowerShell command on Windows and returns stdout, stderr, and exit code. "
         "Supports timeout, working directory, and optional background execution."
     };
     return d;
 }
 
-const std::string& BashTool::prompt() const {
-    // 运行期根据检测到的 shell 类型生成 prompt，确保 prompt 与实际 shell 一致
-    const auto& sh = shell();
-
-    // Unix 风格 shell（/bin/sh 或 Git Bash）— 支持 ls/grep/cat 等
-    static const std::string unix_prompt{
-        "Executes a shell command on the user's machine.\n\n"
-        "## Shell: bash/sh (POSIX)\n"
-        "This tool uses a POSIX-compatible shell. Commands use Unix shell syntax:\n"
-        "- ls, grep, find, cat, rm, cp, mv are available\n"
-        "- Use forward slashes `/` in paths\n"
-        "- Use `;` to chain commands unconditionally, `&&` to chain with success check\n"
-        "- Environment variables: `$VAR` (read), `export VAR=value` (set)\n"
-        "- Pipes `|` and redirections `>` `>>` `2>&1` are supported\n\n"
+const std::string& PowerShellTool::prompt() const {
+    static const std::string p{
+        "Executes a PowerShell command on the user's Windows machine.\n\n"
         "## When to use\n"
-        "- Running tests, builds, or scripts\n"
-        "- Inspecting files with system tools (grep, find, ls)\n"
-        "- Git operations\n"
-        "- Any task requiring shell access\n\n"
+        "- Windows system administration (Get-Process, Get-Service, Set-Location)\n"
+        "- Git operations on Windows (preferring PowerShell over cmd for better path handling)\n"
+        "- Build scripts that use PowerShell cmdlets or .NET APIs\n"
+        "- Windows registry / WMI / CIM queries\n"
+        "- Any task requiring Windows-specific APIs\n\n"
+        "## When NOT to use\n"
+        "- File operations: prefer FileRead / FileEdit / FileWrite\n"
+        "- File searching: prefer Grep / Glob\n"
+        "- Unix-style commands: prefer Bash tool (uses cmd.exe)\n\n"
+        "## PowerShell edition guidance\n"
+        "This tool uses Windows PowerShell 5.1 (powershell.exe) by default.\n"
+        "- Pipeline chain operators `&&` and `||` are NOT available — they cause a parser error.\n"
+        "  To run B only if A succeeds: `A; if ($?) { B }`. To chain unconditionally: `A; B`.\n"
+        "- Ternary (`?:`), null-coalescing (`??`), and null-conditional (`?.`) operators are NOT available.\n"
+        "  Use `if/else` and explicit `$null -eq` checks instead.\n"
+        "- Avoid `2>&1` on native executables (wraps each line in ErrorRecord, sets `$?` to false).\n"
+        "  stderr is already captured separately — don't redirect it.\n"
+        "- Default file encoding is UTF-16 LE (with BOM). When writing files other tools will read,\n"
+        "  pass `-Encoding utf8` to `Out-File` / `Set-Content`.\n"
+        "- `ConvertFrom-Json` returns a PSCustomObject, not a hashtable. `-AsHashtable` is not available.\n\n"
         "## Guidelines\n"
         "- Prefer specialized tools (FileRead/FileEdit/FileWrite/Grep/Glob) when applicable\n"
         "- Use `description` to briefly explain what the command does (5-10 words)\n"
         "- Set `timeout` for long-running commands (max 600000ms)\n"
         "- Use `run_in_background=true` for long-running commands whose output "
         "you don't immediately need\n"
-        "- Avoid interactive commands that require user input\n"
+        "- Avoid interactive cmdlets: `Read-Host`, `Get-Credential`, `PromptForChoice` "
+        "(the shell runs in -NonInteractive mode)\n"
         "- Commands run in the current working directory by default\n"
+        "- Do NOT prefix commands with `cd` or `Set-Location` — use the `cwd` parameter instead\n"
+        "- Environment variables: read with `$env:NAME`, set with `$env:NAME = \"value\"`\n"
         "- The sandbox restricts filesystem and network access by default; "
         "set `dangerously_disable_sandbox=true` only when the command truly "
         "needs unrestricted access\n\n"
@@ -142,54 +148,16 @@ const std::string& BashTool::prompt() const {
         "- Non-zero exit codes are reported in <error>...</error> tags\n"
         "- Output exceeding 8000 characters is truncated\n"
     };
-
-    // cmd.exe 降级 — 仅 Windows 命令
-    static const std::string cmd_prompt{
-        "Executes a command in Windows cmd.exe.\n\n"
-        "## Shell: cmd.exe (Windows, degraded — Git Bash not found)\n"
-        "This tool uses cmd.exe because Git Bash was not detected. "
-        "Commands must use Windows cmd syntax:\n"
-        "- Use `dir` instead of `ls`\n"
-        "- Use `findstr` instead of `grep`\n"
-        "- Use `where` instead of `which`\n"
-        "- Use `type` instead of `cat`\n"
-        "- Use `del` instead of `rm`\n"
-        "- Use `copy` instead of `cp`\n"
-        "- Use `move` instead of `mv`\n"
-        "- Use `&` to chain commands unconditionally, `&&` to chain with success check\n"
-        "- Environment variables: `%VAR%` (read), `set VAR=value` (set)\n\n"
-        "## Tip\n"
-        "Install Git for Windows to enable Unix-style commands (ls/grep/cat) "
-        "in this tool. Alternatively, use the **PowerShell** tool which supports "
-        "aliases for ls/cat/cp/mv/rm.\n\n"
-        "## Guidelines\n"
-        "- Prefer specialized tools (FileRead/FileEdit/FileWrite/Grep/Glob) when applicable\n"
-        "- Use `description` to briefly explain what the command does (5-10 words)\n"
-        "- Set `timeout` for long-running commands (max 600000ms)\n"
-        "- Use `run_in_background=true` for long-running commands whose output "
-        "you don't immediately need\n"
-        "- Avoid interactive commands that require user input\n"
-        "- Commands run in the current working directory by default\n"
-        "- The sandbox restricts filesystem and network access by default; "
-        "set `dangerously_disable_sandbox=true` only when the command truly "
-        "needs unrestricted access\n\n"
-        "## Output format\n"
-        "- stdout is wrapped in <stdout>...</stdout> tags\n"
-        "- stderr is wrapped in <stderr>...</stderr> tags\n"
-        "- Non-zero exit codes are reported in <error>...</error> tags\n"
-        "- Output exceeding 8000 characters is truncated\n"
-    };
-
-    return sh.is_unix ? unix_prompt : cmd_prompt;
+    return p;
 }
 
-nlohmann::json BashTool::input_schema() const {
+nlohmann::json PowerShellTool::input_schema() const {
     return {
         {"type", "object"},
         {"properties", {
             {"command", {
                 {"type", "string"},
-                {"description", "The shell command to execute"}
+                {"description", "The PowerShell command to execute"}
             }},
             {"description", {
                 {"type", "string"},
@@ -224,19 +192,19 @@ nlohmann::json BashTool::input_schema() const {
 // call() — 入口分发
 // ============================================================
 
-ResultV2<ToolResult> BashTool::call(
+ResultV2<ToolResult> PowerShellTool::call(
     const nlohmann::json& input,
     const ToolContext& ctx
 ) const {
     // 解析参数
     if (!input.contains("command") || !input["command"].is_string()) {
         return ResultV2<ToolResult>::err(
-            Error::Code::MissingArgument, "BashTool: 'command' is required");
+            Error::Code::MissingArgument, "PowerShellTool: 'command' is required");
     }
     const std::string command = input["command"].get<std::string>();
     if (command.empty()) {
         return ResultV2<ToolResult>::err(
-            Error::Code::InvalidInput, "BashTool: 'command' must not be empty");
+            Error::Code::InvalidInput, "PowerShellTool: 'command' must not be empty");
     }
 
     int timeout_ms = kDefaultTimeoutMs;
@@ -266,7 +234,7 @@ ResultV2<ToolResult> BashTool::call(
     // 取消检查
     if (ctx.is_cancelled()) {
         return ResultV2<ToolResult>::err(
-            Error::Code::Cancelled, "BashTool: cancelled before execution");
+            Error::Code::Cancelled, "PowerShellTool: cancelled before execution");
     }
 
     if (run_in_background) {
@@ -279,39 +247,35 @@ ResultV2<ToolResult> BashTool::call(
 // execute_sync — 同步执行路径
 // ============================================================
 
-ResultV2<ToolResult> BashTool::execute_sync(
+ResultV2<ToolResult> PowerShellTool::execute_sync(
     const std::string& command,
     const std::string& cwd,
     int timeout_ms,
     bool disable_sandbox,
     const ToolContext& ctx
 ) const {
-    // 上报开始
-    ctx.report_progress(std::format("Executing: {}", command));
+    ctx.report_progress(std::format("Executing (PowerShell): {}", command));
 
-    // 构建沙盒配置（若启用）
+    // 构建沙盒配置
     process::sandbox::SandboxConfig sb_config = disable_sandbox
         ? process::sandbox::SandboxConfig::permissive()
         : process::sandbox::SandboxConfig::restrictive(cwd);
 
-    // 包装命令：通过 shell 执行，使管道/重定向/复合命令可用
+    // 包装命令：powershell.exe -NoProfile -NonInteractive -Command <command>
     auto wrapped = process::sandbox::SandboxAdapter::wrap_command(
-        shell().cmd, {shell().flag, command}, sb_config);
+        kShell, {kNoProfileFlag, kNonInteractiveFlag, kCommandFlag, command}, sb_config);
 
-    // 上报降级或包装情况
     if (wrapped.was_wrapped) {
         std::string sb_status = wrapped.degraded ? "degraded" : "active";
         ctx.report_progress("Sandbox: " + sb_status + " (backend: " + wrapped.backend_name + ")");
     }
 
-    // 构建 ExecOptions
     process::ExecOptions opts;
     opts.cwd = cwd;
     opts.args = wrapped.args;
     if (timeout_ms > 0) {
         opts.timeout = std::chrono::milliseconds(timeout_ms);
     }
-    // 取消回调：绑定到 ctx
     if (ctx.cancel_flag != nullptr) {
         const std::atomic<bool>* flag = ctx.cancel_flag;
         opts.is_cancelled = [flag]() {
@@ -319,20 +283,17 @@ ResultV2<ToolResult> BashTool::execute_sync(
         };
     }
 
-    // 执行
     auto exec_result = process::exec(wrapped.cmd, opts);
     if (exec_result.is_err()) {
         const auto& err = exec_result.error();
-        // 启动失败（命令不存在等）
-        std::string msg = std::format("Failed to execute command: {}", err.message);
+        std::string msg = std::format("Failed to execute PowerShell command: {}", err.message);
         return ResultV2<ToolResult>::err(err.code, std::move(msg));
     }
 
     const auto& out = exec_result.value();
     std::string formatted = format_result(out);
-    formatted = truncate_output(std::move(formatted), kMaxOutputChars);
+    formatted = truncate_output(std::move(formatted));
 
-    // 上报完成
     if (out.is_success()) {
         ctx.report_progress("Command completed successfully");
     } else if (out.timed_out) {
@@ -350,32 +311,28 @@ ResultV2<ToolResult> BashTool::execute_sync(
 // execute_background — 后台执行路径
 // ============================================================
 
-ResultV2<ToolResult> BashTool::execute_background(
+ResultV2<ToolResult> PowerShellTool::execute_background(
     const std::string& command,
     const std::string& cwd,
     int timeout_ms,
     bool disable_sandbox,
     const ToolContext& ctx
 ) const {
-    // 检查 TaskManager 是否可用
     if (ctx.task_manager_ptr == nullptr) {
         return ResultV2<ToolResult>::err(
             Error::Code::ConfigInvalid,
-            "BashTool: run_in_background=true requires TaskManager "
+            "PowerShellTool: run_in_background=true requires TaskManager "
             "(ctx.task_manager_ptr is null)");
     }
 
-    // 沙盒配置
     process::sandbox::SandboxConfig sb_config = disable_sandbox
         ? process::sandbox::SandboxConfig::permissive()
         : process::sandbox::SandboxConfig::restrictive(cwd);
     auto wrapped = process::sandbox::SandboxAdapter::wrap_command(
-        shell().cmd, {shell().flag, command}, sb_config);
+        kShell, {kNoProfileFlag, kNonInteractiveFlag, kCommandFlag, command}, sb_config);
 
-    // M-3 修复：task_name 拼接唯一递增 id，避免不同任务重名
-    // 格式：bash:<id>:<command 前 40 字符>
     const size_t task_id = s_task_id_counter.fetch_add(1, std::memory_order_relaxed);
-    std::string task_name = "bash:" + std::to_string(task_id) + ":" + command.substr(0, 40);
+    std::string task_name = "ps:" + std::to_string(task_id) + ":" + command.substr(0, 40);
 
     auto& tm = ctx.task_manager();
     auto task = tm.launch(task_name,
@@ -391,29 +348,23 @@ ResultV2<ToolResult> BashTool::execute_background(
             };
 
             auto exec_result = process::exec(wrapped.cmd, opts);
-            // M-1 修复：
-            // 1. exec 启动失败（is_err）抛异常 → TaskManager 标记 Failed（发布 TaskFailedEvent）
-            //    原实现 (void)exec_result 会导致 TaskManager 错误地标记 Completed
             if (exec_result.is_err()) {
                 const auto& err = exec_result.error();
                 throw std::runtime_error(
-                    "Failed to execute command: " + err.message);
+                    "Failed to execute PowerShell command: " + err.message);
             }
-            // 2. exec 成功（即使非零退出/超时/取消）→ 保存输出到注册表，供 LLM 查询
-            //    非零退出/超时不视为 task 失败（命令执行了，只是结果非成功），符合 cc 行为
-            BashOutputRegistry::instance().store(task_name, exec_result.value());
+            PSOutputRegistry::instance().store(task_name, exec_result.value());
         },
         TaskType::Background);
 
     if (!task) {
         return ResultV2<ToolResult>::err(
             Error::Code::InternalError,
-            "BashTool: failed to launch background task");
+            "PowerShellTool: failed to launch background task");
     }
 
-    // 立即返回 task 信息
     std::string task_name_str = task->getName();
-    std::string result = "Command running in background with ID: " + task_name_str +
+    std::string result = "PowerShell command running in background with ID: " + task_name_str +
         "\nCommand: " + command +
         "\nOutput will be available when the task completes.";
 
