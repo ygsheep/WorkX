@@ -3,6 +3,8 @@
 
 target_sources(libworkx PRIVATE
     config/config_manager.cpp
+    process/sandbox/sandbox_adapter.cpp
+    process/sandbox/sandbox_detector.cpp
     process/subprocess.cpp
     process/tool_registry.cpp
     task/task_manager.cpp
