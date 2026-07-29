@@ -16,6 +16,7 @@
 #include "tui/render/syntax_highlighter.h"
 #include "core/events/event_bus.h"
 #include "core/events/system_events.h"
+#include "core/task/task_events.h"
 #include "agent/message/types.h"
 
 #include <cassert>
@@ -774,6 +775,31 @@ void ChatRenderer::start() {
             m_status_bar->render();
         })
     );
+
+    // ---- TaskCompletedEvent（后台任务完成通知）----
+    // BashTool run_in_background=true 启动的后台任务完成后触发
+    m_token_task_completed = std::make_unique<EventToken>(
+        bus.subscribe<TaskCompletedEvent>([this](const TaskCompletedEvent& e) {
+            // 仅显示后台任务（前缀 "bash:"），避免与其他任务重复
+            if (e.task_name.rfind("bash:", 0) != 0) return;
+            m_terminal->set_color(ColorRole::Success);
+            m_terminal->write(std::format(
+                "[bg] {} completed ({:.0f}ms)\n", e.task_name, e.duration_ms));
+            m_terminal->reset_color();
+        })
+    );
+
+    // ---- TaskFailedEvent（后台任务失败通知）----
+    m_token_task_failed = std::make_unique<EventToken>(
+        bus.subscribe<TaskFailedEvent>([this](const TaskFailedEvent& e) {
+            if (e.task_name.rfind("bash:", 0) != 0) return;
+            m_terminal->set_color(ColorRole::Failure);
+            m_terminal->write(std::format(
+                "[bg] {} failed: {} ({:.0f}ms)\n",
+                e.task_name, e.error_message, e.duration_ms));
+            m_terminal->reset_color();
+        })
+    );
 }
 
 void ChatRenderer::stop() {
@@ -819,6 +845,12 @@ void ChatRenderer::stop() {
     }
     if (m_token_resize && m_token_resize->is_valid()) {
         bus.unsubscribe<TerminalResizeEvent>(*m_token_resize);
+    }
+    if (m_token_task_completed && m_token_task_completed->is_valid()) {
+        bus.unsubscribe<TaskCompletedEvent>(*m_token_task_completed);
+    }
+    if (m_token_task_failed && m_token_task_failed->is_valid()) {
+        bus.unsubscribe<TaskFailedEvent>(*m_token_task_failed);
     }
 }
 

@@ -89,14 +89,14 @@ TEST_CASE("make_terminal_config custom values", "[factory][terminal]") {
 // register_builtin_tools
 // ============================================================
 
-TEST_CASE("register_builtin_tools registers 3 tools", "[factory][tools]") {
+TEST_CASE("register_builtin_tools registers 4 tools", "[factory][tools]") {
     tool::ToolRegistry registry;
     register_builtin_tools(registry);
 
     auto tools = registry.get_all_tools();
-    REQUIRE(tools.size() == 3);
+    REQUIRE(tools.size() == 4);
 
-    // 验证工具名（FileReadTool / FileWriteTool / FileEditTool）
+    // 验证工具名（FileReadTool / FileWriteTool / FileEditTool / BashTool）
     std::vector<std::string> names;
     for (const auto& t : tools) {
         names.push_back(t->name());
@@ -105,6 +105,7 @@ TEST_CASE("register_builtin_tools registers 3 tools", "[factory][tools]") {
     REQUIRE(std::find(names.begin(), names.end(), "Read") != names.end());
     REQUIRE(std::find(names.begin(), names.end(), "Write") != names.end());
     REQUIRE(std::find(names.begin(), names.end(), "Edit") != names.end());
+    REQUIRE(std::find(names.begin(), names.end(), "Bash") != names.end());
 }
 
 // ============================================================

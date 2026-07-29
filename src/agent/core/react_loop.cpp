@@ -29,12 +29,14 @@ namespace agent {
 ReActLoop::ReActLoop(ICompletionProvider* provider,
                      std::shared_ptr<tool::ToolRegistry> registry,
                      Config config,
-                     IConfigManager* config_manager)
+                     IConfigManager* config_manager,
+                     ITaskManager* task_manager)
     : m_provider(provider)
     , m_registry(std::move(registry))
     , m_config(config)
     , m_compressor(m_config.compressor_cfg)
     , m_config_manager(config_manager)
+    , m_task_manager(task_manager)
 {
     // issue #15-F: 构造函数不变量从 assert 改为 throw，避免 Debug 构建直接 abort
     // 构造失败抛 std::invalid_argument 是 C++ 标准模式，调用方可用 try/catch 处理
@@ -525,6 +527,8 @@ ReActResult ReActLoop::run(
         ctx.cancel_flag = &should_cancel;
         // H-5：注入配置管理器（非空），工具通过 ctx.config_manager() 访问
         ctx.config_manager_ptr = m_config_manager;
+        // BashTool 后台任务 DI：注入任务管理器（可选）
+        ctx.task_manager_ptr = m_task_manager;
 
         // 1. 同步发布所有 Action 步骤（UI 即时反馈工具调用开始）
         for (const auto& tu : thought.tool_uses) {

@@ -1,8 +1,9 @@
 /**
  * @file context.h
  * @brief ToolContext — 工具执行上下文
- * @details 在工具执行过程中传递的运行时信息：会话 ID、工作目录、权限模式、取消信号
- * @version 1.1.0
+ * @details 在工具执行过程中传递的运行时信息：会话 ID、工作目录、权限模式、取消信号、
+ *          任务管理器、进度回调
+ * @version 1.2.0
  * @date 2026-07
  */
 
@@ -10,6 +11,7 @@
 
 #include <string>
 #include <atomic>
+#include <functional>
 #include <nlohmann/json.hpp>
 
 namespace agent {
@@ -17,7 +19,16 @@ namespace agent {
 // D-5：前向声明，避免 context.h 强依赖 i_config_manager.h
 class IConfigManager;
 
+// 前向声明：ITaskManager 在 agent 命名空间下（非 agent::task）
+class ITaskManager;
+
 namespace tool {
+
+/// @brief 工具进度回调类型
+/// @details 工具执行过程中上报进度文本（如 stdout 增量、心跳信息），
+///          由 ReActLoop 注入，最终通过 EventBus 发布到 UI。
+/// @param progress_text 进度文本
+using ProgressCallback = std::function<void(const std::string& progress_text)>;
 
 /// @brief 工具执行上下文
 ///
@@ -26,6 +37,8 @@ namespace tool {
 /// - 工作目录路径
 /// - 权限模式
 /// - 中断信号（CancellationToken）
+/// - 任务管理器（用于后台任务）
+/// - 进度回调
 struct ToolContext {
     std::string cwd;                        ///< 工作目录
     std::string session_id;                 ///< 会话 ID
@@ -45,10 +58,27 @@ struct ToolContext {
     ///          强制 DI 显式依赖。生命周期由调用方保证（通常为 ChatSession 的成员）。
     IConfigManager* config_manager_ptr = nullptr;
 
+    /// @brief 任务管理器指针（可选，非拥有）
+    /// @details 由调用方（ReActLoop）显式注入，工具通过 task_manager() 访问。
+    ///          nullptr 时 task_manager() 抛 std::logic_error。
+    ///          用于 BashTool 等需要启动后台任务的工具。
+    ///          生命周期由调用方保证（通常为 ChatSession 引用的 TaskManager 单例）。
+    ITaskManager* task_manager_ptr = nullptr;
+
+    /// @brief 进度回调（可选）
+    /// @details 由调用方（ReActLoop）注入，工具在长任务执行过程中调用以上报进度。
+    ///          默认为空（无进度上报）。生命周期由 ToolContext 所有者保证。
+    ProgressCallback progress_callback = nullptr;
+
     /// @brief 解析配置管理器（H-5：nullptr 时抛异常，不再回退单例）
     /// @return IConfigManager 引用
     /// @throws std::logic_error 当 config_manager_ptr == nullptr
     IConfigManager& config_manager() const;
+
+    /// @brief 解析任务管理器
+    /// @return ITaskManager 引用
+    /// @throws std::logic_error 当 task_manager_ptr == nullptr
+    ITaskManager& task_manager() const;
 
     /// @brief 检查是否已取消
     /// @return 已取消返回 true
@@ -65,6 +95,14 @@ struct ToolContext {
             cancelled_.store(true, std::memory_order_relaxed);
         }
         // 绑定外部 cancel_flag 时由外部负责置位，本方法无操作
+    }
+
+    /// @brief 上报进度（若 progress_callback 已设置）
+    /// @param progress_text 进度文本
+    void report_progress(const std::string& progress_text) const {
+        if (progress_callback) {
+            progress_callback(progress_text);
+        }
     }
 
 private:
