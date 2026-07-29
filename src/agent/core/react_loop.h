@@ -29,6 +29,7 @@ namespace agent {
 // 前向声明（3.2 IReActObserver）
 class IReActObserver;
 class IConfigManager;  // D-5：前向声明，避免头文件强依赖
+class ITaskManager;    // BashTool 后台任务 DI（agent 命名空间下）
 
 // ============================================================
 // ReAct 步骤类型
@@ -182,17 +183,20 @@ public:
     /// @param registry 工具注册表（可为 nullptr，表示无工具）
     /// @param config 循环配置
     /// @param config_manager 配置管理器（H-5：必须非空，注入到 ToolContext）
+    /// @param task_manager 任务管理器（可选，用于 BashTool 等后台任务工具）
     ReActLoop(ICompletionProvider* provider,
               std::shared_ptr<tool::ToolRegistry> registry,
               Config config,
-              IConfigManager* config_manager);
+              IConfigManager* config_manager,
+              ITaskManager* task_manager = nullptr);
 
     /// @brief 构造（使用默认配置）
     /// @param config_manager 配置管理器（H-5：必须非空，注入到 ToolContext）
     ReActLoop(ICompletionProvider* provider,
               std::shared_ptr<tool::ToolRegistry> registry,
-              IConfigManager* config_manager)
-        : ReActLoop(provider, std::move(registry), Config{}, config_manager) {}
+              IConfigManager* config_manager,
+              ITaskManager* task_manager = nullptr)
+        : ReActLoop(provider, std::move(registry), Config{}, config_manager, task_manager) {}
 
     ~ReActLoop() = default;
 
@@ -309,6 +313,7 @@ private:
     Config m_config;                              ///< 循环配置
     ContextCompressor m_compressor;               ///< 3.3 上下文压缩器
     IConfigManager* m_config_manager = nullptr;   ///< H-5：配置管理器（非拥有，注入到 ToolContext，必须非空）
+    ITaskManager* m_task_manager = nullptr;       ///< BashTool 后台任务 DI（可选，注入到 ToolContext）
 };
 
 } // namespace agent

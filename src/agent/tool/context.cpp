@@ -9,6 +9,7 @@
 
 #include "agent/tool/context.h"
 #include "core/config/i_config_manager.h"
+#include "core/task/task_manager.h"
 
 #include <stdexcept>
 
@@ -23,6 +24,17 @@ IConfigManager& ToolContext::config_manager() const {
             "(H-5: ReActLoop must inject IConfigManager explicitly)");
     }
     return *config_manager_ptr;
+}
+
+// 任务管理器 DI 注入。nullptr 时抛异常。
+// 仅 BashTool 等需要后台任务的工具调用此方法，其他工具不受影响。
+ITaskManager& ToolContext::task_manager() const {
+    if (task_manager_ptr == nullptr) {
+        throw std::logic_error(
+            "ToolContext::task_manager() requires non-null task_manager_ptr "
+            "(BashTool: ReActLoop must inject ITaskManager for background tasks)");
+    }
+    return *task_manager_ptr;
 }
 
 } // namespace agent::tool

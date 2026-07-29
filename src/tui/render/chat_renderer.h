@@ -74,6 +74,8 @@ private:
     std::unique_ptr<agent::EventToken> m_token_agent_done;
     std::unique_ptr<agent::EventToken> m_token_user_input;  ///< 用户输入事件（用于本地 token 估算）
     std::unique_ptr<agent::EventToken> m_token_resize;      ///< 终端尺寸变更事件
+    std::unique_ptr<agent::EventToken> m_token_task_completed;  ///< 后台任务完成事件
+    std::unique_ptr<agent::EventToken> m_token_task_failed;     ///< 后台任务失败事件
 
     // 状态机
     TuiStateMachine m_state_machine;

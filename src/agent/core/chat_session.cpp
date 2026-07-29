@@ -237,8 +237,9 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
 
             // ---- 创建 ReActLoop ----
             // D-5：注入 IConfigManager，工具通过 ToolContext.config_manager() 访问
+            // BashTool DI：注入 TaskManager，工具通过 ToolContext.task_manager() 启动后台任务
             ReActLoop loop(m_provider.get(), m_tool_registry, ReActLoop::Config{},
-                           &m_config_manager.get());
+                           &m_config_manager.get(), &m_task_manager.get());
 
             // 3.2：使用 IReActObserver 接口替代 lambda 回调
             // ReActEventPublisher 内部完成 ReActStep → IEventBus 事件转换

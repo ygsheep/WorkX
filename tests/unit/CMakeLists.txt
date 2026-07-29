@@ -24,6 +24,7 @@ set(UNIT_TEST_SOURCES
     agent/tool/test_tool_context.cpp
     agent/tool/test_tool_executor.cpp
     agent/tool/test_tool_registry.cpp
+    agent/tool/test_bash_tool.cpp
     core/config/test_config_manager.cpp
     core/events/test_event_bus.cpp
     core/process/test_subprocess.cpp

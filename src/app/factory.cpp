@@ -20,6 +20,7 @@
 #include "agent/api/i_backend_admin.h"  // C-2：dynamic_cast 到 IBackendAdmin*
 #include "agent/core/chat_session.h"
 #include "agent/model/provider_preset.h"
+#include "agent/tool/BashTool/bash_tool.h"
 #include "agent/tool/FileEditTool/file_edit_tool.h"
 #include "agent/tool/FileReadTool/file_read_tool.h"
 #include "agent/tool/FileWriteTool/file_write_tool.h"
@@ -163,6 +164,7 @@ void register_builtin_tools(tool::ToolRegistry& registry) {
     registry.register_tool(std::make_shared<tool::FileReadTool>());
     registry.register_tool(std::make_shared<tool::FileWriteTool>());
     registry.register_tool(std::make_shared<tool::FileEditTool>());
+    registry.register_tool(std::make_shared<tool::BashTool>());
 }
 
 // ============================================================
