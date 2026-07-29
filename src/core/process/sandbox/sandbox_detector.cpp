@@ -112,9 +112,11 @@ SandboxDetector::Backend SandboxDetector::do_detect() {
 }
 
 std::optional<std::string> SandboxDetector::path() {
-    // path() 隐含触发 detect()，确保 m_path 已填充
-    detect();
     std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_detected) {
+        m_backend = do_detect();
+        m_detected = true;
+    }
     return m_path;
 }
 

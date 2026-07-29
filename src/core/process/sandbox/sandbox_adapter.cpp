@@ -140,21 +140,33 @@ std::string generate_seatbelt_profile(const SandboxConfig& config) {
     }
 
     // 网络规则
+    // 语义优先级：
+    //   1. network_isolated=true → 完全拒绝网络
+    //   2. allow_domains 非空 → 白名单模式（默认拒绝，仅允许 allow_domains，
+    //      deny_domains 仍可从中排除特定域名，SBPL 中 deny 优先于 allow）
+    //   3. allow_domains 为空、deny_domains 非空 → 黑名单模式（默认允许，拒绝 deny_domains）
+    //   4. 两者都为空 → 允许所有网络
     if (config.network_isolated) {
         ss << "(deny network*)\n";
-    } else {
-        // 默认允许网络，deny_domains 优先
+    } else if (!config.allow_domains.empty()) {
+        // 白名单模式：默认拒绝，仅允许 allow_domains
+        ss << "(deny network*)\n";
+        for (const auto& domain : config.allow_domains) {
+            ss << "(allow network* (remote tcp " << escape_sbpl_string(domain) << "))\n";
+        }
+        // deny_domains 在白名单模式下仍生效（从 allow 列表中排除特定域名）
+        for (const auto& domain : config.deny_domains) {
+            ss << "(deny network* (remote tcp " << escape_sbpl_string(domain) << "))\n";
+        }
+    } else if (!config.deny_domains.empty()) {
+        // 黑名单模式：默认允许，拒绝 deny_domains
         ss << "(allow network*)\n";
         for (const auto& domain : config.deny_domains) {
             ss << "(deny network* (remote tcp " << escape_sbpl_string(domain) << "))\n";
         }
-        // 若有 allow_domains，改为白名单模式
-        if (!config.allow_domains.empty()) {
-            ss << "(deny network*)\n";  // 改为默认拒绝
-            for (const auto& domain : config.allow_domains) {
-                ss << "(allow network* (remote tcp " << escape_sbpl_string(domain) << "))\n";
-            }
-        }
+    } else {
+        // 无限制
+        ss << "(allow network*)\n";
     }
 
     return ss.str();
@@ -210,9 +222,29 @@ std::vector<std::string> generate_bwrap_args(const SandboxConfig& config) {
         args.push_back("--unshare-net");
     }
 
-    // deny_write/deny_read 在 bwrap 中难以细粒度实现（bwrap 是命名空间隔离，非路径过滤）
-    // 此处通过不 bind 对应路径实现（若路径不在 allow_write 中，则保持只读）
-    // 完整的 deny 规则需要叠加 LD_PRELOAD 或 seccomp，留作后续扩展
+    // deny_write/deny_read：用 --tmpfs 覆盖对应路径，使其在沙盒内不可访问
+    // bwrap 是命名空间隔离（非路径过滤），--tmpfs 在该挂载点创建空 tmpfs，
+    // 遮蔽原路径内容。deny_write 路径用 tmpfs 覆盖（不可读写原内容）；
+    // deny_read 路径同理。这是 bwrap 下最接近 deny 语义的方案。
+    // 注意：若 deny 路径同时出现在 allow 中，--tmpfs 必须在 --bind 之后才能遮蔽，
+    //       bwrap 按参数顺序挂载，后挂载覆盖先挂载，因此 deny 放最后。
+    for (const auto& p : config.deny_write) {
+        std::string np = normalize_path(p);
+        args.push_back("--tmpfs");
+        args.push_back(np);
+    }
+    for (const auto& p : config.deny_read) {
+        std::string np = normalize_path(p);
+        // 避免与 deny_write 重复挂载
+        bool already_denied = false;
+        for (const auto& dw : config.deny_write) {
+            if (normalize_path(dw) == np) { already_denied = true; break; }
+        }
+        if (!already_denied) {
+            args.push_back("--tmpfs");
+            args.push_back(np);
+        }
+    }
 
     return args;
 }
