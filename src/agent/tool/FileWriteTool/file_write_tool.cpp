@@ -20,6 +20,7 @@
 #include "agent/tool/FileWriteTool/file_write_tool.h"
 #include "agent/tool/FileWriteTool/diff.h"
 #include "agent/tool/FileReadState/file_read_state.h"
+#include "agent/tool/path_expand.h"
 #include "agent/tool/types.h"
 #include "app/ui/file_index.h"
 
@@ -145,8 +146,8 @@ const std::string& FileWriteTool::prompt() const {
         "Only use this tool to create new files or for complete rewrites.\n"
         "- NEVER create documentation files (*.md) or README files unless explicitly requested by the User.\n"
         "- Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked.\n"
-        "- The file_path parameter must be an absolute path (e.g., /home/user/file.txt or C:\\Users\\user\\file.txt). "
-        "Relative paths will be rejected."
+        "- The file_path parameter should be an absolute path (e.g., /home/user/file.txt or C:\\Users\\user\\file.txt); "
+        "relative paths are resolved against the current working directory."
     };
     return p;
 }
@@ -158,7 +159,7 @@ nlohmann::json FileWriteTool::input_schema() const {
         {"properties", {
             {"file_path", {
                 {"type", "string"},
-                {"description", "The absolute path to the file to write (must be absolute, not relative)"}
+                {"description", "The absolute path to the file to write"}
             }},
             {"content", {
                 {"type", "string"},
@@ -186,20 +187,8 @@ ValidationResult FileWriteTool::validate_input(
     if (path_str.empty()) {
         return ValidationResult::err(Error::Code::InvalidInput, "file_path must not be empty");
     }
-    // issue #13: 强制校验绝对路径，与 prompt/schema 描述保持一致
-    // 弱模型在 prompt 要求绝对路径但代码容错相对路径时会反复纠结导致超时
-    // H-2: 错误信息示例平台相关，避免 Windows 上建议 POSIX 风格路径形成死循环
-    if (fs::path(path_str).is_relative()) {
-        return ValidationResult::err(Error::Code::InvalidInput,
-            "file_path must be an absolute path. Received relative path: '" + path_str +
-            "'. Please provide an absolute path like "
-#ifdef _WIN32
-            "'C:\\Users\\user\\hello.cpp'."
-#else
-            "'/home/user/hello.cpp'."
-#endif
-        );
-    }
+    // 相对路径在 call() 中由 expand_path() 基于 ctx.cwd 自动展开为绝对路径
+    // （对齐 Claude Code CLI expandPath() 行为，避免弱模型/用户输入相对路径被拒）
     // content 校验（允许空字符串，空文件合法）
     if (!input.contains("content") || !input["content"].is_string()) {
         return ValidationResult::err(Error::Code::MissingArgument, "Missing required field: content");
@@ -288,9 +277,9 @@ ResultV2<ToolResult> FileWriteTool::call(
                                          std::format("Input parse failed: {}", e.what()));
     }
 
-    // 2. 路径解析：validate_input 已校验绝对路径，直接规范化
-    // issue #13: 移除相对路径容错，与 prompt/schema 保持一致
-    fs::path file_path(write_input.file_path);
+    // 2. 路径解析：用 expand_path 展开 ~ 与相对路径（基于 ctx.cwd），再 weakly_canonical 规范化
+    std::string expanded = expand_path(write_input.file_path, ctx.cwd);
+    fs::path file_path(expanded);
     std::error_code ec;
     file_path = fs::weakly_canonical(file_path, ec);
     if (ec) {

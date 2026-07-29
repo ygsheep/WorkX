@@ -19,6 +19,7 @@
 #include "agent/tool/FileEditTool/file_edit_tool.h"
 #include "agent/tool/FileWriteTool/diff.h"
 #include "agent/tool/FileReadState/file_read_state.h"
+#include "agent/tool/path_expand.h"
 #include "agent/tool/types.h"
 #include "agent/tool/path_matcher.h"
 #include "agent/tool/secret_scanner.h"
@@ -180,8 +181,8 @@ const std::string& FileEditTool::prompt() const {
         "To make it unique, include more surrounding context in old_string.\n"
         "- Use replace_all to replace all occurrences of old_string with new_string. "
         "This is useful for renaming variables or making sweeping changes across a file.\n"
-        "- The file_path parameter must be an absolute path (e.g., /home/user/file.txt or C:\\Users\\user\\file.txt). "
-        "Relative paths will be rejected."
+        "- The file_path parameter should be an absolute path (e.g., /home/user/file.txt or C:\\Users\\user\\file.txt); "
+        "relative paths are resolved against the current working directory."
     };
     return p;
 }
@@ -240,22 +241,12 @@ ValidationResult FileEditTool::validate_input(
     if (file_path_str.empty()) {
         return ValidationResult::err(Error::Code::InvalidInput, "file_path must not be empty");
     }
-    // issue #13: 强制校验绝对路径，与 prompt/schema 描述保持一致
-    // H-2: 错误信息示例平台相关，避免 Windows 上建议 POSIX 风格路径形成死循环
-    if (fs::path(file_path_str).is_relative()) {
-        return ValidationResult::err(Error::Code::InvalidInput,
-            "file_path must be an absolute path. Received relative path: '" + file_path_str +
-            "'. Please provide an absolute path like "
-#ifdef _WIN32
-            "'C:\\Users\\user\\file.txt'."
-#else
-            "'/home/user/file.txt'."
-#endif
-        );
-    }
+    // 相对路径由 expand_path() 基于 ctx.cwd 自动展开为绝对路径
+    // （对齐 Claude Code CLI expandPath() 行为，避免弱模型/用户输入相对路径被拒）
 
     // 路径解析（提前做，用于后续 deny / 存在性检查）
-    fs::path file_path(file_path_str);
+    std::string expanded = expand_path(file_path_str, ctx.cwd);
+    fs::path file_path(expanded);
     std::error_code ec;
     auto canonical = fs::weakly_canonical(file_path, ec);
     if (ec) {
@@ -466,9 +457,9 @@ ResultV2<ToolResult> FileEditTool::call(
                                          std::format("Input parse failed: {}", e.what()));
     }
 
-    // 2. 路径解析：validate_input 已校验绝对路径，直接规范化
-    // issue #13: 移除相对路径容错，与 prompt/schema 保持一致
-    fs::path file_path(edit_input.file_path);
+    // 2. 路径解析：用 expand_path 展开 ~ 与相对路径（基于 ctx.cwd），再 weakly_canonical 规范化
+    std::string expanded = expand_path(edit_input.file_path, ctx.cwd);
+    fs::path file_path(expanded);
     std::error_code ec;
     file_path = fs::weakly_canonical(file_path, ec);
     if (ec) {
