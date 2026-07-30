@@ -56,6 +56,76 @@ add_executable(workx app/main.cpp)
 target_link_libraries(workx PRIVATE libworkx)
 
 # ============================================================
+# 应用图标：从 src/icon.png 生成各平台格式
+#   Windows: src/icon.ico  → 通过 .rc 资源文件嵌入可执行文件
+#   macOS:   src/icon.icns → 作为 MACOSX_BUNDLE 资源
+#   Linux:   src/icon.png  → 拷贝到输出目录（供 .desktop 文件引用）
+# 转换脚本：scripts/convert_icon.py（缺失 Pillow 时自动安装）
+# ============================================================
+set(WORKX_ICON_PNG "${CMAKE_CURRENT_SOURCE_DIR}/icon.png")
+set(WORKX_ICON_ICO "${CMAKE_CURRENT_SOURCE_DIR}/icon.ico")
+set(WORKX_ICON_ICNS "${CMAKE_CURRENT_SOURCE_DIR}/icon.icns")
+set(WORKX_CONVERT_ICON_SCRIPT "${CMAKE_SOURCE_DIR}/scripts/convert_icon.py")
+
+# 配置阶段调用脚本生成 ico/icns（增量构建，已是最新则跳过）
+# 脚本内部自动 pip install Pillow，无需手动预装
+find_program(PYTHON_EXECUTABLE python python3)
+if(PYTHON_EXECUTABLE AND EXISTS "${WORKX_ICON_PNG}")
+    execute_process(
+        COMMAND "${PYTHON_EXECUTABLE}" "${WORKX_CONVERT_ICON_SCRIPT}"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        RESULT_VARIABLE _icon_result
+        OUTPUT_VARIABLE _icon_output
+        ERROR_VARIABLE _icon_error
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_STRIP_TRAILING_WHITESPACE
+    )
+    if(_icon_output)
+        message(STATUS "${_icon_output}")
+    endif()
+    if(_icon_result EQUAL 0)
+        message(STATUS "Icon: conversion script completed")
+    else()
+        message(WARNING "Icon: conversion script failed: ${_icon_error}")
+    endif()
+endif()
+
+# --- Windows：通过 RC 资源文件嵌入 ICO ---
+if(WIN32 AND EXISTS "${WORKX_ICON_ICO}")
+    set(WORKX_RC_FILE "${CMAKE_CURRENT_BINARY_DIR}/workx_icon.rc")
+    # 使用数字 ID（1），Windows 资源管理器自动识别 exe 中的最低 ID ICON 资源
+    file(WRITE "${WORKX_RC_FILE}"
+        "1 ICON \"${WORKX_ICON_ICO}\"\n"
+    )
+    target_sources(workx PRIVATE "${WORKX_RC_FILE}")
+    message(STATUS "Icon: Windows ICO embedded via RC file")
+endif()
+
+# --- macOS：设置 Bundle 图标 ---
+if(APPLE AND EXISTS "${WORKX_ICON_ICNS}")
+    set_target_properties(workx PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_ICON_FILE "icon.icns"
+    )
+    set_source_files_properties("${WORKX_ICON_ICNS}" PROPERTIES
+        MACOSX_PACKAGE_LOCATION "Resources"
+    )
+    target_sources(workx PRIVATE "${WORKX_ICON_ICNS}")
+    message(STATUS "Icon: macOS ICNS added to bundle Resources")
+endif()
+
+# --- Linux：拷贝 PNG 到输出目录 ---
+if(UNIX AND NOT APPLE AND EXISTS "${WORKX_ICON_PNG}")
+    add_custom_command(TARGET workx POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${WORKX_ICON_PNG}"
+            "$<TARGET_FILE_DIR:workx>/icon.png"
+        COMMENT "Copying application icon: icon.png"
+    )
+    message(STATUS "Icon: Linux PNG copied to output dir")
+endif()
+
+# ============================================================
 # vendor/ripgrep: 构建时拷贝到 workx 输出目录的 tools/ 子目录
 # 二进制由 scripts/fetch-ripgrep.py 下载到 vendor/ripgrep/<platform>/
 # 运行时由 ToolRegistry 从 <exe_dir>/tools/rg 查找
