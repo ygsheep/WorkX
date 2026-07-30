@@ -30,8 +30,10 @@ public:
                          const std::string& data,
                          StreamChunk& out) const override;
 
-    /// @brief Anthropic 无公开 list_models 端点，返回内置 Claude 模型列表
-    std::vector<ModelInfo> get_builtin_models() const override;
+    /// @brief Anthropic 无公开 list_models 端点，返回内置模型列表
+    /// @details 根据 base_url 区分：DeepSeek 的 Anthropic 兼容端点返回 DeepSeek 模型，
+    ///          原生 Anthropic 端点返回 Claude 模型列表
+    std::vector<ModelInfo> get_builtin_models(const std::string& base_url = "") const override;
 };
 
 } // namespace agent

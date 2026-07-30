@@ -262,10 +262,21 @@ bool AnthropicAdapter::parse_sse_event(const std::string& event_type,
     }
 }
 
-std::vector<ModelInfo> AnthropicAdapter::get_builtin_models() const {
-    // Anthropic 无公开 list_models 端点，返回内置 Claude 模型列表
-    // 注意：Anthropic 发布新模型时需手动更新此列表
+std::vector<ModelInfo> AnthropicAdapter::get_builtin_models(const std::string& base_url) const {
+    // Anthropic 无公开 list_models 端点，返回内置模型列表
+    // 根据 base_url 区分：DeepSeek 的 Anthropic 兼容端点返回 DeepSeek 模型
+    // 注意：Anthropic 发布新模型时需手动更新 Claude 列表
     // 最后更新：2026-07-21
+
+    // DeepSeek Anthropic 兼容端点
+    if (base_url.find("deepseek.com") != std::string::npos) {
+        return {
+            {.name = "deepseek-v4-pro",  .description = "DeepSeek V4 Pro (Anthropic 兼容端点)",  .context_length = 128000},
+            {.name = "deepseek-v4-flash", .description = "DeepSeek V4 Flash (Anthropic 兼容端点)", .context_length = 128000},
+        };
+    }
+
+    // 原生 Anthropic Claude 模型列表
     return {
         // 2025-11 旗舰编码模型
         {.name = "claude-opus-4-5-20251101",   .description = "Anthropic Claude Opus 4.5 (旗舰编码/Agent)",   .context_length = 200000},

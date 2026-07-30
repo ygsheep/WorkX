@@ -61,8 +61,10 @@ public:
     }
 
     /// @brief 内置模型列表（当 get_models_endpoint().supported=false 时使用）
-    /// @details Anthropic 等无 list models 端点的 provider 覆盖此方法返回内置列表
-    virtual std::vector<ModelInfo> get_builtin_models() const {
+    /// @details Anthropic 等无 list models 端点的 provider 覆盖此方法返回内置列表。
+    ///          base_url 用于区分同协议下不同 provider（如 DeepSeek 的 Anthropic 兼容端点）。
+    virtual std::vector<ModelInfo> get_builtin_models(const std::string& base_url = "") const {
+        (void)base_url;  // 默认实现忽略
         return {};  // 默认空
     }
 };

@@ -13,6 +13,17 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <filesystem>
+#include <ctime>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>  // GetModuleFileNameW（Debug 日志路径用）
+#else
+#include <unistd.h>   // readlink（Debug 日志路径用）
+#endif
 
 #include "app/config/app_config.h"
 #include "core/config/config_manager.h"
@@ -75,10 +86,10 @@ void register_config_defaults(ConfigManager& cfg) {
     });
     cfg.register_schema({
         .key = keys::PROVIDER,
-        .description = "Provider name (openai, anthropic, deepseek, groq, together, openai-compatible)",
+        .description = "Provider name (openai, anthropic, deepseek, deepseek-anthropic, groq, together, openai-compatible)",
         .default_value = std::string(""),
         .type = ConfigSchema::Type::Enum,
-        .enum_values = {"", "openai", "anthropic", "deepseek", "groq", "together", "openai-compatible"}
+        .enum_values = {"", "openai", "anthropic", "deepseek", "deepseek-anthropic", "groq", "together", "openai-compatible"}
     });
     cfg.register_schema({
         .key = keys::TIMEOUT_MS,
@@ -232,7 +243,47 @@ std::filesystem::path default_config_path() {
 }
 
 std::filesystem::path default_log_path() {
-    return get_config_dir() / "logs" / "workx.log";
+    // 文件名附加程序启动时间后缀：workx_YYYYMMDD_HHMMSS.log
+    // 便于区分多次启动产生的日志，避免覆盖历史日志
+    auto now = std::chrono::system_clock::now();
+    auto t = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+#ifdef _WIN32
+    localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
+    char time_suffix[32];
+    std::strftime(time_suffix, sizeof(time_suffix), "%Y%m%d_%H%M%S", &tm);
+    std::string log_filename = std::string("workx_") + time_suffix + ".log";
+
+#ifndef NDEBUG
+    // Debug 构建：日志写入 exe 同目录的 logs/，便于开发调试
+    // 通过 GetModuleFileNameW / readlink(/proc/self/exe) 获取 exe 路径
+    std::filesystem::path exe_path;
+#ifdef _WIN32
+    wchar_t buf[MAX_PATH];
+    DWORD len = GetModuleFileNameW(nullptr, buf, MAX_PATH);
+    if (len > 0 && len < MAX_PATH) {
+        exe_path = std::filesystem::path(buf);
+    }
+#else
+    char buf[4096];
+    ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (len > 0) {
+        buf[len] = '\0';
+        exe_path = std::filesystem::path(buf);
+    }
+#endif
+    if (!exe_path.empty()) {
+        return exe_path.parent_path() / "logs" / log_filename;
+    }
+    // 回退：当前工作目录
+    return std::filesystem::current_path() / "logs" / log_filename;
+#else
+    // Release 构建：日志写入用户配置目录（AppData / XDG_CONFIG_HOME）
+    return get_config_dir() / "logs" / log_filename;
+#endif
 }
 
 } // namespace agent

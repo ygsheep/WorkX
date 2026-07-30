@@ -41,6 +41,15 @@ static const ProviderPreset s_presets[] = {
         .default_context_length = 1000000  // DeepSeek V4 系列 1M
     },
     {
+        .name          = "deepseek-anthropic",
+        .display_name  = "DeepSeek (Anthropic 兼容)",
+        .type          = ProviderType::Anthropic,
+        .default_url   = "https://api.deepseek.com/anthropic",
+        .default_model = "deepseek-v4-flash",
+        .api_path      = "/v1/messages",
+        .default_context_length = 128000  // DeepSeek Anthropic 兼容端点
+    },
+    {
         .name          = "groq",
         .display_name  = "Groq",
         .type          = ProviderType::OpenAI,

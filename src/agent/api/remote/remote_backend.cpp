@@ -237,7 +237,7 @@ ResultV2<std::vector<ModelInfo>> RemoteBackend::list_models() {
     // Anthropic 无公开 list models 端点，返回内置模型列表
     auto endpoint = m_adapter->get_models_endpoint();
     if (!endpoint.supported) {
-        auto builtin = m_adapter->get_builtin_models();
+        auto builtin = m_adapter->get_builtin_models(m_config.base_url);
         if (!builtin.empty()) {
             return ResultV2<std::vector<ModelInfo>>::ok(std::move(builtin));
         }
