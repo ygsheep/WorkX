@@ -68,11 +68,11 @@ set(WORKX_ICON_ICNS "${CMAKE_CURRENT_SOURCE_DIR}/icon.icns")
 set(WORKX_CONVERT_ICON_SCRIPT "${CMAKE_SOURCE_DIR}/scripts/convert_icon.py")
 
 # 配置阶段调用脚本生成 ico/icns（增量构建，已是最新则跳过）
-# 脚本内部自动 pip install Pillow，无需手动预装
-find_program(PYTHON_EXECUTABLE python python3)
-if(PYTHON_EXECUTABLE AND EXISTS "${WORKX_ICON_PNG}")
+# 注意：脚本不自动安装 Pillow，缺失时仅提示，需开发者手动 pip install
+find_program(WORKX_PYTHON_EXECUTABLE python python3)
+if(WORKX_PYTHON_EXECUTABLE AND EXISTS "${WORKX_ICON_PNG}")
     execute_process(
-        COMMAND "${PYTHON_EXECUTABLE}" "${WORKX_CONVERT_ICON_SCRIPT}"
+        COMMAND "${WORKX_PYTHON_EXECUTABLE}" "${WORKX_CONVERT_ICON_SCRIPT}"
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
         RESULT_VARIABLE _icon_result
         OUTPUT_VARIABLE _icon_output
@@ -88,6 +88,8 @@ if(PYTHON_EXECUTABLE AND EXISTS "${WORKX_ICON_PNG}")
     else()
         message(WARNING "Icon: conversion script failed: ${_icon_error}")
     endif()
+elseif(NOT WORKX_PYTHON_EXECUTABLE)
+    message(WARNING "Icon: Python not found, skip icon conversion")
 endif()
 
 # --- Windows：通过 RC 资源文件嵌入 ICO ---
@@ -102,16 +104,20 @@ if(WIN32 AND EXISTS "${WORKX_ICON_ICO}")
 endif()
 
 # --- macOS：设置 Bundle 图标 ---
-if(APPLE AND EXISTS "${WORKX_ICON_ICNS}")
-    set_target_properties(workx PROPERTIES
-        MACOSX_BUNDLE TRUE
-        MACOSX_BUNDLE_ICON_FILE "icon.icns"
-    )
-    set_source_files_properties("${WORKX_ICON_ICNS}" PROPERTIES
-        MACOSX_PACKAGE_LOCATION "Resources"
-    )
-    target_sources(workx PRIVATE "${WORKX_ICON_ICNS}")
-    message(STATUS "Icon: macOS ICNS added to bundle Resources")
+if(APPLE)
+    if(EXISTS "${WORKX_ICON_ICNS}")
+        set_target_properties(workx PROPERTIES
+            MACOSX_BUNDLE TRUE
+            MACOSX_BUNDLE_ICON_FILE "icon.icns"
+        )
+        set_source_files_properties("${WORKX_ICON_ICNS}" PROPERTIES
+            MACOSX_PACKAGE_LOCATION "Resources"
+        )
+        target_sources(workx PRIVATE "${WORKX_ICON_ICNS}")
+        message(STATUS "Icon: macOS ICNS added to bundle Resources")
+    else()
+        message(WARNING "macOS build without icon: ${WORKX_ICON_ICNS} missing")
+    endif()
 endif()
 
 # --- Linux：拷贝 PNG 到输出目录 ---

@@ -9,37 +9,31 @@
     python scripts/convert_icon.py [--force]
 
 依赖:
-    Pillow —— 缺失时自动 pip install（用户环境隔离时可能需要 --user）
+    Pillow —— 缺失时不自动安装，仅提示开发者手动安装：
+                  pip install Pillow
 
 退出码:
-    0  成功（或已是最新且未指定 --force）
-    1  失败
+    0  至少一个产物生成成功（或已是最新且未指定 --force）
+    1  Pillow 缺失 / 源文件缺失 / 全部产物生成失败
 """
 
 import argparse
-import subprocess
 import sys
-import os
 from pathlib import Path
 
 
 def ensure_pillow():
-    """确保 Pillow 已安装，缺失则自动安装（使用国内镜像加速）。"""
+    """检测 Pillow 是否可用。缺失则提示手动安装，不自动安装。"""
     try:
         from PIL import Image  # noqa: F401
         return True
     except ImportError:
-        print("[convert_icon] Pillow not found, installing...", file=sys.stderr)
-        try:
-            subprocess.check_call(
-                [sys.executable, "-m", "pip", "install", "Pillow",
-                 "--index-url", "https://pypi.tuna.tsinghua.edu.cn/simple"]
-            )
-            return True
-        except subprocess.CalledProcessError as e:
-            print(f"[convert_icon] Failed to install Pillow: {e}",
-                  file=sys.stderr)
-            return False
+        print(
+            "[convert_icon] Pillow not found. "
+            "Install manually: pip install Pillow",
+            file=sys.stderr,
+        )
+        return False
 
 
 def convert_to_ico(src_png: Path, dst_ico: Path):
@@ -56,10 +50,14 @@ def convert_to_icns(src_png: Path, dst_icns: Path):
     """PNG -> ICNS（macOS，Apple Icon Image 格式）
 
     Pillow >= 10.1 支持 ICNS 写入，要求输入尺寸 >= 512x512。
-    src/icon.png 是 1280x1280，满足要求。
+    建议源图 >= 1024x1024 以覆盖 Retina 显示需求。
     """
     from PIL import Image
     img = Image.open(src_png).convert("RGBA")
+    if max(img.size) < 512:
+        raise RuntimeError(
+            f"ICNS requires source >= 512x512, got {img.size}"
+        )
     # Pillow 会自动处理多尺寸嵌入
     img.save(dst_icns, format="ICNS")
     print(f"[convert_icon] Generated {dst_icns}")
@@ -105,20 +103,26 @@ def main():
             print("[convert_icon] All outputs up-to-date, skip")
             return 0
 
+    ico_ok = False
+    icns_ok = False
+
     try:
         convert_to_ico(src_png, dst_ico)
+        ico_ok = True
     except Exception as e:
         print(f"[convert_icon] WARNING: ICO generation failed: {e}",
               file=sys.stderr)
 
     try:
         convert_to_icns(src_png, dst_icns)
+        icns_ok = True
     except Exception as e:
         # ICNS 在非 macOS 环境可能 Pillow 不支持写入，仅警告
         print(f"[convert_icon] WARNING: ICNS generation failed: {e}",
               file=sys.stderr)
 
-    return 0
+    # 至少一个产物生成成功才算通过；全失败返回 1
+    return 0 if (ico_ok or icns_ok) else 1
 
 
 if __name__ == "__main__":
