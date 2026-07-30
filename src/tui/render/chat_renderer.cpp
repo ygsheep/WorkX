@@ -303,6 +303,15 @@ std::string render_code_tool_result(
         return std::string{};
     }
 
+    // 输出状态行: "⎿ The file xxx has been read successfully."
+    // 与 Write/Edit 的状态行保持一致的视觉格式
+    {
+        std::string display_path = file_path.empty() ? std::string{"file"} : file_path;
+        os << indent << "  " << arrow << " " << dim
+           << "The file " << display_path << " has been read successfully."
+           << reset << "\n";
+    }
+
     // 按行 split
     std::vector<std::string> lines;
     {
