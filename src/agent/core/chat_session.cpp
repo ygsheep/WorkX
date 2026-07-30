@@ -19,6 +19,7 @@
 #include <chrono>
 #include <thread>
 #include <fstream>
+#include <filesystem>
 
 namespace agent {
 
@@ -104,6 +105,7 @@ ChatSession::ChatSession(std::unique_ptr<ICompletionProvider> provider,
                          std::string session_id)
     : m_provider(std::move(provider))
     , m_session_id(std::move(session_id))
+    , m_cwd(std::filesystem::current_path().string())
     , m_task_manager(task_manager)
     , m_event_bus(event_bus)
     , m_config_manager(config_manager)
@@ -238,8 +240,9 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
             // ---- 创建 ReActLoop ----
             // D-5：注入 IConfigManager，工具通过 ToolContext.config_manager() 访问
             // BashTool DI：注入 TaskManager，工具通过 ToolContext.task_manager() 启动后台任务
+            // cwd：注入会话启动时捕获的工作目录，避免运行中 cwd 漂移导致工具在错误目录执行
             ReActLoop loop(m_provider.get(), m_tool_registry, ReActLoop::Config{},
-                           &m_config_manager.get(), &m_task_manager.get());
+                           &m_config_manager.get(), &m_task_manager.get(), m_cwd);
 
             // 3.2：使用 IReActObserver 接口替代 lambda 回调
             // ReActEventPublisher 内部完成 ReActStep → IEventBus 事件转换

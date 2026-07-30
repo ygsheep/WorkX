@@ -30,13 +30,15 @@ ReActLoop::ReActLoop(ICompletionProvider* provider,
                      std::shared_ptr<tool::ToolRegistry> registry,
                      Config config,
                      IConfigManager* config_manager,
-                     ITaskManager* task_manager)
+                     ITaskManager* task_manager,
+                     std::string cwd)
     : m_provider(provider)
     , m_registry(std::move(registry))
     , m_config(config)
     , m_compressor(m_config.compressor_cfg)
     , m_config_manager(config_manager)
     , m_task_manager(task_manager)
+    , m_cwd(std::move(cwd))
 {
     // issue #15-F: 构造函数不变量从 assert 改为 throw，避免 Debug 构建直接 abort
     // 构造失败抛 std::invalid_argument 是 C++ 标准模式，调用方可用 try/catch 处理
@@ -46,6 +48,10 @@ ReActLoop::ReActLoop(ICompletionProvider* provider,
     if (m_config_manager == nullptr) {
         throw std::invalid_argument(
             "ReActLoop: config_manager must not be null (H-5: explicit DI required)");
+    }
+    // cwd 为空时回退到进程当前目录（会话启动时捕获更稳定，避免运行中 cwd 漂移）
+    if (m_cwd.empty()) {
+        m_cwd = std::filesystem::current_path().string();
     }
     if (m_registry) {
         m_executor = std::make_unique<tool::ToolExecutor>(m_registry);
@@ -521,7 +527,7 @@ ReActResult ReActLoop::run(
                  iteration, thought.tool_uses.size());
 
         tool::ToolContext ctx;
-        ctx.cwd = std::filesystem::current_path().string();
+        ctx.cwd = m_cwd;  // 使用会话启动时捕获的 cwd，避免运行中 cwd 漂移
         ctx.session_id = "default";
         // 2.3 修复：将外部取消信号绑定到 ToolContext，工具可即时感知中断
         ctx.cancel_flag = &should_cancel;
@@ -625,8 +631,12 @@ ReActResult ReActLoop::run(
     result.total_duration_ms = std::chrono::duration<double, std::milli>(
         loop_end - loop_start).count();
 
-    // 超过最大迭代数
-    if (!result.was_interrupted && !result.was_error && result.final_answer.empty()) {
+    // 超过最大迭代数：仅当真正跑满 max_iterations 才报错
+    // 注意：LLM 返回空 content + 无 tool_use 时也会 break 退出，此时 final_answer 为空，
+    // 但属于正常退出（LLM 主动结束），不应误判为 max iterations
+    if (!result.was_interrupted && !result.was_error
+        && result.final_answer.empty()
+        && result.total_iterations >= m_config.max_iterations) {
         result.was_error = true;
         result.error_message = std::format("Agent loop reached max iterations ({})",
                                            m_config.max_iterations);

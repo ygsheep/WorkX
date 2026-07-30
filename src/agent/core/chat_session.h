@@ -184,6 +184,7 @@ private:
     std::vector<ChatMessage> m_messages;
     std::string m_system_prompt;
     std::string m_session_id;           ///< 会话标识（构造后不变，无需加锁）
+    std::string m_cwd;                  ///< 会话启动时的工作目录（构造时捕获，注入到 ReActLoop）
     std::atomic<bool> m_generating{false};
 
     // D-1：任务管理器引用（非拥有，构造注入；ChatSession 不可移动，引用安全）

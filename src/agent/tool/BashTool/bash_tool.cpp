@@ -295,8 +295,9 @@ ResultV2<ToolResult> BashTool::execute_sync(
         : process::sandbox::SandboxConfig::restrictive(cwd);
 
     // 包装命令：通过 shell 执行，使管道/重定向/复合命令可用
+    const auto& sh = shell();
     auto wrapped = process::sandbox::SandboxAdapter::wrap_command(
-        shell().cmd, {shell().flag, command}, sb_config);
+        sh.cmd, {sh.flag, command}, sb_config);
 
     // 上报降级或包装情况
     if (wrapped.was_wrapped) {

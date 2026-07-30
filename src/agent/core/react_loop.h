@@ -184,19 +184,23 @@ public:
     /// @param config 循环配置
     /// @param config_manager 配置管理器（H-5：必须非空，注入到 ToolContext）
     /// @param task_manager 任务管理器（可选，用于 BashTool 等后台任务工具）
+    /// @param cwd 工作目录（注入到 ToolContext.cwd，空则用进程当前目录）
     ReActLoop(ICompletionProvider* provider,
               std::shared_ptr<tool::ToolRegistry> registry,
               Config config,
               IConfigManager* config_manager,
-              ITaskManager* task_manager = nullptr);
+              ITaskManager* task_manager = nullptr,
+              std::string cwd = "");
 
     /// @brief 构造（使用默认配置）
     /// @param config_manager 配置管理器（H-5：必须非空，注入到 ToolContext）
+    /// @param cwd 工作目录（注入到 ToolContext.cwd，空则用进程当前目录）
     ReActLoop(ICompletionProvider* provider,
               std::shared_ptr<tool::ToolRegistry> registry,
               IConfigManager* config_manager,
-              ITaskManager* task_manager = nullptr)
-        : ReActLoop(provider, std::move(registry), Config{}, config_manager, task_manager) {}
+              ITaskManager* task_manager = nullptr,
+              std::string cwd = "")
+        : ReActLoop(provider, std::move(registry), Config{}, config_manager, task_manager, std::move(cwd)) {}
 
     ~ReActLoop() = default;
 
@@ -314,6 +318,7 @@ private:
     ContextCompressor m_compressor;               ///< 3.3 上下文压缩器
     IConfigManager* m_config_manager = nullptr;   ///< H-5：配置管理器（非拥有，注入到 ToolContext，必须非空）
     ITaskManager* m_task_manager = nullptr;       ///< BashTool 后台任务 DI（可选，注入到 ToolContext）
+    std::string m_cwd;                            ///< 工作目录（会话启动时捕获，注入到 ToolContext.cwd）
 };
 
 } // namespace agent
