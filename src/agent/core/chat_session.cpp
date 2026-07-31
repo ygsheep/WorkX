@@ -737,6 +737,17 @@ nlohmann::json ChatSession::serialize_state() const {
         if (msg.role == ChatMessage::Role::Tool) {
             m["tool_call_id"] = msg.tool_call_id;
             m["tool_name"] = msg.tool_name;
+            if (msg.is_error) {
+                m["is_error"] = true;
+            }
+        }
+        // Task 9：序列化 assistant 消息的 tool_uses（保证 /save /load 后不丢失）
+        if (msg.role == ChatMessage::Role::Assistant && !msg.tool_uses.empty()) {
+            nlohmann::json uses = nlohmann::json::array();
+            for (const auto& tu : msg.tool_uses) {
+                uses.push_back({{"id", tu.id}, {"name", tu.name}, {"input", tu.input}});
+            }
+            m["tool_uses"] = std::move(uses);
         }
         messages.push_back(m);
     }
@@ -790,6 +801,19 @@ ChatSession::deserialize_state(const nlohmann::json& j) {
                     }
                     if (m.contains("tool_name")) {
                         msg.tool_name = m["tool_name"].get<std::string>();
+                    }
+                    if (m.contains("is_error")) {
+                        msg.is_error = m["is_error"].get<bool>();
+                    }
+                }
+                // Task 9：反序列化 assistant 消息的 tool_uses
+                if (msg.role == ChatMessage::Role::Assistant && m.contains("tool_uses")) {
+                    for (const auto& tu : m["tool_uses"]) {
+                        ToolUse use;
+                        use.id = tu.value("id", "");
+                        use.name = tu.value("name", "");
+                        use.input = tu.value("input", nlohmann::json::object());
+                        msg.tool_uses.push_back(std::move(use));
                     }
                 }
                 new_messages.push_back(std::move(msg));
