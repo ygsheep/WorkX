@@ -23,6 +23,7 @@ set(UNIT_TEST_SOURCES
     agent/compact/test_tool_result_maintainer.cpp
     agent/compact/test_cache_aware_compactor.cpp
     agent/compact/test_sha256.cpp
+    agent/session/test_session_store.cpp
     agent/input/test_input_processor.cpp
     agent/tool/test_file_edit_tool.cpp
     agent/tool/test_tool_context.cpp
@@ -39,6 +40,8 @@ set(UNIT_TEST_SOURCES
     core/test_tool_kind.cpp
     core/utils/test_error.cpp
     core/utils/test_result_v2.cpp
+    core/utils/test_uuid.cpp
+    core/utils/test_path_encoder.cpp
     tui/core/test_display_buffer.cpp
     tui/core/test_terminal_overlay.cpp
     tui/core/test_tui_state.cpp

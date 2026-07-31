@@ -10,4 +10,6 @@ target_sources(libworkx PRIVATE
     task/task_manager.cpp
     tool_kind.cpp
     utils/error.cpp
+    utils/uuid.cpp
+    utils/path_encoder.cpp
 )
