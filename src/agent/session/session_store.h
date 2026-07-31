@@ -9,6 +9,7 @@
  *          - user：用户消息
  *          - assistant：助手消息（含 reasoning_content / tool_uses）
  *          - tool：工具结果消息
+ *          - title：会话标题（append-only，/rename 追加新事件覆盖旧标题）
  *          - session_end：会话结束标记
  *
  *          存储路径：~/.workx/projects/<编码路径>/<sessionId>.jsonl
@@ -38,8 +39,9 @@ struct SessionMeta {
     std::string cwd;               ///< 会话工作目录
     std::string model;             ///< 模型名
     std::string git_branch;        ///< git 分支
+    std::string title;             ///< 会话标题（最后一条 title 事件，无则 fallback）
     std::filesystem::file_time_type last_modified;  ///< 最后修改时间（用于排序）
-    int message_count = 0;         ///< 消息数（不含 session_start/end）
+    int message_count = 0;         ///< 消息数（不含 session_start/end/title）
 };
 
 /// @brief JSONL 会话存储（每条消息实时追加）
@@ -93,6 +95,10 @@ public:
 
     /// @brief 追加 session_end 事件
     bool append_session_end();
+
+    /// @brief 追加 title 事件（/rename 或首条消息自动生成标题时调用）
+    /// @details append-only：新 title 事件覆盖旧标题，读取时取最后一条
+    bool append_title(const std::string& title);
 
     // ============================================================
     // 静态工具方法

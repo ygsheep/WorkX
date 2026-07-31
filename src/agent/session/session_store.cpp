@@ -152,6 +152,15 @@ bool SessionStore::append_session_end() {
     return append_line(j);
 }
 
+bool SessionStore::append_title(const std::string& title) {
+    nlohmann::json j;
+    j["type"] = "title";
+    j["sessionId"] = m_session_id;
+    j["timestamp"] = now_iso();
+    j["title"] = title;
+    return append_line(j);
+}
+
 // ============================================================
 // 静态方法
 // ============================================================
@@ -242,6 +251,8 @@ std::optional<SessionMeta> SessionStore::load_meta(const std::string& file_path)
 
     SessionMeta meta;
     int msg_count = 0;
+    std::string first_user_content;  // fallback 标题来源
+    bool has_title = false;
 
     for (const auto& j : events) {
         std::string type = j.value("type", "");
@@ -251,11 +262,43 @@ std::optional<SessionMeta> SessionStore::load_meta(const std::string& file_path)
             meta.model = j.value("model", "");
             meta.git_branch = j.value("gitBranch", "");
             meta.created_at = j.value("createdAt", "");
+        } else if (type == "title") {
+            // 取最后一条 title 事件作为当前标题
+            meta.title = j.value("title", "");
+            has_title = true;
         } else if (type == "user" || type == "assistant" || type == "tool") {
             ++msg_count;
+            // 记录首条 user 消息内容用于 fallback
+            if (type == "user" && first_user_content.empty()) {
+                first_user_content = j.value("content", "");
+            }
         }
     }
     meta.message_count = msg_count;
+
+    // 标题 fallback：无 title 事件时取首条 user 消息前 20 字
+    if (!has_title) {
+        if (!first_user_content.empty()) {
+            // 截取前 20 字（按 UTF-8 字符数，避免截断多字节字符）
+            size_t char_count = 0;
+            size_t byte_pos = 0;
+            while (char_count < 20 && byte_pos < first_user_content.size()) {
+                unsigned char c = static_cast<unsigned char>(first_user_content[byte_pos]);
+                if (c < 0x80) byte_pos += 1;
+                else if ((c & 0xE0) == 0xC0) byte_pos += 2;
+                else if ((c & 0xF0) == 0xE0) byte_pos += 3;
+                else if ((c & 0xF8) == 0xF0) byte_pos += 4;
+                else byte_pos += 1;  // 无效 UTF-8，单字节前进
+                ++char_count;
+            }
+            meta.title = first_user_content.substr(0, byte_pos);
+            if (byte_pos < first_user_content.size()) {
+                meta.title += "...";
+            }
+        } else {
+            meta.title = "未命名会话";
+        }
+    }
 
     if (meta.session_id.empty()) {
         // 没有 session_start 事件，用文件名作为 session_id
