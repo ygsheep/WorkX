@@ -9,7 +9,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
+#include <filesystem>
+#include <fstream>
 #include "agent/core/chat_session.h"
+#include "agent/session/session_store.h"  // 项目会话恢复
 #include "core/events/event_bus.h"
 #include "core/task/task_manager.h"
 #include "agent/message/types.h"
@@ -325,3 +328,170 @@ TEST_CASE("compute_retry handles attempt >= 63 without UB", "[session][h7][retry
 // 是 ill-formed，编译报错）。这是预期的——H-8 的"测试"主要体现在
 // SessionResult.backend_admin 字段的填充与使用上（见 test_factory.cpp）。
 // 此处仅保留文档性注释，无 runtime 测试用例。
+
+// ============================================================
+// 项目会话恢复：serialize_state/deserialize_state tool_uses round-trip
+// ============================================================
+
+TEST_CASE("ChatSession serialize/deserialize tool_uses round-trip", "[session][restore][serialize]") {
+    // 构造含 tool_uses 的 assistant 消息
+    nlohmann::json input;
+    input["system_prompt"] = "test";
+    nlohmann::json uses = nlohmann::json::array({
+        {{"id", "toolu_001"}, {"name", "Read"}, {"input", {{"path", "/tmp/test"}}}},
+        {{"id", "toolu_002"}, {"name", "Write"}, {"input", {{"path", "/tmp/out"}, {"content", "hi"}}}}
+    });
+    input["messages"] = nlohmann::json::array({
+        {{"role", "user"}, {"content", "read and write"}},
+        {{"role", "assistant"}, {"content", "calling tools"}, {"reasoning_content", "thinking"}, {"tool_uses", uses}},
+        {{"role", "tool"}, {"content", "ok"}, {"tool_call_id", "toolu_001"}, {"tool_name", "Read"}, {"is_error", true}}
+    });
+
+    // 反序列化
+    auto parse_result = ChatSession::deserialize_state(input);
+    REQUIRE(parse_result.isOk());
+    auto [messages, system_prompt] = std::move(parse_result).unwrap();
+
+    REQUIRE(messages.size() == 3);
+    REQUIRE(messages[1].role == ChatMessage::Role::Assistant);
+    REQUIRE(messages[1].tool_uses.size() == 2);
+    REQUIRE(messages[1].tool_uses[0].id == "toolu_001");
+    REQUIRE(messages[1].tool_uses[0].name == "Read");
+    REQUIRE(messages[1].tool_uses[0].input["path"] == "/tmp/test");
+    REQUIRE(messages[1].tool_uses[1].name == "Write");
+
+    REQUIRE(messages[2].role == ChatMessage::Role::Tool);
+    REQUIRE(messages[2].is_error == true);
+
+    // 再序列化验证 round-trip
+    MockConfigManager cfg;
+    auto session = make_test_session(cfg);
+    session->commit_state(std::vector<ChatMessage>(messages), system_prompt);
+    auto j = session->serialize_state();
+
+    REQUIRE(j["messages"][1]["tool_uses"].size() == 2);
+    REQUIRE(j["messages"][1]["tool_uses"][0]["id"] == "toolu_001");
+    REQUIRE(j["messages"][1]["tool_uses"][1]["name"] == "Write");
+    REQUIRE(j["messages"][2]["is_error"] == true);
+}
+
+// ============================================================
+// 项目会话恢复：ChatSession + SessionStore 集成
+// ============================================================
+
+TEST_CASE("ChatSession restore_from_file loads messages", "[session][restore]") {
+    MockConfigManager cfg;
+    namespace fs = std::filesystem;
+    auto tmp = fs::temp_directory_path() / "workx_test_restore_chat.jsonl";
+    fs::remove(tmp);
+
+    // 写入测试数据
+    {
+        std::ofstream f(tmp.string());
+        f << R"({"type":"session_start","sessionId":"s1","cwd":"/tmp","model":"m","gitBranch":"main"})" << "\n";
+        f << R"({"type":"user","uuid":"u1","parentUuid":"","timestamp":"t1","content":"hello"})" << "\n";
+        f << R"({"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"t2","content":"hi","reasoningContent":"thinking","toolUses":[]})" << "\n";
+        f << R"({"type":"tool","uuid":"t1","parentUuid":"a1","timestamp":"t3","toolCallId":"tc1","toolName":"Read","content":"file","isError":false})" << "\n";
+    }
+
+    auto session = make_test_session(cfg);
+    REQUIRE(session->restore_from_file(tmp.string()));
+
+    auto messages = session->get_messages();
+    REQUIRE(messages.size() == 3);
+    REQUIRE(messages[0].role == ChatMessage::Role::User);
+    REQUIRE(messages[0].content == "hello");
+    REQUIRE(messages[1].role == ChatMessage::Role::Assistant);
+    REQUIRE(messages[1].content == "hi");
+    REQUIRE(messages[1].reasoning_content == "thinking");
+    REQUIRE(messages[2].role == ChatMessage::Role::Tool);
+    REQUIRE(messages[2].tool_call_id == "tc1");
+    REQUIRE(messages[2].tool_name == "Read");
+
+    fs::remove(tmp);
+}
+
+TEST_CASE("ChatSession restore_from_file empty file returns false", "[session][restore]") {
+    MockConfigManager cfg;
+    namespace fs = std::filesystem;
+    auto tmp = fs::temp_directory_path() / "workx_test_restore_empty.jsonl";
+    fs::remove(tmp);
+
+    // 创建空文件
+    std::ofstream(tmp.string()) << "";
+
+    auto session = make_test_session(cfg);
+    REQUIRE_FALSE(session->restore_from_file(tmp.string()));
+
+    fs::remove(tmp);
+}
+
+TEST_CASE("ChatSession set_session_store and session_store accessor", "[session][restore]") {
+    MockConfigManager cfg;
+    namespace fs = std::filesystem;
+    auto tmp = fs::temp_directory_path() / "workx_test_set_store.jsonl";
+    fs::remove(tmp);
+
+    auto session = make_test_session(cfg);
+
+    // 初始状态 session_store() 为 nullptr
+    REQUIRE(session->session_store() == nullptr);
+
+    // 创建并注入 SessionStore
+    auto store = std::make_shared<agent::session::SessionStore>(tmp.string(), "test-id");
+    REQUIRE(store->open());
+    store->append_session_start("/cwd", "test-model", "main");
+    session->set_session_store(store);
+
+    // 验证 session_store() 返回注入的 store
+    REQUIRE(session->session_store() != nullptr);
+    REQUIRE(session->session_store() == store);
+
+    store->append_session_end();
+    store->close();
+
+    // 验证文件内容
+    auto events = agent::session::SessionStore::read_all(tmp.string());
+    REQUIRE(events.size() == 2);  // session_start + session_end
+    REQUIRE(events[0]["type"] == "session_start");
+    REQUIRE(events[0]["sessionId"] == "test-id");
+    REQUIRE(events[1]["type"] == "session_end");
+
+    fs::remove(tmp);
+}
+
+TEST_CASE("ChatSession full restore cycle: write then restore", "[session][restore][e2e]") {
+    // 端到端测试：通过 SessionStore 写入消息 → ChatSession 从文件恢复 → 验证消息一致
+    MockConfigManager cfg;
+    namespace fs = std::filesystem;
+    auto tmp = fs::temp_directory_path() / "workx_test_e2e_cycle.jsonl";
+    fs::remove(tmp);
+
+    // 写入测试数据（模拟一个完整的会话生命周期）
+    {
+        auto store = std::make_shared<agent::session::SessionStore>(tmp.string(), "e2e-id");
+        REQUIRE(store->open());
+        store->append_session_start("/project", "model-x", "develop");
+        store->append_user_message("u1", "", "question 1", "t1");
+        store->append_assistant_message("a1", "u1", "answer 1", "thinking", {}, "t2");
+        store->append_user_message("u2", "a1", "question 2", "t3");
+        store->append_session_end();
+        store->close();
+    }
+
+    // 从文件恢复
+    auto session = make_test_session(cfg);
+    REQUIRE(session->restore_from_file(tmp.string()));
+
+    auto restored = session->get_messages();
+    REQUIRE(restored.size() == 3);  // user + assistant + user（不含 session_start/end）
+    REQUIRE(restored[0].role == ChatMessage::Role::User);
+    REQUIRE(restored[0].content == "question 1");
+    REQUIRE(restored[1].role == ChatMessage::Role::Assistant);
+    REQUIRE(restored[1].content == "answer 1");
+    REQUIRE(restored[1].reasoning_content == "thinking");
+    REQUIRE(restored[2].role == ChatMessage::Role::User);
+    REQUIRE(restored[2].content == "question 2");
+
+    fs::remove(tmp);
+}

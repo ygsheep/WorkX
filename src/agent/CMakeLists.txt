@@ -26,6 +26,9 @@ target_sources(libworkx PRIVATE
     core/chat_session.cpp
     core/react_loop.cpp
 
+    # session
+    session/session_store.cpp
+
     # model
     model/provider_preset.cpp
     model/config.cpp

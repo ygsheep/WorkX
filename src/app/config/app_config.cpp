@@ -218,8 +218,8 @@ void load_from_config_file(IConfigManager& cfg, const std::filesystem::path& pat
 
 // F.5：统一配置目录解析，优先级链：
 //   1. $WORKX_CONFIG_DIR 环境变量（用户/管理员显式指定）
-//   2. $APPDATA (Windows) / $XDG_CONFIG_HOME (POSIX)
-//   3. $USERPROFILE (Windows) / $HOME (POSIX)
+//   2. $USERPROFILE (Windows) / $HOME (POSIX) → ~/.workx（对齐 cc 的 ~/.claude 风格）
+//   3. $APPDATA (Windows) / $XDG_CONFIG_HOME (POSIX)（受限环境回退）
 //   4. 当前工作目录（最后回退，避免从快捷方式启动时配置丢失）
 static std::filesystem::path get_config_dir() {
     // 1. 显式环境变量优先
@@ -227,18 +227,22 @@ static std::filesystem::path get_config_dir() {
         if (env[0] != '\0') return std::filesystem::path(env);
     }
 #ifdef _WIN32
-    if (const char* env = std::getenv("APPDATA")) {
-        if (env[0] != '\0') return std::filesystem::path(env) / "workx";
-    }
+    // 2. %USERPROFILE%\.workx（主选，对齐 cc 的 ~/.claude 风格）
     if (const char* env = std::getenv("USERPROFILE")) {
         if (env[0] != '\0') return std::filesystem::path(env) / ".workx";
     }
-#else
-    if (const char* env = std::getenv("XDG_CONFIG_HOME")) {
+    // 3. %APPDATA%\workx（USERPROFILE 缺失时的回退）
+    if (const char* env = std::getenv("APPDATA")) {
         if (env[0] != '\0') return std::filesystem::path(env) / "workx";
     }
+#else
+    // 2. $HOME/.workx（主选）
     if (const char* env = std::getenv("HOME")) {
-        if (env[0] != '\0') return std::filesystem::path(env) / ".config" / "workx";
+        if (env[0] != '\0') return std::filesystem::path(env) / ".workx";
+    }
+    // 3. $XDG_CONFIG_HOME/workx（HOME 缺失时的回退）
+    if (const char* env = std::getenv("XDG_CONFIG_HOME")) {
+        if (env[0] != '\0') return std::filesystem::path(env) / "workx";
     }
 #endif
     // 4. 最后回退：当前工作目录下的 .workx

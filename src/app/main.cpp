@@ -19,6 +19,7 @@
 #include <format>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include <liblogger/logger.h>
@@ -31,11 +32,13 @@
 #include "agent/message/types.h"
 #include "agent/model/provider_preset.h"
 #include "agent/model/context_resolver.h"
+#include "agent/session/session_store.h"  // 项目会话恢复：get_project_session_dir
 #include "agent/tool/registry.h"
 #include "app/command/builtin_commands.h"
 #include "app/config/app_config.h"
 #include "app/config/cli_args.h"
 #include "app/factory.h"
+#include "app/session_restore.h"  // 项目会话恢复
 #include "app/ui/model_selector.h"
 #include "app/ui/path_completer.h"
 #include "app/ui/file_index.h"
@@ -109,6 +112,17 @@ static int run(int argc, char* argv[]) {
         std::cerr << "[debug]   remote:    " << cfg.get_or<std::string>(keys::REMOTE_URL, "(not set)") << "\n";
         std::cerr << "[debug]   model:     " << cfg.get_or<std::string>(keys::MODEL_NAME, "(not set)") << "\n";
         std::cerr << "[debug]   simple_io: " << (cfg.get_or<bool>(keys::SIMPLE_IO, false) ? "true" : "false") << "\n";
+    }
+
+    // ---- 项目会话恢复：在 terminal 初始化前询问（避免 raw 模式冲突）----
+    // 检查历史会话，用户可选择恢复或开新会话
+    std::optional<std::string> restore_file;
+    {
+        namespace fs = std::filesystem;
+        fs::path config_dir = default_config_path().parent_path();
+        std::string cwd = fs::current_path().string();
+        fs::path project_dir = agent::session::get_project_session_dir(config_dir, cwd);
+        restore_file = prompt_restore_session(project_dir.string());
     }
 
     // ---- Terminal（D-2：委托工厂构建 config；H-4：显式注入三大依赖）----
@@ -195,6 +209,17 @@ static int run(int argc, char* argv[]) {
     // 不再依赖 ChatSession::backend() 暴露完整 IBackend*。
     // 生命周期：session 持有 backend，session 存活期间 admin 有效。
     auto backend_admin = session_result.backend_admin;
+    // 项目会话恢复：保存 SessionStore 供退出时写 session_end
+    auto session_store = std::move(session_result.session_store);
+
+    // 项目会话恢复：用户选择恢复时加载历史消息
+    if (session && restore_file) {
+        if (session->restore_from_file(*restore_file)) {
+            std::cerr << "[info] 已恢复历史会话\n";
+        } else {
+            std::cerr << "[warn] 恢复会话失败，启动新会话\n";
+        }
+    }
 
     if (session && verbose) {
         std::cerr << "[debug] Backend ready\n";
@@ -496,6 +521,13 @@ static int run(int argc, char* argv[]) {
     // issue #15-C: 显式 reset session，确保 ~ChatSession / ~backend 在 EventBus
     // 仍可用时析构，避免 clear() 后 on_complete 回调访问已失效订阅导致 abort
     // 注意：backend_admin 是裸指针，由 session 持有，session.reset() 后不可再使用
+
+    // 项目会话恢复：session 析构前写入 session_end 并关闭文件
+    if (session_store) {
+        session_store->append_session_end();
+        session_store->close();
+    }
+
     session.reset();
 
     // 清空 EventBus 订阅，防止后续异步事件触发已失效的回调

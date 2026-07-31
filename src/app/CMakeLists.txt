@@ -6,6 +6,7 @@ target_sources(libworkx PRIVATE
     config/app_config.cpp
     config/cli_args.cpp
     factory.cpp
+    session_restore.cpp
     ui/model_selector.cpp
     ui/path_completer.cpp
     ui/file_index.cpp
