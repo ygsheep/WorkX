@@ -12,6 +12,7 @@
 #include "agent/tool/tool_kind.h"
 #include "core/task/task_manager.h"
 #include "core/config/config_manager.h"
+#include "core/utils/uuid.h"  // 项目会话恢复：UUID 生成
 
 #include "agent/api/i_backend.h"
 #include "agent/api/i_stream_reader.h"
@@ -21,6 +22,7 @@
 #include <thread>
 #include <fstream>
 #include <filesystem>
+#include <ctime>
 
 namespace agent {
 
@@ -30,6 +32,26 @@ namespace agent {
 
 // L-1：infer_tool_type 已提升至 core/tool_kind.h/.cpp 作为公共纯函数，
 //      此处不再保留匿名命名空间副本，直接使用 agent::tool::infer_tool_type。
+
+namespace {
+
+/// @brief 获取当前 ISO 8601 时间戳（UTC），用于会话持久化
+/// @details 格式：YYYY-MM-DDTHH:MM:SSZ
+std::string now_iso() {
+    auto now = std::chrono::system_clock::now();
+    auto t = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+#ifdef _WIN32
+    gmtime_s(&tm, &t);
+#else
+    gmtime_r(&t, &tm);
+#endif
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tm);
+    return buf;
+}
+
+} // anonymous namespace
 
 // ============================================================
 // ChatSession::ReActEventPublisher — 3.2 IReActObserver 实现
@@ -195,6 +217,94 @@ void ChatSession::set_compactor_archive_dir(const std::string& dir) {
     m_compactor.set_archive_dir(dir);
 }
 
+// ============================================================
+// 项目会话恢复：SessionStore 集成
+// ============================================================
+
+void ChatSession::set_session_store(std::shared_ptr<agent::session::SessionStore> store) {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    m_session_store = std::move(store);
+}
+
+bool ChatSession::restore_from_file(const std::string& file_path) {
+    auto messages = agent::session::SessionStore::load_messages(file_path);
+    if (messages.empty()) return false;
+
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    // 追加到已有消息（不清空），支持恢复后继续对话
+    m_messages.insert(m_messages.end(),
+                      std::make_move_iterator(messages.begin()),
+                      std::make_move_iterator(messages.end()));
+    return true;
+}
+
+void ChatSession::persist_message(const ChatMessage& msg) {
+    std::shared_ptr<agent::session::SessionStore> store;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        store = m_session_store;
+    }
+    if (!store) return;
+
+    const std::string uuid = core::util::generate_uuid();
+    const std::string timestamp = now_iso();
+
+    switch (msg.role) {
+        case ChatMessage::Role::User:
+            store->append_user_message(uuid, "", msg.content, timestamp);
+            break;
+        case ChatMessage::Role::Assistant:
+            store->append_assistant_message(uuid, "", msg.content,
+                                            msg.reasoning_content,
+                                            msg.tool_uses, timestamp);
+            break;
+        case ChatMessage::Role::Tool:
+            store->append_tool_message(uuid, "", msg.tool_call_id,
+                                       msg.tool_name, msg.content,
+                                       msg.is_error, timestamp);
+            break;
+        default:
+            break;
+    }
+}
+
+void ChatSession::persist_messages_range(size_t start_idx, const std::string& parent_uuid) {
+    std::shared_ptr<agent::session::SessionStore> store;
+    std::vector<ChatMessage> messages_copy;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        store = m_session_store;
+        if (!store) return;
+        if (start_idx >= m_messages.size()) return;
+        messages_copy.assign(m_messages.begin() + start_idx, m_messages.end());
+    }
+
+    std::string current_parent = parent_uuid;
+    for (const auto& msg : messages_copy) {
+        const std::string uuid = core::util::generate_uuid();
+        const std::string timestamp = now_iso();
+
+        switch (msg.role) {
+            case ChatMessage::Role::User:
+                store->append_user_message(uuid, current_parent, msg.content, timestamp);
+                break;
+            case ChatMessage::Role::Assistant:
+                store->append_assistant_message(uuid, current_parent, msg.content,
+                                                msg.reasoning_content,
+                                                msg.tool_uses, timestamp);
+                break;
+            case ChatMessage::Role::Tool:
+                store->append_tool_message(uuid, current_parent, msg.tool_call_id,
+                                           msg.tool_name, msg.content,
+                                           msg.is_error, timestamp);
+                break;
+            default:
+                break;
+        }
+        current_parent = uuid;  // 链式传递 parent_uuid
+    }
+}
+
 std::string ChatSession::summarize_with_llm(const std::vector<ChatMessage>& middle) {
     // DS_CACHE M-4：同步调用 LLM 生成中段摘要
     // 由 compact_middle 在 compact 阶段调用；失败抛异常，由调用方 fallback 到机械折叠
@@ -319,8 +429,13 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
 
     // 仅首次请求时添加用户消息（重试时不重复添加）
     if (retry_attempt == 0) {
-        std::lock_guard<std::mutex> lock(m_state_mutex);
-        m_messages.push_back(ChatMessage::user(user_text));
+        ChatMessage user_msg = ChatMessage::user(user_text);
+        {
+            std::lock_guard<std::mutex> lock(m_state_mutex);
+            m_messages.push_back(user_msg);
+        }
+        // 项目会话恢复：用户消息实时持久化
+        persist_message(user_msg);
     }
 
     m_event_bus.get().publish_async(BackendStatusEvent{
@@ -362,9 +477,11 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
             // H-2：cur_shape 在 run() 后二次捕获，以传入压缩器 rewrite_version。
             //      prev_shape 从上一轮 m_last_prefix_shape 读取（含上轮的 rewrite_version）。
             PrefixShape prev_shape;
+            size_t messages_before_loop = 0;  // 项目会话恢复：记录 loop 前消息数，用于批量持久化
             {
                 std::lock_guard<std::mutex> lock(m_state_mutex);
                 prev_shape = m_last_prefix_shape;
+                messages_before_loop = m_messages.size();
             }
             // 预捕获仅用于 prev_shape 为空（首轮）时的 prefix_hash 基线；
             // 真正的 cur_shape 在 run() 返回后用 react_result.rewrite_version 二次捕获
@@ -379,6 +496,9 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
                 m_messages, m_system_prompt, tools_schema,
                 should_cancel, &publisher
             );
+
+            // 项目会话恢复：批量持久化 ReActLoop 新增的 assistant/tool 消息
+            persist_messages_range(messages_before_loop);
 
             // H-2：用 react_result.rewrite_version 二次捕获 cur_shape，使 log_rewrite 归因生效
             PrefixShape cur_shape = capture_shape(m_system_prompt, tools_schema,
@@ -395,10 +515,16 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
             // ---- 用户中断 ----
             if (react_result.was_interrupted) {
                 if (!react_result.partial_content.empty()) {
-                    m_messages.push_back(ChatMessage::assistant(react_result.partial_content));
+                    ChatMessage partial_msg = ChatMessage::assistant(react_result.partial_content);
                     if (!react_result.partial_reasoning.empty()) {
-                        m_messages.back().reasoning_content = react_result.partial_reasoning;
+                        partial_msg.reasoning_content = react_result.partial_reasoning;
                     }
+                    {
+                        std::lock_guard<std::mutex> lock(m_state_mutex);
+                        m_messages.push_back(partial_msg);
+                    }
+                    // 项目会话恢复：持久化中断时的 partial 消息
+                    persist_message(partial_msg);
                 }
                 m_event_bus.get().publish_async(StreamDoneEvent{
                     .session_id = m_session_id,

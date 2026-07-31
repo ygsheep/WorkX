@@ -28,6 +28,7 @@
 #include "agent/tool/executor.h"
 #include "agent/compact/prefix_shape.h"  // DS_CACHE: 前缀形状追踪
 #include "agent/compact/cache_aware_compactor.h"  // DS_CACHE H-3: 跨 turn 持久化的压缩器
+#include "agent/session/session_store.h"  // 项目会话恢复：JSONL 持久化
 #include "core/task/task_manager.h"
 
 namespace agent {
@@ -116,6 +117,23 @@ public:
     ///          序列化到 <archive_dir>/<timestamp>.jsonl，保证可追溯。
     void set_compactor_archive_dir(const std::string& dir);
 
+    /// @brief 设置 SessionStore（可选，设置后每条消息实时持久化到 JSONL）
+    /// @details 必须在首次 send_message 前调用。设置后：
+    ///          - user 消息 push_back 后立即 append 到 JSONL
+    ///          - run() 返回后批量 append 新增的 assistant/tool 消息
+    ///          - restore_from_file 加载的历史不会重复持久化
+    void set_session_store(std::shared_ptr<agent::session::SessionStore> store);
+
+    /// @brief 从 JSONL 文件加载历史会话消息
+    /// @param file_path JSONL 文件路径
+    /// @return true=加载成功（至少有一条消息）
+    /// @details 加载后消息追加到 m_messages（不清空已有消息）。
+    ///          加载的消息不会触发持久化（避免回环）。
+    bool restore_from_file(const std::string& file_path);
+
+    /// @brief 获取 SessionStore（用于退出时写入 session_end）
+    std::shared_ptr<agent::session::SessionStore> session_store() const { return m_session_store; }
+
     /// @brief 获取会话 ID
     const std::string& session_id() const { return m_session_id; }
 
@@ -201,6 +219,16 @@ private:
     ///          4. 失败（nullptr/Error/Cancelled）抛异常触发 fallback
     std::string summarize_with_llm(const std::vector<ChatMessage>& middle);
 
+    /// @brief 持久化单条消息到 SessionStore（如果已设置）
+    /// @details 根据 msg.role 调用对应的 append 方法。
+    ///          uuid 由 core::util::generate_uuid() 生成，timestamp 由 now_iso() 生成。
+    void persist_message(const ChatMessage& msg);
+
+    /// @brief 批量持久化 [start_idx, end) 范围的消息
+    /// @param start_idx 起始索引（含）
+    /// @param parent_uuid 父消息 UUID（用于 parentUuid 字段）
+    void persist_messages_range(size_t start_idx, const std::string& parent_uuid = "");
+
     std::unique_ptr<ICompletionProvider> m_provider;
     std::vector<ChatMessage> m_messages;
     std::string m_system_prompt;
@@ -230,6 +258,9 @@ private:
 
     // 工具注册表（可选，为空时不启用 function calling）
     std::shared_ptr<tool::ToolRegistry> m_tool_registry;
+
+    // 项目会话恢复：JSONL 持久化（可选，设置后每条消息实时追加）
+    std::shared_ptr<agent::session::SessionStore> m_session_store;
 
     // H-3：重试策略统一由 HttpRetryPolicy 管理
     HttpRetryPolicy m_retry_policy;
