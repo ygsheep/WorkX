@@ -1,13 +1,17 @@
 /**
  * @file session_picker.cpp
  * @brief 会话选择面板实现
- * @details 全屏 overlay + Screen 差分渲染，搜索框 + 会话列表
- * @version 1.0.0
+ * @details 全屏 overlay + Screen 差分渲染，Claude Code 风格搜索框 + 双行会话列表
+ * @version 1.1.0
  * @date 2026-07
  */
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <filesystem>
 #include <format>
 #include <string>
 
@@ -32,8 +36,9 @@ constexpr char32_t KEY_CTRL_C = 0xE009;
 constexpr char32_t KEY_BACKSPACE = 0x08;
 constexpr char32_t KEY_DELETE = 0x7F;
 
-/// 最多显示的会话条目数
-constexpr int MAX_DISPLAY = 7;
+/// 每条会话占 3 行（标题 + 副信息 + 空行），最多显示 5 条
+constexpr int MAX_DISPLAY_ITEMS = 5;
+constexpr int ITEM_HEIGHT = 3;  // 标题行 + 副信息行 + 空行
 
 /// 不区分大小写包含检查
 bool icontains(const std::string& haystack, const std::string& needle) {
@@ -48,12 +53,65 @@ bool icontains(const std::string& haystack, const std::string& needle) {
     return it != haystack.end();
 }
 
-/// 简化时间显示（ISO 8601 → YYYY-MM-DD HH:MM）
-std::string simplify_time(const std::string& iso) {
-    if (iso.size() >= 16) {
-        return iso.substr(0, 10) + " " + iso.substr(11, 5);
+/// 相对时间格式化（file_time_type → "X周前" 风格）
+std::string relative_time(std::filesystem::file_time_type ftime) {
+    try {
+        auto now = std::filesystem::file_time_type::clock::now();
+        auto diff = now - ftime;
+        auto secs = std::chrono::duration_cast<std::chrono::seconds>(diff).count();
+
+        if (secs < 60) return "刚刚";
+        auto mins = secs / 60;
+        if (mins < 60) return std::format("{}分钟前", mins);
+        auto hours = mins / 60;
+        if (hours < 24) return std::format("{}小时前", hours);
+        auto days = hours / 24;
+        if (days < 7) return std::format("{}天前", days);
+        auto weeks = days / 7;
+        if (weeks < 4) return std::format("{}周前", weeks);
+        auto months = days / 30;
+        if (months < 12) return std::format("{}个月前", months);
+        auto years = days / 365;
+        return std::format("{}年前", years);
+    } catch (...) {
+        return "未知时间";
     }
-    return iso;
+}
+
+/// 文件大小格式化
+std::string format_size(uintmax_t bytes) {
+    if (bytes < 1024) return std::format("{} B", bytes);
+    double kb = static_cast<double>(bytes) / 1024.0;
+    if (kb < 1024.0) return std::format("{:.1f} KB", kb);
+    double mb = kb / 1024.0;
+    return std::format("{:.1f} MB", mb);
+}
+
+/// 获取文件大小（安全）
+std::string get_file_size(const std::string& path) {
+    std::error_code ec;
+    auto size = std::filesystem::file_size(path, ec);
+    if (ec) return "未知大小";
+    return format_size(size);
+}
+
+/// 截断字符串到指定显示宽度（按 UTF-8 字符数）
+std::string truncate_utf8(const std::string& s, size_t max_chars) {
+    if (max_chars == 0) return "";
+    size_t char_count = 0;
+    size_t byte_pos = 0;
+    while (char_count < max_chars && byte_pos < s.size()) {
+        unsigned char c = static_cast<unsigned char>(s[byte_pos]);
+        if (c < 0x80) byte_pos += 1;
+        else if ((c & 0xE0) == 0xC0) byte_pos += 2;
+        else if ((c & 0xF0) == 0xE0) byte_pos += 3;
+        else if ((c & 0xF8) == 0xF0) byte_pos += 4;
+        else byte_pos += 1;
+        ++char_count;
+    }
+    std::string result = s.substr(0, byte_pos);
+    if (byte_pos < s.size()) result += "…";
+    return result;
 }
 
 } // anonymous namespace
@@ -77,14 +135,14 @@ std::string pick_session_interactive(
     int scroll_offset = 0;
 
     // 开启 overlay
-    int scroll_bottom = term->get_terminal_height() - 3;
-    if (scroll_bottom < 1) scroll_bottom = 1;
-    term->begin_overlay(1, scroll_bottom);
+    int term_height = term->get_terminal_height();
+    int overlay_bottom = term_height - 2;
+    if (overlay_bottom < 1) overlay_bottom = 1;
+    term->begin_overlay(1, overlay_bottom);
 
     auto apply_filter = [&]() {
         filtered.clear();
         for (const auto& s : all_sessions) {
-            // 按标题、分支、模型过滤
             if (icontains(s.title, search_query) ||
                 icontains(s.git_branch, search_query) ||
                 icontains(s.model, search_query)) {
@@ -104,66 +162,105 @@ std::string pick_session_interactive(
         int width = scr->width();
         if (width < 40) width = 40;
 
-        // 标题行
-        scr->write(row, 0, "  ====== 切换历史会话 ======", ColorRole::StatusBar);
+        // ===== 标题 =====
+        scr->write(row, 0, "  Resume session", ColorRole::StatusBar);
         row++;
 
-        // 搜索框
-        std::string search_line = "  搜索: " + search_query + "_";
-        scr->write(row, 0, search_line, ColorRole::Prompt);
+        // ===== 搜索框（╭─⌕ Search...─╮ ╰─────────╯）=====
+        const std::string HORIZ = "─";  // U+2500，UTF-8 三字节
+        // 上边框
+        std::string top_border = "  ╭─";
+        std::string search_text = search_query.empty() ? "⌕ Search…" : ("⌕ " + search_query);
+        top_border += search_text;
+        int fill_top = width - static_cast<int>(top_border.size()) - 2;
+        for (int i = 0; i < fill_top; ++i) top_border += HORIZ;
+        top_border += "╮";
+        if (static_cast<int>(top_border.size()) > width) top_border = top_border.substr(0, width);
+        scr->write(row, 0, top_border, ColorRole::Dim);
         row++;
 
-        // 分隔线
-        scr->write(row, 0, std::string("  ──────────────────────────────────────────────").substr(0, width),
-                   ColorRole::Dim);
+        // 下边框
+        std::string bottom_border = "  ╰";
+        int fill_bottom = width - 4;
+        for (int i = 0; i < fill_bottom; ++i) bottom_border += HORIZ;
+        bottom_border += "╯";
+        if (static_cast<int>(bottom_border.size()) > width) bottom_border = bottom_border.substr(0, width);
+        scr->write(row, 0, bottom_border, ColorRole::Dim);
         row++;
 
+        // 空行
+        row++;
+
+        // ===== 会话列表（双行条目）=====
         if (filtered.empty()) {
-            scr->write(row, 0, "  (无匹配会话)", ColorRole::Dim);
+            scr->write(row, 0, "    (无匹配会话)", ColorRole::Dim);
+            row++;
         } else {
-            int display_count = std::min(MAX_DISPLAY, static_cast<int>(filtered.size()));
+            // 计算可见区域剩余行数
+            int remaining_rows = overlay_bottom - row - 1;  // 留 1 行给底部提示
+            int max_items = std::min(MAX_DISPLAY_ITEMS, remaining_rows / ITEM_HEIGHT);
+            if (max_items < 1) max_items = 1;
+
             // 调整 scroll_offset 使选中项可见
             if (selected < scroll_offset) scroll_offset = selected;
-            if (selected >= scroll_offset + display_count) {
-                scroll_offset = selected - display_count + 1;
+            if (selected >= scroll_offset + max_items) {
+                scroll_offset = selected - max_items + 1;
             }
 
-            for (int i = 0; i < display_count; ++i) {
+            for (int i = 0; i < max_items; ++i) {
                 int idx = scroll_offset + i;
                 if (idx >= static_cast<int>(filtered.size())) break;
 
                 const auto& s = filtered[idx];
-                std::string branch = s.git_branch.empty() ? "no-branch" : s.git_branch;
-                std::string time = simplify_time(s.created_at);
                 std::string title = s.title.empty() ? "未命名会话" : s.title;
+                std::string branch = s.git_branch.empty() ? "no-branch" : s.git_branch;
+                std::string rel_time = relative_time(s.last_modified);
+                std::string size_str = get_file_size(s.file_path);
 
-                // 格式：  标题 (时间 | 分支 | N条消息)
-                std::string line = std::format("  {} ({} | {} | {} 条消息)",
-                                               title, time, branch, s.message_count);
-                if (static_cast<int>(line.size()) > width) {
-                    line = line.substr(0, width);
-                }
+                // 选中项用 ❯ 标识，未选中用空格
+                std::string marker = (idx == selected) ? "  ❯ " : "    ";
+                ColorRole title_color = (idx == selected) ? ColorRole::StatusBar : ColorRole::Default;
 
-                ColorRole color = (idx == selected) ? ColorRole::StatusBar : ColorRole::Default;
-                if (idx == selected) {
-                    // 选中行反色（用 StatusBar 色调）
-                    // 补齐到 width 防止残留
-                    line += std::string(width - line.size(), ' ');
+                // 标题行（截断到 width - marker 长度）
+                int max_title_chars = width - static_cast<int>(marker.size()) - 2;
+                if (max_title_chars < 1) max_title_chars = 1;
+                std::string title_line = marker + truncate_utf8(title, static_cast<size_t>(max_title_chars));
+                if (static_cast<int>(title_line.size()) > width) {
+                    title_line = title_line.substr(0, width);
                 }
-                scr->write(row, 0, line, color);
+                scr->write(row, 0, title_line, title_color);
+                row++;
+
+                // 副信息行：相对时间 · 分支 · 大小
+                std::string sub_line = "      " + rel_time + " · " + branch + " · " + size_str;
+                if (static_cast<int>(sub_line.size()) > width) {
+                    sub_line = sub_line.substr(0, width);
+                }
+                scr->write(row, 0, sub_line, ColorRole::Dim);
+                row++;
+
+                // 空行分隔
                 row++;
             }
 
-            // 滚动提示
-            if (static_cast<int>(filtered.size()) > MAX_DISPLAY) {
-                std::string hint = std::format("  ({}/{})", selected + 1, filtered.size());
-                scr->write(row, 0, hint, ColorRole::Dim);
+            // 滚动指示
+            if (static_cast<int>(filtered.size()) > max_items) {
+                std::string hint = std::format("    ({}/{})", selected + 1, filtered.size());
+                if (row < overlay_bottom) {
+                    scr->write(row, 0, hint, ColorRole::Dim);
+                }
             }
         }
 
-        row++;
-        // 底部提示
-        scr->write(row, 0, "  ↑↓ 选择 | Enter 确认 | Esc 取消 | 输入搜索", ColorRole::Dim);
+        // ===== 底部提示 =====
+        if (row < overlay_bottom) {
+            row = overlay_bottom - 1;
+        }
+        std::string footer = "  输入搜索 · Enter 选择 · Esc 清空";
+        if (static_cast<int>(footer.size()) > width) {
+            footer = footer.substr(0, width);
+        }
+        scr->write(row, 0, footer, ColorRole::Dim);
 
         scr->flush();
     };
@@ -185,8 +282,19 @@ std::string pick_session_interactive(
                 scr->reset_buffers();
                 return path;
             }
-        } else if (key == KEY_ESC || key == KEY_CTRL_C) {
-            // 取消
+        } else if (key == KEY_ESC) {
+            if (search_query.empty()) {
+                // 搜索框已空，Esc 退出
+                term->end_overlay();
+                scr->reset_buffers();
+                return "";
+            } else {
+                // 搜索框非空，Esc 清空搜索
+                search_query.clear();
+                apply_filter();
+            }
+        } else if (key == KEY_CTRL_C) {
+            // Ctrl+C 直接退出
             term->end_overlay();
             scr->reset_buffers();
             return "";
