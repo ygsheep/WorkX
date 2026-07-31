@@ -19,6 +19,15 @@
 
 ## 架构概览
 
+![Workx 四层架构图（鲸鱼娘解说版）](docs/architecture_overview.jpg)
+
+### 核心工作流（鲸鱼娘图解）
+
+| 📐 ReAct 推理循环 | 📡 EventBus 跨层中枢 |
+|---|---|
+| ![ReAct 推理循环](docs/img/01_react_loop.jpg) | ![EventBus 跨层事件中枢](docs/img/02_eventbus_flow.jpg) |
+| Thought → Action → Observe 循环 ≤25 轮，无工具调用即输出 FinalAnswer | 发布-订阅解耦四层：TUI/Agent/Core 异步消息驱动，同步 publish 需防死锁 |
+
 ```
 src/
 ├── agent/              # Agent 核心层
@@ -73,6 +82,10 @@ src/
 | LM Studio | `lm-studio` | (自定义) |
 | Custom URL | `openai-compatible` | (自定义) |
 
+![LLM 后端适配层（插件式 8 家 Provider）](docs/img/08_backend_adapter.jpg)
+
+> 架构分层：上层 `ReActLoop/ChatSession` 只依赖 `ICompletionProvider + IBackendAdmin` 双接口，新增 Provider 只需实现一个 Adapter。
+
 ## Agent 工具能力
 
 WorkX 的核心是 Agent 自主调用工具完成任务。内置工具集如下：
@@ -89,7 +102,26 @@ WorkX 的核心是 Agent 自主调用工具完成任务。内置工具集如下�
 | `AgentTool` | 启动子 Agent 处理子任务，支持并行调度 |
 | `MCPTool` | 桥接 MCP 服务器，接入外部工具与数据源 |
 
+![工具调用全管线（权限 + 密钥脱敏 + 并行执行）](docs/img/04_tool_pipeline.jpg)
+
+> 执行顺序：Registry 查表 → 构造 ToolContext → Permission 校验 Ask/Auto/Deny → SecretScanner 脱敏 → TaskManager 并行 invoke → 结果回写 messages。
+>
+> **MCP 桥接：** 通过 JSON-RPC 跨进程调用第三方 MCP Server，无需改 Workx 本体即可扩展外部工具。
+>
+> ![MCP 跨进程工具桥接](docs/img/09_mcp_bridge.jpg)
+
+## 上下文管理 & Token 压缩
+
+![Token 上下文压缩 + 预算面板](docs/img/05_token_compression.jpg)
+
+- **触发条件**：总 Token 用量超过上下文窗口 90%（优先级：provider → cfg → capability → preset → default）
+- **永不裁剪区**：system prompt + 最近 5 轮对话 + 上一轮 tool_calls/results
+- **兜底策略**：中段历史摘要压缩 → 依然超限降级多工具并行 → 最后抛 `ContextOverflowError`
+- **实时面板**：StatusBar 显示 4 类计数（Prompt / Cache Create / Cache Read / Generated）+ 估算费用
+
 ## 前置条件
+
+![项目依赖全景图（核心库 + 可选库分层说明）](docs/img/10_dependency_overview.jpg)
 
 - **CMake**: 3.21 或更高版本
 - **C++ 编译器**: 支持 C++20（MSVC 14.5+ 或 GCC 10+）
@@ -98,6 +130,8 @@ WorkX 的核心是 Agent 自主调用工具完成任务。内置工具集如下�
 ## 构建步骤
 
 > **注意**: 当前版本仅支持 Windows 平台。
+
+![CMake 跨平台构建管线（vcpkg + FetchContent 一键三平台）](docs/img/07_build_pipeline.jpg)
 
 ### Linux
 ```bash
@@ -126,6 +160,8 @@ cmake --build . --config Release
 
 ## 运行
 
+![Setup Wizard 首次启动引导（4 步配置）](docs/img/06_setup_wizard.jpg)
+
 ```bash
 # Windows
 build\bin\workx.exe
@@ -145,6 +181,10 @@ build\bin\workx.exe
 | `/clear` | 清空聊天历史 |
 | `/regen` | 重新生成上一条回复 |
 | `/model` | 切换当前使用的模型 |
+
+## TUI 渲染注意事项（开发必读）
+
+![TUI Resize/Overlay 渲染管线（严格按此顺序，否则光标乱飞/快照失效/死锁）](docs/img/03_render_pipeline.jpg)
 
 ## 配置
 
