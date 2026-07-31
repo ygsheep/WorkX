@@ -10,6 +10,7 @@
 
 #include <memory>
 #include <functional>
+#include <string>
 
 #include "agent/command/inclaude/registry.h"
 
@@ -22,9 +23,10 @@ namespace command {
 /// 系统命令注册所需的上下文
 /// 各命令通过 lambda 捕获所需的依赖
 struct SystemCommandContext {
-    ChatSession* session = nullptr;       ///< 会话指针（clear/regen 需要）
+    ChatSession* session = nullptr;       ///< 会话指针（clear/regen/rename 需要）
     std::function<void()> on_exit;        ///< 退出回调（exit/quit 触发）
     std::function<void()> on_model_select; ///< 模型选择回调（model 触发）
+    std::function<void()> on_resume;      ///< 会话恢复回调（resume 触发，打开 TUI 选择面板）
 };
 
 /// 注册内置系统命令
