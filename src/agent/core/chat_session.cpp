@@ -238,13 +238,88 @@ bool ChatSession::restore_from_file(const std::string& file_path) {
     return true;
 }
 
-void ChatSession::persist_message(const ChatMessage& msg) {
+bool ChatSession::switch_session(const std::string& file_path) {
+    // 加载历史消息和元信息（文件 I/O 在锁外执行）
+    auto messages = agent::session::SessionStore::load_messages(file_path);
+    if (messages.empty()) return false;
+
+    auto meta = agent::session::SessionStore::load_meta(file_path);
+    if (!meta) return false;
+
+    // 从文件名提取 session_id（stem，如 "76e1b10d-...-...jsonl" → "76e1b10d-...-..."）
+    std::string new_session_id = std::filesystem::path(file_path).stem().string();
+
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    // 1. 替换 session_id
+    m_session_id = new_session_id;
+
+    // 2. 清空消息历史，填入加载的历史消息
+    m_messages = std::move(messages);
+
+    // 3. 关闭旧 SessionStore，创建新 SessionStore 指向历史文件
+    if (m_session_store) {
+        m_session_store->close();
+    }
+    auto new_store = std::make_shared<agent::session::SessionStore>(file_path, new_session_id);
+    if (!new_store->open()) {
+        return false;  // 打开失败，保留旧状态不变（messages 已替换但 store 为空，后续不持久化）
+    }
+    m_session_store = new_store;
+    // 不追加 session_start（会话进行中，只是换文件继续写）
+
+    // 4. 重置压缩器和前缀形状基线（新会话上下文从零开始）
+    m_compactor.reset();
+    m_last_prefix_shape = PrefixShape{};
+
+    return true;
+}
+
+bool ChatSession::rename_session(const std::string& title) {
     std::shared_ptr<agent::session::SessionStore> store;
     {
         std::lock_guard<std::mutex> lock(m_state_mutex);
         store = m_session_store;
     }
-    if (!store) return;
+    if (!store) return false;
+    return store->append_title(title);
+}
+
+void ChatSession::persist_message(const ChatMessage& msg) {
+    std::shared_ptr<agent::session::SessionStore> store;
+    bool is_first_user = false;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        store = m_session_store;
+        if (!store) return;
+
+        // 检测是否是首条 user 消息（用于自动生成标题）
+        if (msg.role == ChatMessage::Role::User) {
+            bool has_user = false;
+            for (const auto& m : m_messages) {
+                if (m.role == ChatMessage::Role::User) {
+                    has_user = true;
+                    break;
+                }
+            }
+            // 注意：此时 msg 可能已 push_back 到 m_messages，也可能未 push
+            // 若 has_user 为 false，说明 m_messages 中无 user 消息 → 这是首条
+            // 若 has_user 为 true 且 m_messages.back() 就是 msg（刚 push），
+            //   需要进一步检查是否有"其他"user 消息
+            if (!has_user) {
+                is_first_user = true;
+            } else if (!m_messages.empty() && &m_messages.back() == &msg) {
+                // msg 已 push_back，检查之前是否有 user 消息
+                bool has_other_user = false;
+                for (size_t i = 0; i + 1 < m_messages.size(); ++i) {
+                    if (m_messages[i].role == ChatMessage::Role::User) {
+                        has_other_user = true;
+                        break;
+                    }
+                }
+                is_first_user = !has_other_user;
+            }
+        }
+    }
 
     const std::string uuid = core::util::generate_uuid();
     const std::string timestamp = now_iso();
@@ -252,6 +327,27 @@ void ChatSession::persist_message(const ChatMessage& msg) {
     switch (msg.role) {
         case ChatMessage::Role::User:
             store->append_user_message(uuid, "", msg.content, timestamp);
+            // 首条 user 消息自动生成标题（前 20 字）
+            if (is_first_user) {
+                std::string title = msg.content;
+                // UTF-8 安全截取前 20 字
+                size_t char_count = 0;
+                size_t byte_pos = 0;
+                while (char_count < 20 && byte_pos < title.size()) {
+                    unsigned char c = static_cast<unsigned char>(title[byte_pos]);
+                    if (c < 0x80) byte_pos += 1;
+                    else if ((c & 0xE0) == 0xC0) byte_pos += 2;
+                    else if ((c & 0xF0) == 0xE0) byte_pos += 3;
+                    else if ((c & 0xF8) == 0xF0) byte_pos += 4;
+                    else byte_pos += 1;
+                    ++char_count;
+                }
+                title = title.substr(0, byte_pos);
+                if (byte_pos < msg.content.size()) {
+                    title += "...";
+                }
+                store->append_title(title);
+            }
             break;
         case ChatMessage::Role::Assistant:
             store->append_assistant_message(uuid, "", msg.content,

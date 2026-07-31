@@ -131,6 +131,25 @@ public:
     ///          加载的消息不会触发持久化（避免回环）。
     bool restore_from_file(const std::string& file_path);
 
+    /// @brief 切换到历史会话（/resume 命令调用）
+    /// @param file_path 历史会话 JSONL 文件路径
+    /// @return true=切换成功
+    /// @details 原子操作（单一锁作用域）：
+    ///          1. load_messages + load_meta 加载历史
+    ///          2. 替换 m_session_id（从文件名 stem 提取）
+    ///          3. 清空 m_messages，填入历史消息
+    ///          4. 关闭旧 SessionStore，创建新 SessionStore 指向历史文件，append 模式打开
+    ///          5. 不追加 session_start（会话进行中，只是换文件继续写）
+    ///          6. 重置压缩器和前缀形状基线
+    ///          不写 session_end 到旧文件（会话可被多次 resume 继续）。
+    bool switch_session(const std::string& file_path);
+
+    /// @brief 修改当前会话标题（/rename 命令调用）
+    /// @param title 新标题
+    /// @return true=成功追加 title 事件
+    /// @details append-only：追加新 title 事件到当前 JSONL，读取时取最后一条。
+    bool rename_session(const std::string& title);
+
     /// @brief 获取 SessionStore（用于退出时写入 session_end）
     std::shared_ptr<agent::session::SessionStore> session_store() const { return m_session_store; }
 
@@ -232,7 +251,7 @@ private:
     std::unique_ptr<ICompletionProvider> m_provider;
     std::vector<ChatMessage> m_messages;
     std::string m_system_prompt;
-    std::string m_session_id;           ///< 会话标识（构造后不变，无需加锁）
+    std::string m_session_id;           ///< 会话标识（switch_session 可变更，由 m_state_mutex 保护）
     std::string m_cwd;                  ///< 会话启动时的工作目录（构造时捕获，注入到 ReActLoop）
     std::atomic<bool> m_generating{false};
 
