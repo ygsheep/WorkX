@@ -53,6 +53,7 @@
 #include "tui/widgets/bottom_bar_manager.h"
 #include "tui/widgets/command_panel.h"
 #include "tui/widgets/status_bar.h"
+#include "tui/widgets/session_picker.h"  // /resume 会话选择面板
 
 namespace agent {
 
@@ -376,6 +377,34 @@ static int run(int argc, char* argv[]) {
             cfg.save_to_file(default_config_path());
             terminal.set_color(tui::ColorRole::System);
             terminal.write(std::format("Model set to: {}\n", sel.name));
+            terminal.reset_color();
+        }
+    };
+    sys_ctx.on_resume = [&session, &terminal, &screen]() {
+        if (!session) return;
+
+        // 获取项目会话目录
+        namespace fs = std::filesystem;
+        fs::path config_dir = default_config_path().parent_path();
+        std::string cwd = fs::current_path().string();
+        fs::path project_dir = agent::session::get_project_session_dir(config_dir, cwd);
+
+        // 打开会话选择面板
+        std::string selected_path = pick_session_interactive(&terminal, &screen, project_dir.string());
+
+        if (selected_path.empty()) {
+            // 用户取消或无历史会话
+            return;
+        }
+
+        // 切换会话
+        if (session->switch_session(selected_path)) {
+            terminal.set_color(tui::ColorRole::System);
+            terminal.write("已切换到历史会话\n");
+            terminal.reset_color();
+        } else {
+            terminal.set_color(tui::ColorRole::Error);
+            terminal.write("切换会话失败\n");
             terminal.reset_color();
         }
     };
