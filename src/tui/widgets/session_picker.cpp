@@ -166,23 +166,42 @@ std::string pick_session_interactive(
         scr->write(row, 0, "  Resume session", ColorRole::StatusBar);
         row++;
 
-        // ===== 搜索框（╭─⌕ Search...─╮ ╰─────────╯）=====
+        // ===== 搜索框（三行：上边框 / 内容行 / 下边框）=====
         const std::string HORIZ = "─";  // U+2500，UTF-8 三字节
-        // 上边框
-        std::string top_border = "  ╭─";
-        std::string search_text = search_query.empty() ? "⌕ Search…" : ("⌕ " + search_query);
-        top_border += search_text;
-        int fill_top = width - static_cast<int>(top_border.size()) - 2;
-        for (int i = 0; i < fill_top; ++i) top_border += HORIZ;
+        const std::string VERT = "│";   // U+2502
+
+        // 框内可用宽度（左右各留 1 个 │ 和 1 个空格）
+        int box_width = width - 4;  // "  ╭" + 内容 + "╮"，内容区 = width - 4
+        if (box_width < 4) box_width = 4;
+        int inner_width = box_width - 2;  // 减去左右 │
+        if (inner_width < 2) inner_width = 2;
+
+        // 上边框：  ╭────╮
+        std::string top_border = "  ╭";
+        for (int i = 0; i < box_width; ++i) top_border += HORIZ;
         top_border += "╮";
         if (static_cast<int>(top_border.size()) > width) top_border = top_border.substr(0, width);
         scr->write(row, 0, top_border, ColorRole::Dim);
         row++;
 
-        // 下边框
+        // 内容行：  │ ⌕ Search… │
+        std::string search_text = search_query.empty() ? "⌕ Search…" : ("⌕ " + search_query);
+        if (static_cast<int>(search_text.size()) > inner_width - 2) {
+            search_text = search_text.substr(0, inner_width - 2);
+        }
+        std::string content_line = "  " + VERT + " " + search_text;
+        int fill_inner = inner_width - 1 - static_cast<int>(search_text.size());
+        for (int i = 0; i < fill_inner; ++i) content_line += " ";
+        content_line += VERT;
+        if (static_cast<int>(content_line.size()) > width) content_line = content_line.substr(0, width);
+        // 搜索框内容用 Prompt 色高亮
+        ColorRole search_color = search_query.empty() ? ColorRole::Dim : ColorRole::Prompt;
+        scr->write(row, 0, content_line, search_color);
+        row++;
+
+        // 下边框：  ╰────╯
         std::string bottom_border = "  ╰";
-        int fill_bottom = width - 4;
-        for (int i = 0; i < fill_bottom; ++i) bottom_border += HORIZ;
+        for (int i = 0; i < box_width; ++i) bottom_border += HORIZ;
         bottom_border += "╯";
         if (static_cast<int>(bottom_border.size()) > width) bottom_border = bottom_border.substr(0, width);
         scr->write(row, 0, bottom_border, ColorRole::Dim);
