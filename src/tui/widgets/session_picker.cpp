@@ -167,42 +167,46 @@ std::string pick_session_interactive(
         row++;
 
         // ===== 搜索框（三行：上边框 / 内容行 / 下边框）=====
-        // 注意：Screen::write 按字节计算位置，UTF-8 多字节字符（─│╭╮╰╯）会导致右边框超出 width。
-        // 因此边框线用 ASCII 字符（- + |），确保宽度计算准确。
-        // 内容行仍用 ⌕ 等图标（在固定位置，不影响边框对齐）。
+        // Screen::write 按字节计算位置，UTF-8 多字节字符（─│╭╮╰╯ 各 3 字节）需按字节预算。
+        const std::string HORIZ = "─";  // U+2500，3 字节
+        const std::string VERT = "│";   // U+2502，3 字节
+        const std::string TL = "╭", TR = "╮", BL = "╰", BR = "╯";  // 各 3 字节
 
-        // 框内可用宽度（"  +" + 内容 + "+", 2 空格缩进 + 2 个 '+' 边框）
-        int box_width = width - 4;  // 内容区宽度
-        if (box_width < 4) box_width = 4;
-        int inner_width = box_width - 2;  // 减去左右 "|"
-        if (inner_width < 2) inner_width = 2;
+        // 总字节预算 = width。"  " (2) + TL (3) + N*HORIZ (3N) + TR (3) = 8 + 3N ≤ width
+        int horiz_count = (width - 8) / 3;
+        if (horiz_count < 1) horiz_count = 1;
+        // 内容行内宽度（字节）= 2(缩进) + 3(│) + inner + 3(│) ≤ width → inner ≤ width - 8
+        int inner_bytes = horiz_count * 3;  // 与上下边框对齐
 
-        // 上边框：  +--------+
-        std::string top_border = "  +";
-        for (int i = 0; i < box_width; ++i) top_border += "-";
-        top_border += "+";
-        // top_border 长度 = 2 + 1 + box_width + 1 = box_width + 4 = width
+        // 上边框：  ╭────╮
+        std::string top_border = "  " + TL;
+        for (int i = 0; i < horiz_count; ++i) top_border += HORIZ;
+        top_border += TR;
         scr->write(row, 0, top_border, ColorRole::Dim);
         row++;
 
-        // 内容行：  | ⌕ Search…        |
+        // 内容行：  │ ⌕ Search… │
         std::string search_text = search_query.empty() ? "Search..." : search_query;
-        if (static_cast<int>(search_text.size()) > inner_width - 2) {
-            search_text = search_text.substr(0, inner_width - 2);
+        // 内容行字节布局：2(缩进) + 3(│) + 1(空格) + search_text + padding + 3(│)
+        int search_max_bytes = inner_bytes - 1 - 3;  // 留 1 空格 + 右 │ 的 3 字节
+        if (search_max_bytes < 1) search_max_bytes = 1;
+        if (static_cast<int>(search_text.size()) > search_max_bytes) {
+            search_text = search_text.substr(0, search_max_bytes);
         }
-        std::string content_line = "  | " + search_text;
-        int fill_inner = inner_width - 1 - static_cast<int>(search_text.size());
-        for (int i = 0; i < fill_inner; ++i) content_line += " ";
-        content_line += "|";
-        // 搜索框内容用 Prompt 色高亮
+        std::string content_line = "  " + VERT + " " + search_text;
+        int used_bytes = 2 + 3 + 1 + static_cast<int>(search_text.size());
+        int fill_bytes = (2 + 3 + 1 + inner_bytes - 3) - used_bytes;  // 右 │ 前的总填充
+        if (fill_bytes < 0) fill_bytes = 0;
+        for (int i = 0; i < fill_bytes; ++i) content_line += " ";
+        content_line += VERT;
         ColorRole search_color = search_query.empty() ? ColorRole::Dim : ColorRole::Prompt;
         scr->write(row, 0, content_line, search_color);
         row++;
 
-        // 下边框：  +--------+
-        std::string bottom_border = "  +";
-        for (int i = 0; i < box_width; ++i) bottom_border += "-";
-        bottom_border += "+";
+        // 下边框：  ╰────╯
+        std::string bottom_border = "  " + BL;
+        for (int i = 0; i < horiz_count; ++i) bottom_border += HORIZ;
+        bottom_border += BR;
         scr->write(row, 0, bottom_border, ColorRole::Dim);
         row++;
 
