@@ -167,13 +167,13 @@ std::string pick_session_interactive(
         row++;
 
         // ===== 搜索框（三行：上边框 / 内容行 / 下边框）=====
-        // Screen::write 按字节计算位置，UTF-8 多字节字符（─│╭╮╰╯ 各 3 字节）需按字节预算。
-        const std::string HORIZ = "─";  // U+2500，3 字节
-        const std::string VERT = "│";   // U+2502，3 字节
-        const std::string TL = "╭", TR = "╮", BL = "╰", BR = "╯";  // 各 3 字节
+        // Screen::write 按显示列计算位置（每个 UTF-8 字符占 1 列），需按列数对齐。
+        const std::string HORIZ = "─";  // U+2500，显示占 1 列
+        const std::string VERT = "│";   // U+2502，显示占 1 列
+        const std::string TL = "╭", TR = "╮", BL = "╰", BR = "╯";  // 各占 1 列
 
-        // 总字节预算 = width。"  " (2) + TL (3) + N*HORIZ (3N) + TR (3) = 8 + 3N ≤ width
-        int horiz_count = (width - 8) / 3;
+        // 总列预算 = width。"  "(2) + ╭(1) + N×─(N) + ╮(1) = 4 + N ≤ width
+        int horiz_count = width - 4;
         if (horiz_count < 1) horiz_count = 1;
 
         // 上边框：  ╭────╮
@@ -183,26 +183,26 @@ std::string pick_session_interactive(
         scr->write(row, 0, top_border, ColorRole::Dim);
         row++;
 
-        // 内容行：  │ ⌕ Search… │
+        // 内容行：  │ Search... │
+        // 右 │ 的目标列位置 = 2(缩进) + 1(│) + horiz_count(内容区) = 3 + horiz_count
+        // 内容行已用列 = 2(缩进) + 1(│) + 1(空格) + search_text 列数
+        // padding = 目标列 - 已用列
         std::string search_text = search_query.empty() ? "Search..." : search_query;
-        // 右 │ 的目标字节位置 = 5 + 3*horiz_count（与上边框 ╮ 对齐）
-        // 内容行已用字节 = 2(缩进) + 3(│) + 1(空格) + search_text.size()
-        // padding = 目标位置 - 已用字节
-        int right_pos = 5 + 3 * horiz_count;
-        int used_bytes = 2 + 3 + 1 + static_cast<int>(search_text.size());
-        int fill_bytes = right_pos - used_bytes;
-        if (fill_bytes < 1) fill_bytes = 1;  // 至少 1 空格
+        int right_col = 3 + horiz_count;
+        int used_cols = 4 + static_cast<int>(search_text.size());  // 2+1+1+text
+        int fill_cols = right_col - used_cols;
+        if (fill_cols < 1) fill_cols = 1;  // 至少 1 空格
         // 截断过长的 search_text
-        int max_search_bytes = right_pos - used_bytes - 1;
-        if (max_search_bytes < 1) max_search_bytes = 1;
-        if (static_cast<int>(search_text.size()) > max_search_bytes) {
-            search_text = search_text.substr(0, max_search_bytes);
-            used_bytes = 2 + 3 + 1 + static_cast<int>(search_text.size());
-            fill_bytes = right_pos - used_bytes;
-            if (fill_bytes < 1) fill_bytes = 1;
+        int max_search_cols = right_col - 4 - 1;  // 留至少 1 空格
+        if (max_search_cols < 1) max_search_cols = 1;
+        if (static_cast<int>(search_text.size()) > max_search_cols) {
+            search_text = search_text.substr(0, max_search_cols);
+            used_cols = 4 + static_cast<int>(search_text.size());
+            fill_cols = right_col - used_cols;
+            if (fill_cols < 1) fill_cols = 1;
         }
         std::string content_line = "  " + VERT + " " + search_text;
-        for (int i = 0; i < fill_bytes; ++i) content_line += " ";
+        for (int i = 0; i < fill_cols; ++i) content_line += " ";
         content_line += VERT;
         ColorRole search_color = search_query.empty() ? ColorRole::Dim : ColorRole::Prompt;
         scr->write(row, 0, content_line, search_color);
