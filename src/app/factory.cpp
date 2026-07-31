@@ -122,6 +122,8 @@ SessionResult create_session(IConfigManager& cfg,
     backend_config.api_key = cfg.get_or<std::string>(keys::API_KEY, "");
     int default_timeout = preset && preset->timeout_ms > 0 ? preset->timeout_ms : 30000;
     backend_config.timeout_ms = cfg.get_or<int>(keys::TIMEOUT_MS, default_timeout);
+    // DS_CACHE P2：reasoning_content 往返配置（默认 false，仅 DeepSeek-reasoner 等 thinking 模型开启）
+    backend_config.send_reasoning_content = cfg.get_or<bool>(keys::SEND_REASONING, false);
 
     // 创建后端（H-1：显式注入 event_bus 以保留 BackendStatusEvent 发布；
     //              M-1：不再回退 EventBus::instance()）
@@ -165,6 +167,25 @@ SessionResult create_session(IConfigManager& cfg,
         cfg.get_or<std::string>(keys::SYSTEM_PROMPT, ""), *tool_registry);
     if (!sys_prompt.empty()) {
         result.session->set_system_prompt(sys_prompt);
+    }
+
+    // DS_CACHE H-4：从 provider preset 或 cfg 注入上下文窗口到压缩器
+    // 优先级：cfg.backend.context_length > preset.default_context_length > 0（压缩器内部 fallback 1M）
+    int32_t context_window = cfg.get_or<int>(keys::CONTEXT_LENGTH, 0);
+    if (context_window <= 0 && preset && preset->default_context_length > 0) {
+        context_window = preset->default_context_length;
+    }
+    if (context_window > 0) {
+        result.session->set_compactor_context_window(context_window);
+    }
+
+    // DS_CACHE M-1：配置归档目录（compact 折叠前归档原消息，保证可追溯）
+    // 派生自 session.save_path 的父目录 / "archive"，未配置 save_path 则跳过
+    std::string save_path = cfg.get_or<std::string>(keys::SAVE_PATH, "");
+    if (!save_path.empty()) {
+        namespace fs = std::filesystem;
+        fs::path archive_dir = fs::path(save_path).parent_path() / "archive";
+        result.session->set_compactor_archive_dir(archive_dir.string());
     }
 
     return result;

@@ -38,6 +38,7 @@ public:
     void set_token_count(int32_t count);
     void set_context_limit(int32_t limit);  // 模型上下文窗口（token），用于进度条分母
     void set_cache_read_tokens(int32_t count);  // Anthropic prompt cache 命中 token 数（0 表示无命中）
+    void set_ds_cache_hit_rate(int32_t rate);   // DeepSeek 会话级缓存命中率（0-100，-1 表示无数据）
     void set_thinking_seconds(int32_t) {}
     void set_tool_name(const std::string&) {}
     void start_session_timer();
@@ -71,6 +72,7 @@ private:
     int32_t m_token_count = 0;
     int32_t m_context_limit = 0;  // 0 表示未知，进度条按 8192 兜底
     int32_t m_cache_read_tokens = 0;  // Anthropic prompt cache 命中 token 数（0 表示无命中）
+    int32_t m_ds_cache_hit_rate = -1;  // DeepSeek 会话级缓存命中率（-1 表示无数据）
     std::chrono::steady_clock::time_point m_session_start;
     mutable std::string m_last_bar;
     mutable int m_last_rendered_row = 0;  ///< 上次渲染的状态栏行号（用于 resize 后擦除旧行）

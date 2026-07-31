@@ -46,9 +46,13 @@ ResultV2<void> RemoteBackend::initialize(const BackendConfig& config) {
 
     // 根据 ProviderType 创建对应的协议适配器
     switch (config.provider) {
-        case ProviderType::OpenAI:
-            m_adapter = std::make_unique<OpenAIAdapter>();
+        case ProviderType::OpenAI: {
+            auto openai_adapter = std::make_unique<OpenAIAdapter>();
+            // DS_CACHE P2：把 reasoning_content 往返配置传给 adapter
+            openai_adapter->set_send_reasoning_content(config.send_reasoning_content);
+            m_adapter = std::move(openai_adapter);
             break;
+        }
         case ProviderType::Anthropic:
             m_adapter = std::make_unique<AnthropicAdapter>();
             break;

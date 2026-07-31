@@ -10,6 +10,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "core/tool_kind.h"  // C-3：直接引用 core 层规范位置，避免 core→agent 分层越界
 
@@ -47,6 +48,31 @@ struct AgentDoneEvent {
     int32_t total_steps = 0;
     int32_t total_tool_calls = 0;
     double total_duration_ms = 0.0;
+};
+
+/// @brief 缓存诊断事件（DeepSeek 硬盘缓存命中率劣化归因）
+/// @details 当某轮缓存命中率显著下降时发布，用于 UI 显示归因。
+///          reasons 取值："system" / "tools" / "log_rewrite"
+struct CacheDiagnosticsEvent {
+    std::string session_id;
+    std::string prefix_hash;             ///< 当前前缀形状 hash（system + tools 联合）
+    bool prefix_changed = false;         ///< 与上一轮相比前缀是否变化
+    std::vector<std::string> reasons;    ///< 变化原因（空表示无变化）
+    int32_t cache_hit_tokens = 0;        ///< 本轮命中 token 数
+    int32_t cache_miss_tokens = 0;       ///< 本轮未命中 token 数
+};
+
+/// @brief 压缩暂停事件（DS_CACHE H-3：卡死守卫触发/恢复）
+/// @details 当 CacheAwareCompactor 连续 compact 达阈值时发布（paused=true），
+///          当 ratio 回落到 soft 以下自愈恢复时发布（paused=false）。
+///          UI 据此提示"压缩已暂停，前缀重新 append-only 增长以恢复缓存命中"。
+struct CompactionPausedEvent {
+    std::string session_id;
+    bool paused = true;                  ///< true=卡死守卫触发暂停；false=自愈恢复
+    int32_t consecutive_compacts = 0;    ///< 触发时的连续 compact 次数
+    int32_t tokens_before = 0;           ///< 触发时的 token 数
+    float ratio = 0.0f;                  ///< 触发时的窗口占用比
+    std::string notice;                  ///< 人类可读说明
 };
 
 } // namespace agent

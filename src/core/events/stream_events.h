@@ -68,6 +68,9 @@ struct StreamDoneEvent {
     // 命中 cache 时 prompt_tokens 不含 cache 部分，需单独累加
     int32_t cache_creation_input_tokens = 0;
     int32_t cache_read_input_tokens = 0;
+    // 上下文管理：DeepSeek 硬盘缓存命中（Anthropic adapter 留 0）
+    int32_t prompt_cache_hit_tokens = 0;   ///< DeepSeek usage.prompt_cache_hit_tokens
+    int32_t prompt_cache_miss_tokens = 0;  ///< DeepSeek usage.prompt_cache_miss_tokens
     double prompt_ms = 0.0;
     double generation_ms = 0.0;
 };

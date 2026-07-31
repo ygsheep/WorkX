@@ -19,7 +19,7 @@
 
 #include "agent/api/chat_types.h"
 #include "agent/api/i_completion_provider.h"
-#include "agent/compact/context_compressor.h"
+#include "agent/compact/cache_aware_compactor.h"  // DS_CACHE: 替换死代码 ContextCompressor
 #include "agent/tool/registry.h"
 #include "agent/tool/executor.h"
 #include "agent/tool/context.h"
@@ -100,6 +100,12 @@ struct ReActResult {
     // 用于精确计算当前上下文 token 总量（命中 cache 时 prompt_tokens 不含 cache 部分）
     int32_t cache_creation_input_tokens = 0;
     int32_t cache_read_input_tokens = 0;
+    // 上下文管理：DeepSeek 硬盘缓存命中（Anthropic adapter 留 0）
+    int32_t prompt_cache_hit_tokens = 0;   ///< DeepSeek usage.prompt_cache_hit_tokens
+    int32_t prompt_cache_miss_tokens = 0;  ///< DeepSeek usage.prompt_cache_miss_tokens
+    // DS_CACHE H-2：压缩器改写版本号（run() 结束时回填 m_compactor.rewrite_version()）
+    // ChatSession 据此传入 capture_shape，使 compare_shape 的 log_rewrite 归因生效
+    int32_t rewrite_version = 0;
     double prompt_ms = 0.0;
     double generation_ms = 0.0;
 
@@ -158,7 +164,7 @@ public:
     /// @brief 循环配置
     struct Config {
         int max_iterations = 25;                  ///< 最大迭代轮数
-        ContextCompressor::Config compressor_cfg; ///< 3.3 上下文压缩配置
+        CacheAwareCompactor::Config compactor_cfg; ///< DS_CACHE: 缓存感知压缩配置
     };
 
     /// @brief 步骤回调（每完成一个步骤时调用）
@@ -185,12 +191,15 @@ public:
     /// @param config_manager 配置管理器（H-5：必须非空，注入到 ToolContext）
     /// @param task_manager 任务管理器（可选，用于 BashTool 等后台任务工具）
     /// @param cwd 工作目录（注入到 ToolContext.cwd，空则用进程当前目录）
+    /// @param external_compactor 外部压缩器（DS_CACHE H-3：跨 turn 持久化卡死/rewrite 状态，
+    ///                            nullptr 则使用内部默认 compactor，状态仅 turn 内有效）
     ReActLoop(ICompletionProvider* provider,
               std::shared_ptr<tool::ToolRegistry> registry,
               Config config,
               IConfigManager* config_manager,
               ITaskManager* task_manager = nullptr,
-              std::string cwd = "");
+              std::string cwd = "",
+              CacheAwareCompactor* external_compactor = nullptr);
 
     /// @brief 构造（使用默认配置）
     /// @param config_manager 配置管理器（H-5：必须非空，注入到 ToolContext）
@@ -200,7 +209,7 @@ public:
               IConfigManager* config_manager,
               ITaskManager* task_manager = nullptr,
               std::string cwd = "")
-        : ReActLoop(provider, std::move(registry), Config{}, config_manager, task_manager, std::move(cwd)) {}
+        : ReActLoop(provider, std::move(registry), Config{}, config_manager, task_manager, std::move(cwd), nullptr) {}
 
     ~ReActLoop() = default;
 
@@ -246,6 +255,15 @@ public:
         IReActObserver* observer
     );
 
+    /// @brief DS_CACHE H-3：注入压缩器暂停回调（卡死守卫触发/恢复时通知 ChatSession）
+    /// @details ChatSession 据此发布 CompactionPausedEvent 到 EventBus
+    void set_compaction_paused_callback(CacheAwareCompactor::PausedCallback cb) {
+        m_compactor.set_paused_callback(std::move(cb));
+    }
+
+    /// @brief DS_CACHE M-5：重置压缩器状态（clear_history 时调用）
+    void reset_compactor() { m_compactor.reset(); }
+
 private:
     // ============================================================
     // 内部类型
@@ -260,6 +278,8 @@ private:
         int32_t generated_tokens = 0;
         int32_t cache_creation_input_tokens = 0;  ///< Anthropic cache_creation_input_tokens
         int32_t cache_read_input_tokens = 0;      ///< Anthropic cache_read_input_tokens
+        int32_t prompt_cache_hit_tokens = 0;      ///< DeepSeek usage.prompt_cache_hit_tokens
+        int32_t prompt_cache_miss_tokens = 0;     ///< DeepSeek usage.prompt_cache_miss_tokens
         double prompt_ms = 0.0;
         double generation_ms = 0.0;
 
@@ -315,7 +335,8 @@ private:
     std::shared_ptr<tool::ToolRegistry> m_registry; ///< 工具注册表
     std::unique_ptr<tool::ToolExecutor> m_executor; ///< 工具执行器
     Config m_config;                              ///< 循环配置
-    ContextCompressor m_compressor;               ///< 3.3 上下文压缩器
+    std::unique_ptr<CacheAwareCompactor> m_owned_compactor;  ///< 内部拥有的压缩器（未注入外部时创建）
+    CacheAwareCompactor& m_compactor;             ///< DS_CACHE: 压缩器引用（外部注入 or 内部拥有）
     IConfigManager* m_config_manager = nullptr;   ///< H-5：配置管理器（非拥有，注入到 ToolContext，必须非空）
     ITaskManager* m_task_manager = nullptr;       ///< BashTool 后台任务 DI（可选，注入到 ToolContext）
     std::string m_cwd;                            ///< 工作目录（会话启动时捕获，注入到 ToolContext.cwd）

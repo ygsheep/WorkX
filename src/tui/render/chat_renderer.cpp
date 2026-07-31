@@ -16,6 +16,7 @@
 #include "tui/render/syntax_highlighter.h"
 #include "core/events/event_bus.h"
 #include "core/events/system_events.h"
+#include "core/events/agent_events.h"  // CacheDiagnosticsEvent
 #include "core/task/task_events.h"
 #include "agent/message/types.h"
 
@@ -626,11 +627,14 @@ void ChatRenderer::start() {
                 m_token_stats.update_from_usage(e.prompt_tokens,
                                                 e.generated_tokens,
                                                 e.cache_creation_input_tokens,
-                                                e.cache_read_input_tokens);
+                                                e.cache_read_input_tokens,
+                                                e.prompt_cache_hit_tokens,
+                                                e.prompt_cache_miss_tokens);
             } else {
                 m_token_stats.add_response_estimate(e.full_content, e.full_reasoning);
             }
             m_status_bar->set_cache_read_tokens(m_token_stats.cache_read_tokens());
+            m_status_bar->set_ds_cache_hit_rate(m_token_stats.ds_cache_hit_rate());
 
             m_token_stats.increment_message_count();
             m_terminal->mark_cursor_left_output();
@@ -815,6 +819,24 @@ void ChatRenderer::start() {
             m_terminal->reset_color();
         })
     );
+
+    // ---- CacheDiagnosticsEvent → 缓存劣化归因提示 ----
+    // 仅当 prefix_changed=true 时显示，帮助用户理解命中率下降原因
+    m_token_cache_diag = std::make_unique<agent::EventToken>(
+        bus.subscribe<CacheDiagnosticsEvent>([this](const CacheDiagnosticsEvent& e) {
+            if (!e.prefix_changed) return;
+            std::string reason_str;
+            for (size_t i = 0; i < e.reasons.size(); ++i) {
+                if (i > 0) reason_str += "+";
+                reason_str += e.reasons[i];
+            }
+            m_terminal->set_color(ColorRole::ContextWarning);
+            m_terminal->write(std::format(
+                "  [cache] prefix changed ({}) | miss {} tokens\n",
+                reason_str, e.cache_miss_tokens));
+            m_terminal->reset_color();
+        })
+    );
 }
 
 void ChatRenderer::stop() {
@@ -866,6 +888,9 @@ void ChatRenderer::stop() {
     }
     if (m_token_task_failed && m_token_task_failed->is_valid()) {
         bus.unsubscribe<TaskFailedEvent>(*m_token_task_failed);
+    }
+    if (m_token_cache_diag && m_token_cache_diag->is_valid()) {
+        bus.unsubscribe<CacheDiagnosticsEvent>(*m_token_cache_diag);
     }
 }
 

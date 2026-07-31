@@ -106,6 +106,13 @@ void register_config_defaults(ConfigManager& cfg) {
         .type = ConfigSchema::Type::Int,
         .int_range = std::make_pair<int64_t, int64_t>(0, 2000000)
     });
+    cfg.register_schema({
+        .key = keys::SEND_REASONING,
+        .description = "Send reasoning_content back to model (DeepSeek-reasoner CoT roundtrip, "
+                       "increases prompt but may improve cache hit rate for multi-turn CoT)",
+        .default_value = false,
+        .type = ConfigSchema::Type::Bool
+    });
 
     // === Retry ===
     cfg.register_schema({

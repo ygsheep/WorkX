@@ -39,19 +39,29 @@ public:
     /// @brief 从 StreamDoneEvent 用量更新统计（provider 返回 usage 时使用）
     /// @details Anthropic 命中 prompt cache 时 prompt_tokens 不含 cache 部分，需单独累加。
     ///          generated_tokens 为本次生成量，直接累加到总量。
+    ///          DeepSeek 硬盘缓存命中累计到会话级统计（hit_total/miss_total）。
     /// @param prompt_tokens prompt token 数
     /// @param generated_tokens 生成 token 数
     /// @param cache_creation_input_tokens cache 创建 token 数
     /// @param cache_read_input_tokens cache 命中 token 数
+    /// @param prompt_cache_hit_tokens DeepSeek 硬盘缓存命中 token 数
+    /// @param prompt_cache_miss_tokens DeepSeek 硬盘缓存未命中 token 数
     void update_from_usage(int32_t prompt_tokens,
                            int32_t generated_tokens,
                            int32_t cache_creation_input_tokens,
-                           int32_t cache_read_input_tokens) {
+                           int32_t cache_read_input_tokens,
+                           int32_t prompt_cache_hit_tokens = 0,
+                           int32_t prompt_cache_miss_tokens = 0) {
         m_total_tokens.store(prompt_tokens
                              + cache_creation_input_tokens
                              + cache_read_input_tokens
                              + generated_tokens);
         m_cache_read_tokens.store(cache_read_input_tokens);
+        // DeepSeek 会话级累计（原子累加，用于计算平均命中率）
+        if (prompt_cache_hit_tokens > 0 || prompt_cache_miss_tokens > 0) {
+            m_ds_cache_hit_total.fetch_add(prompt_cache_hit_tokens);
+            m_ds_cache_miss_total.fetch_add(prompt_cache_miss_tokens);
+        }
     }
 
     /// @brief 估算响应内容并累加（provider 不返回 usage 时使用）
@@ -74,6 +84,8 @@ public:
         m_message_count.store(0);
         m_total_tokens.store(0);
         m_cache_read_tokens.store(0);
+        m_ds_cache_hit_total.store(0);
+        m_ds_cache_miss_total.store(0);
     }
 
     // === Getters ===
@@ -81,10 +93,21 @@ public:
     int32_t total_tokens() const { return m_total_tokens.load(); }
     int32_t cache_read_tokens() const { return m_cache_read_tokens.load(); }
 
+    /// @brief DeepSeek 会话级缓存命中率（0-100，无数据时返回 -1）
+    int32_t ds_cache_hit_rate() const {
+        int64_t hit = m_ds_cache_hit_total.load();
+        int64_t miss = m_ds_cache_miss_total.load();
+        int64_t total = hit + miss;
+        if (total == 0) return -1;
+        return static_cast<int32_t>(hit * 100 / total);
+    }
+
 private:
     std::atomic<int32_t> m_message_count{0};
     std::atomic<int32_t> m_total_tokens{0};
     std::atomic<int32_t> m_cache_read_tokens{0};
+    std::atomic<int64_t> m_ds_cache_hit_total{0};   ///< DeepSeek 会话级缓存命中累计
+    std::atomic<int64_t> m_ds_cache_miss_total{0};  ///< DeepSeek 会话级缓存未命中累计
 };
 
 } // namespace tui

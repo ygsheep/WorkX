@@ -9,6 +9,7 @@
 #include "agent/core/react_loop.h"
 #include "agent/core/react_observer.h"
 #include "agent/api/i_stream_reader.h"
+#include "agent/compact/prefix_shape.h"  // DS_CACHE M-2: normalize_tools_schema
 #include "liblogger/logger.h"
 
 #include <cctype>
@@ -31,11 +32,14 @@ ReActLoop::ReActLoop(ICompletionProvider* provider,
                      Config config,
                      IConfigManager* config_manager,
                      ITaskManager* task_manager,
-                     std::string cwd)
+                     std::string cwd,
+                     CacheAwareCompactor* external_compactor)
     : m_provider(provider)
     , m_registry(std::move(registry))
     , m_config(config)
-    , m_compressor(m_config.compressor_cfg)
+    , m_owned_compactor(external_compactor ? nullptr
+                                           : std::make_unique<CacheAwareCompactor>(m_config.compactor_cfg))
+    , m_compactor(external_compactor ? *external_compactor : *m_owned_compactor)
     , m_config_manager(config_manager)
     , m_task_manager(task_manager)
     , m_cwd(std::move(cwd))
@@ -79,8 +83,10 @@ CompletionRequest ReActLoop::build_request(
     }
 
     // 注入工具 schema（启用 function calling）
+    // DS_CACHE M-2：按 function.name 排序后再赋值，消除注册顺序抖动导致的缓存击穿。
+    // 与 prefix_shape::normalize_tools_schema 复用同一逻辑，保证发送字节与 hash 计算一致。
     if (!tools_schema.is_null() && tools_schema.is_array() && !tools_schema.empty()) {
-        request.tools = tools_schema;
+        request.tools = normalize_tools_schema(tools_schema);
     }
 
     return request;
@@ -168,6 +174,8 @@ ReActLoop::ThoughtResult ReActLoop::execute_thought(
             result.generated_tokens = chunk.generated_tokens;
             result.cache_creation_input_tokens = chunk.cache_creation_input_tokens;
             result.cache_read_input_tokens = chunk.cache_read_input_tokens;
+            result.prompt_cache_hit_tokens = chunk.prompt_cache_hit_tokens;
+            result.prompt_cache_miss_tokens = chunk.prompt_cache_miss_tokens;
             result.prompt_ms = chunk.prompt_ms;
             result.generation_ms = chunk.generation_ms;
             result.status = ThoughtResult::Completed;
@@ -380,6 +388,23 @@ ReActResult ReActLoop::run(
                  iteration, messages.size(),
                  (!tools_schema.is_null() && tools_schema.is_array() && !tools_schema.empty()));
 
+        // DS_CACHE M-6：压缩点移至 turn 间（仅 iteration == 1 时执行）
+        // 原实现每 iteration > 1 都调用，会在单 turn 多步推理中过早截短前序 tool_result。
+        // Plan 意图是 turn 间压缩：每 turn 开始时压缩一次，避免 turn 内工具链被破坏。
+        // compactor 状态由 ChatSession 持有跨 turn 持久化（H-3）。
+        if (iteration == 1) {
+            auto compact_result = m_compactor.maybe_compact(messages);
+            if (compact_result.action != CacheAwareCompactor::Action::None
+                && compact_result.action != CacheAwareCompactor::Action::SoftNotice) {
+                LOG_INFO("[react_loop] turn-start compact action={}, snipped={}, folded={}, "
+                         "tokens {} -> {}, rewrite_version={}",
+                         static_cast<int>(compact_result.action),
+                         compact_result.snipped_count, compact_result.compacted_count,
+                         compact_result.tokens_before, compact_result.tokens_after,
+                         m_compactor.rewrite_version());
+            }
+        }
+
         CompletionRequest request = build_request(messages, system_prompt, tools_schema);
         ThoughtResult thought = execute_thought(request, should_cancel, on_token);
 
@@ -438,6 +463,8 @@ ReActResult ReActLoop::run(
         result.generated_tokens = thought.generated_tokens;
         result.cache_creation_input_tokens = thought.cache_creation_input_tokens;
         result.cache_read_input_tokens = thought.cache_read_input_tokens;
+        result.prompt_cache_hit_tokens = thought.prompt_cache_hit_tokens;
+        result.prompt_cache_miss_tokens = thought.prompt_cache_miss_tokens;
         result.prompt_ms = thought.prompt_ms;
         result.generation_ms = thought.generation_ms;
 
@@ -630,6 +657,10 @@ ReActResult ReActLoop::run(
     auto loop_end = std::chrono::steady_clock::now();
     result.total_duration_ms = std::chrono::duration<double, std::milli>(
         loop_end - loop_start).count();
+
+    // DS_CACHE H-2：回填压缩器改写版本号，供 ChatSession 传入 capture_shape
+    // 使 compare_shape 的 log_rewrite 归因在 compact 改写历史后能正确触发
+    result.rewrite_version = m_compactor.rewrite_version();
 
     // 超过最大迭代数：仅当真正跑满 max_iterations 才报错
     // 注意：LLM 返回空 content + 无 tool_use 时也会 break 退出，此时 final_answer 为空，
