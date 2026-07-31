@@ -193,31 +193,24 @@ SessionResult create_session(IConfigManager& cfg,
     }
 
     // ============================================================
-    // 项目会话恢复：创建 SessionStore 并注入 ChatSession
+    // 项目会话恢复：配置懒创建 SessionStore（首条 user 消息时才创建文件）
     // ============================================================
     // 存储路径：<config_dir>/projects/<编码路径>/<session_id>.jsonl
-    // config_dir 由 default_config_path() 的 parent_path() 推导（如 ~/.workx/config.json → ~/.workx）
+    // factory 只传配置，不创建文件；ChatSession 在首条 user 消息时懒创建
     try {
         namespace fs = std::filesystem;
         fs::path config_dir = default_config_path().parent_path();
         std::string cwd = fs::current_path().string();
         fs::path project_dir = session::get_project_session_dir(config_dir, cwd);
-        fs::path session_file = project_dir / (session_id + ".jsonl");
 
-        auto store = std::make_shared<session::SessionStore>(session_file.string(), session_id);
-        if (store->open()) {
-            // 写入 session_start 事件（含 cwd/model/gitBranch 元信息）
-            // gitBranch：简化处理，检测 .git 目录存在则标记 "unknown"，否则空
-            std::string git_branch;
-            if (fs::exists(fs::current_path() / ".git")) {
-                git_branch = "unknown";  // 完整分支名由 main.cpp 启动时注入更准确
-            }
-            store->append_session_start(cwd, result.model_name, git_branch);
-            result.session->set_session_store(store);
-            result.session_store = store;  // 保存到 SessionResult 供 main.cpp 退出时写 session_end
+        std::string git_branch;
+        if (fs::exists(fs::current_path() / ".git")) {
+            git_branch = "unknown";
         }
+        result.session->configure_session_store(
+            project_dir.string(), cwd, result.model_name, git_branch);
     } catch (const std::exception&) {
-        // SessionStore 创建失败不阻断会话启动，仅失去持久化能力
+        // 配置失败不阻断会话启动，仅失去持久化能力
     }
 
     return result;

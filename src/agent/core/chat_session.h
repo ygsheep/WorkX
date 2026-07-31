@@ -124,6 +124,18 @@ public:
     ///          - restore_from_file 加载的历史不会重复持久化
     void set_session_store(std::shared_ptr<agent::session::SessionStore> store);
 
+    /// @brief 配置懒创建 SessionStore 的参数（首条 user 消息时才创建文件）
+    /// @details factory 调用此方法传入配置，不立即创建文件。
+    ///          首条 user 消息持久化时才创建 SessionStore + 写 session_start + title。
+    /// @param project_dir 项目会话目录（<config_dir>/projects/<编码路径>）
+    /// @param cwd 当前工作目录
+    /// @param model 模型名
+    /// @param git_branch git 分支
+    void configure_session_store(const std::string& project_dir,
+                                  const std::string& cwd,
+                                  const std::string& model,
+                                  const std::string& git_branch);
+
     /// @brief 从 JSONL 文件加载历史会话消息
     /// @param file_path JSONL 文件路径
     /// @return true=加载成功（至少有一条消息）
@@ -280,6 +292,13 @@ private:
 
     // 项目会话恢复：JSONL 持久化（可选，设置后每条消息实时追加）
     std::shared_ptr<agent::session::SessionStore> m_session_store;
+
+    // 懒创建 SessionStore 配置（首条 user 消息时才创建文件）
+    bool m_store_configured = false;
+    std::string m_store_project_dir;
+    std::string m_store_cwd;
+    std::string m_store_model;
+    std::string m_store_git_branch;
 
     // H-3：重试策略统一由 HttpRetryPolicy 管理
     HttpRetryPolicy m_retry_policy;

@@ -226,6 +226,18 @@ void ChatSession::set_session_store(std::shared_ptr<agent::session::SessionStore
     m_session_store = std::move(store);
 }
 
+void ChatSession::configure_session_store(const std::string& project_dir,
+                                           const std::string& cwd,
+                                           const std::string& model,
+                                           const std::string& git_branch) {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    m_store_configured = true;
+    m_store_project_dir = project_dir;
+    m_store_cwd = cwd;
+    m_store_model = model;
+    m_store_git_branch = git_branch;
+}
+
 bool ChatSession::restore_from_file(const std::string& file_path) {
     auto messages = agent::session::SessionStore::load_messages(file_path);
     if (messages.empty()) return false;
@@ -287,10 +299,32 @@ bool ChatSession::rename_session(const std::string& title) {
 void ChatSession::persist_message(const ChatMessage& msg) {
     std::shared_ptr<agent::session::SessionStore> store;
     bool is_first_user = false;
+    bool need_lazy_init = false;
+    std::string lazy_project_dir, lazy_cwd, lazy_model, lazy_git_branch;
     {
         std::lock_guard<std::mutex> lock(m_state_mutex);
         store = m_session_store;
-        if (!store) return;
+
+        // 懒创建：首条 user 消息且 SessionStore 未创建时，创建文件 + 写 session_start
+        if (!store && m_store_configured && msg.role == ChatMessage::Role::User) {
+            // 检查是否已有 user 消息（有则不是首条，不应触发懒创建）
+            bool has_user = false;
+            for (const auto& m : m_messages) {
+                if (m.role == ChatMessage::Role::User) {
+                    has_user = true;
+                    break;
+                }
+            }
+            if (!has_user) {
+                need_lazy_init = true;
+                lazy_project_dir = m_store_project_dir;
+                lazy_cwd = m_store_cwd;
+                lazy_model = m_store_model;
+                lazy_git_branch = m_store_git_branch;
+            }
+        }
+
+        if (!store && !need_lazy_init) return;
 
         // 检测是否是首条 user 消息（用于自动生成标题）
         if (msg.role == ChatMessage::Role::User) {
@@ -301,14 +335,9 @@ void ChatSession::persist_message(const ChatMessage& msg) {
                     break;
                 }
             }
-            // 注意：此时 msg 可能已 push_back 到 m_messages，也可能未 push
-            // 若 has_user 为 false，说明 m_messages 中无 user 消息 → 这是首条
-            // 若 has_user 为 true 且 m_messages.back() 就是 msg（刚 push），
-            //   需要进一步检查是否有"其他"user 消息
             if (!has_user) {
                 is_first_user = true;
             } else if (!m_messages.empty() && &m_messages.back() == &msg) {
-                // msg 已 push_back，检查之前是否有 user 消息
                 bool has_other_user = false;
                 for (size_t i = 0; i + 1 < m_messages.size(); ++i) {
                     if (m_messages[i].role == ChatMessage::Role::User) {
@@ -320,6 +349,28 @@ void ChatSession::persist_message(const ChatMessage& msg) {
             }
         }
     }
+
+    // 懒创建 SessionStore（锁外执行文件 I/O）
+    if (need_lazy_init) {
+        try {
+            namespace fs = std::filesystem;
+            fs::path session_file = fs::path(lazy_project_dir) / (m_session_id + ".jsonl");
+            auto new_store = std::make_shared<agent::session::SessionStore>(
+                session_file.string(), m_session_id);
+            if (!new_store->open()) return;
+            new_store->append_session_start(lazy_cwd, lazy_model, lazy_git_branch);
+            // 写入 store 后再持久化消息
+            {
+                std::lock_guard<std::mutex> lock(m_state_mutex);
+                m_session_store = new_store;
+            }
+            store = new_store;
+        } catch (const std::exception&) {
+            return;  // 创建失败，放弃持久化
+        }
+    }
+
+    if (!store) return;
 
     const std::string uuid = core::util::generate_uuid();
     const std::string timestamp = now_iso();
