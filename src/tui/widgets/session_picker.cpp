@@ -175,8 +175,6 @@ std::string pick_session_interactive(
         // 总字节预算 = width。"  " (2) + TL (3) + N*HORIZ (3N) + TR (3) = 8 + 3N ≤ width
         int horiz_count = (width - 8) / 3;
         if (horiz_count < 1) horiz_count = 1;
-        // 内容行内宽度（字节）= 2(缩进) + 3(│) + inner + 3(│) ≤ width → inner ≤ width - 8
-        int inner_bytes = horiz_count * 3;  // 与上下边框对齐
 
         // 上边框：  ╭────╮
         std::string top_border = "  " + TL;
@@ -187,16 +185,23 @@ std::string pick_session_interactive(
 
         // 内容行：  │ ⌕ Search… │
         std::string search_text = search_query.empty() ? "Search..." : search_query;
-        // 内容行字节布局：2(缩进) + 3(│) + 1(空格) + search_text + padding + 3(│)
-        int search_max_bytes = inner_bytes - 1 - 3;  // 留 1 空格 + 右 │ 的 3 字节
-        if (search_max_bytes < 1) search_max_bytes = 1;
-        if (static_cast<int>(search_text.size()) > search_max_bytes) {
-            search_text = search_text.substr(0, search_max_bytes);
+        // 右 │ 的目标字节位置 = 5 + 3*horiz_count（与上边框 ╮ 对齐）
+        // 内容行已用字节 = 2(缩进) + 3(│) + 1(空格) + search_text.size()
+        // padding = 目标位置 - 已用字节
+        int right_pos = 5 + 3 * horiz_count;
+        int used_bytes = 2 + 3 + 1 + static_cast<int>(search_text.size());
+        int fill_bytes = right_pos - used_bytes;
+        if (fill_bytes < 1) fill_bytes = 1;  // 至少 1 空格
+        // 截断过长的 search_text
+        int max_search_bytes = right_pos - used_bytes - 1;
+        if (max_search_bytes < 1) max_search_bytes = 1;
+        if (static_cast<int>(search_text.size()) > max_search_bytes) {
+            search_text = search_text.substr(0, max_search_bytes);
+            used_bytes = 2 + 3 + 1 + static_cast<int>(search_text.size());
+            fill_bytes = right_pos - used_bytes;
+            if (fill_bytes < 1) fill_bytes = 1;
         }
         std::string content_line = "  " + VERT + " " + search_text;
-        int used_bytes = 2 + 3 + 1 + static_cast<int>(search_text.size());
-        int fill_bytes = (2 + 3 + 1 + inner_bytes - 3) - used_bytes;  // 右 │ 前的总填充
-        if (fill_bytes < 0) fill_bytes = 0;
         for (int i = 0; i < fill_bytes; ++i) content_line += " ";
         content_line += VERT;
         ColorRole search_color = search_query.empty() ? ColorRole::Dim : ColorRole::Prompt;
