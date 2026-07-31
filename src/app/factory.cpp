@@ -31,6 +31,7 @@
 #include "agent/api/i_backend_admin.h"  // C-2：dynamic_cast 到 IBackendAdmin*
 #include "agent/core/chat_session.h"
 #include "agent/model/provider_preset.h"
+#include "agent/session/session_store.h"  // 项目会话恢复
 #include "agent/tool/BashTool/bash_tool.h"
 #include "agent/tool/FileEditTool/file_edit_tool.h"
 #include "agent/tool/FileReadTool/file_read_tool.h"
@@ -43,6 +44,7 @@
 #include "core/events/event_bus.h"
 #include "core/events/i_event_bus.h"
 #include "core/task/task_manager.h"
+#include "core/utils/uuid.h"  // 项目会话恢复：UUID 生成
 #include "tui/core/terminal.h"
 
 namespace agent {
@@ -141,13 +143,15 @@ SessionResult create_session(IConfigManager& cfg,
     // 构造 ChatSession（M-1：显式注入 task_manager / event_bus / cfg，不再用单例）
     // C-2：先构造 session，再从 session 暴露的 admin 接口获取 backend_admin
     //      （避免 std::move(backend) 之前赋值导致 ChatSession 构造抛异常时悬垂指针）
+    // 项目会话恢复：生成 UUID 作为 session_id（替换硬编码 "default"）
+    std::string session_id = core::util::generate_uuid();
     int default_retry_delay = preset && preset->retry_delay_ms > 0 ? preset->retry_delay_ms : 1000;
     result.session = std::make_unique<ChatSession>(
         std::move(backend),
         task_manager,
         event_bus,
         cfg,
-        default_retry_delay, "default");
+        default_retry_delay, session_id);
 
     // C-2：session 构造成功后，backend 已由 session 持有。
     // 通过 ChatSession 暴露的 completion_provider() 获取 ICompletionProvider*，
@@ -186,6 +190,34 @@ SessionResult create_session(IConfigManager& cfg,
         namespace fs = std::filesystem;
         fs::path archive_dir = fs::path(save_path).parent_path() / "archive";
         result.session->set_compactor_archive_dir(archive_dir.string());
+    }
+
+    // ============================================================
+    // 项目会话恢复：创建 SessionStore 并注入 ChatSession
+    // ============================================================
+    // 存储路径：<config_dir>/projects/<编码路径>/<session_id>.jsonl
+    // config_dir 由 default_config_path() 的 parent_path() 推导（如 ~/.workx/config.json → ~/.workx）
+    try {
+        namespace fs = std::filesystem;
+        fs::path config_dir = default_config_path().parent_path();
+        std::string cwd = fs::current_path().string();
+        fs::path project_dir = session::get_project_session_dir(config_dir, cwd);
+        fs::path session_file = project_dir / (session_id + ".jsonl");
+
+        auto store = std::make_shared<session::SessionStore>(session_file.string(), session_id);
+        if (store->open()) {
+            // 写入 session_start 事件（含 cwd/model/gitBranch 元信息）
+            // gitBranch：简化处理，检测 .git 目录存在则标记 "unknown"，否则空
+            std::string git_branch;
+            if (fs::exists(fs::current_path() / ".git")) {
+                git_branch = "unknown";  // 完整分支名由 main.cpp 启动时注入更准确
+            }
+            store->append_session_start(cwd, result.model_name, git_branch);
+            result.session->set_session_store(store);
+            result.session_store = store;  // 保存到 SessionResult 供 main.cpp 退出时写 session_end
+        }
+    } catch (const std::exception&) {
+        // SessionStore 创建失败不阻断会话启动，仅失去持久化能力
     }
 
     return result;
