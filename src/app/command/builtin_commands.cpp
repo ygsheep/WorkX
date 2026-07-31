@@ -21,6 +21,7 @@ void register_system_commands(CommandRegistry& registry, const SystemCommandCont
     ChatSession* session = ctx.session;
     auto on_exit = ctx.on_exit;
     auto on_model_select = ctx.on_model_select;
+    auto on_resume = ctx.on_resume;
 
     // help: 列出所有可用命令
     auto help_cmd = make_local_command("help", "显示可用命令列表");

@@ -15,6 +15,7 @@
 #include "tui/core/screen.h"
 #include "tui/core/terminal.h"
 #include "tui/core/color_scheme.h"
+#include "tui/core/platform/i_platform.h"
 
 namespace agent {
 
