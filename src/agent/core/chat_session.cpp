@@ -14,6 +14,7 @@
 #include "core/config/config_manager.h"
 
 #include "agent/api/i_backend.h"
+#include "agent/api/i_stream_reader.h"
 #include <nlohmann/json.hpp>
 
 #include <chrono>
@@ -120,6 +121,27 @@ ChatSession::ChatSession(std::unique_ptr<ICompletionProvider> provider,
         ? cfg.get_or<int>("backend.retry_delay_ms", retry_delay_ms)
         : retry_delay_ms;
 
+    // DS_CACHE H-3：注册压缩器暂停回调，发布 CompactionPausedEvent 到 EventBus
+    m_compactor.set_paused_callback(
+        [this](bool paused, int consecutive_compacts, int32_t tokens, float ratio,
+               const std::string& notice) {
+            m_event_bus.get().publish_async(CompactionPausedEvent{
+                .session_id = m_session_id,
+                .paused = paused,
+                .consecutive_compacts = static_cast<int32_t>(consecutive_compacts),
+                .tokens_before = tokens,
+                .ratio = ratio,
+                .notice = notice
+            });
+        });
+
+    // DS_CACHE M-4：注入 LLM 摘要回调（compact 阶段调用，失败自动 fallback 到机械折叠）
+    // 捕获 this 以访问 m_provider；provider 生命周期与 ChatSession 绑定，安全。
+    m_compactor.set_summarize_fn(
+        [this](const std::vector<ChatMessage>& middle) {
+            return this->summarize_with_llm(middle);
+        });
+
     subscribe_interrupt();
 }
 
@@ -156,6 +178,90 @@ void ChatSession::set_tool_registry(std::shared_ptr<tool::ToolRegistry> registry
 void ChatSession::clear_history() {
     std::lock_guard<std::mutex> lock(m_state_mutex);
     m_messages.clear();
+    // DS_CACHE M-3：移除 m_cache_hit_total/m_cache_miss_total 重置（死代码已删除）
+    // DS_CACHE M-5：重置压缩器状态（卡死守卫/rewrite_version），避免跨 clear_history 泄漏
+    m_compactor.reset();
+    // 重置前缀形状基线
+    m_last_prefix_shape = PrefixShape{};
+}
+
+void ChatSession::set_compactor_context_window(int32_t context_window_tokens) {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    m_compactor.set_context_window(context_window_tokens);
+}
+
+void ChatSession::set_compactor_archive_dir(const std::string& dir) {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    m_compactor.set_archive_dir(dir);
+}
+
+std::string ChatSession::summarize_with_llm(const std::vector<ChatMessage>& middle) {
+    // DS_CACHE M-4：同步调用 LLM 生成中段摘要
+    // 由 compact_middle 在 compact 阶段调用；失败抛异常，由调用方 fallback 到机械折叠
+    if (!m_provider) {
+        throw std::runtime_error("summarize_with_llm: provider is null");
+    }
+    if (middle.empty()) {
+        throw std::runtime_error("summarize_with_llm: empty middle");
+    }
+
+    // 构造摘要请求：system prompt 指示摘要任务 + middle 消息
+    static const std::string k_summary_system_prompt =
+        "你是对话历史压缩助手。请将以下历史对话（含用户问题、助手回答、工具调用结果）"
+        "压缩为一份简洁的结构化摘要，保留：\n"
+        "1. 用户的核心意图与关键约束\n"
+        "2. 已完成的关键操作及其结果（工具名 + 要点）\n"
+        "3. 未解决的问题或待办事项\n"
+        "4. 关键文件路径、错误信息、数值参数\n"
+        "用 <compaction-summary> 标签包裹摘要内容。不超过 500 字。不要添加新信息。";
+
+    CompletionRequest req;
+    // system prompt 作为首条消息（对齐主推理流程的 messages 约定）
+    req.messages.reserve(middle.size() + 1);
+    req.messages.push_back(ChatMessage::system(k_summary_system_prompt));
+    req.messages.insert(req.messages.end(), middle.begin(), middle.end());
+    req.max_tokens = 1024;       // 摘要无需过长
+    req.temperature = 0.3f;      // 低温度保证忠实
+    req.stream = true;
+
+    // 提交流式请求
+    auto reader = m_provider->submit_completion(req);
+    if (!reader) {
+        throw std::runtime_error("summarize_with_llm: submit_completion returned null");
+    }
+
+    // 阻塞读取流直到完成，拼接 content
+    std::string summary;
+    StreamChunk chunk;
+    auto should_stop = []() { return false; };  // 摘要不响应取消信号（短任务）
+    while (true) {
+        auto state = reader->next(should_stop, chunk);
+        if (state == StreamState::HasData) {
+            if (!chunk.content_delta.empty()) {
+                summary += chunk.content_delta;
+            }
+            if (chunk.is_final) {
+                break;
+            }
+        } else if (state == StreamState::Complete) {
+            break;
+        } else if (state == StreamState::Error) {
+            throw std::runtime_error("summarize_with_llm: stream error");
+        } else if (state == StreamState::Cancelled) {
+            throw std::runtime_error("summarize_with_llm: stream cancelled");
+        }
+    }
+
+    if (summary.empty()) {
+        throw std::runtime_error("summarize_with_llm: empty summary");
+    }
+
+    // 确保 <compaction-summary> 包裹（LLM 可能不严格遵循 system prompt）
+    if (summary.find("<compaction-summary>") == std::string::npos) {
+        summary = "<compaction-summary>\n" + summary + "\n</compaction-summary>";
+    }
+
+    return summary;
 }
 
 void ChatSession::regenerate() {
@@ -205,6 +311,8 @@ std::vector<ChatMessage> ChatSession::get_messages() const {
     return m_messages;
 }
 
+// DS_CACHE M-3：session_cache_stats() 已删除（死代码，TUI 使用 token_stats_model）
+
 void ChatSession::run_completion(const std::string& user_text, int retry_attempt) {
     // B.1：拆分后的 run_completion 仅做顶层调度，agent 循环逻辑分发到子方法
     // 子方法返回 AgentStepResult，决定下一步动作（避免 goto 跨变量声明）
@@ -241,18 +349,44 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
             // D-5：注入 IConfigManager，工具通过 ToolContext.config_manager() 访问
             // BashTool DI：注入 TaskManager，工具通过 ToolContext.task_manager() 启动后台任务
             // cwd：注入会话启动时捕获的工作目录，避免运行中 cwd 漂移导致工具在错误目录执行
+            // DS_CACHE H-3：注入 m_compactor 引用，使卡死守卫/rewrite_version 跨 turn 持久化
             ReActLoop loop(m_provider.get(), m_tool_registry, ReActLoop::Config{},
-                           &m_config_manager.get(), &m_task_manager.get(), m_cwd);
+                           &m_config_manager.get(), &m_task_manager.get(), m_cwd,
+                           &m_compactor);
 
             // 3.2：使用 IReActObserver 接口替代 lambda 回调
             // ReActEventPublisher 内部完成 ReActStep → IEventBus 事件转换
             ReActEventPublisher publisher(m_event_bus, m_session_id);
+
+            // ---- DS_CACHE: 捕获前缀形状（用于本轮结束后的缓存劣化归因）----
+            // H-2：cur_shape 在 run() 后二次捕获，以传入压缩器 rewrite_version。
+            //      prev_shape 从上一轮 m_last_prefix_shape 读取（含上轮的 rewrite_version）。
+            PrefixShape prev_shape;
+            {
+                std::lock_guard<std::mutex> lock(m_state_mutex);
+                prev_shape = m_last_prefix_shape;
+            }
+            // 预捕获仅用于 prev_shape 为空（首轮）时的 prefix_hash 基线；
+            // 真正的 cur_shape 在 run() 返回后用 react_result.rewrite_version 二次捕获
+            PrefixShape cur_shape_baseline = capture_shape(m_system_prompt, tools_schema, 0);
+            if (prev_shape.prefix_hash.empty()) {
+                std::lock_guard<std::mutex> lock(m_state_mutex);
+                m_last_prefix_shape = cur_shape_baseline;
+            }
 
             // ---- 执行 ReAct 循环 ----
             ReActResult react_result = loop.run(
                 m_messages, m_system_prompt, tools_schema,
                 should_cancel, &publisher
             );
+
+            // H-2：用 react_result.rewrite_version 二次捕获 cur_shape，使 log_rewrite 归因生效
+            PrefixShape cur_shape = capture_shape(m_system_prompt, tools_schema,
+                                                  react_result.rewrite_version);
+            {
+                std::lock_guard<std::mutex> lock(m_state_mutex);
+                m_last_prefix_shape = cur_shape;
+            }
 
             // ============================================================
             // 结果处理
@@ -275,6 +409,8 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
                     .generated_tokens = react_result.generated_tokens,
                     .cache_creation_input_tokens = react_result.cache_creation_input_tokens,
                     .cache_read_input_tokens = react_result.cache_read_input_tokens,
+                    .prompt_cache_hit_tokens = react_result.prompt_cache_hit_tokens,
+                    .prompt_cache_miss_tokens = react_result.prompt_cache_miss_tokens,
                     .prompt_ms = react_result.prompt_ms,
                     .generation_ms = react_result.generation_ms
                 });
@@ -344,9 +480,33 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
                 .generated_tokens = react_result.generated_tokens,
                 .cache_creation_input_tokens = react_result.cache_creation_input_tokens,
                 .cache_read_input_tokens = react_result.cache_read_input_tokens,
+                .prompt_cache_hit_tokens = react_result.prompt_cache_hit_tokens,
+                .prompt_cache_miss_tokens = react_result.prompt_cache_miss_tokens,
                 .prompt_ms = react_result.prompt_ms,
                 .generation_ms = react_result.generation_ms
             });
+
+            // DS_CACHE M-3：移除 m_cache_hit_total/m_cache_miss_total 累加（死代码已删除）
+            // TUI 通过 token_stats_model 的 update_from_usage 自行累计
+
+            // DS_CACHE: 发布缓存诊断事件（前缀变化归因）
+            // 仅当前缀变化或本轮有 cache 数据时发布，避免无意义事件刷屏
+            if (!prev_shape.prefix_hash.empty() || react_result.prompt_cache_hit_tokens > 0
+                || react_result.prompt_cache_miss_tokens > 0) {
+                auto diag = compare_shape(prev_shape, cur_shape,
+                                          react_result.prompt_cache_hit_tokens,
+                                          react_result.prompt_cache_miss_tokens);
+                if (diag.prefix_changed || diag.cache_miss_tokens > 0) {
+                    m_event_bus.get().publish_async(CacheDiagnosticsEvent{
+                        .session_id = m_session_id,
+                        .prefix_hash = diag.prefix_hash,
+                        .prefix_changed = diag.prefix_changed,
+                        .reasons = diag.reasons,
+                        .cache_hit_tokens = diag.cache_hit_tokens,
+                        .cache_miss_tokens = diag.cache_miss_tokens
+                    });
+                }
+            }
 
             m_event_bus.get().publish_async(AgentDoneEvent{
                 .final_response = react_result.final_answer,

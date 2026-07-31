@@ -35,6 +35,7 @@ struct BackendConfig {
     std::string api_key;            ///< API Key
     std::string model_name;         ///< 模型名称
     int timeout_ms = 30000;         ///< HTTP 超时（毫秒）
+    bool send_reasoning_content = false;  ///< DS_CACHE P2：是否往返 reasoning_content（DeepSeek-reasoner）
 
     // Local 配置（Phase 5）
     std::string model_path;

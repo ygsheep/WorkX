@@ -26,6 +26,8 @@
 #include "agent/message/types.h"
 #include "agent/tool/registry.h"
 #include "agent/tool/executor.h"
+#include "agent/compact/prefix_shape.h"  // DS_CACHE: 前缀形状追踪
+#include "agent/compact/cache_aware_compactor.h"  // DS_CACHE H-3: 跨 turn 持久化的压缩器
 #include "core/task/task_manager.h"
 
 namespace agent {
@@ -105,6 +107,15 @@ public:
     /// @brief 获取对话历史（返回拷贝，线程安全）
     std::vector<ChatMessage> get_messages() const;
 
+    /// @brief DS_CACHE H-4：配置压缩器上下文窗口（从 provider preset 注入）
+    /// @details 必须在首次 send_message 前调用。影响压缩水位判定。
+    void set_compactor_context_window(int32_t context_window_tokens);
+
+    /// @brief DS_CACHE M-1：配置压缩器归档目录（compact 折叠前归档原消息）
+    /// @details 必须在首次 send_message 前调用。非空时折叠的中段消息会被
+    ///          序列化到 <archive_dir>/<timestamp>.jsonl，保证可追溯。
+    void set_compactor_archive_dir(const std::string& dir);
+
     /// @brief 获取会话 ID
     const std::string& session_id() const { return m_session_id; }
 
@@ -180,12 +191,33 @@ private:
     /// @brief 取消中断订阅
     void unsubscribe_interrupt();
 
+    /// @brief DS_CACHE M-4：LLM 摘要回调（注入到 m_compactor）
+    /// @param middle 待摘要的中段消息序列
+    /// @return LLM 生成的摘要文本（失败时抛异常，由 compact_middle fallback 到机械折叠）
+    /// @details 同步调用 m_provider 完成摘要生成：
+    ///          1. 构造摘要 system prompt + middle 消息
+    ///          2. submit_completion 提交
+    ///          3. 阻塞 next() 读取流直到 Complete，拼接 content
+    ///          4. 失败（nullptr/Error/Cancelled）抛异常触发 fallback
+    std::string summarize_with_llm(const std::vector<ChatMessage>& middle);
+
     std::unique_ptr<ICompletionProvider> m_provider;
     std::vector<ChatMessage> m_messages;
     std::string m_system_prompt;
     std::string m_session_id;           ///< 会话标识（构造后不变，无需加锁）
     std::string m_cwd;                  ///< 会话启动时的工作目录（构造时捕获，注入到 ReActLoop）
     std::atomic<bool> m_generating{false};
+
+    // DS_CACHE M-3：移除 m_cache_hit_total/m_cache_miss_total 死代码
+    // （TUI 使用 token_stats_model.h 自有的累计器，ChatSession 侧为死代码）
+
+    // 上一轮前缀形状（用于本轮对比，诊断缓存劣化归因）
+    // 由 m_state_mutex 保护（与 system_prompt / tools 同步更新）
+    PrefixShape m_last_prefix_shape;
+
+    // DS_CACHE H-3：跨 turn 持久化的压缩器（卡死守卫/rewrite_version 跨 turn 累积）
+    // 由 m_state_mutex 保护（与 messages 生命周期同步）
+    CacheAwareCompactor m_compactor;
 
     // D-1：任务管理器引用（非拥有，构造注入；ChatSession 不可移动，引用安全）
     std::reference_wrapper<ITaskManager> m_task_manager;

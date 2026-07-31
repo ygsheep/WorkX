@@ -121,6 +121,12 @@ struct StreamChunk {
     int32_t cache_read_input_tokens = 0;      ///< Anthropic cache_read_input_tokens
     std::string response_id;                  ///< Anthropic message.id（并行 tool_use 拆分识别）
 
+    // 上下文管理：DeepSeek 硬盘缓存命中（Anthropic adapter 留 0）
+    // usage.prompt_cache_hit_tokens / prompt_cache_miss_tokens
+    // 命中部分不计入 prompt_tokens，需单独累加用于命中率观测
+    int32_t prompt_cache_hit_tokens = 0;   ///< DeepSeek usage.prompt_cache_hit_tokens
+    int32_t prompt_cache_miss_tokens = 0;  ///< DeepSeek usage.prompt_cache_miss_tokens
+
     // tool_use 流式事件（Anthropic content_block_start/delta）
     bool is_tool_use_start = false;     ///< tool_use content_block 开始
     bool is_tool_use_delta = false;     ///< tool_use input JSON 增量

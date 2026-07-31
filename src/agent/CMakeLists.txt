@@ -17,6 +17,10 @@ target_sources(libworkx PRIVATE
 
     # compact
     compact/token_count.cpp
+    compact/prefix_shape.cpp
+    compact/cache_aware_compactor.cpp
+    compact/tool_result_maintainer.cpp
+    compact/sha256.cpp
 
     # core
     core/chat_session.cpp

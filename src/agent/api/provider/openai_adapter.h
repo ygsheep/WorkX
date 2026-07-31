@@ -32,6 +32,17 @@ public:
 
     /// @brief OpenAI 支持 /v1/models 端点
     ModelEndpointResult get_models_endpoint() const override;
+
+    /// @brief DS_CACHE P2：设置是否把 reasoning_content 往返发送给模型
+    /// @details DeepSeek-reasoner 支持 reasoning_content 字段往返，CoT 进前缀可提升
+    ///          多轮对话缓存命中率。默认 false（不发送，兼容 Gemma 等非标准模型）。
+    ///          仅对 DeepSeek-reasoner 等 thinking 模型开启。
+    /// @note 必须在 build_request_body 调用前设置
+    void set_send_reasoning_content(bool enabled) { m_send_reasoning_content = enabled; }
+    bool send_reasoning_content() const { return m_send_reasoning_content; }
+
+private:
+    bool m_send_reasoning_content = false;  ///< DS_CACHE P2：是否往返 reasoning_content
 };
 
 } // namespace agent

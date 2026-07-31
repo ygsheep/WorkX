@@ -30,6 +30,7 @@ namespace keys {
     constexpr const char* PROVIDER     = "backend.provider";
     constexpr const char* TIMEOUT_MS   = "backend.timeout_ms";
     constexpr const char* CONTEXT_LENGTH = "backend.context_length";  // 模型上下文窗口（token），覆盖 preset 默认值
+    constexpr const char* SEND_REASONING = "backend.send_reasoning_content";  // DS_CACHE P2：是否把 reasoning_content 往返发送给模型（DeepSeek-reasoner CoT 进前缀，默认 false）
 
     // Retry
     constexpr const char* RETRY_COUNT    = "backend.retry_count";

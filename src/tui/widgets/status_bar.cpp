@@ -64,6 +64,11 @@ void StatusBar::set_cache_read_tokens(int32_t count) {
     m_cache_read_tokens = count;
 }
 
+void StatusBar::set_ds_cache_hit_rate(int32_t rate) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_ds_cache_hit_rate = rate;
+}
+
 void StatusBar::start_session_timer() {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_session_start = std::chrono::steady_clock::now();
@@ -262,6 +267,10 @@ std::string StatusBar::format_bar() const {
     std::string cache_str;
     if (m_cache_read_tokens > 0) {
         cache_str = " \xc2\xb7 cache " + fmt_k(m_cache_read_tokens);
+    }
+    // DeepSeek 会话级缓存命中率：rate >= 0 时追加显示（如 "· ds 87%"）
+    if (m_ds_cache_hit_rate >= 0) {
+        cache_str += " \xc2\xb7 ds " + std::to_string(m_ds_cache_hit_rate) + "%";
     }
 
     std::string bar = " "

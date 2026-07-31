@@ -71,6 +71,71 @@ TEST_CASE("OpenAIAdapter build_request_body", "[provider][openai]") {
     REQUIRE(body.find("\"role\":\"assistant\"") != std::string::npos);
 }
 
+TEST_CASE("OpenAIAdapter reasoning_content roundtrip (DS_CACHE P2)", "[provider][openai][ds_cache]") {
+    SECTION("default: reasoning_content NOT sent") {
+        OpenAIAdapter adapter;
+        REQUIRE_FALSE(adapter.send_reasoning_content());
+
+        CompletionRequest request;
+        request.stream = false;
+        auto msg = ChatMessage::assistant("answer");
+        msg.reasoning_content = "secret thinking process";
+        request.messages.push_back(ChatMessage::user("Q"));
+        request.messages.push_back(msg);
+
+        auto body = adapter.build_request_body(request, "deepseek-reasoner");
+        // 默认不发送 reasoning_content
+        REQUIRE(body.find("reasoning_content") == std::string::npos);
+        REQUIRE(body.find("secret thinking process") == std::string::npos);
+    }
+
+    SECTION("enabled: reasoning_content sent for assistant role") {
+        OpenAIAdapter adapter;
+        adapter.set_send_reasoning_content(true);
+        REQUIRE(adapter.send_reasoning_content());
+
+        CompletionRequest request;
+        request.stream = false;
+        auto msg = ChatMessage::assistant("answer");
+        msg.reasoning_content = "chain of thought here";
+        request.messages.push_back(ChatMessage::user("Q"));
+        request.messages.push_back(msg);
+
+        auto body = adapter.build_request_body(request, "deepseek-reasoner");
+        // 开启后 reasoning_content 出现在请求体中
+        REQUIRE(body.find("reasoning_content") != std::string::npos);
+        REQUIRE(body.find("chain of thought here") != std::string::npos);
+    }
+
+    SECTION("enabled: empty reasoning_content not sent") {
+        OpenAIAdapter adapter;
+        adapter.set_send_reasoning_content(true);
+
+        CompletionRequest request;
+        request.stream = false;
+        request.messages.push_back(ChatMessage::user("Q"));
+        request.messages.push_back(ChatMessage::assistant("answer"));  // reasoning_content 为空
+
+        auto body = adapter.build_request_body(request, "deepseek-reasoner");
+        // 空 reasoning_content 不发送字段
+        REQUIRE(body.find("reasoning_content") == std::string::npos);
+    }
+
+    SECTION("enabled: user/tool role reasoning_content not sent") {
+        OpenAIAdapter adapter;
+        adapter.set_send_reasoning_content(true);
+
+        CompletionRequest request;
+        request.stream = false;
+        auto user_msg = ChatMessage::user("Q");
+        user_msg.reasoning_content = "should not appear";  // user 角色不应发送
+        request.messages.push_back(user_msg);
+
+        auto body = adapter.build_request_body(request, "deepseek-reasoner");
+        REQUIRE(body.find("should not appear") == std::string::npos);
+    }
+}
+
 TEST_CASE("OpenAIAdapter parse_sse_event", "[provider][openai]") {
     OpenAIAdapter adapter;
 

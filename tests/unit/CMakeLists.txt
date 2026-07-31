@@ -19,6 +19,10 @@ set(UNIT_TEST_SOURCES
     agent/model/test_provider_preset.cpp
     agent/model/test_model_config.cpp
     agent/compact/test_token_count.cpp
+    agent/compact/test_prefix_shape.cpp
+    agent/compact/test_tool_result_maintainer.cpp
+    agent/compact/test_cache_aware_compactor.cpp
+    agent/compact/test_sha256.cpp
     agent/input/test_input_processor.cpp
     agent/tool/test_file_edit_tool.cpp
     agent/tool/test_tool_context.cpp

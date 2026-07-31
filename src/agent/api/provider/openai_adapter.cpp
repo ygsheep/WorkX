@@ -64,7 +64,13 @@ std::string OpenAIAdapter::build_request_body(const CompletionRequest& request,
         } else {
             m["content"] = msg.content;
         }
-        // 注意：reasoning_content 不发送给模型（非标准字段，会干扰 Gemma 等模型）
+        // DS_CACHE P2：reasoning_content 可选往返
+        // 默认不发送（非标准字段，会干扰 Gemma 等模型）
+        // 开启时（DeepSeek-reasoner 等 thinking 模型）：把 CoT 作为前缀发送，提升多轮缓存命中
+        if (m_send_reasoning_content && msg.role == ChatMessage::Role::Assistant
+            && !msg.reasoning_content.empty()) {
+            m["reasoning_content"] = msg.reasoning_content;
+        }
         if (msg.role == ChatMessage::Role::Tool) {
             if (msg.tool_call_id.empty()) {
                 continue;  // 跳过无效 Tool 消息
@@ -153,6 +159,9 @@ bool OpenAIAdapter::parse_sse_event(const std::string& /*event_type*/,
                 const auto& usage = json_obj.value("usage", nlohmann::json::object());
                 out.prompt_tokens = usage.value("prompt_tokens", 0);
                 out.generated_tokens = usage.value("completion_tokens", 0);
+                // DeepSeek 硬盘缓存命中字段（其它 provider 无此字段时为 0）
+                out.prompt_cache_hit_tokens = usage.value("prompt_cache_hit_tokens", 0);
+                out.prompt_cache_miss_tokens = usage.value("prompt_cache_miss_tokens", 0);
                 return true;  // 仅更新 usage，不算 final
             }
             return false;
@@ -221,6 +230,9 @@ bool OpenAIAdapter::parse_sse_event(const std::string& /*event_type*/,
                     const auto& usage = json_obj.value("usage", nlohmann::json::object());
                     out.prompt_tokens = usage.value("prompt_tokens", 0);
                     out.generated_tokens = usage.value("completion_tokens", 0);
+                    // DeepSeek 硬盘缓存命中字段（其它 provider 无此字段时为 0）
+                    out.prompt_cache_hit_tokens = usage.value("prompt_cache_hit_tokens", 0);
+                    out.prompt_cache_miss_tokens = usage.value("prompt_cache_miss_tokens", 0);
                 }
             }
         }
