@@ -38,7 +38,6 @@
 #include "app/config/app_config.h"
 #include "app/config/cli_args.h"
 #include "app/factory.h"
-#include "app/session_restore.h"  // 项目会话恢复
 #include "app/ui/model_selector.h"
 #include "app/ui/path_completer.h"
 #include "app/ui/file_index.h"
@@ -53,7 +52,7 @@
 #include "tui/widgets/bottom_bar_manager.h"
 #include "tui/widgets/command_panel.h"
 #include "tui/widgets/status_bar.h"
-#include "tui/widgets/session_picker.h"  // /resume 会话选择面板
+#include "tui/widgets/session_picker.h"  // 启动恢复 + /resume 会话选择面板
 
 namespace agent {
 
@@ -113,17 +112,6 @@ static int run(int argc, char* argv[]) {
         std::cerr << "[debug]   remote:    " << cfg.get_or<std::string>(keys::REMOTE_URL, "(not set)") << "\n";
         std::cerr << "[debug]   model:     " << cfg.get_or<std::string>(keys::MODEL_NAME, "(not set)") << "\n";
         std::cerr << "[debug]   simple_io: " << (cfg.get_or<bool>(keys::SIMPLE_IO, false) ? "true" : "false") << "\n";
-    }
-
-    // ---- 项目会话恢复：在 terminal 初始化前询问（避免 raw 模式冲突）----
-    // 检查历史会话，用户可选择恢复或开新会话
-    std::optional<std::string> restore_file;
-    {
-        namespace fs = std::filesystem;
-        fs::path config_dir = default_config_path().parent_path();
-        std::string cwd = fs::current_path().string();
-        fs::path project_dir = agent::session::get_project_session_dir(config_dir, cwd);
-        restore_file = prompt_restore_session(project_dir.string());
     }
 
     // ---- Terminal（D-2：委托工厂构建 config；H-4：显式注入三大依赖）----
@@ -213,12 +201,26 @@ static int run(int argc, char* argv[]) {
     // 项目会话恢复：保存 SessionStore 供退出时写 session_end
     auto session_store = std::move(session_result.session_store);
 
-    // 项目会话恢复：用户选择恢复时加载历史消息
-    if (session && restore_file) {
-        if (session->restore_from_file(*restore_file)) {
-            std::cerr << "[info] 已恢复历史会话\n";
-        } else {
-            std::cerr << "[warn] 恢复会话失败，启动新会话\n";
+    // 项目会话恢复：检测历史会话，有则直接打开 TUI 选择面板（统一 UX，无乱码）
+    if (session) {
+        namespace fs = std::filesystem;
+        fs::path config_dir = default_config_path().parent_path();
+        std::string cwd = fs::current_path().string();
+        fs::path project_dir = agent::session::get_project_session_dir(config_dir, cwd);
+
+        // 检查是否有历史会话
+        auto sessions = agent::session::SessionStore::list_sessions(project_dir.string());
+        if (!sessions.empty()) {
+            // 有历史会话，打开 SessionPicker 面板
+            std::string selected_path = pick_session_interactive(
+                &terminal, &screen, project_dir.string());
+            if (!selected_path.empty()) {
+                // 用户选择恢复历史会话
+                if (session->switch_session(selected_path)) {
+                    // 切换成功，更新 session_store 引用（退出时写 session_end 用）
+                    session_store = session->session_store();
+                }
+            }
         }
     }
 
