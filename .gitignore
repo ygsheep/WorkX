@@ -6,6 +6,9 @@ _build/
 vcpkg_installed/
 .vcpkg/
 
+example\cc
+example\DeepSeek-Reasonix
+
 # IDE and editor directories
 .idea/
 .trae/
