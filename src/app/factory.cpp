@@ -31,12 +31,15 @@
 #include "agent/api/i_backend_admin.h"  // C-2：dynamic_cast 到 IBackendAdmin*
 #include "agent/core/chat_session.h"
 #include "agent/model/provider_preset.h"
+#include "agent/prompt/memory.h"  // 项目记忆加载（CLAUDE.md / AGENT.md）
 #include "agent/session/session_store.h"  // 项目会话恢复
 #include "agent/tool/BashTool/bash_tool.h"
+#include "agent/tool/AskUser/AskUserTool.h"
 #include "agent/tool/FileEditTool/file_edit_tool.h"
 #include "agent/tool/FileReadTool/file_read_tool.h"
 #include "agent/tool/FileWriteTool/file_write_tool.h"
 #include "agent/tool/GlobTool/glob_tool.h"
+#include "agent/tool/GrepTool/grep_tool.h"
 #include "agent/tool/PowerShellTool/powershell_tool.h"
 #include "agent/tool/ShellTool/shell_detector.h"
 #include "agent/tool/registry.h"
@@ -226,6 +229,8 @@ void register_builtin_tools(tool::ToolRegistry& registry) {
     registry.register_tool(std::make_shared<tool::FileEditTool>());
     registry.register_tool(std::make_shared<tool::BashTool>());
     registry.register_tool(std::make_shared<tool::GlobTool>());
+    registry.register_tool(std::make_shared<tool::GrepTool>());
+    registry.register_tool(std::make_shared<tool::AskUserTool>());
 
     // Windows 平台额外注册 PowerShellTool（对齐 Claude Code 的条件注册策略）
     // BashTool（cmd.exe）和 PowerShellTool 并存，由模型根据任务特征自行选用
@@ -376,6 +381,14 @@ std::string build_system_prompt(const std::string& user_prompt,
     // 注入环境上下文（<env> 段，对齐 Claude Code）
     sys_prompt += "\n\n";
     sys_prompt += build_environment_context();
+
+    // 注入项目记忆（CLAUDE.md / AGENT.md，从 CWD 向上遍历）
+    // 放在环境上下文之后、工具 prompt 之前，让项目约定优先级高于工具说明
+    std::string project_memory = prompt::load_and_format_project_memory(std::filesystem::current_path());
+    if (!project_memory.empty()) {
+        sys_prompt += "\n\n";
+        sys_prompt += project_memory;
+    }
 
     // 拼接工具 prompt
     for (const auto& t : registry.get_all_tools()) {

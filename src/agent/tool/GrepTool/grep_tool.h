@@ -1,9 +1,9 @@
 /**
  * @file grep_tool.h
  * @brief GrepTool — 内容搜索工具
- * @details 在文件中搜索匹配的行，支持正则和字面量
- * @version 1.0.0
- * @date 2026-07
+ * @details 调用 ripgrep (rg) 在文件中搜索匹配的行，支持正则和字面量
+ * @version 1.1.0
+ * @date 2026-08
  */
 
 #pragma once
@@ -17,8 +17,10 @@ namespace agent::tool {
 /// @brief GrepTool — 内容搜索工具
 ///
 /// 在指定路径下搜索文件内容：
+/// - 内部调用捆绑的 ripgrep (rg) 实现高性能搜索
 /// - 支持正则表达式和字面量匹配
 /// - 支持大小写敏感/忽略
+/// - 支持 glob 过滤文件（如 *.cpp）
 /// - 返回匹配的文件名、行号、行内容
 class GrepTool : public ITool {
 public:

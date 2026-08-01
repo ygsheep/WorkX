@@ -30,15 +30,28 @@ constexpr int kMaxTimeoutMs = 600'000;
 constexpr size_t kMaxOutputChars = 8'000;
 
 /// @brief 截断输出到指定字符数，保留头尾
-/// @details 对齐 ToolExecutor::finalize_result 的截断逻辑
+/// @details 对齐 ToolExecutor::finalize_result 的截断逻辑。
+///          UTF-8 安全：截断点回退到字符边界，避免在多字节字符中间截断。
 inline std::string truncate_output(std::string s, size_t max_chars = kMaxOutputChars) {
     if (s.size() <= max_chars) return s;
     const size_t head = max_chars / 2;
     const size_t tail = max_chars - head;
-    const size_t omitted = s.size() - max_chars;
-    return s.substr(0, head) +
+
+    // UTF-8 安全截断：回退到非 continuation byte
+    auto safe_pos = [](const std::string& str, size_t pos) -> size_t {
+        if (pos >= str.size()) return str.size();
+        while (pos > 0 && (static_cast<unsigned char>(str[pos]) & 0xC0) == 0x80) {
+            --pos;
+        }
+        return pos;
+    };
+
+    const size_t head_end = safe_pos(s, head);
+    const size_t tail_start = safe_pos(s, s.size() - tail);
+    const size_t omitted = s.size() - head_end - (s.size() - tail_start);
+    return s.substr(0, head_end) +
            std::format("\n... [output truncated, {} characters omitted] ...\n", omitted) +
-           s.substr(s.size() - tail);
+           s.substr(tail_start);
 }
 
 /// @brief 去除连续空行（对齐 cc stripEmptyLines）

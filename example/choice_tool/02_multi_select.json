@@ -1,0 +1,17 @@
+{
+  "_comment": "场景 2：单问题多选 — allow_custom_input 设为 false，不添加 ✎ 自定义输入 选项",
+  "questions": [
+    {
+      "question": "选择要修改的文件？",
+      "header": "文件",
+      "multiSelect": true,
+      "allow_custom_input": false,
+      "options": [
+        { "label": "src/app/main.cpp" },
+        { "label": "src/agent/core/chat_session.h" },
+        { "label": "src/agent/core/chat_session.cpp" },
+        { "label": "src/app/factory.cpp" }
+      ]
+    }
+  ]
+}

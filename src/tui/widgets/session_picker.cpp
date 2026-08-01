@@ -120,13 +120,8 @@ std::string pick_session_interactive(
     Terminal* term, Screen* scr,
     const std::string& project_dir)
 {
-    // 加载会话列表
+    // 加载会话列表（可能为空，空列表也显示面板，列表区提示"没有可恢复会话"）
     auto all_sessions = session::SessionStore::list_sessions(project_dir);
-
-    if (all_sessions.empty()) {
-        // 无历史会话，直接返回空
-        return "";
-    }
 
     // 过滤后的会话列表（根据搜索词）
     std::vector<session::SessionMeta> filtered = all_sessions;
@@ -220,7 +215,11 @@ std::string pick_session_interactive(
 
         // ===== 会话列表（双行条目）=====
         if (filtered.empty()) {
-            scr->write(row, 0, "    (无匹配会话)", ColorRole::Dim);
+            // 区分两种空状态：无历史会话 vs 搜索无匹配
+            std::string empty_hint = all_sessions.empty()
+                ? "    没有可恢复会话"
+                : "    (无匹配会话)";
+            scr->write(row, 0, empty_hint, ColorRole::Dim);
             row++;
         } else {
             // 计算可见区域剩余行数

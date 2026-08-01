@@ -11,8 +11,15 @@
 
 #include <string>
 #include <vector>
+#include <future>
+#include <memory>
+#include <nlohmann/json.hpp>
 
 #include "core/tool_kind.h"  // C-3：直接引用 core 层规范位置，避免 core→agent 分层越界
+
+namespace tui {
+struct ChoiceResult;  // 前向声明，避免本头强依赖 choice_panel.h
+}
 
 namespace agent {
 
@@ -73,6 +80,20 @@ struct CompactionPausedEvent {
     int32_t tokens_before = 0;           ///< 触发时的 token 数
     float ratio = 0.0f;                  ///< 触发时的窗口占用比
     std::string notice;                  ///< 人类可读说明
+};
+
+/// @brief AskUser 请求事件（AskUserTool → TUI，触发 ChoicePanel 模态）
+/// @details AskUserTool 在工作线程发布本事件后阻塞等待 result_promise；
+///          TUI 主循环 drain 异步事件后弹出 ChoicePanel，用户操作完成时
+///          调用 result_promise->set_value() 回填结果唤醒工作线程。
+///          timeout_ms > 0 时，工作线程等待超时后自动返回 timeout 状态。
+struct AskUserRequestEvent {
+    std::string session_id;
+    nlohmann::json questions;   ///< 原样转交 parse_choice_config 的 JSON
+    int32_t timeout_ms = 0;     ///< 超时毫秒（0=不限时；>0 超时自动返回）
+    /// @brief 结果回填通道：TUI 设置 value 后唤醒阻塞的 AskUserTool
+    /// @details shared_ptr 使事件按值传递时 promise 仍共享同一实例
+    std::shared_ptr<std::promise<tui::ChoiceResult>> result_promise;
 };
 
 } // namespace agent

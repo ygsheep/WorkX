@@ -597,6 +597,10 @@ void ChatRenderer::start() {
                     m_thinking_start_time = std::chrono::steady_clock::now();
                     m_thinking_seconds.store(0);
                     m_reasoning_buffer.clear();
+                    m_thinking_marker_physical_row = 0;
+                    m_thinking_marker_offset = 0;
+                    m_thinking_expanded = false;
+                    m_thinking_used_full_overlay = false;
 
                     // 启动 Spinner（思考计时）
                     m_terminal->spinner_start("Thinking");
@@ -652,6 +656,7 @@ void ChatRenderer::start() {
                     m_terminal->write(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83\xe4\xb8\xad... (ctrl+o \xe6\x9f\xa5\xe7\x9c\x8b)\n");
                     m_terminal->reset_color();
                     m_thinking_indicator_shown = true;
+                    m_thinking_marker_offset = 1;  // "思考中" 行会被覆盖，但 DisplayBuffer 仍保留
 
                     transition_to(TuiState::THINKING);
                     m_status_bar->set_state(TuiState::THINKING);
@@ -683,7 +688,10 @@ void ChatRenderer::start() {
                         m_terminal->set_color(ColorRole::Success);
                         m_terminal->write(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83 ");
                         m_terminal->write(std::to_string(m_thinking_seconds.load()));
-                        m_terminal->write("s (ctrl+o \xe6\x9f\xa5\xe7\x9c\x8b)\n\n");
+                        m_terminal->write("s (ctrl+o \xe6\x9f\xa5\xe7\x9c\x8b)\n");
+                        // 记录标记物理行号（此时标记行已入 DisplayBuffer，row_count 含标记行）
+                        m_thinking_marker_physical_row = m_terminal->display_buffer_row_count();
+                        m_terminal->write("\n");
                         m_terminal->reset_color();
                     }
 
@@ -732,7 +740,9 @@ void ChatRenderer::start() {
                 m_terminal->set_color(ColorRole::Success);
                 m_terminal->write(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83 ");  // ● (绿色)
                 m_terminal->write(std::to_string(m_thinking_seconds.load()));
-                m_terminal->write("s (ctrl+o \xe6\x9f\xa5\xe7\x9c\x8b)\n\n");
+                m_terminal->write("s (ctrl+o \xe6\x9f\xa5\xe7\x9c\x8b)\n");
+                m_thinking_marker_physical_row = m_terminal->display_buffer_row_count();
+                m_terminal->write("\n");
                 m_terminal->reset_color();
             }
         })
@@ -760,7 +770,9 @@ void ChatRenderer::start() {
                 m_terminal->set_color(ColorRole::Success);
                 m_terminal->write(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83 ");  // ● (绿色)
                 m_terminal->write(std::to_string(m_thinking_seconds.load()));
-                m_terminal->write("s (ctrl+o \xe6\x9f\xa5\xe7\x9c\x8b)\n\n");
+                m_terminal->write("s (ctrl+o \xe6\x9f\xa5\xe7\x9c\x8b)\n");
+                m_thinking_marker_physical_row = m_terminal->display_buffer_row_count();
+                m_terminal->write("\n");
                 m_terminal->reset_color();
             } else {
                 m_terminal->write("\n");
@@ -1008,6 +1020,19 @@ void ChatRenderer::start() {
             m_terminal->reset_color();
         })
     );
+
+    // ---- AskUserRequestEvent → 设置 pending 请求并唤醒主循环 ----
+    // 事件泵线程 drain 到 AskUser 请求时，存入 Terminal 的 pending 槽，
+    // 并通过 platform wake_event 唤醒阻塞在 read_char 的主循环。
+    // 主循环取出 pending 后弹出 ChoicePanel 模态，结果回填 promise 唤醒工作线程。
+    m_token_ask_user = std::make_unique<agent::EventToken>(
+        bus.subscribe<AskUserRequestEvent>([this](const AskUserRequestEvent& e) {
+            tui::detail::PendingAskRequest req;
+            req.questions = e.questions;
+            req.result_promise = e.result_promise;
+            m_terminal->set_pending_ask(std::move(req));
+        })
+    );
 }
 
 void ChatRenderer::stop() {
@@ -1063,6 +1088,9 @@ void ChatRenderer::stop() {
     if (m_token_cache_diag && m_token_cache_diag->is_valid()) {
         bus.unsubscribe<CacheDiagnosticsEvent>(*m_token_cache_diag);
     }
+    if (m_token_ask_user && m_token_ask_user->is_valid()) {
+        bus.unsubscribe<AskUserRequestEvent>(*m_token_ask_user);
+    }
 }
 
 void ChatRenderer::transition_to(TuiState new_state) {
@@ -1076,87 +1104,212 @@ void ChatRenderer::toggle_thinking_view() {
     if (m_reasoning_buffer.empty()) return;
 
     if (!m_terminal->is_overlay_active()) {
-        // ---- 展开思考视图：快照对话区 + 轻量样式渲染 ----
-        // M-1: 状态由 begin_overlay() 原子设置，无需单独维护 m_viewing_thinking
+        // ============================================================
+        // 展开思考视图
+        // ============================================================
+
+        // 思考进行中（THINKING 状态）：用全屏 overlay（实时追加 reasoning_delta）
+        // 此时标记 "● 思考 Ns" 尚未输出，m_thinking_marker_physical_row 无效
+        if (m_state_machine.current() == TuiState::THINKING) {
+            m_thinking_used_full_overlay = true;
+            int height = m_terminal->get_terminal_height();
+            int scroll_bottom = height - 3;
+            if (scroll_bottom < 1) scroll_bottom = 1;
+
+            m_terminal->begin_overlay(1, scroll_bottom);
+            m_terminal->reset_scroll_region();
+            m_terminal->write("\x1b[2J\x1b[H");
+
+            // 标题行
+            m_terminal->set_color(ColorRole::ThinkingBlock);
+            m_terminal->write(std::format(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83 {}s (ctrl+o \xe8\xbf\x94\xe5\x9b\x9e)\n",
+                m_thinking_seconds.load()));
+            m_terminal->reset_color();
+
+            // 已累积的思考内容
+            std::string rendered = render_markdown_block(m_reasoning_buffer);
+            std::string indented;
+            indented.reserve(rendered.size() + 64);
+            std::istringstream iss(rendered);
+            std::string line;
+            while (std::getline(iss, line)) {
+                if (!line.empty()) indented += "  ";
+                indented += line;
+                indented += "\n";
+            }
+            m_terminal->set_color(ColorRole::Reasoning);
+            m_terminal->write(indented);
+            m_terminal->reset_color();
+
+            m_terminal->write("\n");
+            m_terminal->set_color(ColorRole::Dim);
+            m_terminal->write("  (ctrl+o \xe8\xbf\x94\xe5\x9b\x9e)\n");
+            m_terminal->reset_color();
+            return;
+        }
+
+        // 思考已结束：尝试局部 overlay（保留标记行上方对话内容）
         int height = m_terminal->get_terminal_height();
         int scroll_bottom = height - 3;
         if (scroll_bottom < 1) scroll_bottom = 1;
+        int scroll_h = scroll_bottom;
 
-        // 快照当前对话区（同时设置 overlay active，阻止思考内容写入 DisplayBuffer）
-        // 收起时 end_overlay() 会从快照恢复对话，避免清屏丢失历史
-        m_terminal->begin_overlay(1, scroll_bottom);
+        int total_rows = m_terminal->display_buffer_row_count();
+        // 计算标记屏幕行号（底部对齐映射 + 偏差修正）
+        // DisplayBuffer snapshot 映射: physical = screen_row + total_rows - scroll_h
+        // 逆映射: screen_row = physical - total_rows + scroll_h
+        // m_thinking_marker_offset 修正 "思考中..." 覆盖导致的 DisplayBuffer 多 1 行
+        int marker_screen_row = m_thinking_marker_physical_row > 0
+            ? (m_thinking_marker_physical_row - total_rows + scroll_h - m_thinking_marker_offset)
+            : 0;
 
-        // 重置 scroll region，允许思考视图使用全屏
-        m_terminal->reset_scroll_region();
+        if (marker_screen_row >= 1) {
+            // ---- 局部 overlay：标记行在屏幕内，保留标记行上方内容 ----
+            // 快照标记行下方到 scroll_bottom 的区域
+            m_terminal->begin_overlay(marker_screen_row + 1, scroll_bottom);
 
-        // 清屏
-        m_terminal->write("\x1b[2J\x1b[H");
+            // 定位光标到标记行，更新标记文本为 "(ctrl+o 收起)"
+            {
+                char cmd[32];
+                snprintf(cmd, sizeof(cmd), "\x1b[%d;1H\x1b[2K", marker_screen_row);
+                m_terminal->write(cmd);
+                m_terminal->set_color(ColorRole::Success);
+                m_terminal->write(std::format(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83 {}s (ctrl+o \xe6\x94\xb6\xe8\xb5\xb7)",
+                    m_thinking_seconds.load()));
+                m_terminal->reset_color();
+            }
 
-        // 标题行：● 思考 Ns (ctrl+o 返回) — 移除 ┌─┐ 硬边框，仅颜色区分
-        m_terminal->set_color(ColorRole::ThinkingBlock);
-        m_terminal->write(std::format(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83 {}s (ctrl+o \xe8\xbf\x94\xe5\x9b\x9e)\n",
-            m_thinking_seconds.load()));
-        m_terminal->reset_color();
+            // 定位光标到标记行下方，写入思考内容
+            {
+                char cmd[32];
+                snprintf(cmd, sizeof(cmd), "\x1b[%d;1H", marker_screen_row + 1);
+                m_terminal->write(cmd);
+            }
 
-        // 思考内容：缩进式块，走 markdown 渲染
-        std::string rendered = render_markdown_block(m_reasoning_buffer);
-        // L-1: 每行添加 2 空格缩进，与标题区分（替代硬边框的视觉分隔）
-        std::string indented;
-        indented.reserve(rendered.size() + 64);
-        std::istringstream iss(rendered);
-        std::string line;
-        while (std::getline(iss, line)) {
-            if (!line.empty()) indented += "  ";
-            indented += line;
-            indented += "\n";
-        }
-        m_terminal->set_color(ColorRole::Reasoning);
-        m_terminal->write(indented);
-        m_terminal->reset_color();
+            // 思考内容：markdown 渲染 + 2 空格缩进
+            std::string rendered = render_markdown_block(m_reasoning_buffer);
+            std::string indented;
+            indented.reserve(rendered.size() + 64);
+            std::istringstream iss(rendered);
+            std::string line;
+            while (std::getline(iss, line)) {
+                if (!line.empty()) indented += "  ";
+                indented += line;
+                indented += "\n";
+            }
+            m_terminal->set_color(ColorRole::Reasoning);
+            m_terminal->write(indented);
+            m_terminal->reset_color();
 
-        // 底部提示（移除 └─┘ 硬边框）
-        m_terminal->write("\n");
-        m_terminal->set_color(ColorRole::Dim);
-        m_terminal->write("  (ctrl+o \xe8\xbf\x94\xe5\x9b\x9e)\n");
-        m_terminal->reset_color();
-    } else {
-        // ---- 收起思考视图：从快照恢复对话区 ----
-        // M-1: 状态由 end_overlay() 原子清除，无需单独维护 m_viewing_thinking
-
-        // H-2 修复：先 end_overlay 恢复对话内容，再 setup_scroll_region
-        // end_overlay() 使用 platform->write_output 直接写入，不受 scroll region 影响
-        // 若先 setup_scroll_region() 会将光标定位到 (1,1)，end_overlay() 的 DECSC 会
-        // 保存这个错误的光标位置，导致收起后光标停在左上角而非对话末尾
-        m_terminal->end_overlay();
-
-        // 恢复 scroll region（在对话内容恢复之后）
-        m_terminal->setup_scroll_region();
-
-        // 光标归位到输出区底部（对话末尾），确保下次输入时光标位置正确
-        m_terminal->cursor_to_output();
-
-        // H-1 修复：flush overlay 期间缓冲的正文内容到 formatter
-        // 此时 scroll region 已恢复，feed() 会正确写入终端并进入 DisplayBuffer
-        if (!m_pending_content.empty()) {
-            m_formatter->feed(m_pending_content);
-            m_pending_content.clear();
-        }
-
-        // 流式输出进行中时附加提示
-        if (m_state_machine.current() == TuiState::STREAMING) {
+            // 底部提示
             m_terminal->set_color(ColorRole::Dim);
-            m_terminal->write("  [streaming in progress...]\n");
+            m_terminal->write("  (ctrl+o \xe6\x94\xb6\xe8\xb5\xb7)\n");
+            m_terminal->reset_color();
+
+            m_thinking_expanded = true;
+        } else {
+            // ---- fallback：标记滚出屏幕，用全屏 overlay ----
+            m_thinking_used_full_overlay = true;
+
+            m_terminal->begin_overlay(1, scroll_bottom);
+            m_terminal->reset_scroll_region();
+            m_terminal->write("\x1b[2J\x1b[H");
+
+            m_terminal->set_color(ColorRole::ThinkingBlock);
+            m_terminal->write(std::format(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83 {}s (ctrl+o \xe8\xbf\x94\xe5\x9b\x9e)\n",
+                m_thinking_seconds.load()));
+            m_terminal->reset_color();
+
+            std::string rendered = render_markdown_block(m_reasoning_buffer);
+            std::string indented;
+            indented.reserve(rendered.size() + 64);
+            std::istringstream iss(rendered);
+            std::string line;
+            while (std::getline(iss, line)) {
+                if (!line.empty()) indented += "  ";
+                indented += line;
+                indented += "\n";
+            }
+            m_terminal->set_color(ColorRole::Reasoning);
+            m_terminal->write(indented);
+            m_terminal->reset_color();
+
+            m_terminal->write("\n");
+            m_terminal->set_color(ColorRole::Dim);
+            m_terminal->write("  (ctrl+o \xe8\xbf\x94\xe5\x9b\x9e)\n");
             m_terminal->reset_color();
         }
+    } else {
+        // ============================================================
+        // 收起思考视图
+        // ============================================================
 
-        // 重绘状态栏
-        m_status_bar->render();
+        if (m_thinking_expanded) {
+            // ---- 局部 overlay 收起 ----
+            // end_overlay 恢复标记行下方的快照内容
+            m_terminal->end_overlay();
+
+            // 恢复标记文本为 "(ctrl+o 查看)"
+            int scroll_h = m_terminal->get_terminal_height() - 3;
+            int total_rows = m_terminal->display_buffer_row_count();
+            int marker_screen_row = m_thinking_marker_physical_row - total_rows + scroll_h - m_thinking_marker_offset;
+
+            if (marker_screen_row >= 1) {
+                char cmd[32];
+                snprintf(cmd, sizeof(cmd), "\x1b[%d;1H\x1b[2K", marker_screen_row);
+                m_terminal->write(cmd);
+                m_terminal->set_color(ColorRole::Success);
+                m_terminal->write(std::format(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83 {}s (ctrl+o \xe6\x9f\xa5\xe7\x9c\x8b)",
+                    m_thinking_seconds.load()));
+                m_terminal->reset_color();
+            }
+
+            // 光标归位到输出区底部
+            m_terminal->cursor_to_output();
+
+            // flush overlay 期间缓冲的正文
+            if (!m_pending_content.empty()) {
+                m_formatter->feed(m_pending_content);
+                m_pending_content.clear();
+            }
+
+            m_thinking_expanded = false;
+            m_status_bar->render();
+        } else {
+            // ---- 全屏 overlay 收起（旧逻辑）----
+            // H-2 修复：先 end_overlay 恢复对话内容，再 setup_scroll_region
+            m_terminal->end_overlay();
+            m_terminal->setup_scroll_region();
+            m_terminal->cursor_to_output();
+
+            // H-1 修复：flush overlay 期间缓冲的正文内容到 formatter
+            if (!m_pending_content.empty()) {
+                m_formatter->feed(m_pending_content);
+                m_pending_content.clear();
+            }
+
+            // 流式输出进行中时附加提示
+            if (m_state_machine.current() == TuiState::STREAMING) {
+                m_terminal->set_color(ColorRole::Dim);
+                m_terminal->write("  [streaming in progress...]\n");
+                m_terminal->reset_color();
+            }
+
+            m_thinking_used_full_overlay = false;
+            m_status_bar->render();
+        }
     }
 }
 
 void ChatRenderer::replay_history(const std::vector<agent::ChatMessage>& messages, bool show_welcome) {
     // 清空输出区域并重置 formatter 状态
     m_formatter->reset();
+
+    // 重置 ctrl+o 就地展开状态
+    m_thinking_marker_physical_row = 0;
+    m_thinking_marker_offset = 0;
+    m_thinking_expanded = false;
+    m_thinking_used_full_overlay = false;
 
     // 清屏流程：先重置 scroll region（使 \x1b[2J 清全屏，不受 region 限制），
     // 再全屏清屏 + 光标归位，最后重新设置 scroll region 并定位光标到顶部。

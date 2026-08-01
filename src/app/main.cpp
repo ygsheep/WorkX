@@ -200,6 +200,9 @@ static int run(int argc, char* argv[]) {
     auto backend_admin = session_result.backend_admin;
 
     // 项目会话恢复：检测历史会话，有则直接打开 TUI 选择面板（统一 UX，无乱码）
+    // 注意：选择面板在 renderer 创建前弹出（overlay 不依赖 renderer），
+    //       实际的 switch_session + replay_history 延迟到 renderer 就绪后执行。
+    std::string pending_restore_path;
     if (session) {
         namespace fs = std::filesystem;
         fs::path config_dir = default_config_path().parent_path();
@@ -210,12 +213,8 @@ static int run(int argc, char* argv[]) {
         auto sessions = agent::session::SessionStore::list_sessions(project_dir.string());
         if (!sessions.empty()) {
             // 有历史会话，打开 SessionPicker 面板
-            std::string selected_path = pick_session_interactive(
+            pending_restore_path = pick_session_interactive(
                 &terminal, &screen, project_dir.string());
-            if (!selected_path.empty()) {
-                // 用户选择恢复历史会话
-                session->switch_session(selected_path);
-            }
         }
     }
 
@@ -287,6 +286,14 @@ static int run(int argc, char* argv[]) {
     // ---- ChatRenderer ----
     tui::ChatRenderer renderer(&terminal);
     renderer.start();
+
+    // 启动时恢复历史会话：renderer 就绪后执行 switch_session + replay_history
+    // show_welcome=true：启动恢复时先渲染欢迎横幅再渲染历史消息
+    if (session && !pending_restore_path.empty()) {
+        if (session->switch_session(pending_restore_path)) {
+            renderer.replay_history(session->get_messages(), /*show_welcome=*/true);
+        }
+    }
 
     // ---- Ctrl+O 回调：切换思考视图 ----
     terminal.set_ctrl_o_callback([&renderer]() {
@@ -377,7 +384,7 @@ static int run(int argc, char* argv[]) {
             terminal.reset_color();
         }
     };
-    sys_ctx.on_resume = [&session, &terminal, &screen]() {
+    sys_ctx.on_resume = [&session, &terminal, &screen, &renderer]() {
         if (!session) return;
 
         // 获取项目会话目录
@@ -386,16 +393,18 @@ static int run(int argc, char* argv[]) {
         std::string cwd = fs::current_path().string();
         fs::path project_dir = agent::session::get_project_session_dir(config_dir, cwd);
 
-        // 打开会话选择面板
+        // 打开会话选择面板（空列表也显示，面板内提示"没有可恢复会话"）
         std::string selected_path = pick_session_interactive(&terminal, &screen, project_dir.string());
 
         if (selected_path.empty()) {
-            // 用户取消或无历史会话
+            // 用户取消（Esc/Ctrl+C）或无历史会话
             return;
         }
 
         // 切换会话
         if (session->switch_session(selected_path)) {
+            // 重绘历史消息到输出区域
+            renderer.replay_history(session->get_messages());
             terminal.set_color(tui::ColorRole::System);
             terminal.write("已切换到历史会话\n");
             terminal.reset_color();

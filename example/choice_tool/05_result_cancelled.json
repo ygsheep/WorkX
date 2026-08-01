@@ -1,0 +1,5 @@
+{
+  "_comment": "返回结果示例（用户按 Esc 取消）",
+  "status": "cancelled",
+  "message": "User cancelled the question"
+}

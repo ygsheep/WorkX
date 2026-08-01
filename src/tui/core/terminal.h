@@ -14,6 +14,10 @@
 #include <mutex>
 #include <thread>
 #include <atomic>
+#include <optional>
+#include <future>
+
+#include <nlohmann/json.hpp>
 
 #include "core/utils/result.h"
 #include "tui/core/color_scheme.h"
@@ -26,11 +30,22 @@
 namespace tui {
 
 class IPlatform;
+class Screen;
 class LineEditor;
 class Spinner;
+class BottomBarManager;
+class DisplayBuffer;
 class StatusBar;
 class ChatRenderer;
-class BottomBarManager;
+struct ChoiceResult;
+
+namespace detail {
+/// @brief 待处理的 AskUser 请求（由事件泵线程设置，主循环消费）
+struct PendingAskRequest {
+    nlohmann::json questions;
+    std::shared_ptr<std::promise<ChoiceResult>> result_promise;
+};
+}  // namespace detail
 
 /**
  * @brief Terminal 配置
@@ -98,6 +113,20 @@ public:
 
     /// @brief 关闭终端
     void shutdown();
+
+    // ---- AskUser 跨线程协作 ----
+
+    /// @brief 设置待处理的 AskUser 请求（事件泵线程调用）
+    /// @details ChatRenderer 订阅 AskUserRequestEvent 回调中调用，
+    ///          存入 pending 请求并唤醒主循环。主循环取出后弹出 ChoicePanel。
+    void set_pending_ask(detail::PendingAskRequest req);
+
+    /// @brief 取出待处理的 AskUser 请求（主循环调用）
+    /// @return 待处理请求；无请求返回空 optional
+    std::optional<detail::PendingAskRequest> take_pending_ask();
+
+    /// @brief 唤醒阻塞在 read_char 的主循环（线程安全）
+    void wake_main_loop();
 
     // ---- 渲染 API ----
 
@@ -184,6 +213,12 @@ public:
     /// @details M-1: 统一 overlay 状态查询入口，消除 ChatRenderer 与 Terminal 间的状态非原子窗口
     bool is_overlay_active() const { return m_overlay_active.load(std::memory_order_acquire); }
 
+    /// @brief 获取 DisplayBuffer 已记录的物理行总数
+    /// @details 供 ChatRenderer 计算 "● 思考 Ns" 标记的屏幕行号，实现就地展开。
+    ///          overlay 激活时行数冻结（feed 被阻止），收起后恢复。
+    /// @return 物理行总数；DisplayBuffer 未初始化时返回 0
+    int display_buffer_row_count() const;
+
     /// @brief 获取底部区域管理器
     BottomBarManager& bottom_bar() { return *m_bottom_bar; }
     const BottomBarManager& bottom_bar() const { return *m_bottom_bar; }
@@ -196,8 +231,11 @@ public:
     /// @brief 解析任务管理器（H-4：不再回退单例）
     agent::ITaskManager& task_manager();
 
-private:
+    /// @brief 显示欢迎横幅（WorkX logo + 模型 + 项目路径）
+    /// @details 正常启动时由 run() 内部调用；会话恢复场景需显式调用以控制渲染顺序
     void display_welcome();
+
+private:
     void run_simple();
     void run_advanced();
 
@@ -216,9 +254,14 @@ private:
     // T-4：跨线程访问（主线程 + 事件泵线程），原子化消除数据竞争
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_initialized{false};
+    bool m_welcome_displayed = false;  ///< 欢迎横幅是否已显示（避免 run() 重复调用）
 
     History m_history;
     std::mutex m_output_mutex;  ///< 保护 IPlatform 输出操作
+
+    // AskUser 跨线程协作：事件泵线程 set，主循环 take
+    std::mutex m_pending_ask_mutex;
+    std::optional<detail::PendingAskRequest> m_pending_ask;
     ColorRole m_current_color = ColorRole::Default;
     bool m_scroll_region_active = false;  ///< 滚动区域是否已激活
     bool m_editing = false;               ///< read_line() 是否正在运行

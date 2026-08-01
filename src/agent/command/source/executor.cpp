@@ -18,10 +18,25 @@ ExecutorResult CommandExecutor::execute(const std::string& input, const CommandC
 
     auto cmd = registry_->find_by_name(command_name);
     if (!cmd) {
-        return {
-            .result = CommandResult::error("Command not found: " + command_name),
-            .command_name = command_name,
-        };
+        // 前缀匹配回退：精确匹配失败时，若只有一个命令以输入开头则匹配它
+        // 例如 /resum → /resume（CLI 常见的命令缩写支持）
+        auto candidates = registry_->get_user_invocable_commands();
+        std::vector<std::shared_ptr<CommandBase>> matches;
+        for (const auto& c : candidates) {
+            const auto& name = c->name();
+            if (name.size() >= command_name.size() &&
+                name.compare(0, command_name.size(), command_name) == 0) {
+                matches.push_back(c);
+            }
+        }
+        if (matches.size() == 1) {
+            cmd = matches[0];
+        } else {
+            return {
+                .result = CommandResult::error("Command not found: " + command_name),
+                .command_name = command_name,
+            };
+        }
     }
 
     if (!cmd->is_enabled()) {

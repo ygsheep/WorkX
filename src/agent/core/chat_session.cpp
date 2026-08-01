@@ -305,49 +305,27 @@ void ChatSession::persist_message(const ChatMessage& msg) {
         std::lock_guard<std::mutex> lock(m_state_mutex);
         store = m_session_store;
 
-        // 懒创建：首条 user 消息且 SessionStore 未创建时，创建文件 + 写 session_start
-        if (!store && m_store_configured && msg.role == ChatMessage::Role::User) {
-            // 检查是否已有 user 消息（有则不是首条，不应触发懒创建）
-            bool has_user = false;
+        // 检测是否是首条 user 消息（用于自动生成标题 + 懒创建触发条件）
+        // 注意：当前 msg 在 persist_message 调用前已被 push_back 到 m_messages 中，
+        //       因此用 user 消息计数 == 1 判断首条（而非检查"是否有 user 消息"）
+        if (msg.role == ChatMessage::Role::User) {
+            int user_count = 0;
             for (const auto& m : m_messages) {
-                if (m.role == ChatMessage::Role::User) {
-                    has_user = true;
-                    break;
-                }
+                if (m.role == ChatMessage::Role::User) ++user_count;
             }
-            if (!has_user) {
-                need_lazy_init = true;
-                lazy_project_dir = m_store_project_dir;
-                lazy_cwd = m_store_cwd;
-                lazy_model = m_store_model;
-                lazy_git_branch = m_store_git_branch;
-            }
+            is_first_user = (user_count == 1);
+        }
+
+        // 懒创建：首条 user 消息且 SessionStore 未创建时，创建文件 + 写 session_start
+        if (!store && m_store_configured && is_first_user) {
+            need_lazy_init = true;
+            lazy_project_dir = m_store_project_dir;
+            lazy_cwd = m_store_cwd;
+            lazy_model = m_store_model;
+            lazy_git_branch = m_store_git_branch;
         }
 
         if (!store && !need_lazy_init) return;
-
-        // 检测是否是首条 user 消息（用于自动生成标题）
-        if (msg.role == ChatMessage::Role::User) {
-            bool has_user = false;
-            for (const auto& m : m_messages) {
-                if (m.role == ChatMessage::Role::User) {
-                    has_user = true;
-                    break;
-                }
-            }
-            if (!has_user) {
-                is_first_user = true;
-            } else if (!m_messages.empty() && &m_messages.back() == &msg) {
-                bool has_other_user = false;
-                for (size_t i = 0; i + 1 < m_messages.size(); ++i) {
-                    if (m_messages[i].role == ChatMessage::Role::User) {
-                        has_other_user = true;
-                        break;
-                    }
-                }
-                is_first_user = !has_other_user;
-            }
-        }
     }
 
     // 懒创建 SessionStore（锁外执行文件 I/O）
@@ -612,9 +590,10 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
             // BashTool DI：注入 TaskManager，工具通过 ToolContext.task_manager() 启动后台任务
             // cwd：注入会话启动时捕获的工作目录，避免运行中 cwd 漂移导致工具在错误目录执行
             // DS_CACHE H-3：注入 m_compactor 引用，使卡死守卫/rewrite_version 跨 turn 持久化
+            // AskUserTool DI：注入 EventBus，工具通过 ToolContext.event_bus() 发布事件
             ReActLoop loop(m_provider.get(), m_tool_registry, ReActLoop::Config{},
                            &m_config_manager.get(), &m_task_manager.get(), m_cwd,
-                           &m_compactor);
+                           &m_compactor, &m_event_bus.get());
 
             // 3.2：使用 IReActObserver 接口替代 lambda 回调
             // ReActEventPublisher 内部完成 ReActStep → IEventBus 事件转换

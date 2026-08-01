@@ -56,6 +56,12 @@ add_executable(workx app/main.cpp)
 target_link_libraries(workx PRIVATE libworkx)
 
 # ============================================================
+# choice_preview 可执行文件（ChoiceTool TUI 预览）
+# ============================================================
+add_executable(choice_preview example/choice_preview.cpp)
+target_link_libraries(choice_preview PRIVATE libworkx)
+
+# ============================================================
 # 应用图标：从 src/icon.png 生成各平台格式
 #   Windows: src/icon.ico  → 通过 .rc 资源文件嵌入可执行文件
 #   macOS:   src/icon.icns → 作为 MACOSX_BUNDLE 资源

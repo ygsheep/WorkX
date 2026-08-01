@@ -21,6 +21,7 @@ src/agent/tool/
 ├── GrepTool/                 # 内容搜索（正则/字面量）
 ├── BashTool/                 # Shell 命令执行
 ├── AgentTool/                # 子 Agent 调度
+├── AskUser/                  # 向用户提问（TUI 选择面板，阻塞 + 超时）
 ├── MCPTool/                  # MCP 外部工具调用
 └── WebFetchTool/             # 网页抓取（HTML → Markdown）
 ```
@@ -166,6 +167,7 @@ sequenceDiagram
 | 目录 | 工具名 | 功能 | 输入 |
 |------|--------|------|------|
 | `AgentTool/` | `Agent` | 启动子 Agent 处理子任务 | `prompt`, `tools` |
+| `AskUser/` | `AskUser` | 向用户提问（TUI 选择面板，阻塞 + 超时） | `questions`, `timeout_ms` |
 | `MCPTool/` | `MCP` | 调用 MCP 协议外部工具 | `server`, `tool`, `input` |
 
 ## 添加新工具

@@ -27,6 +27,7 @@ static constexpr char32_t KEY_DELETE           = 0xE008;
 static constexpr char32_t KEY_CTRL_C           = 0xE009;
 static constexpr char32_t KEY_CTRL_O           = 0xE00A;
 static constexpr char32_t KEY_RESIZE           = 0xE00B;  // 终端尺寸变更
+static constexpr char32_t KEY_WAKE             = 0xE010;  // 跨线程唤醒（AskUser 等）
 
 LineEditor::LineEditor(IPlatform* platform)
     : m_platform(platform)
@@ -453,6 +454,13 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
             // Ctrl+O 切换思考视图
             if (input_char == KEY_CTRL_O) {
                 return {std::string(), false, false, false, true};
+            }
+
+            // 跨线程唤醒（AskUser 等）：立即返回空结果，主循环检查 pending 事件
+            if (input_char == KEY_WAKE) {
+                ReadResult r;
+                r.woken_by_ask = true;
+                return r;
             }
 
             // 终端 resize：通知 Terminal 刷新 scroll region / 重放 DisplayBuffer，

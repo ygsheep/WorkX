@@ -338,7 +338,7 @@ ValidationResult FileEditTool::validate_input(
     // 错误码 6/7: 预读检查 + staleness 检测（仅在文件存在时）
     if (exists) {
         auto check = check_pre_read_and_staleness(
-            canonical.generic_string(), canonical
+            canonical.generic_string(), canonical, old_string
         );
         if (check.is_err()) {
             return check.error();
@@ -381,7 +381,8 @@ ValidationResult FileEditTool::validate_input(
 
 ValidationResult FileEditTool::check_pre_read_and_staleness(
     const std::string& canonical_path,
-    const fs::path& file_path
+    const fs::path& file_path,
+    const std::string& old_string
 ) {
     // 1. Pre-read 强制检查
     auto state = FileReadStateTracker::instance().get_state(canonical_path);
@@ -390,10 +391,27 @@ ValidationResult FileEditTool::check_pre_read_and_staleness(
             "File has not been read yet. Read it first before editing it."
         );
     }
-    if (state->is_partial_view) {
-        return ValidationResult::err(Error::Code::PermissionDenied,
-            "File was only partially read. Read the full file before editing it."
-        );
+
+    // 1b. 部分视图：仅当 old_string 起始行落在已读范围内时放行
+    //     （支持分段读取后编辑已读区域；未读区域仍拒绝，防止盲改）
+    if (state->is_partial_view && !old_string.empty()) {
+        const auto current_content = read_file_lf_normalized(file_path);
+        const auto pos = current_content.find(old_string);
+        if (pos != std::string::npos) {
+            // 计算 old_string 的起始行号（1-based）
+            int start_line = 1;
+            for (size_t i = 0; i < pos; ++i) {
+                if (current_content[i] == '\n') ++start_line;
+            }
+            if (!state->covers_line(start_line)) {
+                return ValidationResult::err(Error::Code::PermissionDenied, std::format(
+                    "File was only partially read (edit target line {} is outside the read ranges). "
+                    "Read the relevant section before editing it.",
+                    start_line
+                ));
+            }
+        }
+        // old_string 未找到：放行，由后续匹配检查给出更准确的错误
     }
 
     // 2. Staleness 检查：mtime 对比
@@ -525,7 +543,7 @@ ResultV2<ToolResult> FileEditTool::call(
 
     // 5. 更新模式
     // 5a. Pre-read + Staleness 检查（validate_input 已检查，这里再查一次以防 call 直接调用）
-    auto check = check_pre_read_and_staleness(canonical_key, file_path);
+    auto check = check_pre_read_and_staleness(canonical_key, file_path, edit_input.old_string);
     if (check.is_err()) {
         return check.error();
     }

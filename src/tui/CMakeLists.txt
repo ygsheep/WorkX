@@ -33,6 +33,7 @@ target_sources(libworkx PRIVATE
     widgets/select_panel.cpp
     widgets/bottom_bar_manager.cpp
     widgets/session_picker.cpp
+    widgets/choice_panel.cpp
 )
 
 # 平台特定实现

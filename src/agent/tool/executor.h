@@ -57,19 +57,34 @@ struct ExecutionResult {
 /// @return {截断后的文本, 是否发生了截断}
 /// @details L-2：原签名 `bool truncate_result(std::string& text, ...)` 直接修改入参，
 ///          违反纯函数原则。现改为返回 std::pair，无副作用，可独立测试与复用。
+///          UTF-8 安全：截断点回退到字符边界，避免在多字节字符中间截断产生无效 UTF-8。
 inline std::pair<std::string, bool> truncate_result(std::string_view text, size_t max_length = MAX_TOOL_RESULT_LENGTH) {
     if (text.length() <= max_length) {
         return {std::string{text}, false};
     }
     const size_t half = max_length / 2;
-    const size_t omitted = text.length() - max_length;
+
+    // UTF-8 安全截断：回退到字符边界（连续字节 10xxxxxx 之前）
+    auto safe_boundary = [](std::string_view s, size_t pos) -> size_t {
+        if (pos >= s.size()) return s.size();
+        // 回退直到 pos 指向非 continuation byte（即字符起始）
+        while (pos > 0 && (static_cast<unsigned char>(s[pos]) & 0xC0) == 0x80) {
+            --pos;
+        }
+        return pos;
+    };
+
+    const size_t head_end = safe_boundary(text, half);
+    const size_t tail_start = safe_boundary(text, text.length() - half);
+    const size_t omitted = text.length() - head_end - (text.length() - tail_start);
+
     std::string result;
-    result.reserve(max_length + 64);
-    result.append(text.substr(0, half));
+    result.reserve(head_end + (text.length() - tail_start) + 64);
+    result.append(text.substr(0, head_end));
     result.append("\n\n... [output truncated, ");
     result.append(std::to_string(omitted));
     result.append(" characters omitted] ...\n\n");
-    result.append(text.substr(text.length() - half));
+    result.append(text.substr(tail_start));
     return {result, true};
 }
 

@@ -237,9 +237,30 @@ std::string StatusBar::format_bar() const {
     int ctx_pct = static_cast<int>(ctx_pct_d);
     int filled = ctx_pct / 10;
 
+    // 四阶段颜色（对齐 cache_aware_compactor 水位阈值 soft=50% / compact=80% / force=90%）
+    //   0%  - 50% : 绿色（安全）
+    //  50% - 80% : 黄色（注意）
+    //  80% - 90% : 橙色（警告）
+    //  90% -100% : 红色（危险）
+    std::string bar_color;
+    if (!has_limit || ctx_pct_d < 50.0) {
+        bar_color = "\x1b[32m";  // 绿
+    } else if (ctx_pct_d < 80.0) {
+        bar_color = "\x1b[33m";  // 黄
+    } else if (ctx_pct_d < 90.0) {
+        bar_color = "\x1b[38;5;208m";  // 橙
+    } else {
+        bar_color = "\x1b[31m";  // 红
+    }
+
+    // 进度条：填充段用阶段色，未填充段用灰色
     std::string bar_str;
     for (int i = 0; i < 10; ++i) {
-        bar_str += (i < filled) ? "\xe2\x96\x88" : "\xe2\x96\x91";
+        if (i < filled) {
+            bar_str += bar_color + "\xe2\x96\x88" + reset;
+        } else {
+            bar_str += gray + "\xe2\x96\x91" + reset;
+        }
     }
 
     // 百分比字符串：< 1% 时显示 1 位小数，否则显示整数
@@ -278,7 +299,7 @@ std::string StatusBar::format_bar() const {
         + " \xe2\x94\x82 " + m_project_name
         + " | Context " + bar_str;
     if (has_limit) {
-        bar += " " + std::string(pct_buf);
+        bar += " " + bar_color + std::string(pct_buf) + reset;
     } else {
         bar += " \xe2\x80\x94";  // em dash，表示未知窗口
     }

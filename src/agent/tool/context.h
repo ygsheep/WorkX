@@ -22,6 +22,9 @@ class IConfigManager;
 // 前向声明：ITaskManager 在 agent 命名空间下（非 agent::task）
 class ITaskManager;
 
+// 前向声明：IEventBus（用于 AskUserTool 等需要发布事件的工具）
+class IEventBus;
+
 namespace tool {
 
 /// @brief 工具进度回调类型
@@ -65,6 +68,13 @@ struct ToolContext {
     ///          生命周期由调用方保证（通常为 ChatSession 引用的 TaskManager 单例）。
     ITaskManager* task_manager_ptr = nullptr;
 
+    /// @brief 事件总线指针（可选，非拥有）
+    /// @details 由调用方（ReActLoop）显式注入，工具通过 event_bus() 访问。
+    ///          nullptr 时 event_bus() 抛 std::logic_error。
+    ///          用于 AskUserTool 等需要发布事件的工具。
+    ///          生命周期由调用方保证（通常为 ChatSession 持有的 EventBus 引用）。
+    IEventBus* event_bus_ptr = nullptr;
+
     /// @brief 进度回调（可选）
     /// @details 由调用方（ReActLoop）注入，工具在长任务执行过程中调用以上报进度。
     ///          默认为空（无进度上报）。生命周期由 ToolContext 所有者保证。
@@ -79,6 +89,11 @@ struct ToolContext {
     /// @return ITaskManager 引用
     /// @throws std::logic_error 当 task_manager_ptr == nullptr
     ITaskManager& task_manager() const;
+
+    /// @brief 解析事件总线
+    /// @return IEventBus 引用
+    /// @throws std::logic_error 当 event_bus_ptr == nullptr
+    IEventBus& event_bus() const;
 
     /// @brief 检查是否已取消
     /// @return 已取消返回 true

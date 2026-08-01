@@ -355,7 +355,8 @@ ResultV2<ToolResult> FileReadTool::call(
             file_path.generic_string(),
             std::string{},
             mtime_ec ? std::filesystem::file_time_type{} : mtime,
-            false  // 空文件视为完整视图
+            false,   // 空文件视为完整视图
+            1, 0, 0  // offset=1, lines_read=0, total_lines=0（空文件无行）
         );
         return ResultV2<ToolResult>::ok(ToolResult::ok(std::string{"<system-reminder>File exists but has empty contents.</system-reminder>"}));
     }
@@ -389,21 +390,28 @@ ResultV2<ToolResult> FileReadTool::call(
             file_path.generic_string(),
             std::move(content_snapshot),
             mtime_ec ? std::filesystem::file_time_type{} : mtime,
-            is_partial
+            is_partial,
+            offset,
+            lines_read,
+            total_lines  // has_more 时提前退出，total_lines 可能不完整
         );
     }
 
     // 9. 格式化输出（带行号，1-based）
     std::string formatted = format_with_line_numbers(target_lines, offset);
 
-    // 10. 部分读取时附加元信息（行数统计）
+    // 10. 部分读取时附加元信息（明确已读行范围，供模型定位缺失区域）
     const int lines_read = static_cast<int>(target_lines.size());
-    if (has_more) {
-        // 提前退出：文件还有更多行，total_lines 不完整
-        formatted += "\n\n(" + std::to_string(lines_read) + " lines shown, more available)";
-    } else if (lines_read < total_lines) {
-        formatted += "\n\n(" + std::to_string(lines_read) + " of "
-                   + std::to_string(total_lines) + " lines shown)";
+    if (lines_read > 0) {
+        const int end_line = offset + lines_read - 1;
+        if (has_more) {
+            // 提前退出：文件还有更多行，total_lines 不完整
+            formatted += std::string("\n\n(read lines ") + std::to_string(offset) + "-" + std::to_string(end_line)
+                       + ", more lines available)";
+        } else if (lines_read < total_lines) {
+            formatted += std::string("\n\n(read lines ") + std::to_string(offset) + "-" + std::to_string(end_line)
+                       + ", total " + std::to_string(total_lines) + ", truncated)";
+        }
     }
 
     return ResultV2<ToolResult>::ok(ToolResult::ok(std::move(formatted)));

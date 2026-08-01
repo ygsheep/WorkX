@@ -95,11 +95,11 @@ TEST_CASE("register_builtin_tools registers expected tools", "[factory][tools]")
 
     auto tools = registry.get_all_tools();
 
-    // 基础工具数：5（Read/Write/Edit/Bash/Glob），Windows 额外注册 PowerShellTool
+    // 基础工具数：7（Read/Write/Edit/Bash/Glob/Grep/AskUser），Windows 额外注册 PowerShellTool
 #ifdef _WIN32
-    constexpr size_t kExpectedCount = 6;
+    constexpr size_t kExpectedCount = 8;
 #else
-    constexpr size_t kExpectedCount = 5;
+    constexpr size_t kExpectedCount = 7;
 #endif
     REQUIRE(tools.size() == kExpectedCount);
 
@@ -114,6 +114,8 @@ TEST_CASE("register_builtin_tools registers expected tools", "[factory][tools]")
     REQUIRE(std::find(names.begin(), names.end(), "Edit") != names.end());
     REQUIRE(std::find(names.begin(), names.end(), "Bash") != names.end());
     REQUIRE(std::find(names.begin(), names.end(), "Glob") != names.end());
+    REQUIRE(std::find(names.begin(), names.end(), "Grep") != names.end());
+    REQUIRE(std::find(names.begin(), names.end(), "AskUser") != names.end());
 
 #ifdef _WIN32
     // Windows 平台额外验证 PowerShellTool 已注册

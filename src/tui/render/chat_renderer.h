@@ -88,6 +88,7 @@ private:
     std::unique_ptr<agent::EventToken> m_token_task_completed;  ///< 后台任务完成事件
     std::unique_ptr<agent::EventToken> m_token_task_failed;     ///< 后台任务失败事件
     std::unique_ptr<agent::EventToken> m_token_cache_diag;      ///< 缓存诊断事件
+    std::unique_ptr<agent::EventToken> m_token_ask_user;        ///< AskUser 请求事件
 
     // 状态机
     TuiStateMachine m_state_machine;
@@ -111,6 +112,15 @@ private:
     ToolCallTracker m_tool_tracker;           ///< 工具调用嵌套与上下文管理
     std::atomic<bool> m_streaming_started{false};  ///< 是否已输出 "● Thought for"（防重复）
     bool m_thinking_indicator_shown = false;  ///< 是否已输出 "● 思考中..." 临时候选标记（供覆盖）
+
+    // ---- ctrl+o 就地展开（局部 overlay）----
+    // 思考结束后标记 "● 思考 Ns" 已输出到对话流，ctrl+o 时只对标记行下方区域
+    // 做 overlay（快照+恢复），保留标记行上方的对话内容。
+    // 比旧方案（覆盖整个对话区）保留更多上下文。
+    int m_thinking_marker_physical_row = 0;  ///< "● 思考 Ns" 标记的物理行号（1-based）
+    int m_thinking_marker_offset = 0;        ///< DisplayBuffer 与终端的行偏差修正（"思考中..."覆盖导致）
+    bool m_thinking_expanded = false;        ///< 思考内容是否已就地展开
+    bool m_thinking_used_full_overlay = false; ///< 标记滚出屏幕时 fallback 到全屏 overlay
 };
 
 } // namespace tui

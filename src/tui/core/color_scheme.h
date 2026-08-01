@@ -56,6 +56,9 @@ enum class ColorRole {
     SelectChecked,       ///< 选择面板已选中 ◉（绿色）
     SelectUnchecked,     ///< 选择面板未选中 ○（灰色）
 
+    // ChoicePanel
+    ChoiceTabActiveBg,   ///< ChoicePanel 活跃 Tab（蓝色背景 + 亮白文字）
+
 };
 
 /**
@@ -95,6 +98,7 @@ constexpr std::string_view get_color_ansi(ColorRole role) {
         case ColorRole::SelectCursor:         return "\x1b[36m";       // 青色
         case ColorRole::SelectChecked:        return "\x1b[32m";       // 绿色
         case ColorRole::SelectUnchecked:      return "\x1b[90m";       // 灰色
+        case ColorRole::ChoiceTabActiveBg:    return "\x1b[44m\x1b[97m"; // 蓝色背景 + 亮白文字
         case ColorRole::TextColor:            return "\x1b[97m";   // 亮白色
         default:                           return "\x1b[0m";
     }
