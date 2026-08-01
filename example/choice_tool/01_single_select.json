@@ -1,0 +1,15 @@
+{
+  "_comment": "场景 1：单问题单选 — allow_custom_input 默认为 true，末尾自动添加 ✎ 自定义输入... 选项",
+  "questions": [
+    {
+      "question": "选择哪种修复策略？",
+      "header": "策略",
+      "multiSelect": false,
+      "options": [
+        { "label": "重构", "description": "提取公共函数，消除重复代码" },
+        { "label": "打补丁", "description": "最小改动，仅修复当前 bug" },
+        { "label": "重写", "description": "整体重写该模块" }
+      ]
+    }
+  ]
+}

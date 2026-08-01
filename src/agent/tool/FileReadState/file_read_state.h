@@ -15,20 +15,44 @@
 #include <unordered_map>
 #include <mutex>
 #include <optional>
+#include <vector>
 #include <filesystem>
 
 namespace agent::tool {
 
+/// @brief 已读行范围（1-based 闭区间）
+struct LineRange {
+    int32_t start = 0;  ///< 起始行（含）
+    int32_t end = 0;    ///< 结束行（含）
+
+    [[nodiscard]] bool contains(int32_t line) const {
+        return line >= start && line <= end;
+    }
+};
+
 /// @brief 文件读取状态快照
 ///
-/// 由 FileReadTool 在成功读取后填充，供 FileWriteTool 校验：
+/// 由 FileReadTool 在成功读取后填充，供 FileWriteTool/FileEditTool 校验：
 /// - `mtime`：读取时的文件最后修改时间，用于 staleness 快速检测
 /// - `content`：LF 规范化后的内容快照，用于 mtime 变化后的内容对比回退
 /// - `is_partial_view`：是否使用 offset/limit 部分读取（部分读取不可做内容对比）
+/// - `read_ranges`：已读取的行范围集合（有序、不重叠、已合并），
+///   供 FileEditTool 按"编辑目标是否在已读范围内"做局部校验
 struct FileReadState {
     std::filesystem::file_time_type mtime;  ///< 读取时的 mtime
     std::string content;                    ///< LF 规范化内容快照
     bool is_partial_view{false};            ///< 是否部分读取（offset/limit）
+    std::vector<LineRange> read_ranges;     ///< 已读行范围（1-based）
+    int32_t total_lines = 0;                ///< 文件总行数（未知时 0）
+
+    /// @brief 判断指定行（1-based）是否已被读取
+    [[nodiscard]] bool covers_line(int32_t line) const {
+        for (const auto& r : read_ranges) {
+            if (r.contains(line)) return true;
+            if (r.start > line) break;  // read_ranges 有序，提前退出
+        }
+        return false;
+    }
 };
 
 /// @brief FileReadStateTracker — 文件读取状态追踪器（单例）
@@ -63,16 +87,22 @@ public:
     FileReadStateTracker& operator=(FileReadStateTracker&&) = delete;
 
     /// @brief 记录文件读取状态
-    /// @details 由 FileReadTool 在成功读取后调用。相同路径覆盖旧状态。
+    /// @details 由 FileReadTool 在成功读取后调用。相同路径合并读取范围（不覆盖）。
     /// @param canonical_path 规范化路径（generic_string 形式）
     /// @param content LF 规范化后的内容快照
     /// @param mtime 读取时的文件 mtime（fs::last_write_time 返回值）
     /// @param is_partial_view 是否部分读取（offset/limit）
+    /// @param offset 本次读取的起始行（1-based，默认 1）
+    /// @param lines_read 本次实际读取的行数（默认 0）
+    /// @param total_lines 文件总行数（未知时 0；完整读取且 >0 时视为覆盖全文件）
     void record_read(
         const std::string& canonical_path,
         std::string content,
         std::filesystem::file_time_type mtime,
-        bool is_partial_view = false
+        bool is_partial_view = false,
+        int32_t offset = 1,
+        int32_t lines_read = 0,
+        int32_t total_lines = 0
     );
 
     /// @brief 查询文件读取状态
@@ -83,7 +113,8 @@ public:
     ) const;
 
     /// @brief 写入后刷新状态
-    /// @details 由 FileWriteTool 在成功写入后调用，使后续连续写入通过 staleness 检查。
+    /// @details 由 FileWriteTool/FileEditTool 在成功写入后调用，使后续连续写入通过 staleness 检查。
+    ///          写入后视为完整视图：read_ranges 重置为覆盖全文件。
     /// @param canonical_path 规范化路径
     /// @param new_content 新内容（LF 规范化）
     /// @param new_mtime 写入后的 mtime（重新 stat 获取）

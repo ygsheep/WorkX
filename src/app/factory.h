@@ -39,7 +39,6 @@ struct SessionResult {
     std::string remote_url;                ///< 解析后的 API URL
     std::string model_name;                ///< 解析后的模型名
     IBackendAdmin* backend_admin = nullptr;  ///< H-8：后端管理句柄（非拥有，session 持有 backend 生命周期）
-    std::shared_ptr<session::SessionStore> session_store;  ///< 项目会话恢复：JSONL 存储（供 main 退出时写 session_end）
 };
 
 /// @brief 初始化日志系统

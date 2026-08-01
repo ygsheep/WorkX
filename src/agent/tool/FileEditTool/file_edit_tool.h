@@ -120,15 +120,17 @@ private:
     /// @brief Pre-read 强制检查 + Staleness 检测
     /// @details 对齐 CC validateInput + FileWriteTool::check_pre_read_and_staleness：
     /// - 文件存在但无读取状态 → 拒绝（"File has not been read yet..."）
-    /// - 状态为 partial_view → 拒绝（需完整读取）
+    /// - 状态为 partial_view 且 old_string 起始行不在已读范围 → 拒绝
     /// - 当前 mtime > 状态 mtime → 拒绝（"File has been modified since read..."）
     /// - 完整读取下 mtime 变化但内容相同 → 放行（云同步/杀毒误判防护）
     /// @param canonical_path 规范化路径（FileReadStateTracker key）
     /// @param file_path 文件系统路径（用于 stat）
+    /// @param old_string 待替换的旧文本（用于定位编辑目标行；空串表示新建/整文件场景）
     /// @return 通过返回 ok，否则返回错误信息
     static ValidationResult check_pre_read_and_staleness(
         const std::string& canonical_path,
-        const std::filesystem::path& file_path
+        const std::filesystem::path& file_path,
+        const std::string& old_string
     );
 
     /// @brief 创建 .bak 备份文件

@@ -38,7 +38,6 @@
 #include "app/config/app_config.h"
 #include "app/config/cli_args.h"
 #include "app/factory.h"
-#include "app/session_restore.h"  // 项目会话恢复
 #include "app/ui/model_selector.h"
 #include "app/ui/path_completer.h"
 #include "app/ui/file_index.h"
@@ -53,6 +52,7 @@
 #include "tui/widgets/bottom_bar_manager.h"
 #include "tui/widgets/command_panel.h"
 #include "tui/widgets/status_bar.h"
+#include "tui/widgets/session_picker.h"  // 启动恢复 + /resume 会话选择面板
 
 namespace agent {
 
@@ -112,17 +112,6 @@ static int run(int argc, char* argv[]) {
         std::cerr << "[debug]   remote:    " << cfg.get_or<std::string>(keys::REMOTE_URL, "(not set)") << "\n";
         std::cerr << "[debug]   model:     " << cfg.get_or<std::string>(keys::MODEL_NAME, "(not set)") << "\n";
         std::cerr << "[debug]   simple_io: " << (cfg.get_or<bool>(keys::SIMPLE_IO, false) ? "true" : "false") << "\n";
-    }
-
-    // ---- 项目会话恢复：在 terminal 初始化前询问（避免 raw 模式冲突）----
-    // 检查历史会话，用户可选择恢复或开新会话
-    std::optional<std::string> restore_file;
-    {
-        namespace fs = std::filesystem;
-        fs::path config_dir = default_config_path().parent_path();
-        std::string cwd = fs::current_path().string();
-        fs::path project_dir = agent::session::get_project_session_dir(config_dir, cwd);
-        restore_file = prompt_restore_session(project_dir.string());
     }
 
     // ---- Terminal（D-2：委托工厂构建 config；H-4：显式注入三大依赖）----
@@ -209,15 +198,23 @@ static int run(int argc, char* argv[]) {
     // 不再依赖 ChatSession::backend() 暴露完整 IBackend*。
     // 生命周期：session 持有 backend，session 存活期间 admin 有效。
     auto backend_admin = session_result.backend_admin;
-    // 项目会话恢复：保存 SessionStore 供退出时写 session_end
-    auto session_store = std::move(session_result.session_store);
 
-    // 项目会话恢复：用户选择恢复时加载历史消息
-    if (session && restore_file) {
-        if (session->restore_from_file(*restore_file)) {
-            std::cerr << "[info] 已恢复历史会话\n";
-        } else {
-            std::cerr << "[warn] 恢复会话失败，启动新会话\n";
+    // 项目会话恢复：检测历史会话，有则直接打开 TUI 选择面板（统一 UX，无乱码）
+    // 注意：选择面板在 renderer 创建前弹出（overlay 不依赖 renderer），
+    //       实际的 switch_session + replay_history 延迟到 renderer 就绪后执行。
+    std::string pending_restore_path;
+    if (session) {
+        namespace fs = std::filesystem;
+        fs::path config_dir = default_config_path().parent_path();
+        std::string cwd = fs::current_path().string();
+        fs::path project_dir = agent::session::get_project_session_dir(config_dir, cwd);
+
+        // 检查是否有历史会话
+        auto sessions = agent::session::SessionStore::list_sessions(project_dir.string());
+        if (!sessions.empty()) {
+            // 有历史会话，打开 SessionPicker 面板
+            pending_restore_path = pick_session_interactive(
+                &terminal, &screen, project_dir.string());
         }
     }
 
@@ -289,6 +286,14 @@ static int run(int argc, char* argv[]) {
     // ---- ChatRenderer ----
     tui::ChatRenderer renderer(&terminal);
     renderer.start();
+
+    // 启动时恢复历史会话：renderer 就绪后执行 switch_session + replay_history
+    // show_welcome=true：启动恢复时先渲染欢迎横幅再渲染历史消息
+    if (session && !pending_restore_path.empty()) {
+        if (session->switch_session(pending_restore_path)) {
+            renderer.replay_history(session->get_messages(), /*show_welcome=*/true);
+        }
+    }
 
     // ---- Ctrl+O 回调：切换思考视图 ----
     terminal.set_ctrl_o_callback([&renderer]() {
@@ -376,6 +381,36 @@ static int run(int argc, char* argv[]) {
             cfg.save_to_file(default_config_path());
             terminal.set_color(tui::ColorRole::System);
             terminal.write(std::format("Model set to: {}\n", sel.name));
+            terminal.reset_color();
+        }
+    };
+    sys_ctx.on_resume = [&session, &terminal, &screen, &renderer]() {
+        if (!session) return;
+
+        // 获取项目会话目录
+        namespace fs = std::filesystem;
+        fs::path config_dir = default_config_path().parent_path();
+        std::string cwd = fs::current_path().string();
+        fs::path project_dir = agent::session::get_project_session_dir(config_dir, cwd);
+
+        // 打开会话选择面板（空列表也显示，面板内提示"没有可恢复会话"）
+        std::string selected_path = pick_session_interactive(&terminal, &screen, project_dir.string());
+
+        if (selected_path.empty()) {
+            // 用户取消（Esc/Ctrl+C）或无历史会话
+            return;
+        }
+
+        // 切换会话
+        if (session->switch_session(selected_path)) {
+            // 重绘历史消息到输出区域
+            renderer.replay_history(session->get_messages());
+            terminal.set_color(tui::ColorRole::System);
+            terminal.write("已切换到历史会话\n");
+            terminal.reset_color();
+        } else {
+            terminal.set_color(tui::ColorRole::Error);
+            terminal.write("切换会话失败\n");
             terminal.reset_color();
         }
     };
@@ -522,10 +557,13 @@ static int run(int argc, char* argv[]) {
     // 仍可用时析构，避免 clear() 后 on_complete 回调访问已失效订阅导致 abort
     // 注意：backend_admin 是裸指针，由 session 持有，session.reset() 后不可再使用
 
-    // 项目会话恢复：session 析构前写入 session_end 并关闭文件
-    if (session_store) {
-        session_store->append_session_end();
-        session_store->close();
+    // 项目会话恢复：关闭 SessionStore 文件（懒创建可能未创建，需动态获取）
+    // 不写 session_end：会话可被多次 resume 继续，session_end 会破坏语义
+    if (session) {
+        auto store = session->session_store();
+        if (store) {
+            store->close();
+        }
     }
 
     session.reset();

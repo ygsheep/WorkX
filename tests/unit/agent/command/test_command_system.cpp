@@ -197,13 +197,15 @@ TEST_CASE("register_system_commands registers 6 commands", "[command]") {
 
     register_system_commands(registry, ctx);
 
-    REQUIRE(registry.size() == 6);
+    REQUIRE(registry.size() == 8);
     REQUIRE(registry.exists("help"));
     REQUIRE(registry.exists("exit"));
     REQUIRE(registry.exists("quit"));
     REQUIRE(registry.exists("clear"));
     REQUIRE(registry.exists("regen"));
     REQUIRE(registry.exists("model"));
+    REQUIRE(registry.exists("resume"));
+    REQUIRE(registry.exists("rename"));
 }
 
 TEST_CASE("builtin help command returns command list", "[command]") {

@@ -28,6 +28,7 @@
 #include <filesystem>
 #include <sstream>
 #include <string>
+#include <cstring>
 #include <unordered_map>
 #include <vector>
 #include <nlohmann/json.hpp>
@@ -90,6 +91,156 @@ std::string extract_file_path(const std::string& arguments_json) {
 bool is_code_tool(const std::string& tool_name) {
     return tool_name == "Read" || tool_name == "Write" || tool_name == "Edit"
         || tool_name == "FileRead" || tool_name == "FileWrite" || tool_name == "FileEdit";
+}
+
+/// @brief 判断是否为 Shell 类工具 (Bash/PowerShell)
+bool is_shell_tool(const std::string& tool_name) {
+    return tool_name == "Bash" || tool_name == "PowerShell";
+}
+
+/// @brief 渲染工具结果摘要（恢复会话场景的兜底显示）
+/// @details 多行结果只显示行数，少行结果显示内容（截断到 200 字符）。
+///          调用方已写入 ✓/✗ marker，本函数返回从 " ⎿  " 开始的字符串。
+std::string render_tool_summary(const std::string& content)
+{
+    // 统计行数
+    int line_count = 0;
+    {
+        std::string cur;
+        for (char c : content) {
+            if (c == '\n') { ++line_count; cur.clear(); }
+            else cur.push_back(c);
+        }
+        if (!cur.empty()) ++line_count;
+    }
+
+    const std::string arrow = "\xe2\x8e\xbf";  // ⎿
+    const std::string dim = "\x1b[2m";
+    const std::string reset = "\x1b[0m";
+
+    if (line_count > 3) {
+        return " " + arrow + "  " + dim +
+               std::format("({} lines)", line_count) + reset + "\n";
+    }
+    std::string preview = content;
+    if (preview.length() > 200) {
+        preview.replace(200, std::string::npos, "...");
+    }
+    while (!preview.empty() && preview.back() == '\n') {
+        preview.pop_back();
+    }
+    return " " + arrow + "  " + dim + preview + reset + "\n";
+}
+
+/// @brief 从 ToolCallEvent.arguments (JSON) 解析 command 字段
+/// @return command 字符串; 解析失败或字段不存在返回空
+std::string extract_command(const std::string& arguments_json) {
+    if (arguments_json.empty()) return {};
+    try {
+        auto j = nlohmann::json::parse(arguments_json);
+        if (j.contains("command") && j["command"].is_string()) {
+            return j["command"].get<std::string>();
+        }
+    } catch (...) {
+        // 解析失败忽略
+    }
+    return {};
+}
+
+/// @brief 渲染 Shell 工具的结果 (Bash/PowerShell)
+/// @details 格式:
+///   ⎿  <command>
+///       <output line 1>
+///       <output line 2>
+///       ...
+/// 输出内容与 command 对齐 (前面补空格)。
+/// 注意: 调用方已写入 ✓/✗ marker, 本函数输出从 " ⎿  " 开始。
+/// @param arguments_json  工具调用参数 JSON (用于提取 command)
+/// @param result          format_result() 生成的工具结果 (含 <stdout>/<stderr>/<error> 标签)
+/// @param indent          当前缩进字符串
+std::string render_shell_tool_result(
+    const std::string& arguments_json,
+    const std::string& result,
+    const std::string& indent)
+{
+    const std::string command = extract_command(arguments_json);
+
+    constexpr std::string_view dim = "\x1b[2m";
+    constexpr std::string_view reset = "\x1b[0m";
+    constexpr int MAX_DISPLAY_LINES = 60;
+
+    std::ostringstream os;
+    const std::string arrow = "\xe2\x8e\xbf";  // ⎿
+
+    // 对齐前缀: 与 command 起始列对齐
+    // command 起始列 = indent + "  "(2) + marker(1) + " "(1) + arrow(1) + "  "(2) = indent + 7
+    const std::string align_prefix = indent + "       ";  // 7 spaces
+
+    // 第一行: ⎿  <command>
+    os << " " << arrow << "  ";
+    if (!command.empty()) {
+        os << dim << command << reset;
+    } else {
+        os << dim << "(shell output)" << reset;
+    }
+    os << "\n";
+
+    // 解析 result, 去掉 <stdout>/<stderr>/<error> 标签, 逐行收集内容
+    std::vector<std::string> content_lines;
+    {
+        std::string cur;
+        auto flush = [&]() {
+            // 去掉行尾 \r
+            if (!cur.empty() && cur.back() == '\r') cur.pop_back();
+            // 跳过纯标签行
+            if (cur == "<stdout>" || cur == "</stdout>" ||
+                cur == "<stderr>" || cur == "</stderr>") {
+                cur.clear();
+                return;
+            }
+            // 去掉行内 <error>/<stdout>/<stderr> 及闭合标签 (如 <error>Command exited with code 1</error>)
+            std::string cleaned = cur;
+            for (const auto* tag : {"<error>", "<stdout>", "<stderr>",
+                                     "</error>", "</stdout>", "</stderr>"}) {
+                size_t pos = cleaned.find(tag);
+                while (pos != std::string::npos) {
+                    cleaned.erase(pos, std::strlen(tag));
+                    pos = cleaned.find(tag, pos);
+                }
+            }
+            content_lines.push_back(std::move(cleaned));
+            cur.clear();
+        };
+        for (char c : result) {
+            if (c == '\n') flush();
+            else cur.push_back(c);
+        }
+        if (!cur.empty()) flush();
+    }
+
+    // 去掉首尾空行
+    while (!content_lines.empty() && content_lines.front().empty()) {
+        content_lines.erase(content_lines.begin());
+    }
+    while (!content_lines.empty() && content_lines.back().empty()) {
+        content_lines.pop_back();
+    }
+
+    // 限制最大显示行数
+    const bool truncated = static_cast<int>(content_lines.size()) > MAX_DISPLAY_LINES;
+    if (truncated) content_lines.resize(MAX_DISPLAY_LINES);
+
+    // 输出内容行, 带对齐前缀
+    for (const auto& line : content_lines) {
+        os << align_prefix << line << "\n";
+    }
+    if (truncated) {
+        os << align_prefix << dim
+           << "(... truncated, showing first " << MAX_DISPLAY_LINES << " lines)"
+           << reset << "\n";
+    }
+
+    return os.str();
 }
 
 /// @brief 把 FileRead 工具的带行号输出 (如 "  123→code") 拆分为 (行号前缀, 代码内容)
@@ -441,10 +592,15 @@ void ChatRenderer::start() {
             if (e.status == BackendStatusEvent::Connecting) {
                 if (m_state_machine.current() == TuiState::IDLE) {
                     m_streaming_started.store(false);
+                    m_thinking_indicator_shown = false;
                     transition_to(TuiState::THINKING);
                     m_thinking_start_time = std::chrono::steady_clock::now();
                     m_thinking_seconds.store(0);
                     m_reasoning_buffer.clear();
+                    m_thinking_marker_physical_row = 0;
+                    m_thinking_marker_offset = 0;
+                    m_thinking_expanded = false;
+                    m_thinking_used_full_overlay = false;
 
                     // 启动 Spinner（思考计时）
                     m_terminal->spinner_start("Thinking");
@@ -499,6 +655,8 @@ void ChatRenderer::start() {
                     m_terminal->set_color(ColorRole::ThinkingIndicator);
                     m_terminal->write(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83\xe4\xb8\xad... (ctrl+o \xe6\x9f\xa5\xe7\x9c\x8b)\n");
                     m_terminal->reset_color();
+                    m_thinking_indicator_shown = true;
+                    m_thinking_marker_offset = 1;  // "思考中" 行会被覆盖，但 DisplayBuffer 仍保留
 
                     transition_to(TuiState::THINKING);
                     m_status_bar->set_state(TuiState::THINKING);
@@ -522,10 +680,18 @@ void ChatRenderer::start() {
                 if (!m_streaming_started.exchange(true)) {
                     // 第一次收到正文：切换到流式输出
                     if (!m_reasoning_buffer.empty()) {
+                        // 覆盖之前的 "● 思考中..." 临时候选标记（ANSI: 上移1行+清行）
+                        if (m_thinking_indicator_shown) {
+                            m_terminal->write("\x1b[1A\x1b[2K");
+                            m_thinking_indicator_shown = false;
+                        }
                         m_terminal->set_color(ColorRole::Success);
                         m_terminal->write(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83 ");
                         m_terminal->write(std::to_string(m_thinking_seconds.load()));
                         m_terminal->write("s (ctrl+o \xe6\x9f\xa5\xe7\x9c\x8b)\n");
+                        // 记录标记物理行号（此时标记行已入 DisplayBuffer，row_count 含标记行）
+                        m_thinking_marker_physical_row = m_terminal->display_buffer_row_count();
+                        m_terminal->write("\n");
                         m_terminal->reset_color();
                     }
 
@@ -566,15 +732,19 @@ void ChatRenderer::start() {
 
             // 如果还在思考状态且有推理内容，输出 ● 思考 Ns 标记
             if (m_state_machine.current() == TuiState::THINKING && !m_reasoning_buffer.empty()) {
+                // 覆盖之前的 "● 思考中..." 临时候选标记
+                if (m_thinking_indicator_shown) {
+                    m_terminal->write("\x1b[1A\x1b[2K");
+                    m_thinking_indicator_shown = false;
+                }
                 m_terminal->set_color(ColorRole::Success);
                 m_terminal->write(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83 ");  // ● (绿色)
                 m_terminal->write(std::to_string(m_thinking_seconds.load()));
                 m_terminal->write("s (ctrl+o \xe6\x9f\xa5\xe7\x9c\x8b)\n");
+                m_thinking_marker_physical_row = m_terminal->display_buffer_row_count();
+                m_terminal->write("\n");
                 m_terminal->reset_color();
             }
-            // 不输出换行、不显示 token 统计、不更新 token_stats、
-            // 不 increment_message_count、不转 IDLE、不光标复位
-            // —— 这些是会话级结束动作，由 StreamDoneEvent 处理
         })
     );
 
@@ -592,14 +762,21 @@ void ChatRenderer::start() {
 
             // 如果还在思考状态且有推理内容，输出 ● 思考 Ns 标记
             if (m_state_machine.current() == TuiState::THINKING && !m_reasoning_buffer.empty()) {
+                // 覆盖之前的 "● 思考中..." 临时候选标记
+                if (m_thinking_indicator_shown) {
+                    m_terminal->write("\x1b[1A\x1b[2K");
+                    m_thinking_indicator_shown = false;
+                }
                 m_terminal->set_color(ColorRole::Success);
                 m_terminal->write(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83 ");  // ● (绿色)
                 m_terminal->write(std::to_string(m_thinking_seconds.load()));
                 m_terminal->write("s (ctrl+o \xe6\x9f\xa5\xe7\x9c\x8b)\n");
+                m_thinking_marker_physical_row = m_terminal->display_buffer_row_count();
+                m_terminal->write("\n");
                 m_terminal->reset_color();
+            } else {
+                m_terminal->write("\n");
             }
-
-            m_terminal->write("\n");
 
             // 显示 token 统计
             if (e.generated_tokens > 0) {
@@ -742,7 +919,13 @@ void ChatRenderer::start() {
             m_terminal->write(marker);
             m_terminal->reset_color();
 
-            if (has_info && is_code_tool(info.tool_name) && !e.is_error) {
+            if (has_info && is_shell_tool(info.tool_name)) {
+                // Shell 工具 (Bash/PowerShell): 显示命令 + 对齐输出
+                std::string rendered = render_shell_tool_result(
+                    info.arguments, e.result, indent);
+                m_terminal->write(rendered);
+                m_terminal->reset_color();
+            } else if (has_info && is_code_tool(info.tool_name) && !e.is_error) {
                 // 代码类工具: 走高亮渲染 (输出已带 ANSI, 不再设 color)
                 std::string rendered = render_code_tool_result(
                     info.tool_name, info.arguments, e.result, indent, e.is_error);
@@ -837,6 +1020,19 @@ void ChatRenderer::start() {
             m_terminal->reset_color();
         })
     );
+
+    // ---- AskUserRequestEvent → 设置 pending 请求并唤醒主循环 ----
+    // 事件泵线程 drain 到 AskUser 请求时，存入 Terminal 的 pending 槽，
+    // 并通过 platform wake_event 唤醒阻塞在 read_char 的主循环。
+    // 主循环取出 pending 后弹出 ChoicePanel 模态，结果回填 promise 唤醒工作线程。
+    m_token_ask_user = std::make_unique<agent::EventToken>(
+        bus.subscribe<AskUserRequestEvent>([this](const AskUserRequestEvent& e) {
+            tui::detail::PendingAskRequest req;
+            req.questions = e.questions;
+            req.result_promise = e.result_promise;
+            m_terminal->set_pending_ask(std::move(req));
+        })
+    );
 }
 
 void ChatRenderer::stop() {
@@ -892,6 +1088,9 @@ void ChatRenderer::stop() {
     if (m_token_cache_diag && m_token_cache_diag->is_valid()) {
         bus.unsubscribe<CacheDiagnosticsEvent>(*m_token_cache_diag);
     }
+    if (m_token_ask_user && m_token_ask_user->is_valid()) {
+        bus.unsubscribe<AskUserRequestEvent>(*m_token_ask_user);
+    }
 }
 
 void ChatRenderer::transition_to(TuiState new_state) {
@@ -905,82 +1104,331 @@ void ChatRenderer::toggle_thinking_view() {
     if (m_reasoning_buffer.empty()) return;
 
     if (!m_terminal->is_overlay_active()) {
-        // ---- 展开思考视图：快照对话区 + 轻量样式渲染 ----
-        // M-1: 状态由 begin_overlay() 原子设置，无需单独维护 m_viewing_thinking
+        // ============================================================
+        // 展开思考视图
+        // ============================================================
+
+        // 思考进行中（THINKING 状态）：用全屏 overlay（实时追加 reasoning_delta）
+        // 此时标记 "● 思考 Ns" 尚未输出，m_thinking_marker_physical_row 无效
+        if (m_state_machine.current() == TuiState::THINKING) {
+            m_thinking_used_full_overlay = true;
+            int height = m_terminal->get_terminal_height();
+            int scroll_bottom = height - 3;
+            if (scroll_bottom < 1) scroll_bottom = 1;
+
+            m_terminal->begin_overlay(1, scroll_bottom);
+            m_terminal->reset_scroll_region();
+            m_terminal->write("\x1b[2J\x1b[H");
+
+            // 标题行
+            m_terminal->set_color(ColorRole::ThinkingBlock);
+            m_terminal->write(std::format(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83 {}s (ctrl+o \xe8\xbf\x94\xe5\x9b\x9e)\n",
+                m_thinking_seconds.load()));
+            m_terminal->reset_color();
+
+            // 已累积的思考内容
+            std::string rendered = render_markdown_block(m_reasoning_buffer);
+            std::string indented;
+            indented.reserve(rendered.size() + 64);
+            std::istringstream iss(rendered);
+            std::string line;
+            while (std::getline(iss, line)) {
+                if (!line.empty()) indented += "  ";
+                indented += line;
+                indented += "\n";
+            }
+            m_terminal->set_color(ColorRole::Reasoning);
+            m_terminal->write(indented);
+            m_terminal->reset_color();
+
+            m_terminal->write("\n");
+            m_terminal->set_color(ColorRole::Dim);
+            m_terminal->write("  (ctrl+o \xe8\xbf\x94\xe5\x9b\x9e)\n");
+            m_terminal->reset_color();
+            return;
+        }
+
+        // 思考已结束：尝试局部 overlay（保留标记行上方对话内容）
         int height = m_terminal->get_terminal_height();
         int scroll_bottom = height - 3;
         if (scroll_bottom < 1) scroll_bottom = 1;
+        int scroll_h = scroll_bottom;
 
-        // 快照当前对话区（同时设置 overlay active，阻止思考内容写入 DisplayBuffer）
-        // 收起时 end_overlay() 会从快照恢复对话，避免清屏丢失历史
-        m_terminal->begin_overlay(1, scroll_bottom);
+        int total_rows = m_terminal->display_buffer_row_count();
+        // 计算标记屏幕行号（底部对齐映射 + 偏差修正）
+        // DisplayBuffer snapshot 映射: physical = screen_row + total_rows - scroll_h
+        // 逆映射: screen_row = physical - total_rows + scroll_h
+        // m_thinking_marker_offset 修正 "思考中..." 覆盖导致的 DisplayBuffer 多 1 行
+        int marker_screen_row = m_thinking_marker_physical_row > 0
+            ? (m_thinking_marker_physical_row - total_rows + scroll_h - m_thinking_marker_offset)
+            : 0;
 
-        // 重置 scroll region，允许思考视图使用全屏
-        m_terminal->reset_scroll_region();
+        if (marker_screen_row >= 1) {
+            // ---- 局部 overlay：标记行在屏幕内，保留标记行上方内容 ----
+            // 快照标记行下方到 scroll_bottom 的区域
+            m_terminal->begin_overlay(marker_screen_row + 1, scroll_bottom);
 
-        // 清屏
-        m_terminal->write("\x1b[2J\x1b[H");
+            // 定位光标到标记行，更新标记文本为 "(ctrl+o 收起)"
+            {
+                char cmd[32];
+                snprintf(cmd, sizeof(cmd), "\x1b[%d;1H\x1b[2K", marker_screen_row);
+                m_terminal->write(cmd);
+                m_terminal->set_color(ColorRole::Success);
+                m_terminal->write(std::format(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83 {}s (ctrl+o \xe6\x94\xb6\xe8\xb5\xb7)",
+                    m_thinking_seconds.load()));
+                m_terminal->reset_color();
+            }
 
-        // 标题行：● 思考 Ns (ctrl+o 返回) — 移除 ┌─┐ 硬边框，仅颜色区分
-        m_terminal->set_color(ColorRole::ThinkingBlock);
-        m_terminal->write(std::format(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83 {}s (ctrl+o \xe8\xbf\x94\xe5\x9b\x9e)\n",
-            m_thinking_seconds.load()));
-        m_terminal->reset_color();
+            // 定位光标到标记行下方，写入思考内容
+            {
+                char cmd[32];
+                snprintf(cmd, sizeof(cmd), "\x1b[%d;1H", marker_screen_row + 1);
+                m_terminal->write(cmd);
+            }
 
-        // 思考内容：缩进式块，走 markdown 渲染
-        std::string rendered = render_markdown_block(m_reasoning_buffer);
-        // L-1: 每行添加 2 空格缩进，与标题区分（替代硬边框的视觉分隔）
-        std::string indented;
-        indented.reserve(rendered.size() + 64);
-        std::istringstream iss(rendered);
-        std::string line;
-        while (std::getline(iss, line)) {
-            if (!line.empty()) indented += "  ";
-            indented += line;
-            indented += "\n";
-        }
-        m_terminal->set_color(ColorRole::Reasoning);
-        m_terminal->write(indented);
-        m_terminal->reset_color();
+            // 思考内容：markdown 渲染 + 2 空格缩进
+            std::string rendered = render_markdown_block(m_reasoning_buffer);
+            std::string indented;
+            indented.reserve(rendered.size() + 64);
+            std::istringstream iss(rendered);
+            std::string line;
+            while (std::getline(iss, line)) {
+                if (!line.empty()) indented += "  ";
+                indented += line;
+                indented += "\n";
+            }
+            m_terminal->set_color(ColorRole::Reasoning);
+            m_terminal->write(indented);
+            m_terminal->reset_color();
 
-        // 底部提示（移除 └─┘ 硬边框）
-        m_terminal->write("\n");
-        m_terminal->set_color(ColorRole::Dim);
-        m_terminal->write("  (ctrl+o \xe8\xbf\x94\xe5\x9b\x9e)\n");
-        m_terminal->reset_color();
-    } else {
-        // ---- 收起思考视图：从快照恢复对话区 ----
-        // M-1: 状态由 end_overlay() 原子清除，无需单独维护 m_viewing_thinking
-
-        // H-2 修复：先 end_overlay 恢复对话内容，再 setup_scroll_region
-        // end_overlay() 使用 platform->write_output 直接写入，不受 scroll region 影响
-        // 若先 setup_scroll_region() 会将光标定位到 (1,1)，end_overlay() 的 DECSC 会
-        // 保存这个错误的光标位置，导致收起后光标停在左上角而非对话末尾
-        m_terminal->end_overlay();
-
-        // 恢复 scroll region（在对话内容恢复之后）
-        m_terminal->setup_scroll_region();
-
-        // 光标归位到输出区底部（对话末尾），确保下次输入时光标位置正确
-        m_terminal->cursor_to_output();
-
-        // H-1 修复：flush overlay 期间缓冲的正文内容到 formatter
-        // 此时 scroll region 已恢复，feed() 会正确写入终端并进入 DisplayBuffer
-        if (!m_pending_content.empty()) {
-            m_formatter->feed(m_pending_content);
-            m_pending_content.clear();
-        }
-
-        // 流式输出进行中时附加提示
-        if (m_state_machine.current() == TuiState::STREAMING) {
+            // 底部提示
             m_terminal->set_color(ColorRole::Dim);
-            m_terminal->write("  [streaming in progress...]\n");
+            m_terminal->write("  (ctrl+o \xe6\x94\xb6\xe8\xb5\xb7)\n");
+            m_terminal->reset_color();
+
+            m_thinking_expanded = true;
+        } else {
+            // ---- fallback：标记滚出屏幕，用全屏 overlay ----
+            m_thinking_used_full_overlay = true;
+
+            m_terminal->begin_overlay(1, scroll_bottom);
+            m_terminal->reset_scroll_region();
+            m_terminal->write("\x1b[2J\x1b[H");
+
+            m_terminal->set_color(ColorRole::ThinkingBlock);
+            m_terminal->write(std::format(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83 {}s (ctrl+o \xe8\xbf\x94\xe5\x9b\x9e)\n",
+                m_thinking_seconds.load()));
+            m_terminal->reset_color();
+
+            std::string rendered = render_markdown_block(m_reasoning_buffer);
+            std::string indented;
+            indented.reserve(rendered.size() + 64);
+            std::istringstream iss(rendered);
+            std::string line;
+            while (std::getline(iss, line)) {
+                if (!line.empty()) indented += "  ";
+                indented += line;
+                indented += "\n";
+            }
+            m_terminal->set_color(ColorRole::Reasoning);
+            m_terminal->write(indented);
+            m_terminal->reset_color();
+
+            m_terminal->write("\n");
+            m_terminal->set_color(ColorRole::Dim);
+            m_terminal->write("  (ctrl+o \xe8\xbf\x94\xe5\x9b\x9e)\n");
             m_terminal->reset_color();
         }
+    } else {
+        // ============================================================
+        // 收起思考视图
+        // ============================================================
 
-        // 重绘状态栏
-        m_status_bar->render();
+        if (m_thinking_expanded) {
+            // ---- 局部 overlay 收起 ----
+            // end_overlay 恢复标记行下方的快照内容
+            m_terminal->end_overlay();
+
+            // 恢复标记文本为 "(ctrl+o 查看)"
+            int scroll_h = m_terminal->get_terminal_height() - 3;
+            int total_rows = m_terminal->display_buffer_row_count();
+            int marker_screen_row = m_thinking_marker_physical_row - total_rows + scroll_h - m_thinking_marker_offset;
+
+            if (marker_screen_row >= 1) {
+                char cmd[32];
+                snprintf(cmd, sizeof(cmd), "\x1b[%d;1H\x1b[2K", marker_screen_row);
+                m_terminal->write(cmd);
+                m_terminal->set_color(ColorRole::Success);
+                m_terminal->write(std::format(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83 {}s (ctrl+o \xe6\x9f\xa5\xe7\x9c\x8b)",
+                    m_thinking_seconds.load()));
+                m_terminal->reset_color();
+            }
+
+            // 光标归位到输出区底部
+            m_terminal->cursor_to_output();
+
+            // flush overlay 期间缓冲的正文
+            if (!m_pending_content.empty()) {
+                m_formatter->feed(m_pending_content);
+                m_pending_content.clear();
+            }
+
+            m_thinking_expanded = false;
+            m_status_bar->render();
+        } else {
+            // ---- 全屏 overlay 收起（旧逻辑）----
+            // H-2 修复：先 end_overlay 恢复对话内容，再 setup_scroll_region
+            m_terminal->end_overlay();
+            m_terminal->setup_scroll_region();
+            m_terminal->cursor_to_output();
+
+            // H-1 修复：flush overlay 期间缓冲的正文内容到 formatter
+            if (!m_pending_content.empty()) {
+                m_formatter->feed(m_pending_content);
+                m_pending_content.clear();
+            }
+
+            // 流式输出进行中时附加提示
+            if (m_state_machine.current() == TuiState::STREAMING) {
+                m_terminal->set_color(ColorRole::Dim);
+                m_terminal->write("  [streaming in progress...]\n");
+                m_terminal->reset_color();
+            }
+
+            m_thinking_used_full_overlay = false;
+            m_status_bar->render();
+        }
     }
+}
+
+void ChatRenderer::replay_history(const std::vector<agent::ChatMessage>& messages, bool show_welcome) {
+    // 清空输出区域并重置 formatter 状态
+    m_formatter->reset();
+
+    // 重置 ctrl+o 就地展开状态
+    m_thinking_marker_physical_row = 0;
+    m_thinking_marker_offset = 0;
+    m_thinking_expanded = false;
+    m_thinking_used_full_overlay = false;
+
+    // 清屏流程：先重置 scroll region（使 \x1b[2J 清全屏，不受 region 限制），
+    // 再全屏清屏 + 光标归位，最后重新设置 scroll region 并定位光标到顶部。
+    // 这样可确保 overlay 快照恢复的欢迎横幅等旧内容被彻底清除。
+    m_terminal->reset_scroll_region();
+    m_terminal->write("\x1b[2J\x1b[H");
+    m_terminal->setup_scroll_region();
+
+    // 启动恢复时先渲染欢迎横幅（位于历史消息上方），/resume 切换时不重复显示
+    if (show_welcome) {
+        m_terminal->display_welcome();
+    }
+
+    // 预扫描：构建 tool_call_id → (tool_name, arguments_json) 映射
+    // 用于 Tool 消息渲染时提取 shell 工具的 command 参数
+    std::unordered_map<std::string, std::pair<std::string, std::string>> tool_args_map;
+    for (const auto& m : messages) {
+        if (m.role != agent::ChatMessage::Role::Assistant) continue;
+        for (const auto& tu : m.tool_uses) {
+            tool_args_map.emplace(tu.id,
+                std::make_pair(tu.name, tu.input.dump()));
+        }
+    }
+
+    // 渲染历史消息
+    for (const auto& msg : messages) {
+        switch (msg.role) {
+            case agent::ChatMessage::Role::User: {
+                // 用户消息："> 内容"（与 echo_input 风格一致）
+                m_terminal->set_color(ColorRole::UserInput);
+                m_terminal->write("> ");
+                m_terminal->write(msg.content);
+                m_terminal->write("\n");
+                m_terminal->reset_color();
+                break;
+            }
+            case agent::ChatMessage::Role::Assistant: {
+                // 思考内容：有 reasoning_content 时显示 "● 思考 (ctrl+o 查看)" 标记
+                // 并把最后一条 assistant 的思考内容回填到 m_reasoning_buffer（供 ctrl+o 展开）
+                if (!msg.reasoning_content.empty()) {
+                    m_terminal->set_color(ColorRole::Success);
+                    m_terminal->write(" \xe2\x97\x8f \xe6\x80\x9d\xe8\x80\x83 (ctrl+o \xe6\x9f\xa5\xe7\x9c\x8b)\n");
+                    m_terminal->reset_color();
+                    m_reasoning_buffer = msg.reasoning_content;
+                    m_thinking_seconds.store(0);  // 历史无秒数信息，显示 0s
+                }
+                // 工具调用标记
+                for (const auto& tu : msg.tool_uses) {
+                    auto icon = get_tool_icon(tu.name);
+                    m_terminal->set_color(ColorRole::ToolName);
+                    m_terminal->write(std::format("{} {} (ctrl+o to view)\n",
+                        icon.icon, tu.name));
+                    m_terminal->reset_color();
+                }
+                if (!msg.content.empty()) {
+                    // 通过 OutputFormatter 渲染 markdown
+                    m_formatter->feed(msg.content);
+                    m_formatter->flush();
+                    m_formatter->reset();
+                    m_terminal->write("\n");
+                }
+                break;
+            }
+            case agent::ChatMessage::Role::Tool: {
+                // 工具结果渲染（恢复会话场景）：
+                //   - Shell 工具 (Bash/PowerShell): 复用 render_shell_tool_result
+                //     显示命令 + 对齐输出，与实时执行格式一致
+                //   - 其他工具: 走摘要逻辑 (行数或前 200 字符)
+                const char* marker = msg.is_error
+                    ? "\xe2\x9c\x97"  // ✗
+                    : "\xe2\x9c\x93"; // ✓
+                ColorRole marker_color = msg.is_error ? ColorRole::Failure : ColorRole::Success;
+                m_terminal->set_color(marker_color);
+                m_terminal->write("  ");
+                m_terminal->write(marker);
+                m_terminal->reset_color();
+
+                // 查找对应的工具调用参数
+                std::string tool_name = msg.tool_name;
+                std::string arguments_json;
+                auto it_args = tool_args_map.find(msg.tool_call_id);
+                if (it_args != tool_args_map.end()) {
+                    tool_name = it_args->second.first;
+                    arguments_json = it_args->second.second;
+                }
+
+                if (is_shell_tool(tool_name) && !arguments_json.empty()) {
+                    // Shell 工具：显示命令 + 对齐输出
+                    std::string rendered = render_shell_tool_result(
+                        arguments_json, msg.content, "");
+                    m_terminal->write(rendered);
+                    m_terminal->reset_color();
+                } else if (is_code_tool(tool_name) && !msg.is_error && !arguments_json.empty()) {
+                    // 代码工具：走高亮渲染（语法高亮 + 行号 / diff）
+                    std::string rendered = render_code_tool_result(
+                        tool_name, arguments_json, msg.content, "", msg.is_error);
+                    if (!rendered.empty()) {
+                        m_terminal->write(rendered);
+                        m_terminal->reset_color();
+                    } else {
+                        // 无 diff / 兜底：走摘要
+                        m_terminal->write(render_tool_summary(msg.content));
+                        m_terminal->reset_color();
+                    }
+                } else {
+                    // 其他工具 / 错误：摘要显示（行数或前 200 字符）
+                    m_terminal->write(render_tool_summary(msg.content));
+                    m_terminal->reset_color();
+                }
+                break;
+            }
+            case agent::ChatMessage::Role::System:
+                // System 消息不渲染到输出区
+                break;
+        }
+    }
+
+    // 重绘状态栏
+    m_status_bar->render();
 }
 
 } // namespace tui

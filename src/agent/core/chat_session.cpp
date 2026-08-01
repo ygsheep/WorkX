@@ -226,6 +226,18 @@ void ChatSession::set_session_store(std::shared_ptr<agent::session::SessionStore
     m_session_store = std::move(store);
 }
 
+void ChatSession::configure_session_store(const std::string& project_dir,
+                                           const std::string& cwd,
+                                           const std::string& model,
+                                           const std::string& git_branch) {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    m_store_configured = true;
+    m_store_project_dir = project_dir;
+    m_store_cwd = cwd;
+    m_store_model = model;
+    m_store_git_branch = git_branch;
+}
+
 bool ChatSession::restore_from_file(const std::string& file_path) {
     auto messages = agent::session::SessionStore::load_messages(file_path);
     if (messages.empty()) return false;
@@ -238,12 +250,104 @@ bool ChatSession::restore_from_file(const std::string& file_path) {
     return true;
 }
 
-void ChatSession::persist_message(const ChatMessage& msg) {
+bool ChatSession::switch_session(const std::string& file_path) {
+    // 加载历史消息和元信息（文件 I/O 在锁外执行）
+    auto messages = agent::session::SessionStore::load_messages(file_path);
+    if (messages.empty()) return false;
+
+    auto meta = agent::session::SessionStore::load_meta(file_path);
+    if (!meta) return false;
+
+    // 从文件名提取 session_id（stem，如 "76e1b10d-...-...jsonl" → "76e1b10d-...-..."）
+    std::string new_session_id = std::filesystem::path(file_path).stem().string();
+
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    // 1. 替换 session_id
+    m_session_id = new_session_id;
+
+    // 2. 清空消息历史，填入加载的历史消息
+    m_messages = std::move(messages);
+
+    // 3. 关闭旧 SessionStore，创建新 SessionStore 指向历史文件
+    if (m_session_store) {
+        m_session_store->close();
+    }
+    auto new_store = std::make_shared<agent::session::SessionStore>(file_path, new_session_id);
+    if (!new_store->open()) {
+        return false;  // 打开失败，保留旧状态不变（messages 已替换但 store 为空，后续不持久化）
+    }
+    m_session_store = new_store;
+    // 不追加 session_start（会话进行中，只是换文件继续写）
+
+    // 4. 重置压缩器和前缀形状基线（新会话上下文从零开始）
+    m_compactor.reset();
+    m_last_prefix_shape = PrefixShape{};
+
+    return true;
+}
+
+bool ChatSession::rename_session(const std::string& title) {
     std::shared_ptr<agent::session::SessionStore> store;
     {
         std::lock_guard<std::mutex> lock(m_state_mutex);
         store = m_session_store;
     }
+    if (!store) return false;
+    return store->append_title(title);
+}
+
+void ChatSession::persist_message(const ChatMessage& msg) {
+    std::shared_ptr<agent::session::SessionStore> store;
+    bool is_first_user = false;
+    bool need_lazy_init = false;
+    std::string lazy_project_dir, lazy_cwd, lazy_model, lazy_git_branch;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        store = m_session_store;
+
+        // 检测是否是首条 user 消息（用于自动生成标题 + 懒创建触发条件）
+        // 注意：当前 msg 在 persist_message 调用前已被 push_back 到 m_messages 中，
+        //       因此用 user 消息计数 == 1 判断首条（而非检查"是否有 user 消息"）
+        if (msg.role == ChatMessage::Role::User) {
+            int user_count = 0;
+            for (const auto& m : m_messages) {
+                if (m.role == ChatMessage::Role::User) ++user_count;
+            }
+            is_first_user = (user_count == 1);
+        }
+
+        // 懒创建：首条 user 消息且 SessionStore 未创建时，创建文件 + 写 session_start
+        if (!store && m_store_configured && is_first_user) {
+            need_lazy_init = true;
+            lazy_project_dir = m_store_project_dir;
+            lazy_cwd = m_store_cwd;
+            lazy_model = m_store_model;
+            lazy_git_branch = m_store_git_branch;
+        }
+
+        if (!store && !need_lazy_init) return;
+    }
+
+    // 懒创建 SessionStore（锁外执行文件 I/O）
+    if (need_lazy_init) {
+        try {
+            namespace fs = std::filesystem;
+            fs::path session_file = fs::path(lazy_project_dir) / (m_session_id + ".jsonl");
+            auto new_store = std::make_shared<agent::session::SessionStore>(
+                session_file.string(), m_session_id);
+            if (!new_store->open()) return;
+            new_store->append_session_start(lazy_cwd, lazy_model, lazy_git_branch);
+            // 写入 store 后再持久化消息
+            {
+                std::lock_guard<std::mutex> lock(m_state_mutex);
+                m_session_store = new_store;
+            }
+            store = new_store;
+        } catch (const std::exception&) {
+            return;  // 创建失败，放弃持久化
+        }
+    }
+
     if (!store) return;
 
     const std::string uuid = core::util::generate_uuid();
@@ -252,6 +356,27 @@ void ChatSession::persist_message(const ChatMessage& msg) {
     switch (msg.role) {
         case ChatMessage::Role::User:
             store->append_user_message(uuid, "", msg.content, timestamp);
+            // 首条 user 消息自动生成标题（前 20 字）
+            if (is_first_user) {
+                std::string title = msg.content;
+                // UTF-8 安全截取前 20 字
+                size_t char_count = 0;
+                size_t byte_pos = 0;
+                while (char_count < 20 && byte_pos < title.size()) {
+                    unsigned char c = static_cast<unsigned char>(title[byte_pos]);
+                    if (c < 0x80) byte_pos += 1;
+                    else if ((c & 0xE0) == 0xC0) byte_pos += 2;
+                    else if ((c & 0xF0) == 0xE0) byte_pos += 3;
+                    else if ((c & 0xF8) == 0xF0) byte_pos += 4;
+                    else byte_pos += 1;
+                    ++char_count;
+                }
+                title = title.substr(0, byte_pos);
+                if (byte_pos < msg.content.size()) {
+                    title += "...";
+                }
+                store->append_title(title);
+            }
             break;
         case ChatMessage::Role::Assistant:
             store->append_assistant_message(uuid, "", msg.content,
@@ -465,9 +590,10 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
             // BashTool DI：注入 TaskManager，工具通过 ToolContext.task_manager() 启动后台任务
             // cwd：注入会话启动时捕获的工作目录，避免运行中 cwd 漂移导致工具在错误目录执行
             // DS_CACHE H-3：注入 m_compactor 引用，使卡死守卫/rewrite_version 跨 turn 持久化
+            // AskUserTool DI：注入 EventBus，工具通过 ToolContext.event_bus() 发布事件
             ReActLoop loop(m_provider.get(), m_tool_registry, ReActLoop::Config{},
                            &m_config_manager.get(), &m_task_manager.get(), m_cwd,
-                           &m_compactor);
+                           &m_compactor, &m_event_bus.get());
 
             // 3.2：使用 IReActObserver 接口替代 lambda 回调
             // ReActEventPublisher 内部完成 ReActStep → IEventBus 事件转换

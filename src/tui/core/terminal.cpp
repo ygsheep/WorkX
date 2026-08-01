@@ -9,7 +9,9 @@
 #include "tui/render/spinner.h"
 #include "tui/core/color_scheme.h"
 #include "tui/core/platform/i_platform.h"
+#include "tui/core/screen.h"
 #include "tui/widgets/bottom_bar_manager.h"
+#include "tui/widgets/choice_panel.h"
 #include "core/events/event_bus.h"
 #include "core/config/config_manager.h"
 #include "core/task/task_manager.h"
@@ -180,7 +182,10 @@ void Terminal::run() {
     // welcome 内容底对齐（紧挨状态栏），避免 logo 在顶部留下大量空行
     m_cursor_in_output = false;
 
-    display_welcome();
+    // 仅在未显示过欢迎横幅时调用（会话恢复场景已由 replay_history 先渲染）
+    if (!m_welcome_displayed) {
+        display_welcome();
+    }
 
     if (m_config.simple_io) {
         run_simple();
@@ -332,6 +337,27 @@ void Terminal::run_advanced() {
             continue;
         }
 
+        // 跨线程唤醒（AskUser 请求）：弹出 ChoicePanel 模态，结果回填 promise
+        if (result.woken_by_ask) {
+            auto pending = take_pending_ask();
+            if (pending) {
+                auto config = parse_choice_config(pending->questions);
+                if (config) {
+                    // 弹出模态选择面板（主线程执行，安全访问终端）
+                    Screen scr(this);
+                    ChoiceResult choice = run_choice_panel(this, &scr, *config);
+                    // 回填结果唤醒工作线程
+                    pending->result_promise->set_value(std::move(choice));
+                } else {
+                    // 解析失败：回填取消结果
+                    ChoiceResult cancelled;
+                    cancelled.submitted = false;
+                    pending->result_promise->set_value(std::move(cancelled));
+                }
+            }
+            continue;
+        }
+
         if (result.text.empty()) continue;
 
         if (result.is_command) {
@@ -366,6 +392,28 @@ void Terminal::run_advanced() {
 
 void Terminal::shutdown() {
     m_running = false;
+}
+
+void Terminal::set_pending_ask(detail::PendingAskRequest req) {
+    {
+        std::lock_guard<std::mutex> lock(m_pending_ask_mutex);
+        m_pending_ask = std::move(req);
+    }
+    wake_main_loop();
+}
+
+std::optional<detail::PendingAskRequest> Terminal::take_pending_ask() {
+    std::lock_guard<std::mutex> lock(m_pending_ask_mutex);
+    if (!m_pending_ask) return std::nullopt;
+    auto req = std::move(m_pending_ask);
+    m_pending_ask.reset();
+    return req;
+}
+
+void Terminal::wake_main_loop() {
+    if (m_platform) {
+        m_platform->notify_wake();
+    }
 }
 
 void Terminal::set_color(ColorRole role) {
@@ -468,6 +516,11 @@ int Terminal::get_terminal_height() const {
 int Terminal::get_terminal_width() const {
     if (m_platform) return m_platform->get_terminal_width();
     return 80;
+}
+
+int Terminal::display_buffer_row_count() const {
+    if (!m_display_buffer) return 0;
+    return m_display_buffer->row_count();
 }
 
 void Terminal::setup_scroll_region() {
@@ -764,6 +817,8 @@ void Terminal::display_welcome() {
     }
 
     write("\r\n");
+
+    m_welcome_displayed = true;
 }
 
 } // namespace tui

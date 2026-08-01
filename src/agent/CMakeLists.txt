@@ -56,6 +56,7 @@ target_sources(libworkx PRIVATE
     tool/PowerShellTool/powershell_tool.cpp
     tool/ShellTool/shell_detector.cpp
     tool/AgentTool/agent_tool.cpp
+    tool/AskUser/AskUserTool.cpp
     tool/MCPTool/mcp_tool.cpp
     tool/WebFetchTool/web_fetch_tool.cpp
 

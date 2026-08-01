@@ -29,6 +29,12 @@ public:
     /// @return Unicode code point，WEOF 表示流结束
     virtual char32_t read_char() = 0;
 
+    /// @brief 唤醒阻塞中的 read_char（线程安全）
+    /// @details 使正在 read_char 阻塞等待输入的线程立即返回 KEY_WAKE。
+    ///          用于跨线程通知主循环有紧急事件（如 AskUser 请求）需处理。
+    ///          实现应保证线程安全（典型用 Windows Event 或 POSIX self-pipe）。
+    virtual void notify_wake() {}
+
     /// @brief 输出文本
     virtual void write_output(std::string_view text) = 0;
 

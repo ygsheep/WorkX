@@ -1,0 +1,5 @@
+{
+  "_comment": "返回结果示例（用户在超时时间内未响应）— AskUserTool 默认超时 5 分钟(300000ms)，可通过 input.timeout_ms 自定义；超时后 status=timeout",
+  "status": "timeout",
+  "message": "User did not respond within 300s"
+}

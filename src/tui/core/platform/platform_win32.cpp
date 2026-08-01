@@ -70,6 +70,10 @@ public:
             SetConsoleMode(m_h_input, new_mode);
         }
 
+        // 创建手动复位事件，用于跨线程唤醒阻塞的 read_char
+        // 初始非触发态；notify_wake 调 SetEvent 触发，read_char 取出后 ResetEvent
+        m_wake_event = CreateEventW(nullptr, /*manualReset=*/TRUE, /*initialState=*/FALSE, nullptr);
+
         m_raw_mode_enabled = true;
         return Result<void, std::string>::ok();
     }
@@ -84,14 +88,46 @@ public:
             SetConsoleMode(m_h_input, m_original_input_mode);
             _setmode(_fileno(stdin), _O_U8TEXT);
         }
+        if (m_wake_event) {
+            CloseHandle(m_wake_event);
+            m_wake_event = nullptr;
+        }
 
         m_raw_mode_enabled = false;
+    }
+
+    void notify_wake() override {
+        if (m_wake_event) {
+            SetEvent(m_wake_event);
+        }
     }
 
     char32_t read_char() override {
         wchar_t high_surrogate = 0;
 
         while (true) {
+            // 用 WaitForMultipleObjects 同时等待 stdin 可读 和 wake_event，
+            // 任一就绪即返回；wake_event 触发时返回 KEY_WAKE 唤醒主循环
+            HANDLE handles[2];
+            DWORD n_handles = 1;
+            handles[0] = m_h_input;
+            if (m_wake_event) {
+                handles[1] = m_wake_event;
+                n_handles = 2;
+            }
+            DWORD wait_result = WaitForMultipleObjects(
+                n_handles, handles, /*bWaitAll=*/FALSE, /*dwMilliseconds=*/INFINITE);
+
+            // wake_event 触发：返回 KEY_WAKE 并复位事件
+            if (n_handles == 2 && wait_result == WAIT_OBJECT_0 + 1) {
+                ResetEvent(m_wake_event);
+                return 0xE010;  // KEY_WAKE
+            }
+            // stdin 未就绪或其他错误：继续等待
+            if (wait_result != WAIT_OBJECT_0) {
+                continue;
+            }
+
             INPUT_RECORD record;
             DWORD count = 0;
             if (!ReadConsoleInputW(m_h_input, &record, 1, &count) || count == 0) {
@@ -246,6 +282,7 @@ public:
 private:
     HANDLE m_h_output = nullptr;
     HANDLE m_h_input = nullptr;
+    HANDLE m_wake_event = nullptr;  ///< 唤醒 read_char 的事件（跨线程通知）
     DWORD m_original_output_mode = 0;
     DWORD m_original_input_mode = 0;
     bool m_raw_mode_enabled = false;

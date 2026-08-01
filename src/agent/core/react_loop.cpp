@@ -33,7 +33,8 @@ ReActLoop::ReActLoop(ICompletionProvider* provider,
                      IConfigManager* config_manager,
                      ITaskManager* task_manager,
                      std::string cwd,
-                     CacheAwareCompactor* external_compactor)
+                     CacheAwareCompactor* external_compactor,
+                     IEventBus* event_bus)
     : m_provider(provider)
     , m_registry(std::move(registry))
     , m_config(config)
@@ -42,6 +43,7 @@ ReActLoop::ReActLoop(ICompletionProvider* provider,
     , m_compactor(external_compactor ? *external_compactor : *m_owned_compactor)
     , m_config_manager(config_manager)
     , m_task_manager(task_manager)
+    , m_event_bus(event_bus)
     , m_cwd(std::move(cwd))
 {
     // issue #15-F: 构造函数不变量从 assert 改为 throw，避免 Debug 构建直接 abort
@@ -562,6 +564,8 @@ ReActResult ReActLoop::run(
         ctx.config_manager_ptr = m_config_manager;
         // BashTool 后台任务 DI：注入任务管理器（可选）
         ctx.task_manager_ptr = m_task_manager;
+        // AskUserTool 事件发布 DI：注入事件总线（可选）
+        ctx.event_bus_ptr = m_event_bus;
 
         // 1. 同步发布所有 Action 步骤（UI 即时反馈工具调用开始）
         for (const auto& tu : thought.tool_uses) {

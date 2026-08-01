@@ -1,0 +1,35 @@
+{
+  "_comment": "场景 3：多问题混合 — 策略(单选+自定义) + 文件(多选+自定义) + 测试(多选，关闭自定义)",
+  "questions": [
+    {
+      "question": "选择哪种修复策略？",
+      "header": "策略",
+      "multiSelect": false,
+      "options": [
+        { "label": "重构", "description": "提取公共函数" },
+        { "label": "打补丁", "description": "最小改动" }
+      ]
+    },
+    {
+      "question": "选择要修改的文件？",
+      "header": "文件",
+      "multiSelect": true,
+      "options": [
+        { "label": "src/app/main.cpp" },
+        { "label": "src/agent/core/chat_session.cpp" },
+        { "label": "src/app/factory.cpp" }
+      ]
+    },
+    {
+      "question": "需要运行哪些验证？",
+      "header": "测试",
+      "multiSelect": true,
+      "allow_custom_input": false,
+      "options": [
+        { "label": "单元测试" },
+        { "label": "集成测试" },
+        { "label": "手动验证" }
+      ]
+    }
+  ]
+}

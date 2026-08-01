@@ -7,6 +7,7 @@
  * @date 2026-07
  */
 
+#include <cctype>
 #include <format>
 
 #include "agent/command/inclaude/command.h"
@@ -20,6 +21,7 @@ void register_system_commands(CommandRegistry& registry, const SystemCommandCont
     ChatSession* session = ctx.session;
     auto on_exit = ctx.on_exit;
     auto on_model_select = ctx.on_model_select;
+    auto on_resume = ctx.on_resume;
 
     // help: 列出所有可用命令
     auto help_cmd = make_local_command("help", "显示可用命令列表");
@@ -79,6 +81,34 @@ void register_system_commands(CommandRegistry& registry, const SystemCommandCont
         return CommandResult::ok("");
     });
     registry.register_command(model_cmd);
+
+    // resume: 切换到历史会话
+    auto resume_cmd = make_local_command("resume", "切换到历史会话");
+    resume_cmd->set_argument_hint("/resume");
+    resume_cmd->set_call([on_resume](const std::string& /*args*/, const CommandContext& /*c*/) -> CommandResult {
+        if (on_resume) on_resume();
+        return CommandResult::ok("");
+    });
+    registry.register_command(resume_cmd);
+
+    // rename: 修改当前会话标题
+    auto rename_cmd = make_local_command("rename", "修改当前会话标题");
+    rename_cmd->set_argument_hint("/rename <title>");
+    rename_cmd->set_call([session](const std::string& args, const CommandContext& /*c*/) -> CommandResult {
+        if (!session) return CommandResult::error("No active session");
+        std::string title = args;
+        // 去除首尾空白
+        while (!title.empty() && std::isspace(static_cast<unsigned char>(title.front()))) title.erase(0, 1);
+        while (!title.empty() && std::isspace(static_cast<unsigned char>(title.back()))) title.pop_back();
+        if (title.empty()) {
+            return CommandResult::error("标题不能为空，用法：/rename <title>");
+        }
+        if (session->rename_session(title)) {
+            return CommandResult::ok(std::format("会话标题已修改为：{}\n", title));
+        }
+        return CommandResult::error("修改标题失败（会话未持久化？）");
+    });
+    registry.register_command(rename_cmd);
 }
 
 } // namespace agent::command

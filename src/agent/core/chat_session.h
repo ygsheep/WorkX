@@ -124,12 +124,43 @@ public:
     ///          - restore_from_file 加载的历史不会重复持久化
     void set_session_store(std::shared_ptr<agent::session::SessionStore> store);
 
+    /// @brief 配置懒创建 SessionStore 的参数（首条 user 消息时才创建文件）
+    /// @details factory 调用此方法传入配置，不立即创建文件。
+    ///          首条 user 消息持久化时才创建 SessionStore + 写 session_start + title。
+    /// @param project_dir 项目会话目录（<config_dir>/projects/<编码路径>）
+    /// @param cwd 当前工作目录
+    /// @param model 模型名
+    /// @param git_branch git 分支
+    void configure_session_store(const std::string& project_dir,
+                                  const std::string& cwd,
+                                  const std::string& model,
+                                  const std::string& git_branch);
+
     /// @brief 从 JSONL 文件加载历史会话消息
     /// @param file_path JSONL 文件路径
     /// @return true=加载成功（至少有一条消息）
     /// @details 加载后消息追加到 m_messages（不清空已有消息）。
     ///          加载的消息不会触发持久化（避免回环）。
     bool restore_from_file(const std::string& file_path);
+
+    /// @brief 切换到历史会话（/resume 命令调用）
+    /// @param file_path 历史会话 JSONL 文件路径
+    /// @return true=切换成功
+    /// @details 原子操作（单一锁作用域）：
+    ///          1. load_messages + load_meta 加载历史
+    ///          2. 替换 m_session_id（从文件名 stem 提取）
+    ///          3. 清空 m_messages，填入历史消息
+    ///          4. 关闭旧 SessionStore，创建新 SessionStore 指向历史文件，append 模式打开
+    ///          5. 不追加 session_start（会话进行中，只是换文件继续写）
+    ///          6. 重置压缩器和前缀形状基线
+    ///          不写 session_end 到旧文件（会话可被多次 resume 继续）。
+    bool switch_session(const std::string& file_path);
+
+    /// @brief 修改当前会话标题（/rename 命令调用）
+    /// @param title 新标题
+    /// @return true=成功追加 title 事件
+    /// @details append-only：追加新 title 事件到当前 JSONL，读取时取最后一条。
+    bool rename_session(const std::string& title);
 
     /// @brief 获取 SessionStore（用于退出时写入 session_end）
     std::shared_ptr<agent::session::SessionStore> session_store() const { return m_session_store; }
@@ -232,7 +263,7 @@ private:
     std::unique_ptr<ICompletionProvider> m_provider;
     std::vector<ChatMessage> m_messages;
     std::string m_system_prompt;
-    std::string m_session_id;           ///< 会话标识（构造后不变，无需加锁）
+    std::string m_session_id;           ///< 会话标识（switch_session 可变更，由 m_state_mutex 保护）
     std::string m_cwd;                  ///< 会话启动时的工作目录（构造时捕获，注入到 ReActLoop）
     std::atomic<bool> m_generating{false};
 
@@ -261,6 +292,13 @@ private:
 
     // 项目会话恢复：JSONL 持久化（可选，设置后每条消息实时追加）
     std::shared_ptr<agent::session::SessionStore> m_session_store;
+
+    // 懒创建 SessionStore 配置（首条 user 消息时才创建文件）
+    bool m_store_configured = false;
+    std::string m_store_project_dir;
+    std::string m_store_cwd;
+    std::string m_store_model;
+    std::string m_store_git_branch;
 
     // H-3：重试策略统一由 HttpRetryPolicy 管理
     HttpRetryPolicy m_retry_policy;
