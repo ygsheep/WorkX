@@ -65,7 +65,12 @@ std::pair<int, std::string> provider_rank(const std::string& provider_id) {
     const auto& order = official_provider_order();
     std::string key = to_lower(provider_id);
     for (std::size_t i = 0; i < order.size(); ++i) {
-        if (key == order[i]) return {0, std::to_string(i)};
+        // P2: std::to_string 字典序 bug（"10" < "2"）→ 补零定宽，数组顺序即优先级
+        if (key == order[i]) {
+            std::string rank = std::to_string(i);
+            if (rank.size() < 2) rank.insert(rank.begin(), '0');
+            return {0, rank};
+        }
     }
     return {1, key};
 }
