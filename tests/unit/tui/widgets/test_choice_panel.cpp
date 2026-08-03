@@ -18,7 +18,7 @@ using json = nlohmann::json;
 // 成功路径
 // ============================================================
 
-TEST_CASE("parse_choice_config: 单问题单选 (默认 allow_custom_input=true)", "[choice_panel][parse]") {
+TEST_CASE("parse_choice_config: single question single choice (default allow_custom_input=true)", "[choice_panel][parse]") {
     json input = {
         {"questions", json::array({
             {
@@ -51,7 +51,7 @@ TEST_CASE("parse_choice_config: 单问题单选 (默认 allow_custom_input=true)
     REQUIRE(tab.items[2].label == "重写");
 }
 
-TEST_CASE("parse_choice_config: 单问题多选 allow_custom_input=false", "[choice_panel][parse]") {
+TEST_CASE("parse_choice_config: single question multi choice allow_custom_input=false", "[choice_panel][parse]") {
     json input = {
         {"questions", json::array({
             {
@@ -80,7 +80,7 @@ TEST_CASE("parse_choice_config: 单问题多选 allow_custom_input=false", "[cho
     REQUIRE(tab.items[0].id == "src/app/main.cpp");
 }
 
-TEST_CASE("parse_choice_config: 多 Tab (多问题) 混合配置", "[choice_panel][parse]") {
+TEST_CASE("parse_choice_config: multi-tab multi-question mixed config", "[choice_panel][parse]") {
     json input = {
         {"questions", json::array({
             {
@@ -131,7 +131,7 @@ TEST_CASE("parse_choice_config: 多 Tab (多问题) 混合配置", "[choice_pane
     REQUIRE(config->tabs[2].allow_custom_input == false);  // 显式 false
 }
 
-TEST_CASE("parse_choice_config: multiSelect 缺省为 false", "[choice_panel][parse]") {
+TEST_CASE("parse_choice_config: multiSelect defaults to false", "[choice_panel][parse]") {
     json input = {
         {"questions", json::array({
             {
@@ -148,7 +148,7 @@ TEST_CASE("parse_choice_config: multiSelect 缺省为 false", "[choice_panel][pa
     REQUIRE(config->tabs[0].allow_custom_input == true);  // 缺省 true
 }
 
-TEST_CASE("parse_choice_config: id 等于 label", "[choice_panel][parse]") {
+TEST_CASE("parse_choice_config: id equals label", "[choice_panel][parse]") {
     json input = {
         {"questions", json::array({
             {
@@ -172,22 +172,22 @@ TEST_CASE("parse_choice_config: id 等于 label", "[choice_panel][parse]") {
 // 失败路径 (返回 nullopt)
 // ============================================================
 
-TEST_CASE("parse_choice_config: 缺少 questions 键 → nullopt", "[choice_panel][parse]") {
+TEST_CASE("parse_choice_config: missing questions key returns nullopt", "[choice_panel][parse]") {
     json input = {{"foo", "bar"}};
     REQUIRE_FALSE(parse_choice_config(input).has_value());
 }
 
-TEST_CASE("parse_choice_config: questions 非数组 → nullopt", "[choice_panel][parse]") {
+TEST_CASE("parse_choice_config: questions not an array returns nullopt", "[choice_panel][parse]") {
     json input = {{"questions", "not-an-array"}};
     REQUIRE_FALSE(parse_choice_config(input).has_value());
 }
 
-TEST_CASE("parse_choice_config: questions 空数组 → nullopt", "[choice_panel][parse]") {
+TEST_CASE("parse_choice_config: questions empty array returns nullopt", "[choice_panel][parse]") {
     json input = {{"questions", json::array()}};
     REQUIRE_FALSE(parse_choice_config(input).has_value());
 }
 
-TEST_CASE("parse_choice_config: question 缺少 question 字段 → nullopt", "[choice_panel][parse]") {
+TEST_CASE("parse_choice_config: question missing question field returns nullopt", "[choice_panel][parse]") {
     json input = {
         {"questions", json::array({
             {
@@ -199,7 +199,7 @@ TEST_CASE("parse_choice_config: question 缺少 question 字段 → nullopt", "[
     REQUIRE_FALSE(parse_choice_config(input).has_value());
 }
 
-TEST_CASE("parse_choice_config: question 缺少 header 字段 → nullopt", "[choice_panel][parse]") {
+TEST_CASE("parse_choice_config: question missing header field returns nullopt", "[choice_panel][parse]") {
     json input = {
         {"questions", json::array({
             {
@@ -211,7 +211,7 @@ TEST_CASE("parse_choice_config: question 缺少 header 字段 → nullopt", "[ch
     REQUIRE_FALSE(parse_choice_config(input).has_value());
 }
 
-TEST_CASE("parse_choice_config: question 缺少 options 字段 → nullopt", "[choice_panel][parse]") {
+TEST_CASE("parse_choice_config: question missing options field returns nullopt", "[choice_panel][parse]") {
     json input = {
         {"questions", json::array({
             {{"question", "Q?"}, {"header", "H"}}
@@ -220,7 +220,7 @@ TEST_CASE("parse_choice_config: question 缺少 options 字段 → nullopt", "[c
     REQUIRE_FALSE(parse_choice_config(input).has_value());
 }
 
-TEST_CASE("parse_choice_config: option 缺少 label 字段 → nullopt", "[choice_panel][parse]") {
+TEST_CASE("parse_choice_config: option missing label field returns nullopt", "[choice_panel][parse]") {
     json input = {
         {"questions", json::array({
             {
@@ -235,7 +235,7 @@ TEST_CASE("parse_choice_config: option 缺少 label 字段 → nullopt", "[choic
     REQUIRE_FALSE(parse_choice_config(input).has_value());
 }
 
-TEST_CASE("parse_choice_config: 空选项数组 → nullopt", "[choice_panel][parse]") {
+TEST_CASE("parse_choice_config: empty options array returns nullopt", "[choice_panel][parse]") {
     json input = {
         {"questions", json::array({
             {
@@ -252,7 +252,7 @@ TEST_CASE("parse_choice_config: 空选项数组 → nullopt", "[choice_panel][pa
 // 类型错误 (返回 nullopt)
 // ============================================================
 
-TEST_CASE("parse_choice_config: question 非字符串 → nullopt", "[choice_panel][parse]") {
+TEST_CASE("parse_choice_config: question not a string returns nullopt", "[choice_panel][parse]") {
     json input = {
         {"questions", json::array({
             {
@@ -265,7 +265,7 @@ TEST_CASE("parse_choice_config: question 非字符串 → nullopt", "[choice_pan
     REQUIRE_FALSE(parse_choice_config(input).has_value());
 }
 
-TEST_CASE("parse_choice_config: header 非字符串 → nullopt", "[choice_panel][parse]") {
+TEST_CASE("parse_choice_config: header not a string returns nullopt", "[choice_panel][parse]") {
     json input = {
         {"questions", json::array({
             {
@@ -278,7 +278,7 @@ TEST_CASE("parse_choice_config: header 非字符串 → nullopt", "[choice_panel
     REQUIRE_FALSE(parse_choice_config(input).has_value());
 }
 
-TEST_CASE("parse_choice_config: label 非字符串 → nullopt", "[choice_panel][parse]") {
+TEST_CASE("parse_choice_config: label not a string returns nullopt", "[choice_panel][parse]") {
     json input = {
         {"questions", json::array({
             {
@@ -293,7 +293,7 @@ TEST_CASE("parse_choice_config: label 非字符串 → nullopt", "[choice_panel]
     REQUIRE_FALSE(parse_choice_config(input).has_value());
 }
 
-TEST_CASE("parse_choice_config: options 非数组 → nullopt", "[choice_panel][parse]") {
+TEST_CASE("parse_choice_config: options not an array returns nullopt", "[choice_panel][parse]") {
     json input = {
         {"questions", json::array({
             {
@@ -310,19 +310,19 @@ TEST_CASE("parse_choice_config: options 非数组 → nullopt", "[choice_panel][
 // 异常路径
 // ============================================================
 
-TEST_CASE("parse_choice_config: 输入非对象 → nullopt", "[choice_panel][parse]") {
+TEST_CASE("parse_choice_config: input not an object returns nullopt", "[choice_panel][parse]") {
     json input = json::array({1, 2, 3});
     REQUIRE_FALSE(parse_choice_config(input).has_value());
 }
 
-TEST_CASE("parse_choice_config: question 元素非对象 → nullopt", "[choice_panel][parse]") {
+TEST_CASE("parse_choice_config: question element not an object returns nullopt", "[choice_panel][parse]") {
     json input = {
         {"questions", json::array({"not-an-object", 42})}
     };
     REQUIRE_FALSE(parse_choice_config(input).has_value());
 }
 
-TEST_CASE("parse_choice_config: option 元素非对象 → nullopt", "[choice_panel][parse]") {
+TEST_CASE("parse_choice_config: option element not an object returns nullopt", "[choice_panel][parse]") {
     json input = {
         {"questions", json::array({
             {
@@ -339,7 +339,7 @@ TEST_CASE("parse_choice_config: option 元素非对象 → nullopt", "[choice_pa
 // 边界：description 为非字符串时被忽略 (value() 安全处理)
 // ============================================================
 
-TEST_CASE("parse_choice_config: description 非字符串时忽略", "[choice_panel][parse]") {
+TEST_CASE("parse_choice_config: description non-string is ignored", "[choice_panel][parse]") {
     json input = {
         {"questions", json::array({
             {
