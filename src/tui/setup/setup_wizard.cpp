@@ -8,8 +8,6 @@
 #include "tui/core/screen.h"
 #include "tui/core/platform/i_platform.h"
 #include "core/config/i_config_manager.h"
-#include "app/config/app_config.h"
-#include "app/ui/provider_form.h"
 
 namespace tui {
 
@@ -25,11 +23,15 @@ static constexpr char32_t KEY_ESC    = 0x1B;
 // ============================================================
 
 SetupWizard::SetupWizard(IPlatform* platform, Terminal* terminal, Screen* screen,
-                         agent::IConfigManager& cfg)
+                         agent::IConfigManager& cfg,
+                         const std::filesystem::path& config_save_path,
+                         ProviderPanelFn provider_panel)
     : m_platform(platform)
     , m_terminal(terminal)
     , m_screen(screen)
     , m_cfg(cfg)
+    , m_save_path(config_save_path)
+    , m_provider_panel(std::move(provider_panel))
 {
 }
 
@@ -46,8 +48,8 @@ bool SetupWizard::run_wizard() {
     m_cursor_row = 2;
 
     // 步骤1：多供应商配置面板（列表 + 表单，含名称/URL/模型/API Key）
-    agent::ProviderSwitchResult sel = agent::provider_manager_interactive(
-        m_cfg, m_terminal, m_screen);
+    // 面板由 app 层注入（ProviderPanelFn），tui 层不依赖 app/ui/provider_form
+    agent::ProviderSwitchResult sel = m_provider_panel(m_cfg, m_terminal, m_screen);
     if (!sel.applied || sel.entry.id.empty()) {
         m_screen->write(m_cursor_row, 2, "设置已取消。使用 --help 查看 CLI 选项。", ColorRole::System);
         m_screen->flush();
@@ -56,8 +58,7 @@ bool SetupWizard::run_wizard() {
     }
 
     // 步骤2：保存配置（面板已写入 backend.* 标量键与 backend.providers 列表）
-    auto save_path = agent::default_config_path();
-    auto result = m_cfg.save_to_file(save_path);
+    auto result = m_cfg.save_to_file(m_save_path);
 
     int r = m_cursor_row;
     if (result.is_ok()) {
@@ -66,7 +67,7 @@ bool SetupWizard::run_wizard() {
         m_screen->write(r + 2, 4, std::format("提供商：{}", sel.entry.name), ColorRole::Default);
         if (!sel.entry.model.empty())
             m_screen->write(r + 3, 4, std::format("模型：{}", sel.entry.model), ColorRole::Default);
-        m_screen->write(r + 4, 4, std::format("配置：{}", save_path.string()), ColorRole::Dim);
+        m_screen->write(r + 4, 4, std::format("配置：{}", m_save_path.string()), ColorRole::Dim);
         m_screen->write(r + 5, 4, "随时输入 /provider 修改配置。", ColorRole::Dim);
     } else {
         m_screen->write(r, 2, "保存失败", ColorRole::StatusBar);

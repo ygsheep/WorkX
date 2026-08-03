@@ -179,8 +179,12 @@ static int run(int argc, char* argv[]) {
     tui::Screen screen(&terminal);
 
     if (needs_wizard) {
-        // H-A：SetupWizard 仅依赖 IConfigWriter + IConfigPersistence（M-4 ISP）
-        tui::SetupWizard wizard(terminal.platform(), &terminal, &screen, cfg);
+        // H-A：SetupWizard 接收 IConfigManager&（面板需 get/has/set 读写 backend.* 键
+        //       与 save_to_file 持久化，接口在 core/config 层）；
+        //       面板函数与配置路径由 app 层注入（回调），tui 层不依赖 app 层。
+        tui::SetupWizard wizard(
+            terminal.platform(), &terminal, &screen, cfg, default_config_path(),
+            &provider_manager_interactive);
         bool ok = wizard.run_wizard();
         if (!ok) {
             terminal.restore();

@@ -5,37 +5,24 @@
  *          第二层：字段表单（Enter 依次切换，最后一个字段 Enter=保存）。
  *          多供应商列表通过 ConfigManager 持久化（backend.providers JSON 数组），
  *          设为使用中时写入 backend.* 标量键并返回结果供调用方热切换会话。
+ *          领域类型（ProviderConfigEntry / ProviderSwitchResult）定义在
+ *          agent/model/provider_config.h，本文件仅含 UI 层函数。
  * @version 2.0.0
  * @date 2026-08
  */
 
 #pragma once
 
-#include <cstdint>
 #include <string>
 #include <vector>
+
+#include "agent/model/provider_config.h"
 
 namespace tui { class Terminal; class Screen; }
 
 namespace agent {
 
 class IConfigManager;
-
-/// @brief 供应商配置条目（与持久化 JSON 字段一一对应）
-struct ProviderConfigEntry {
-    std::string id;              ///< 标识（预设内部名或自定义名称，写入 backend.provider）
-    std::string name;            ///< 显示名
-    std::string base_url;        ///< API 基础 URL
-    std::string model;           ///< 模型 ID
-    int32_t context_length = 0;  ///< 上下文窗口（token），0 = 未知
-    std::string api_key;         ///< API Key
-};
-
-/// @brief 供应商面板返回结果
-struct ProviderSwitchResult {
-    bool applied = false;        ///< 是否执行了"设为使用中"（需要热切换）
-    ProviderConfigEntry entry;   ///< 切换到的条目（applied=true 时有效）
-};
 
 /// @brief 从 ConfigManager 加载供应商列表（backend.providers，空时返回空）
 std::vector<ProviderConfigEntry> load_provider_configs(IConfigManager& cfg);
