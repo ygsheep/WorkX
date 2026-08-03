@@ -285,7 +285,7 @@ TEST_CASE("builtin clear command clears session history", "[command]") {
     auto registry = std::make_shared<CommandRegistry>();
 
     SystemCommandContext sys_ctx;
-    sys_ctx.session = session.get();
+    sys_ctx.session = &session;  // 间接引用：指向运行时持有的 unique_ptr<ChatSession>
     register_system_commands(*registry, sys_ctx);
 
     CommandExecutor executor(registry);

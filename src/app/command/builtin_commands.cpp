@@ -18,7 +18,7 @@ namespace agent::command {
 
 void register_system_commands(CommandRegistry& registry, const SystemCommandContext& ctx) {
     CommandRegistry* reg_ptr = &registry;
-    ChatSession* session = ctx.session;
+    std::unique_ptr<ChatSession>* session_ref = ctx.session;
     auto on_exit = ctx.on_exit;
     auto on_model_select = ctx.on_model_select;
     auto on_provider_select = ctx.on_provider_select;
@@ -57,9 +57,9 @@ void register_system_commands(CommandRegistry& registry, const SystemCommandCont
     // clear: 清除会话历史
     auto clear_cmd = make_local_command("clear", "清除会话历史");
     clear_cmd->set_argument_hint("/clear");
-    clear_cmd->set_call([session](const std::string& /*args*/, const CommandContext& /*c*/) -> CommandResult {
-        if (!session) return CommandResult::error("No active session");
-        session->clear_history();
+    clear_cmd->set_call([session_ref](const std::string& /*args*/, const CommandContext& /*c*/) -> CommandResult {
+        if (!session_ref || !*session_ref) return CommandResult::error("No active session");
+        (*session_ref)->clear_history();
         return CommandResult::ok("Session history cleared.\n");
     });
     registry.register_command(clear_cmd);
@@ -67,9 +67,9 @@ void register_system_commands(CommandRegistry& registry, const SystemCommandCont
     // regen: 重新生成上一条回复
     auto regen_cmd = make_local_command("regen", "重新生成上一条回复");
     regen_cmd->set_argument_hint("/regen");
-    regen_cmd->set_call([session](const std::string& /*args*/, const CommandContext& /*c*/) -> CommandResult {
-        if (!session) return CommandResult::error("No active session");
-        session->regenerate();
+    regen_cmd->set_call([session_ref](const std::string& /*args*/, const CommandContext& /*c*/) -> CommandResult {
+        if (!session_ref || !*session_ref) return CommandResult::error("No active session");
+        (*session_ref)->regenerate();
         return CommandResult::ok("");
     });
     registry.register_command(regen_cmd);
@@ -104,8 +104,8 @@ void register_system_commands(CommandRegistry& registry, const SystemCommandCont
     // rename: 修改当前会话标题
     auto rename_cmd = make_local_command("rename", "修改当前会话标题");
     rename_cmd->set_argument_hint("/rename <title>");
-    rename_cmd->set_call([session](const std::string& args, const CommandContext& /*c*/) -> CommandResult {
-        if (!session) return CommandResult::error("No active session");
+    rename_cmd->set_call([session_ref](const std::string& args, const CommandContext& /*c*/) -> CommandResult {
+        if (!session_ref || !*session_ref) return CommandResult::error("No active session");
         std::string title = args;
         // 去除首尾空白
         while (!title.empty() && std::isspace(static_cast<unsigned char>(title.front()))) title.erase(0, 1);
@@ -113,7 +113,7 @@ void register_system_commands(CommandRegistry& registry, const SystemCommandCont
         if (title.empty()) {
             return CommandResult::error("标题不能为空，用法：/rename <title>");
         }
-        if (session->rename_session(title)) {
+        if ((*session_ref)->rename_session(title)) {
             return CommandResult::ok(std::format("会话标题已修改为：{}\n", title));
         }
         return CommandResult::error("修改标题失败（会话未持久化？）");

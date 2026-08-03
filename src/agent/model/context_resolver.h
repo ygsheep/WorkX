@@ -16,6 +16,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string_view>
 
 namespace agent {
@@ -42,12 +43,14 @@ struct ContextLengthResolution {
 /// @param cfg_context_length cfg.backend.context_length 持久化值（0 表示未配置）
 /// @param preset 当前 provider 预设（可空）
 /// @param catalog models.dev 远程目录（可空；命中优先级高于静态能力表）
+///        收 shared_ptr 而非裸指针：catalog 可能被后台刷新线程并发替换
+///        （std::atomic<std::shared_ptr<...>>），值传递保证函数调用期间对象存活
 /// @return 解析结果；value>0 时有效，source 标识来源
 ContextLengthResolution resolve_context_length(
     std::string_view model_name,
     int32_t sel_context_length,
     int32_t cfg_context_length,
     const ProviderPreset* preset,
-    const ModelCatalog* catalog = nullptr);
+    std::shared_ptr<const ModelCatalog> catalog = nullptr);
 
 } // namespace agent

@@ -23,7 +23,11 @@ namespace command {
 /// 系统命令注册所需的上下文
 /// 各命令通过 lambda 捕获所需的依赖
 struct SystemCommandContext {
-    ChatSession* session = nullptr;       ///< 会话指针（clear/regen/rename 需要）
+    /// 会话引用（clear/regen/rename 需要）。
+    /// 指向装配层持有的 unique_ptr<ChatSession> 变量本身，而非拷贝裸指针：
+    /// /provider 热切换会整体替换 session（旧对象析构），拷贝的裸指针会悬垂，
+    /// 间接引用在替换后自动跟随新 session。
+    std::unique_ptr<ChatSession>* session = nullptr;
     std::function<void()> on_exit;        ///< 退出回调（exit/quit 触发）
     std::function<void()> on_model_select; ///< 模型选择回调（model 触发）
     std::function<void()> on_provider_select; ///< 供应商选择回调（provider 触发）

@@ -13,6 +13,7 @@
  */
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -213,13 +214,22 @@ static int run(int argc, char* argv[]) {
     // 拉取失败保留现有缓存，不影响启动。
     // 缓存路径：<config_dir>/models_cache.json
     constexpr const char* kModelsDevUrl = "https://models.dev/api.json";
-    std::atomic<std::shared_ptr<const ModelCatalog>> model_catalog;
+    // 堆上持有原子指针：后台 detach 线程按值捕获，退出/切换时无栈悬垂；
+    // 后台 store() 替换与前台 load() 并发安全（atomic），值传递给 resolver 贯穿调用期
+    auto model_catalog = std::make_shared<std::atomic<std::shared_ptr<const ModelCatalog>>>();
     auto catalog_cache_path = default_config_path().parent_path() / "models_cache.json";
     if (auto cached = ModelCatalog::load_cache(catalog_cache_path); cached.is_ok()) {
-        model_catalog.store(std::make_shared<const ModelCatalog>(std::move(cached.value())));
+        model_catalog->store(std::make_shared<const ModelCatalog>(std::move(cached.value())));
     }
     // 后台线程拉取（不阻塞启动）
-    std::thread catalog_refresh_thread([&model_catalog, catalog_cache_path]() {
+    std::thread catalog_refresh_thread([model_catalog, catalog_cache_path]() {
+        // 缓存新鲜度：24h 内已拉取过则跳过（启动即离线命中，避免每次启动都 30s 网络窗口）
+        constexpr auto kCacheTtl = std::chrono::hours(24);
+        std::error_code ec;
+        auto mtime = std::filesystem::last_write_time(catalog_cache_path, ec);
+        if (!ec && std::filesystem::file_time_type::clock::now() - mtime < kCacheTtl) {
+            return;
+        }
         HttpClient http;
         auto resp = http.get(kModelsDevUrl, {}, /*timeout_ms=*/30000);
         if (resp.is_err() || !resp.value().is_success()) return;
@@ -227,7 +237,7 @@ static int run(int argc, char* argv[]) {
         if (parsed.is_err()) return;
         // 先写缓存再更新内存（保证下次启动也能离线命中）
         parsed.value().save_cache(catalog_cache_path);
-        model_catalog.store(std::make_shared<const ModelCatalog>(std::move(parsed.value())));
+        model_catalog->store(std::make_shared<const ModelCatalog>(std::move(parsed.value())));
     });
     catalog_refresh_thread.detach();
 
@@ -385,17 +395,19 @@ static int run(int argc, char* argv[]) {
             /*sel_context_length=*/0,
             cfg.get_or<int>(keys::CONTEXT_LENGTH, 0),
             preset,
-            model_catalog.load().get());
+            model_catalog->load());
         sb->set_context_limit(resolution.value);
     }
 
     // 注册内置系统命令（help/exit/quit/clear/regen/model）
     command::SystemCommandContext sys_ctx;
-    sys_ctx.session = session.get();
+    // 间接引用：指向本函数持有的 session 变量。热切换（/provider）替换 session
+    // 后 clear/regen/rename 命令自动跟随新对象，避免拷贝裸指针悬垂（use-after-free）。
+    sys_ctx.session = &session;
     sys_ctx.on_exit = []() {
         EventBus::instance().publish(ShutdownEvent{.force = false});
     };
-    sys_ctx.on_model_select = [&terminal, &screen, &backend_admin, &cfg, &renderer, &preset, &model_catalog]() {
+    sys_ctx.on_model_select = [&terminal, &screen, &backend_admin, &cfg, &renderer, &preset, model_catalog]() {
         // H-8：使用 factory 注入的 backend_admin 替代 session->backend()
         if (!backend_admin) {
             terminal.set_color(tui::ColorRole::Error);
@@ -417,7 +429,7 @@ static int run(int argc, char* argv[]) {
                     sel.context_length,
                     cfg.get_or<int>(keys::CONTEXT_LENGTH, 0),
                     preset,
-                    model_catalog.load().get());
+                    model_catalog->load());
                 sb->set_context_limit(resolution.value);
                 // 仅当来源是 ProviderList 时持久化（避免用兜底值覆盖用户配置）
                 if (resolution.source == ContextLengthResolution::Source::ProviderList) {
@@ -431,7 +443,7 @@ static int run(int argc, char* argv[]) {
         }
     };
     sys_ctx.on_provider_select = [&terminal, &screen, &cfg, &session, &backend_admin,
-                                  &renderer, &preset, &model_catalog]() {
+                                  &renderer, &preset, model_catalog]() {
         ProviderSwitchResult sel = provider_manager_interactive(cfg, &terminal, &screen);
         if (!sel.applied) {
             return;  // 用户取消或仅编辑配置列表
@@ -481,7 +493,7 @@ static int run(int argc, char* argv[]) {
                 /*sel_context_length=*/0,
                 cfg.get_or<int>(keys::CONTEXT_LENGTH, 0),
                 new_preset,
-                model_catalog.load().get());
+                model_catalog->load());
             sb->set_context_limit(resolution.value);
         }
         renderer.replay_history(session->get_messages());

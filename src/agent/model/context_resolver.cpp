@@ -15,7 +15,7 @@ ContextLengthResolution resolve_context_length(
     int32_t sel_context_length,
     int32_t cfg_context_length,
     const ProviderPreset* preset,
-    const ModelCatalog* catalog)
+    std::shared_ptr<const ModelCatalog> catalog)
 {
     ContextLengthResolution result;
 
