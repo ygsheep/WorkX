@@ -205,17 +205,14 @@ std::vector<ProviderConfigEntry> default_providers() {
     return out;
 }
 
-/// 当前字段值引用（F_CONTEXT 不走此函数，由调用方单独处理）
-std::string& field_value(ProviderConfigEntry& e, Field f) {
+/// 当前字段值指针（F_CONTEXT 无字符串存储，返回 nullptr，由调用方单独处理）
+std::string* field_value(ProviderConfigEntry& e, Field f) {
     switch (f) {
-        case F_NAME:    return e.name;
-        case F_URL:     return e.base_url;
-        case F_MODEL:   return e.model;
-        case F_KEY:     return e.api_key;
-        default: {
-            static std::string s_dummy;
-            return s_dummy;
-        }
+        case F_NAME:    return &e.name;
+        case F_URL:     return &e.base_url;
+        case F_MODEL:   return &e.model;
+        case F_KEY:     return &e.api_key;
+        default:        return nullptr;
     }
 }
 
@@ -353,6 +350,9 @@ ProviderSwitchResult provider_manager_interactive(
     std::string status_msg;
     bool quit = false;
     bool esc_armed = false;
+
+    // 进入表单层时对当前条目做快照，Esc 放弃时回滚编辑（不落盘也不残留内存）
+    ProviderConfigEntry entry_snapshot;
 
     // ---- 两层 UI：列表层（第一层）+ 表单层（第二层） ----
     enum class Layer { List, Form };
@@ -600,7 +600,8 @@ ProviderSwitchResult provider_manager_interactive(
                 }
                 return "(未匹配，可直接输入数字)";
             }
-            std::string v = field_value(cur, f);
+            std::string* vp = field_value(cur, f);
+            std::string v = vp ? *vp : "";
             if (f == F_KEY && !v.empty() && st.field != f) v = mask_key(v);
             if (v.empty()) v = "(空)";
             return v;
@@ -657,12 +658,14 @@ ProviderSwitchResult provider_manager_interactive(
             } else if (key == KEY_ENTER) {
                 if (!avail_indices.empty()) {
                     // 编辑选中配置 → 进入表单层（预填）
+                    // 注意：保留 dirty（列表层 Ctrl+D 等未保存修改的标记不因进入表单丢失），
+                    // 表单层 Esc 放弃时统一清空
                     st.active = avail_indices[list_cursor];
                     st.field = F_NAME;
                     st.context_auto = true;
-                    st.dirty = false;
                     esc_armed = false;
                     editing_new = false;
+                    entry_snapshot = st.providers[st.active];  // Esc 放弃时回滚编辑
                     refresh_suggestions();
                     layer = Layer::Form;
                     status_msg = std::format("编辑配置：{}", st.providers[st.active].name);
@@ -682,8 +685,18 @@ ProviderSwitchResult provider_manager_interactive(
                 }
             } else if (key == KEY_CTRL_N) {
                 // 新增配置 → 进入表单层
+                // 生成唯一占位 id：循环递增直到不冲突（删除后再新增不会重复）
+                std::string new_id;
+                for (int n = 1;; ++n) {
+                    std::string candidate = "new-provider-" + std::to_string(n);
+                    bool taken = false;
+                    for (const auto& e : st.providers) {
+                        if (e.id == candidate) { taken = true; break; }
+                    }
+                    if (!taken) { new_id = std::move(candidate); break; }
+                }
                 ProviderConfigEntry ne;
-                ne.id = "new-provider-" + std::to_string(st.providers.size() + 1);
+                ne.id = std::move(new_id);
                 ne.name = "New Provider";
                 st.providers.push_back(std::move(ne));
                 st.active = static_cast<int>(st.providers.size()) - 1;
@@ -714,10 +727,10 @@ ProviderSwitchResult provider_manager_interactive(
             } else if (key == KEY_ESC || key == KEY_CTRL_C) {
                 if (st.dirty && !esc_armed) {
                     esc_armed = true;
-                    status_msg = "有未保存修改，再按一次 Esc 放弃";
+                    status_msg = "有未保存修改，再按一次 Esc 放弃（不保存）";
                     continue;
                 }
-                if (st.dirty) persist_list();
+                // 放弃所有未保存修改直接退出（想保存请按 Ctrl+S 或 Tab/空格 设为使用中）
                 quit = true;
             }
             continue;
@@ -806,39 +819,58 @@ ProviderSwitchResult provider_manager_interactive(
                 status_msg = "有未保存修改，再按一次 Esc 返回列表（不保存）";
                 continue;
             }
-            // 返回配置列表（不退出面板）
+            // 放弃（不保存）：撤销未完成的新增条目；编辑已有条目时回滚到进入表单前的快照
+            if (editing_new) {
+                st.providers.erase(st.providers.begin() + st.active);
+                if (st.active >= static_cast<int>(st.providers.size())) {
+                    st.active = static_cast<int>(st.providers.size()) - 1;
+                }
+                editing_new = false;
+            } else {
+                st.providers[st.active] = entry_snapshot;
+            }
+            st.dirty = false;  // 放弃所有未保存修改（含列表层的删除/新增标记）
             rebuild_avail();
             layer = Layer::List;
             esc_armed = false;
-            status_msg = "已返回配置列表";
+            status_msg = "已放弃修改，返回配置列表";
         } else if (key == KEY_BACKSPACE || key == KEY_DELETE) {
             if (st.field == F_CONTEXT) {
                 cur.context_length /= 10;
                 if (cur.context_length == 0) st.context_auto = true;
             } else {
-                std::string& v = field_value(cur, st.field);
-                if (!v.empty()) {
-                    pop_utf8_back(v);
-                    st.dirty = true;
-                    esc_armed = false;
-                    if (st.field == F_MODEL) {
-                        cur.context_length = match_context_window(catalog.get(), cur.model);
-                        st.context_auto = (cur.context_length > 0);
-                    } else if (st.field == F_NAME) {
-                        refresh_suggestions();
-                    }
+                std::string* vp = field_value(cur, st.field);
+                if (!vp || vp->empty()) continue;
+                pop_utf8_back(*vp);
+                st.dirty = true;
+                esc_armed = false;
+                if (st.field == F_MODEL) {
+                    cur.context_length = match_context_window(catalog.get(), cur.model);
+                    st.context_auto = (cur.context_length > 0);
+                } else if (st.field == F_NAME) {
+                    refresh_suggestions();
                 }
             }
         } else if (key >= '0' && key <= '9' && st.field == F_CONTEXT) {
-            if (cur.context_length == 0) st.context_auto = false;
-            cur.context_length = cur.context_length * 10 + (key - '0');
-            st.context_auto = false;
-            st.dirty = true;
-            esc_armed = false;
+            // 上限与 backend.context_length schema 一致（2000000），防止 int32 溢出
+            constexpr int64_t kMaxContext = 2000000;
+            int64_t next = static_cast<int64_t>(cur.context_length) * 10 + (key - '0');
+            if (next > kMaxContext) {
+                status_msg = "上下文窗口已达上限 2000000";
+            } else {
+                if (cur.context_length == 0) st.context_auto = false;
+                cur.context_length = static_cast<int32_t>(next);
+                st.context_auto = false;
+                st.dirty = true;
+                esc_armed = false;
+            }
         } else if (key >= 0x20 && key < 0xE000) {  // 可打印字符（含中文），0xE000+ 为特殊键区
-            std::string& v = field_value(cur, st.field);
-            if (v.size() < 512) {
-                append_utf8_cp(key, v);
+            std::string* vp = field_value(cur, st.field);
+            if (!vp) {
+                // F_CONTEXT 只接受数字（数字已在上面分支处理）
+                status_msg = "上下文窗口仅支持输入数字";
+            } else if (vp->size() < 512) {
+                append_utf8_cp(key, *vp);
                 st.dirty = true;
                 esc_armed = false;
                 if (st.field == F_MODEL) {
