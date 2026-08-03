@@ -461,6 +461,16 @@ static int run(int argc, char* argv[]) {
             return;
         }
 
+        // 生成中禁止热切换：替换 session 会触发旧 ChatSession 析构
+        // （~ChatSession 执行 interrupt + wait，最长 30s 阻塞 UI 线程），
+        // 且切换瞬间导入的消息列表不一致。提示用户先中断当前回复。
+        if (session->is_generating()) {
+            terminal.set_color(tui::ColorRole::Error);
+            terminal.write("正在生成中，请先按 Ctrl+C 中断当前回复，再切换 Provider\n");
+            terminal.reset_color();
+            return;
+        }
+
         // 1. 备份当前消息与 SessionStore（继续写同一会话文件）
         std::vector<ChatMessage> messages = session->get_messages();
         auto store = session->session_store();
