@@ -19,19 +19,23 @@
 #include <format>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 
 #include <liblogger/logger.h>
 
 #include "agent/api/chat_types.h"
 #include "agent/api/i_backend.h"
+#include "agent/api/remote/http_client.h"
 #include "agent/command/inclaude/registry.h"
 #include "agent/input/processor.h"
 #include "agent/core/chat_session.h"
 #include "agent/message/types.h"
 #include "agent/model/provider_preset.h"
 #include "agent/model/context_resolver.h"
+#include "agent/model/model_catalog.h"
 #include "agent/session/session_store.h"  // 项目会话恢复：get_project_session_dir
 #include "agent/tool/registry.h"
 #include "app/command/builtin_commands.h"
@@ -41,6 +45,7 @@
 #include "app/ui/model_selector.h"
 #include "app/ui/path_completer.h"
 #include "app/ui/file_index.h"
+#include "app/ui/provider_selector.h"
 #include "core/config/config_manager.h"
 #include "core/events/event_bus.h"
 #include "core/task/task_manager.h"
@@ -187,6 +192,29 @@ static int run(int argc, char* argv[]) {
     std::string provider_name = cfg.get_or<std::string>(keys::PROVIDER, "");
     const ProviderPreset* preset = provider_name.empty() ? nullptr : find_preset(provider_name);
 
+    // ---- models.dev 远程目录（ModelCatalog）----
+    // 启动时先加载本地缓存（快、离线可用）→ 后台线程拉取远程 → 成功写缓存 + 更新内存。
+    // 拉取失败保留现有缓存，不影响启动。
+    // 缓存路径：<config_dir>/models_cache.json
+    constexpr const char* kModelsDevUrl = "https://models.dev/api.json";
+    std::atomic<std::shared_ptr<const ModelCatalog>> model_catalog;
+    auto catalog_cache_path = default_config_path().parent_path() / "models_cache.json";
+    if (auto cached = ModelCatalog::load_cache(catalog_cache_path); cached.is_ok()) {
+        model_catalog.store(std::make_shared<const ModelCatalog>(std::move(cached.value())));
+    }
+    // 后台线程拉取（不阻塞启动）
+    std::thread catalog_refresh_thread([&model_catalog, catalog_cache_path]() {
+        HttpClient http;
+        auto resp = http.get(kModelsDevUrl, {}, /*timeout_ms=*/30000);
+        if (resp.is_err() || !resp.value().is_success()) return;
+        auto parsed = ModelCatalog::from_api_json(resp.value().body);
+        if (parsed.is_err()) return;
+        // 先写缓存再更新内存（保证下次启动也能离线命中）
+        parsed.value().save_cache(catalog_cache_path);
+        model_catalog.store(std::make_shared<const ModelCatalog>(std::move(parsed.value())));
+    });
+    catalog_refresh_thread.detach();
+
     // ---- Backend + Session（D-2：委托工厂）----
     auto session_result = create_session(cfg, preset,
                                          TaskManager::instance(),
@@ -332,7 +360,7 @@ static int run(int argc, char* argv[]) {
         sb->set_project_name(is_home_dir ? "\xEF\xBC\x88\xE6\x97\xA0\xE9\xA1\xB9\xE7\x9B\xAE\xEF\xBC\x89"
                                           : fs::current_path().filename().string());
 
-        // 上下文窗口：统一通过 resolver 解析（优先级：provider→user cfg→capability→preset→default）
+        // 上下文窗口：统一通过 resolver 解析（优先级：provider→user cfg→catalog→capability→preset→default）
         // 启动初始化时无 selector 返回值，sel_context_length 传 0；
         // 若启动时已通过 select_model_interactive 选择模型并持久化了 context_length，
         // 这里读 cfg 即可拿到（来源为 ProviderList 的值已 save_to_file）
@@ -340,7 +368,8 @@ static int run(int argc, char* argv[]) {
             model_name,
             /*sel_context_length=*/0,
             cfg.get_or<int>(keys::CONTEXT_LENGTH, 0),
-            preset);
+            preset,
+            model_catalog.load().get());
         sb->set_context_limit(resolution.value);
     }
 
@@ -350,7 +379,7 @@ static int run(int argc, char* argv[]) {
     sys_ctx.on_exit = []() {
         EventBus::instance().publish(ShutdownEvent{.force = false});
     };
-    sys_ctx.on_model_select = [&terminal, &screen, &backend_admin, &cfg, &renderer, &preset]() {
+    sys_ctx.on_model_select = [&terminal, &screen, &backend_admin, &cfg, &renderer, &preset, &model_catalog]() {
         // H-8：使用 factory 注入的 backend_admin 替代 session->backend()
         if (!backend_admin) {
             terminal.set_color(tui::ColorRole::Error);
@@ -366,12 +395,13 @@ static int run(int argc, char* argv[]) {
             backend_admin->set_model_name(sel.name);
             if (auto* sb = renderer.status_bar()) {
                 sb->set_model_name(sel.name);
-                // 上下文窗口：统一通过 resolver 解析（优先级：provider→user cfg→capability→preset→default）
+                // 上下文窗口：统一通过 resolver 解析（优先级：provider→user cfg→catalog→capability→preset→default）
                 auto resolution = resolve_context_length(
                     sel.name,
                     sel.context_length,
                     cfg.get_or<int>(keys::CONTEXT_LENGTH, 0),
-                    preset);
+                    preset,
+                    model_catalog.load().get());
                 sb->set_context_limit(resolution.value);
                 // 仅当来源是 ProviderList 时持久化（避免用兜底值覆盖用户配置）
                 if (resolution.source == ContextLengthResolution::Source::ProviderList) {
@@ -383,6 +413,21 @@ static int run(int argc, char* argv[]) {
             terminal.write(std::format("Model set to: {}\n", sel.name));
             terminal.reset_color();
         }
+    };
+    sys_ctx.on_provider_select = [&terminal, &screen, &cfg]() {
+        ProviderSelection sel = select_provider_interactive(cfg, &terminal, &screen);
+        if (sel.provider.empty()) {
+            return;  // 用户取消
+        }
+        // 应用配置（重启生效）：provider + remote_url + api_key + model_name
+        apply_provider_selection(cfg, sel);
+        cfg.save_to_file(default_config_path());
+
+        terminal.set_color(tui::ColorRole::System);
+        terminal.write(std::format(
+            "Provider set to: {} (model: {}). Restart to apply.\n",
+            sel.provider, sel.model_name.empty() ? "(custom)" : sel.model_name));
+        terminal.reset_color();
     };
     sys_ctx.on_resume = [&session, &terminal, &screen, &renderer]() {
         if (!session) return;

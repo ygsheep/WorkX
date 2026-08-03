@@ -47,6 +47,9 @@ workx_session.json
 config.json
 *.env
 
+# models.dev catalog data (large local test fixtures, ~17MB)
+models-*.json
+
 # Test outputs
 tests/*.log
 tests/*.out

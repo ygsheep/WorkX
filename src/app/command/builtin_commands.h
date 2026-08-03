@@ -26,6 +26,7 @@ struct SystemCommandContext {
     ChatSession* session = nullptr;       ///< 会话指针（clear/regen/rename 需要）
     std::function<void()> on_exit;        ///< 退出回调（exit/quit 触发）
     std::function<void()> on_model_select; ///< 模型选择回调（model 触发）
+    std::function<void()> on_provider_select; ///< 供应商选择回调（provider 触发）
     std::function<void()> on_resume;      ///< 会话恢复回调（resume 触发，打开 TUI 选择面板）
 };
 

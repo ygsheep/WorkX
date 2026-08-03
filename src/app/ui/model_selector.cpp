@@ -88,10 +88,11 @@ ModelSelection select_model_interactive(
 
     if (model_names.empty()) {
         if (!current_model.empty()) model_names.push_back(current_model);
-        model_names.emplace_back("gpt-4o");
-        model_names.emplace_back("gpt-4o-mini");
-        model_names.emplace_back("deepseek-chat");
-        model_names.emplace_back("claude-sonnet-4-20250514");
+        model_names.emplace_back("deepseek-v4-flash");
+        model_names.emplace_back("glm-5.2");
+        model_names.emplace_back("kimi-k3");
+        model_names.emplace_back("qwen-plus");
+        model_names.emplace_back("MiniMax-M3");
     }
 
     // 构建 SelectPanel 数据

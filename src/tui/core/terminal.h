@@ -44,6 +44,8 @@ namespace detail {
 struct PendingAskRequest {
     nlohmann::json questions;
     std::shared_ptr<std::promise<ChoiceResult>> result_promise;
+    /// @brief 取消标志：工作线程超时后置位，run_choice_panel 检查后关闭面板
+    std::shared_ptr<std::atomic<bool>> cancel_flag;
 };
 }  // namespace detail
 

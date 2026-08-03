@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 #include <optional>
+#include <atomic>
 #include <nlohmann/json.hpp>
 
 namespace tui {
@@ -73,7 +74,11 @@ std::optional<ChoiceConfig> parse_choice_config(const nlohmann::json& input);
 /// @param term Terminal 实例
 /// @param scr Screen 差分渲染缓冲
 /// @param config 面板配置
+/// @param cancel_flag 外部取消标志（nullptr 表示不支持取消）
+///                     工作线程超时后置位此标志并唤醒主循环，
+///                     本函数收到 KEY_WAKE 后检查此标志，若已置位则返回 cancelled。
 /// @return 用户选择结果（submitted=false 表示取消）
-ChoiceResult run_choice_panel(Terminal* term, Screen* scr, const ChoiceConfig& config);
+ChoiceResult run_choice_panel(Terminal* term, Screen* scr, const ChoiceConfig& config,
+                               const std::atomic<bool>* cancel_flag = nullptr);
 
 } // namespace tui

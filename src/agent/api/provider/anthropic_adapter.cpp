@@ -21,7 +21,9 @@ std::string AnthropicAdapter::build_url(const std::string& base_url) const {
     while (!url.empty() && url.back() == '/') {
         url.pop_back();
     }
-    url += "/v1/messages";
+    if (!url.ends_with("/v1/messages")) {
+        url += "/v1/messages";
+    }
     return url;
 }
 

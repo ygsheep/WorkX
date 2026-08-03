@@ -18,10 +18,10 @@ using namespace agent::test;
 
 namespace {
 
-/// @brief 构造一个最小可用的 ClientConfig（lm-studio preset，无需 api_key）
+/// @brief 构造一个最小可用的 ClientConfig（openai-compatible preset，无需 api_key）
 ClientConfig make_test_config() {
     ClientConfig cfg;
-    cfg.provider = "lm-studio";
+    cfg.provider = "openai-compatible";
     cfg.backend.base_url = "http://localhost:1234/v1";
     cfg.model = "test-model";
     cfg.retry_count = 0;
@@ -196,7 +196,7 @@ TEST_CASE("Client::create rejects empty base_url without preset", "[client][conf
 
 TEST_CASE("Client::create rejects missing api_key for non-local provider", "[client][config]") {
     auto cfg = make_test_config();
-    cfg.provider = "deepseek";  // 非 lm-studio/openai-compatible，需要 api_key
+    cfg.provider = "deepseek";  // 非 openai-compatible，需要 api_key
     cfg.backend.base_url = "https://api.deepseek.com";
     cfg.backend.api_key = "";
 

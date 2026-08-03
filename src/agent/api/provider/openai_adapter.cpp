@@ -12,13 +12,51 @@
 
 namespace agent {
 
+namespace {
+
+/// @brief 从 OpenAI usage 对象提取缓存命中 token 数
+/// @details OpenAI 标准缓存字段为 usage.prompt_tokens_details.cached_tokens（Azure/OpenAI/多数兼容网关）。
+///          部分厂商（如 DeepSeek 官方）额外提供 prompt_cache_hit_tokens / prompt_cache_miss_tokens，
+///          格式不同，优先读取厂商私有字段，缺失时回退到 OpenAI 标准 cached_tokens。
+/// @param usage usage JSON 对象
+/// @param hit 输出：命中 token 数（私有字段优先，否则取 cached_tokens）
+/// @param miss 输出：未命中 token 数（私有字段，否则为 prompt_tokens - cached_tokens）
+void parse_cached_tokens(const nlohmann::json& usage, int32_t& hit, int32_t& miss) {
+    // DeepSeek 私有字段：prompt_cache_hit_tokens / prompt_cache_miss_tokens
+    if (usage.contains("prompt_cache_hit_tokens") && usage["prompt_cache_hit_tokens"].is_number_integer()) {
+        hit = usage["prompt_cache_hit_tokens"].get<int32_t>();
+        miss = usage.contains("prompt_cache_miss_tokens")
+                   && usage["prompt_cache_miss_tokens"].is_number_integer()
+               ? usage["prompt_cache_miss_tokens"].get<int32_t>()
+               : 0;
+        return;
+    }
+    // OpenAI 标准：usage.prompt_tokens_details.cached_tokens
+    if (usage.contains("prompt_tokens_details") && usage["prompt_tokens_details"].is_object()) {
+        const auto& details = usage["prompt_tokens_details"];
+        if (details.contains("cached_tokens") && details["cached_tokens"].is_number_integer()) {
+            hit = details["cached_tokens"].get<int32_t>();
+            int32_t prompt = usage.contains("prompt_tokens") && usage["prompt_tokens"].is_number_integer()
+                                 ? usage["prompt_tokens"].get<int32_t>()
+                                 : 0;
+            miss = (prompt > hit) ? (prompt - hit) : 0;
+            return;
+        }
+    }
+}
+
+} // anonymous namespace
+
 std::string OpenAIAdapter::build_url(const std::string& base_url) const {
     std::string url = base_url;
     // 去重尾部 /
     while (!url.empty() && url.back() == '/') {
         url.pop_back();
     }
-    url += "/v1/chat/completions";
+    // 尾部检查：base_url 已含完整端点时不重复追加（如用户直接填完整 chat/completions URL）
+    if (!url.ends_with("/v1/chat/completions") && !url.ends_with("/chat/completions")) {
+        url += "/v1/chat/completions";
+    }
     return url;
 }
 
@@ -159,9 +197,8 @@ bool OpenAIAdapter::parse_sse_event(const std::string& /*event_type*/,
                 const auto& usage = json_obj.value("usage", nlohmann::json::object());
                 out.prompt_tokens = usage.value("prompt_tokens", 0);
                 out.generated_tokens = usage.value("completion_tokens", 0);
-                // DeepSeek 硬盘缓存命中字段（其它 provider 无此字段时为 0）
-                out.prompt_cache_hit_tokens = usage.value("prompt_cache_hit_tokens", 0);
-                out.prompt_cache_miss_tokens = usage.value("prompt_cache_miss_tokens", 0);
+                // 缓存命中字段：DeepSeek 私有字段或 OpenAI 标准 prompt_tokens_details.cached_tokens
+                parse_cached_tokens(usage, out.prompt_cache_hit_tokens, out.prompt_cache_miss_tokens);
                 return true;  // 仅更新 usage，不算 final
             }
             return false;
@@ -230,9 +267,8 @@ bool OpenAIAdapter::parse_sse_event(const std::string& /*event_type*/,
                     const auto& usage = json_obj.value("usage", nlohmann::json::object());
                     out.prompt_tokens = usage.value("prompt_tokens", 0);
                     out.generated_tokens = usage.value("completion_tokens", 0);
-                    // DeepSeek 硬盘缓存命中字段（其它 provider 无此字段时为 0）
-                    out.prompt_cache_hit_tokens = usage.value("prompt_cache_hit_tokens", 0);
-                    out.prompt_cache_miss_tokens = usage.value("prompt_cache_miss_tokens", 0);
+                    // 缓存命中字段：DeepSeek 私有字段或 OpenAI 标准 prompt_tokens_details.cached_tokens
+                    parse_cached_tokens(usage, out.prompt_cache_hit_tokens, out.prompt_cache_miss_tokens);
                 }
             }
         }

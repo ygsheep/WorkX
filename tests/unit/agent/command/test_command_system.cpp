@@ -191,19 +191,20 @@ TEST_CASE("CommandExecutor execute prompt command", "[command]") {
 // 内置系统命令注册测试
 // ============================================================
 
-TEST_CASE("register_system_commands registers 6 commands", "[command]") {
+TEST_CASE("register_system_commands registers 9 commands", "[command]") {
     CommandRegistry registry;
     SystemCommandContext ctx;
 
     register_system_commands(registry, ctx);
 
-    REQUIRE(registry.size() == 8);
+    REQUIRE(registry.size() == 9);
     REQUIRE(registry.exists("help"));
     REQUIRE(registry.exists("exit"));
     REQUIRE(registry.exists("quit"));
     REQUIRE(registry.exists("clear"));
     REQUIRE(registry.exists("regen"));
     REQUIRE(registry.exists("model"));
+    REQUIRE(registry.exists("provider"));
     REQUIRE(registry.exists("resume"));
     REQUIRE(registry.exists("rename"));
 }

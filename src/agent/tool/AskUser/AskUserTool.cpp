@@ -17,6 +17,7 @@
 #include <future>
 #include <memory>
 #include <chrono>
+#include <atomic>
 
 namespace agent::tool {
 
@@ -149,9 +150,15 @@ ResultV2<ToolResult> AskUserTool::call(
             Error::Code::InvalidInput, "AskUser: failed to parse 'questions' as choice config");
     }
 
-    // 4. 创建 promise/future 通道
+    // 4. 创建 promise/future 通道 + 取消标志
     auto promise = std::make_shared<std::promise<tui::ChoiceResult>>();
     std::future<tui::ChoiceResult> future = promise->get_future();
+    // cancel_flag：工作线程超时后置位，TUI 主循环检查后关闭 ChoicePanel。
+    // timeout_ms > 0 时才需要取消机制；timeout_ms == 0（不限时）传 nullptr。
+    std::shared_ptr<std::atomic<bool>> cancel_flag;
+    if (timeout_ms > 0) {
+        cancel_flag = std::make_shared<std::atomic<bool>>(false);
+    }
 
     // 5. 发布 AskUserRequestEvent（异步入队，主循环 drain 后弹 ChoicePanel）
     IEventBus& bus = ctx.event_bus();
@@ -159,7 +166,8 @@ ResultV2<ToolResult> AskUserTool::call(
         .session_id = ctx.session_id,
         .questions = input,  // 完整 input 对象（含 questions 键），与 parse_choice_config 契约一致
         .timeout_ms = timeout_ms,
-        .result_promise = promise
+        .result_promise = promise,
+        .cancel_flag = cancel_flag
     };
     bus.publish_async(evt);
 
@@ -171,6 +179,14 @@ ResultV2<ToolResult> AskUserTool::call(
         auto status = future.wait_for(std::chrono::milliseconds(timeout_ms));
         if (status == std::future_status::timeout) {
             timed_out = true;
+            // 置位取消标志并发布超时事件，唤醒 TUI 主循环关闭 ChoicePanel。
+            // 必须先置位 cancel_flag 再发事件，确保 TUI 收到 KEY_WAKE 时能看到标志已置位。
+            if (cancel_flag) {
+                cancel_flag->store(true, std::memory_order_release);
+            }
+            bus.publish_async(AskUserTimeoutEvent{
+                .session_id = ctx.session_id
+            });
         }
         // ready 或 timeout 都尝试 get（timeout 时若 TUI 恰好回填也能取到）
         // 注意：若已 timeout 且 promise 未 set_value，get() 会抛异常，需保护

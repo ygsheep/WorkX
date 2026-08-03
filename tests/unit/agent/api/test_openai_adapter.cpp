@@ -20,6 +20,16 @@ TEST_CASE("OpenAIAdapter build_url", "[provider][openai]") {
         auto url = adapter.build_url("https://api.deepseek.com/");
         REQUIRE(url == "https://api.deepseek.com/v1/chat/completions");
     }
+
+    SECTION("base_url already contains full endpoint") {
+        auto url = adapter.build_url("https://moma.cmecloud.cn/v1/chat/completions");
+        REQUIRE(url == "https://moma.cmecloud.cn/v1/chat/completions");
+    }
+
+    SECTION("base_url ends with chat/completions (no v1)") {
+        auto url = adapter.build_url("https://open.bigmodel.cn/api/paas/v4/chat/completions");
+        REQUIRE(url == "https://open.bigmodel.cn/api/paas/v4/chat/completions");
+    }
 }
 
 TEST_CASE("OpenAIAdapter build_headers", "[provider][openai]") {
@@ -156,6 +166,42 @@ TEST_CASE("OpenAIAdapter parse_sse_event", "[provider][openai]") {
             chunk);
         REQUIRE(result);
         REQUIRE(chunk.is_final);
+    }
+
+    SECTION("usage chunk with OpenAI cached_tokens") {
+        // OpenAI 标准缓存字段：usage.prompt_tokens_details.cached_tokens
+        StreamChunk chunk;
+        bool result = adapter.parse_sse_event("",
+            R"({"choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":50,
+                "prompt_tokens_details":{"cached_tokens":900}}})",
+            chunk);
+        REQUIRE(result);
+        REQUIRE(chunk.prompt_tokens == 1000);
+        REQUIRE(chunk.generated_tokens == 50);
+        REQUIRE(chunk.prompt_cache_hit_tokens == 900);
+        REQUIRE(chunk.prompt_cache_miss_tokens == 100);
+    }
+
+    SECTION("usage chunk with deepseek private cache fields") {
+        // DeepSeek 官方私有字段优先
+        StreamChunk chunk;
+        bool result = adapter.parse_sse_event("",
+            R"({"choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":50,
+                "prompt_cache_hit_tokens":700,"prompt_cache_miss_tokens":300}})",
+            chunk);
+        REQUIRE(result);
+        REQUIRE(chunk.prompt_cache_hit_tokens == 700);
+        REQUIRE(chunk.prompt_cache_miss_tokens == 300);
+    }
+
+    SECTION("usage chunk without cache fields") {
+        StreamChunk chunk;
+        bool result = adapter.parse_sse_event("",
+            R"({"choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":50}})",
+            chunk);
+        REQUIRE(result);
+        REQUIRE(chunk.prompt_cache_hit_tokens == 0);
+        REQUIRE(chunk.prompt_cache_miss_tokens == 0);
     }
 
     SECTION("[DONE] signal") {

@@ -207,8 +207,8 @@ TEST_CASE("create_session resolves url from preset", "[factory][session]") {
     test::MockTaskManager tm;
     test::MockEventBus bus;
 
-    // 使用 lm-studio preset（默认 URL http://localhost:1234/v1）
-    std::string provider_name = "lm-studio";
+    // 使用 deepseek preset（默认 URL https://api.deepseek.com）
+    std::string provider_name = "deepseek";
     const ProviderPreset* preset = find_preset(provider_name);
     REQUIRE(preset != nullptr);
 
@@ -216,7 +216,7 @@ TEST_CASE("create_session resolves url from preset", "[factory][session]") {
 
     // URL 从 preset 解析（不实际创建 backend，因为无网络）
     REQUIRE(result.remote_url == std::string(preset->default_url));
-    // session 创建会尝试连接，可能失败（无 LM Studio 运行），session 可能为 nullptr
+    // session 创建会尝试连接，可能失败（无网络/API Key），session 可能为 nullptr
     // 这里只验证 URL 解析逻辑
 }
 
@@ -228,7 +228,7 @@ TEST_CASE("create_session uses injected MockTaskManager / MockEventBus (H-A)", "
 
     // preset 路径会触发 BackendFactory::create → backend->initialize（无网络失败）
     // 即使 session 创建失败，注入的 Mock 也不应被绕过（不应调用 ::instance()）
-    std::string provider_name = "lm-studio";
+    std::string provider_name = "deepseek";
     const ProviderPreset* preset = find_preset(provider_name);
     REQUIRE(preset != nullptr);
 

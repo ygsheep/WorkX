@@ -60,9 +60,8 @@ void parse_cli_args(IConfigManager& cfg, int argc, char* argv[]) {
         } else if (arg == "--help" || arg == "-h") {
             std::cout << "Usage: workx [options]\n"
                       << "\nOptions:\n"
-                      << "  --provider <name>       API provider: openai, anthropic, deepseek,\n"
-                      << "                          deepseek-anthropic, groq, together,\n"
-                      << "                          openai-compatible\n"
+                      << "  --provider <name>       API provider: deepseek, glm, kimi, qwen,\n"
+                      << "                          minimax, openai-compatible\n"
                       << "  --remote <url>          Remote API base URL\n"
                       << "  --model <name>          Model name\n"
                       << "  --api-key <key>         API key\n"

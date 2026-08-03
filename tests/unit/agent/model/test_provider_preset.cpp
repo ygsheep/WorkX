@@ -9,24 +9,6 @@
 using namespace agent;
 
 TEST_CASE("ProviderPreset find built-in presets", "[provider][preset]") {
-    SECTION("openai preset exists") {
-        auto* preset = find_preset("openai");
-        REQUIRE(preset != nullptr);
-        REQUIRE(preset->type == ProviderType::OpenAI);
-        REQUIRE(preset->name == "openai");
-        REQUIRE_FALSE(preset->default_url.empty());
-        REQUIRE_FALSE(preset->default_model.empty());
-    }
-
-    SECTION("anthropic preset exists") {
-        auto* preset = find_preset("anthropic");
-        REQUIRE(preset != nullptr);
-        REQUIRE(preset->type == ProviderType::Anthropic);
-        REQUIRE(preset->name == "anthropic");
-        REQUIRE_FALSE(preset->default_url.empty());
-        REQUIRE_FALSE(preset->default_model.empty());
-    }
-
     SECTION("deepseek preset exists and uses OpenAI type") {
         auto* preset = find_preset("deepseek");
         REQUIRE(preset != nullptr);
@@ -36,30 +18,46 @@ TEST_CASE("ProviderPreset find built-in presets", "[provider][preset]") {
         REQUIRE_FALSE(preset->default_model.empty());
     }
 
-    SECTION("groq preset exists") {
-        auto* preset = find_preset("groq");
+    SECTION("glm preset exists") {
+        auto* preset = find_preset("glm");
         REQUIRE(preset != nullptr);
         REQUIRE(preset->type == ProviderType::OpenAI);
+        REQUIRE(preset->name == "glm");
+        REQUIRE_FALSE(preset->default_url.empty());
+        REQUIRE_FALSE(preset->default_model.empty());
     }
 
-    SECTION("together preset exists") {
-        auto* preset = find_preset("together");
+    SECTION("kimi preset exists") {
+        auto* preset = find_preset("kimi");
         REQUIRE(preset != nullptr);
         REQUIRE(preset->type == ProviderType::OpenAI);
+        REQUIRE(preset->name == "kimi");
+        REQUIRE_FALSE(preset->default_url.empty());
+        REQUIRE_FALSE(preset->default_model.empty());
+    }
+
+    SECTION("qwen preset exists") {
+        auto* preset = find_preset("qwen");
+        REQUIRE(preset != nullptr);
+        REQUIRE(preset->type == ProviderType::OpenAI);
+        REQUIRE(preset->name == "qwen");
+        REQUIRE_FALSE(preset->default_url.empty());
+        REQUIRE_FALSE(preset->default_model.empty());
+    }
+
+    SECTION("minimax preset exists") {
+        auto* preset = find_preset("minimax");
+        REQUIRE(preset != nullptr);
+        REQUIRE(preset->type == ProviderType::OpenAI);
+        REQUIRE(preset->name == "minimax");
+        REQUIRE_FALSE(preset->default_url.empty());
+        REQUIRE_FALSE(preset->default_model.empty());
     }
 
     SECTION("openai-compatible preset exists") {
         auto* preset = find_preset("openai-compatible");
         REQUIRE(preset != nullptr);
         REQUIRE(preset->type == ProviderType::OpenAI);
-    }
-
-    SECTION("lm-studio preset exists") {
-        auto* preset = find_preset("lm-studio");
-        REQUIRE(preset != nullptr);
-        REQUIRE(preset->type == ProviderType::OpenAI);
-        REQUIRE(preset->name == "lm-studio");
-        REQUIRE_FALSE(preset->default_url.empty());
     }
 }
 
@@ -75,13 +73,13 @@ TEST_CASE("ProviderPreset list all names", "[provider][preset]") {
     auto names = list_preset_names();
     REQUIRE(names.size() >= 5);
 
-    bool has_openai = false, has_anthropic = false, has_deepseek = false;
+    bool has_deepseek = false, has_glm = false, has_kimi = false;
     for (auto n : names) {
-        if (n == "openai") has_openai = true;
-        if (n == "anthropic") has_anthropic = true;
         if (n == "deepseek") has_deepseek = true;
+        if (n == "glm") has_glm = true;
+        if (n == "kimi") has_kimi = true;
     }
-    REQUIRE(has_openai);
-    REQUIRE(has_anthropic);
     REQUIRE(has_deepseek);
+    REQUIRE(has_glm);
+    REQUIRE(has_kimi);
 }

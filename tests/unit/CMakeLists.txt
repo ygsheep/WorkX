@@ -6,6 +6,7 @@ set(UNIT_TEST_SOURCES
     helpers/test_mock_helpers.cpp
     app/test_factory.cpp
     app/test_cli_args.cpp
+    app/test_provider_selector.cpp
     agent/api/test_anthropic_adapter.cpp
     agent/api/test_openai_adapter.cpp
     agent/api/test_http_response.cpp
@@ -18,6 +19,8 @@ set(UNIT_TEST_SOURCES
     agent/command/test_command_system.cpp
     agent/model/test_provider_preset.cpp
     agent/model/test_model_config.cpp
+    agent/model/test_model_catalog.cpp
+    agent/model/test_context_resolver.cpp
     agent/compact/test_token_count.cpp
     agent/compact/test_prefix_shape.cpp
     agent/compact/test_tool_result_maintainer.cpp
@@ -53,6 +56,7 @@ set(UNIT_TEST_SOURCES
     tui/render/test_streaming_buffer.cpp
     tui/utils/test_utf8_utils.cpp
     tui/widgets/test_status_bar.cpp
+    tui/widgets/test_choice_panel.cpp
 )
 
 add_executable(workx_unit_tests ${UNIT_TEST_SOURCES})

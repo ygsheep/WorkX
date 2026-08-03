@@ -16,8 +16,8 @@ namespace agent {
 namespace {
 
 /// @brief 内置模型能力表
-/// @note 更新日期：2026-07-20
-/// @note 字段来源：Anthropic/OpenAI/DeepSeek 官方文档
+/// @note 更新日期：2026-08-02
+/// @note 字段来源：Anthropic/OpenAI/DeepSeek/GLM/Kimi/Qwen/MiniMax 官方文档
 /// @note F.9：模型版本会随厂商发布过时，定期更新并标注日期
 static const ModelCapability s_capabilities[] = {
     // ============================================================
@@ -121,6 +121,91 @@ static const ModelCapability s_capabilities[] = {
      .max_output_tokens = 8'192,
      .supports_tools = false,
      .supports_vision = false},
+
+    // ============================================================
+    // DeepSeek V4 系列（2026-04-24 发布，1M context）
+    // ============================================================
+    {.canonical_name = "deepseek-v4-flash",
+     .context_window = 1'048'576,
+     .max_output_tokens = 384'000,
+     .supports_tools = true,
+     .supports_vision = false},
+    {.canonical_name = "deepseek-v4-pro",
+     .context_window = 1'048'576,
+     .max_output_tokens = 384'000,
+     .supports_tools = true,
+     .supports_vision = false},
+
+    // ============================================================
+    // 智谱 GLM 系列（GLM-5.2 2026-06-13 发布，1M context）
+    // ============================================================
+    {.canonical_name = "glm-5.2",
+     .context_window = 1'048'576,
+     .max_output_tokens = 131'072,
+     .supports_tools = true,
+     .supports_vision = false},
+    {.canonical_name = "glm-5.1",
+     .context_window = 200'000,
+     .max_output_tokens = 64'000,
+     .supports_tools = true,
+     .supports_vision = false},
+    {.canonical_name = "glm-4.7",
+     .context_window = 200'000,
+     .max_output_tokens = 64'000,
+     .supports_tools = true,
+     .supports_vision = false},
+    {.canonical_name = "glm-4.6",
+     .context_window = 200'000,
+     .max_output_tokens = 64'000,
+     .supports_tools = true,
+     .supports_vision = false},
+
+    // ============================================================
+    // Kimi (Moonshot) 系列（K3 2026-07-16 发布，1M context）
+    // ============================================================
+    {.canonical_name = "kimi-k3",
+     .context_window = 1'048'576,
+     .max_output_tokens = 128'000,
+     .supports_tools = true,
+     .supports_vision = true},
+    {.canonical_name = "kimi-k2",
+     .context_window = 256'000,
+     .max_output_tokens = 128'000,
+     .supports_tools = true,
+     .supports_vision = true},
+
+    // ============================================================
+    // Qwen 系列（Qwen3.7-Max 2026-05-20 发布，1M context）
+    // ============================================================
+    {.canonical_name = "qwen3.7-max",
+     .context_window = 1'048'576,
+     .max_output_tokens = 65'536,
+     .supports_tools = true,
+     .supports_vision = false},
+    {.canonical_name = "qwen3.7-plus",
+     .context_window = 1'048'576,
+     .max_output_tokens = 65'536,
+     .supports_tools = true,
+     .supports_vision = true},
+    {.canonical_name = "qwen3.6-max",
+     .context_window = 262'144,
+     .max_output_tokens = 65'536,
+     .supports_tools = true,
+     .supports_vision = false},
+    {.canonical_name = "qwen-plus",
+     .context_window = 128'000,
+     .max_output_tokens = 8'192,
+     .supports_tools = true,
+     .supports_vision = false},
+
+    // ============================================================
+    // MiniMax 系列（M3 2026-06-01 发布，1M context）
+    // ============================================================
+    {.canonical_name = "minimax-m3",
+     .context_window = 1'048'576,
+     .max_output_tokens = 131'072,
+     .supports_tools = true,
+     .supports_vision = true},
 };
 
 /// @brief 不区分大小写的子串包含检查

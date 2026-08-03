@@ -86,10 +86,10 @@ void register_config_defaults(ConfigManager& cfg) {
     });
     cfg.register_schema({
         .key = keys::PROVIDER,
-        .description = "Provider name (openai, anthropic, deepseek, deepseek-anthropic, groq, together, openai-compatible)",
+        .description = "Provider name (deepseek, glm, kimi, qwen, minimax, openai-compatible)",
         .default_value = std::string(""),
         .type = ConfigSchema::Type::Enum,
-        .enum_values = {"", "openai", "anthropic", "deepseek", "deepseek-anthropic", "groq", "together", "openai-compatible"}
+        .enum_values = {"", "deepseek", "glm", "kimi", "qwen", "minimax", "openai-compatible"}
     });
     cfg.register_schema({
         .key = keys::TIMEOUT_MS,

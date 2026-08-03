@@ -21,6 +21,7 @@ void register_system_commands(CommandRegistry& registry, const SystemCommandCont
     ChatSession* session = ctx.session;
     auto on_exit = ctx.on_exit;
     auto on_model_select = ctx.on_model_select;
+    auto on_provider_select = ctx.on_provider_select;
     auto on_resume = ctx.on_resume;
 
     // help: 列出所有可用命令
@@ -81,6 +82,15 @@ void register_system_commands(CommandRegistry& registry, const SystemCommandCont
         return CommandResult::ok("");
     });
     registry.register_command(model_cmd);
+
+    // provider: 交互式切换 API 供应商
+    auto provider_cmd = make_local_command("provider", "切换 API 供应商");
+    provider_cmd->set_argument_hint("/provider");
+    provider_cmd->set_call([on_provider_select](const std::string& /*args*/, const CommandContext& /*c*/) -> CommandResult {
+        if (on_provider_select) on_provider_select();
+        return CommandResult::ok("");
+    });
+    registry.register_command(provider_cmd);
 
     // resume: 切换到历史会话
     auto resume_cmd = make_local_command("resume", "切换到历史会话");

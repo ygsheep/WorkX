@@ -37,6 +37,8 @@ static constexpr char32_t KEY_DELETE           = 0xE008;
 static constexpr char32_t KEY_CTRL_C           = 0xE009;
 static constexpr char32_t KEY_CTRL_O           = 0xE00A;
 static constexpr char32_t KEY_RESIZE           = 0xE00B;  // 终端尺寸变更
+static constexpr char32_t KEY_CTRL_N           = 0xE00C;
+static constexpr char32_t KEY_CTRL_D           = 0xE00D;
 
 class Win32Platform : public IPlatform {
 public:
@@ -150,6 +152,8 @@ public:
                     switch (record.Event.KeyEvent.wVirtualKeyCode) {
                         case 'C':       return KEY_CTRL_C;
                         case 'O':       return KEY_CTRL_O;
+                        case 'N':       return KEY_CTRL_N;
+                        case 'D':       return KEY_CTRL_D;
                         default:        break;  // 其他 Ctrl 组合键走默认逻辑
                     }
                 }

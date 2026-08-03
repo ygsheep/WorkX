@@ -10,8 +10,6 @@
 #include "core/config/i_config_manager.h"
 #include "app/config/app_config.h"
 
-#include <filesystem>
-
 namespace tui {
 
 using namespace agent;  // P0: tui→agent 类型引用过渡方案，后续 P2/P3 收紧到显式前缀
@@ -63,21 +61,10 @@ static constexpr char32_t KEY_CTRL_U      = 0x15;
 // 默认配置文件路径
 // ============================================================
 
-static std::filesystem::path default_config_path() {
-#ifdef _WIN32
-    const char* appdata = std::getenv("APPDATA");
-    if (appdata) {
-        return std::filesystem::path(appdata) / "workx" / "config.json";
-    }
-    return std::filesystem::path("workx.json");
-#else
-    const char* home = std::getenv("HOME");
-    if (home) {
-        return std::filesystem::path(home) / ".config" / "workx" / "config.json";
-    }
-    return std::filesystem::path("workx.json");
-#endif
-}
+// 使用 app/config/app_config.h 中的全局 default_config_path()，
+// 与 main.cpp 加载路径保持一致（~/.workx/config.json）。
+// 注意：不得在此定义同名 static 函数，否则遮蔽全局版，
+// 导致向导保存路径与启动加载路径不一致。
 
 // ============================================================
 // SetupWizard
@@ -140,7 +127,7 @@ bool SetupWizard::run_wizard() {
         save_provider_name = std::string(preset->name);
         display_name = std::string(preset->display_name);
         model_name = std::string(preset->default_model);
-        api_key_required = (std::string(preset->name) != "lm-studio");
+        api_key_required = true;  // 中国模型提供商均需 API Key
     }
 
     // 步骤2：输入 API Key

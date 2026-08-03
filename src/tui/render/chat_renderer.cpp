@@ -1030,7 +1030,17 @@ void ChatRenderer::start() {
             tui::detail::PendingAskRequest req;
             req.questions = e.questions;
             req.result_promise = e.result_promise;
+            req.cancel_flag = e.cancel_flag;
             m_terminal->set_pending_ask(std::move(req));
+        })
+    );
+
+    // ---- AskUserTimeoutEvent → 唤醒主循环关闭 ChoicePanel ----
+    // 工作线程超时后置位 cancel_flag 并发布本事件，
+    // 此处唤醒主循环使 read_char 返回 KEY_WAKE，run_choice_panel 检查 cancel_flag 后退出。
+    m_token_ask_timeout = std::make_unique<agent::EventToken>(
+        bus.subscribe<AskUserTimeoutEvent>([this](const AskUserTimeoutEvent& /*e*/) {
+            m_terminal->wake_main_loop();
         })
     );
 }
@@ -1090,6 +1100,9 @@ void ChatRenderer::stop() {
     }
     if (m_token_ask_user && m_token_ask_user->is_valid()) {
         bus.unsubscribe<AskUserRequestEvent>(*m_token_ask_user);
+    }
+    if (m_token_ask_timeout && m_token_ask_timeout->is_valid()) {
+        bus.unsubscribe<AskUserTimeoutEvent>(*m_token_ask_timeout);
     }
 }
 

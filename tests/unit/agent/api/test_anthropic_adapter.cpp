@@ -20,6 +20,11 @@ TEST_CASE("AnthropicAdapter build_url", "[provider][anthropic]") {
         auto url = adapter.build_url("https://api.anthropic.com/");
         REQUIRE(url == "https://api.anthropic.com/v1/messages");
     }
+
+    SECTION("base_url already contains full endpoint") {
+        auto url = adapter.build_url("https://api.anthropic.com/v1/messages");
+        REQUIRE(url == "https://api.anthropic.com/v1/messages");
+    }
 }
 
 TEST_CASE("AnthropicAdapter build_headers", "[provider][anthropic]") {

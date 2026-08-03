@@ -341,11 +341,21 @@ void Terminal::run_advanced() {
         if (result.woken_by_ask) {
             auto pending = take_pending_ask();
             if (pending) {
+                // 检查是否已被取消（超时发生在面板打开前）
+                if (pending->cancel_flag &&
+                    pending->cancel_flag->load(std::memory_order_acquire)) {
+                    ChoiceResult cancelled;
+                    cancelled.submitted = false;
+                    pending->result_promise->set_value(std::move(cancelled));
+                    continue;
+                }
                 auto config = parse_choice_config(pending->questions);
                 if (config) {
                     // 弹出模态选择面板（主线程执行，安全访问终端）
+                    // 传入 cancel_flag 供面板检查超时取消
                     Screen scr(this);
-                    ChoiceResult choice = run_choice_panel(this, &scr, *config);
+                    ChoiceResult choice = run_choice_panel(
+                        this, &scr, *config, pending->cancel_flag.get());
                     // 回填结果唤醒工作线程
                     pending->result_promise->set_value(std::move(choice));
                 } else {

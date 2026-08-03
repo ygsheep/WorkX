@@ -8,29 +8,12 @@
 
 namespace agent {
 
-/// @brief 内置预设表
-/// @note openai-compatible 是特殊预设：无默认 URL/Model，用户必须提供 --remote
+/// @brief 内置预设表（中国顶级模型 + 自定义 URL）
+/// @note 仅保留中国模型提供商：DeepSeek / GLM / Kimi / Qwen / MiniMax。
+///       openai-compatible 是特殊预设：无默认 URL/Model，用户必须提供 --remote。
 /// @note F.9：默认模型版本会随厂商发布过时，定期更新并标注日期。
 ///       用户可通过 config.json 的 backend.model_name 覆盖默认值。
 static const ProviderPreset s_presets[] = {
-    {
-        .name          = "openai",
-        .display_name  = "OpenAI",
-        .type          = ProviderType::OpenAI,
-        .default_url   = "https://api.openai.com",
-        .default_model = "gpt-5",  // 2025-08 发布，400K 上下文
-        .api_path      = "/v1/chat/completions",
-        .default_context_length = 400000  // GPT-5 系列
-    },
-    {
-        .name          = "anthropic",
-        .display_name  = "Anthropic",
-        .type          = ProviderType::Anthropic,
-        .default_url   = "https://api.anthropic.com",
-        .default_model = "claude-opus-4-5-20251101",  // 2025-11-25 发布，旗舰编码模型
-        .api_path      = "/v1/messages",
-        .default_context_length = 200000  // Claude 4.5 系列（1M 需 beta 申请）
-    },
     {
         .name          = "deepseek",
         .display_name  = "DeepSeek",
@@ -41,35 +24,8 @@ static const ProviderPreset s_presets[] = {
         .default_context_length = 1000000  // DeepSeek V4 系列 1M
     },
     {
-        .name          = "deepseek-anthropic",
-        .display_name  = "DeepSeek (Anthropic 兼容)",
-        .type          = ProviderType::Anthropic,
-        .default_url   = "https://api.deepseek.com/anthropic",
-        .default_model = "deepseek-v4-flash",
-        .api_path      = "/v1/messages",
-        .default_context_length = 128000  // DeepSeek Anthropic 兼容端点
-    },
-    {
-        .name          = "groq",
-        .display_name  = "Groq",
-        .type          = ProviderType::OpenAI,
-        .default_url   = "https://api.groq.com/openai",
-        .default_model = "llama-4-maverick-17b-128e-instruct",  // Llama 4 Maverick，1M 上下文
-        .api_path      = "/v1/chat/completions",
-        .default_context_length = 1000000  // Llama 4 Maverick 1M
-    },
-    {
-        .name          = "together",
-        .display_name  = "Together AI",
-        .type          = ProviderType::OpenAI,
-        .default_url   = "https://api.together.xyz",
-        .default_model = "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
-        .api_path      = "/v1/chat/completions",
-        .default_context_length = 1000000  // Llama 4 Maverick 1M
-    },
-    {
         .name          = "glm",
-        .display_name  = "智谱 GLM (Z.ai)",
+        .display_name  = "智谱 GLM",
         .type          = ProviderType::OpenAI,
         .default_url   = "https://open.bigmodel.cn/api/paas/v4",
         .default_model = "glm-5.2",  // GLM-5.2 (2026-06-13) 旗舰编码模型，1M context
@@ -77,14 +33,31 @@ static const ProviderPreset s_presets[] = {
         .default_context_length = 1000000  // GLM-5.2 系列 1M
     },
     {
-        .name          = "lm-studio",
-        .display_name  = "LM Studio",
+        .name          = "kimi",
+        .display_name  = "Kimi (Moonshot)",
         .type          = ProviderType::OpenAI,
-        .default_url   = "http://localhost:1234",
-        .default_model = "",
-        .api_path      = "/v1/chat/completions",
-        .timeout_ms    = 120000,
-        .retry_delay_ms = 10000   // 本地模型重试延迟 10s（指数退避上限 60s）
+        .default_url   = "https://api.moonshot.cn/v1",
+        .default_model = "kimi-k3",  // Kimi K3 (2026) 1M context，Agent/编码旗舰
+        .api_path      = "/chat/completions",
+        .default_context_length = 1000000  // Kimi K3 1M
+    },
+    {
+        .name          = "qwen",
+        .display_name  = "通义千问 (Qwen)",
+        .type          = ProviderType::OpenAI,
+        .default_url   = "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        .default_model = "qwen-plus",  // Qwen Plus 商业版 (阿里云百炼)，128K context
+        .api_path      = "/chat/completions",
+        .default_context_length = 128000  // Qwen Plus 128K
+    },
+    {
+        .name          = "minimax",
+        .display_name  = "MiniMax",
+        .type          = ProviderType::OpenAI,
+        .default_url   = "https://api.minimaxi.com/v1",
+        .default_model = "MiniMax-M3",  // MiniMax M3 (2026) 1M context，Agent/代码优化
+        .api_path      = "/chat/completions",
+        .default_context_length = 1000000  // MiniMax M3 1M
     },
     {
         .name          = "openai-compatible",

@@ -29,6 +29,7 @@ constexpr char32_t KEY_SPACE = 0x20;
 constexpr char32_t KEY_CTRL_C = 0xE009;
 constexpr char32_t KEY_BACKSPACE = 0x08;
 constexpr char32_t KEY_DELETE = 0x7F;
+constexpr char32_t KEY_WAKE  = 0xE010;  // 跨线程唤醒（AskUser 超时等）
 
 // 显示常量
 constexpr int MAX_DISPLAY_ITEMS = 8;   ///< 最多显示的选项数（超出滚动）
@@ -119,7 +120,8 @@ std::optional<ChoiceConfig> parse_choice_config(const nlohmann::json& input) {
 // ============================================================
 // run_choice_panel
 // ============================================================
-ChoiceResult run_choice_panel(Terminal* term, Screen* scr, const ChoiceConfig& config) {
+ChoiceResult run_choice_panel(Terminal* term, Screen* scr, const ChoiceConfig& config,
+                               const std::atomic<bool>* cancel_flag) {
     if (config.tabs.empty()) {
         return ChoiceResult{};
     }
@@ -311,6 +313,18 @@ ChoiceResult run_choice_panel(Terminal* term, Screen* scr, const ChoiceConfig& c
     while (true) {
         do_render();
         char32_t key = term->platform()->read_char();
+
+        // 跨线程唤醒（AskUser 超时等）：检查 cancel_flag，若已置位则取消面板
+        if (key == KEY_WAKE) {
+            if (cancel_flag && cancel_flag->load(std::memory_order_acquire)) {
+                result.submitted = false;
+                term->end_overlay();
+                scr->reset_buffers();
+                return result;
+            }
+            // 非 cancel 唤醒（不应发生），忽略后重新渲染
+            continue;
+        }
 
         if (input_mode) {
             // ===== 输入模式：所有按键都给输入框 =====

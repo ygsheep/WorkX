@@ -40,6 +40,39 @@ TEST_CASE("ModelCapability exact match", "[model][config]") {
         REQUIRE(cap->supports_tools);
         REQUIRE_FALSE(cap->supports_vision);
     }
+
+    SECTION("deepseek-v4-flash 1M context") {
+        auto* cap = find_model_capability("deepseek-v4-flash");
+        REQUIRE(cap != nullptr);
+        REQUIRE(cap->context_window == 1'048'576);
+        REQUIRE(cap->supports_tools);
+    }
+
+    SECTION("glm-5.2 1M context") {
+        auto* cap = find_model_capability("glm-5.2");
+        REQUIRE(cap != nullptr);
+        REQUIRE(cap->context_window == 1'048'576);
+    }
+
+    SECTION("kimi-k3 1M context") {
+        auto* cap = find_model_capability("kimi-k3");
+        REQUIRE(cap != nullptr);
+        REQUIRE(cap->context_window == 1'048'576);
+        REQUIRE(cap->supports_tools);
+        REQUIRE(cap->supports_vision);
+    }
+
+    SECTION("qwen3.7-max 1M context") {
+        auto* cap = find_model_capability("qwen3.7-max");
+        REQUIRE(cap != nullptr);
+        REQUIRE(cap->context_window == 1'048'576);
+    }
+
+    SECTION("minimax-m3 1M context") {
+        auto* cap = find_model_capability("minimax-m3");
+        REQUIRE(cap != nullptr);
+        REQUIRE(cap->context_window == 1'048'576);
+    }
 }
 
 TEST_CASE("ModelCapability fuzzy match by substring", "[model][config]") {
@@ -81,6 +114,11 @@ TEST_CASE("get_context_window_for_model fallback", "[model][config]") {
     SECTION("known model returns configured window") {
         REQUIRE(get_context_window_for_model("claude-sonnet-4-5") == 200'000);
         REQUIRE(get_context_window_for_model("gpt-4o") == 128'000);
+        REQUIRE(get_context_window_for_model("deepseek-v4-flash") == 1'048'576);
+        REQUIRE(get_context_window_for_model("kimi-k3") == 1'048'576);
+        REQUIRE(get_context_window_for_model("glm-5.2") == 1'048'576);
+        REQUIRE(get_context_window_for_model("qwen3.7-max") == 1'048'576);
+        REQUIRE(get_context_window_for_model("minimax-m3") == 1'048'576);
     }
 
     SECTION("unknown model returns default") {

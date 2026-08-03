@@ -33,6 +33,7 @@ target_sources(libworkx PRIVATE
     model/provider_preset.cpp
     model/config.cpp
     model/context_resolver.cpp
+    model/model_catalog.cpp
 
     # tool: 通用工具
     tool/context.cpp

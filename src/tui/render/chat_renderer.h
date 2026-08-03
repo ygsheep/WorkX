@@ -89,6 +89,7 @@ private:
     std::unique_ptr<agent::EventToken> m_token_task_failed;     ///< 后台任务失败事件
     std::unique_ptr<agent::EventToken> m_token_cache_diag;      ///< 缓存诊断事件
     std::unique_ptr<agent::EventToken> m_token_ask_user;        ///< AskUser 请求事件
+    std::unique_ptr<agent::EventToken> m_token_ask_timeout;     ///< AskUser 超时事件
 
     // 状态机
     TuiStateMachine m_state_machine;

@@ -72,14 +72,15 @@ src/
 
 ## 支持的 AI 提供商
 
+仅内置中国顶级模型厂商预设，另支持自定义 OpenAI 兼容端点：
+
 | 提供商 | 预设名称 | 默认模型 |
 |--------|----------|----------|
-| OpenAI | `openai` | gpt-4o |
-| Anthropic | `anthropic` | claude-sonnet-4-20250514 |
-| DeepSeek | `deepseek` | deepseek-chat |
-| Groq | `groq` | llama-3.3-70b-versatile |
-| Together AI | `together` | mistralai/Mixtral-8x22B-Instruct-v0.1 |
-| LM Studio | `lm-studio` | (自定义) |
+| DeepSeek | `deepseek` | deepseek-v4-flash |
+| 智谱 GLM | `glm` | glm-5.2 |
+| Kimi (Moonshot) | `kimi` | kimi-k3 |
+| 通义千问 (Qwen) | `qwen` | qwen-plus |
+| MiniMax | `minimax` | MiniMax-M3 |
 | Custom URL | `openai-compatible` | (自定义) |
 
 ![LLM 后端适配层（插件式 8 家 Provider）](docs/img/08_backend_adapter.jpg)

@@ -57,13 +57,10 @@ ResultV2<Client> Client::create(ClientConfig cfg) {
     }
     cfg.backend.type = BackendConfig::Type::Remote;
 
-    // 3.5 校验 api_key — Remote 后端必须有 api_key，但本地服务（LM Studio /
-    //     openai-compatible）允许为空。
+    // 3.5 校验 api_key — Remote 后端必须有 api_key，但自定义 URL（openai-compatible）允许为空。
     if (cfg.backend.api_key.empty()) {
         bool needs_key = true;
-        if (preset
-            && (preset->name == "lm-studio"
-                || preset->name == "openai-compatible")) {
+        if (preset && preset->name == "openai-compatible") {
             needs_key = false;
         }
         if (needs_key) {

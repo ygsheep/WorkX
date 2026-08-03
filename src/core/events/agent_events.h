@@ -13,6 +13,7 @@
 #include <vector>
 #include <future>
 #include <memory>
+#include <atomic>
 #include <nlohmann/json.hpp>
 
 #include "core/tool_kind.h"  // C-3：直接引用 core 层规范位置，避免 core→agent 分层越界
@@ -86,7 +87,8 @@ struct CompactionPausedEvent {
 /// @details AskUserTool 在工作线程发布本事件后阻塞等待 result_promise；
 ///          TUI 主循环 drain 异步事件后弹出 ChoicePanel，用户操作完成时
 ///          调用 result_promise->set_value() 回填结果唤醒工作线程。
-///          timeout_ms > 0 时，工作线程等待超时后自动返回 timeout 状态。
+///          timeout_ms > 0 时，工作线程等待超时后自动返回 timeout 状态，
+///          同时置位 cancel_flag 并发布 AskUserTimeoutEvent 通知 TUI 关闭面板。
 struct AskUserRequestEvent {
     std::string session_id;
     nlohmann::json questions;   ///< 原样转交 parse_choice_config 的 JSON
@@ -94,6 +96,18 @@ struct AskUserRequestEvent {
     /// @brief 结果回填通道：TUI 设置 value 后唤醒阻塞的 AskUserTool
     /// @details shared_ptr 使事件按值传递时 promise 仍共享同一实例
     std::shared_ptr<std::promise<tui::ChoiceResult>> result_promise;
+    /// @brief 取消标志：工作线程超时后置位，TUI 主循环检查后关闭 ChoicePanel
+    /// @details shared_ptr<atomic<bool>> 使事件按值传递时标志仍共享同一实例。
+    ///          nullptr 表示不支持取消（timeout_ms == 0 时可为空）。
+    std::shared_ptr<std::atomic<bool>> cancel_flag;
+};
+
+/// @brief AskUser 超时事件（AskUserTool → TUI，通知主循环关闭 ChoicePanel）
+/// @details AskUserTool 在工作线程超时后发布本事件。ChatRenderer 订阅后
+///          调用 Terminal::wake_main_loop()，使阻塞在 read_char 的主循环
+///          返回 KEY_WAKE，run_choice_panel 检查 cancel_flag 后返回 cancelled。
+struct AskUserTimeoutEvent {
+    std::string session_id;
 };
 
 } // namespace agent
