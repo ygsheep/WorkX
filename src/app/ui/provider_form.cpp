@@ -275,6 +275,13 @@ void save_provider_configs(IConfigManager& cfg,
 }
 
 void apply_provider_switch(IConfigManager& cfg, const ProviderConfigEntry& entry) {
+    // 先清除旧键再写入新值：条目留空的字段不得残留上次供应商的配置。
+    // （P1: 旧实现只 set 非空值，custom 预设全程空输入会残留旧 API_KEY/URL/MODEL_NAME）
+    cfg.remove_value(keys::PROVIDER);
+    cfg.remove_value(keys::REMOTE_URL);
+    cfg.remove_value(keys::MODEL_NAME);
+    cfg.remove_value(keys::API_KEY);
+
     cfg.set(keys::PROVIDER, entry.id.empty() ? entry.name : entry.id);
     if (!entry.base_url.empty()) {
         cfg.set(keys::REMOTE_URL, entry.base_url);

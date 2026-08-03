@@ -116,6 +116,25 @@ TEST_CASE("apply_provider_switch falls back to name when id empty", "[app][provi
     REQUIRE(t.cfg.get_or<std::string>(keys::REMOTE_URL, "") == "https://custom.example.com/v1");
 }
 
+TEST_CASE("apply_provider_switch clears stale keys from previous provider", "[app][provider]") {
+    TestCfg t;
+    t.cfg.set(keys::PROVIDER, std::string("deepseek"));
+    t.cfg.set(keys::REMOTE_URL, std::string("https://api.deepseek.com"));
+    t.cfg.set(keys::MODEL_NAME, std::string("deepseek-v4-flash"));
+    t.cfg.set(keys::API_KEY, std::string("sk-stale"));
+
+    // 切到 custom：全部字段留空（模拟全程跳过输入的 custom 预设）
+    ProviderConfigEntry entry;
+    entry.name = "LocalOnly";
+    apply_provider_switch(t.cfg, entry);
+
+    REQUIRE(t.cfg.get_or<std::string>(keys::PROVIDER, "") == "LocalOnly");
+    REQUIRE_FALSE(t.cfg.has(keys::REMOTE_URL));   // 旧 URL 不得残留
+    REQUIRE_FALSE(t.cfg.has(keys::MODEL_NAME));   // 旧模型名不得残留
+    REQUIRE_FALSE(t.cfg.has(keys::API_KEY));      // 旧 API Key 不得残留
+    REQUIRE(t.cfg.get_or<int>(keys::CONTEXT_LENGTH, 0) == 0);
+}
+
 TEST_CASE("load prefers providers array over legacy scalars", "[app][provider]") {
     TestCfg t;
 
