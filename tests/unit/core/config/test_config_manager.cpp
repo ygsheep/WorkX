@@ -5,6 +5,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include <filesystem>
 #include "core/config/config_manager.h"
 #include "helpers/mock_config_manager.h"  // H-B：ConfigScope DI 测试使用
 
@@ -254,6 +255,56 @@ TEST_CASE("ConfigSchema validation", "[config][schema]") {
         REQUIRE_FALSE(all.empty());
     }
 
+    cfg.clear();
+}
+
+TEST_CASE("ConfigManager JSON array save/load roundtrip", "[config]") {
+    // backend.providers 多供应商列表（JSON 数组）经 set_nested_json/flatten_json
+    // 持久化：数组整体作为 ConfigValue（nlohmann::json）存储，必须实测 save→load 往返
+    auto& cfg = ConfigManager::instance();
+    cfg.clear();
+
+    auto test_path = std::filesystem::temp_directory_path() / "workx_cfg_roundtrip_test.json";
+    nlohmann::json providers = nlohmann::json::array();
+    providers.push_back({
+        {"id", "deepseek"},
+        {"name", "DeepSeek"},
+        {"base_url", "https://api.deepseek.com"},
+        {"model", "deepseek-v4-flash"},
+        {"context_length", 1000000},
+        {"api_key", "sk-test"}
+    });
+    providers.push_back({
+        {"id", "openai-compatible"},
+        {"name", "Custom URL"},
+        {"base_url", "https://example.com/v1"},
+        {"model", "my-model"},
+        {"context_length", 0},
+        {"api_key", ""}
+    });
+    cfg.set("backend.providers", providers);
+    cfg.set("backend.provider", std::string("deepseek"));
+
+    auto save_result = cfg.save_to_file(test_path);
+    REQUIRE(save_result.is_ok());
+
+    cfg.clear();
+    auto load_result = cfg.load_from_file(test_path);
+    REQUIRE(load_result.is_ok());
+
+    auto loaded = cfg.get<nlohmann::json>("backend.providers");
+    REQUIRE(loaded.is_ok());
+    const auto& j = loaded.value();
+    REQUIRE(j.is_array());
+    REQUIRE(j.size() == 2);
+    REQUIRE(j[0]["id"] == "deepseek");
+    REQUIRE(j[0]["model"] == "deepseek-v4-flash");
+    REQUIRE(j[0]["context_length"] == 1000000);
+    REQUIRE(j[1]["id"] == "openai-compatible");
+    REQUIRE(j[1]["api_key"] == "");
+    REQUIRE(cfg.get_or<std::string>("backend.provider", "") == "deepseek");
+
+    std::filesystem::remove(test_path);
     cfg.clear();
 }
 
