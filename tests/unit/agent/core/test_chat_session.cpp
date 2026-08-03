@@ -495,3 +495,45 @@ TEST_CASE("ChatSession full restore cycle: write then restore", "[session][resto
 
     fs::remove(tmp);
 }
+
+// ============================================================
+// /provider 热切换链路：get_messages → import_messages 保留当前对话继续
+// ============================================================
+
+TEST_CASE("ChatSession import_messages keeps conversation across provider switch",
+          "[session][import]") {
+    MockConfigManager cfg;
+
+    // 旧 session：注入一段多模态对话（user 带图片 + assistant 回复）
+    std::vector<ChatMessage> original;
+    original.push_back(ChatMessage::user("看图说话", {"C:/tmp/a.png", "C:/tmp/b.png"}));
+    original.push_back(ChatMessage::assistant("图片中有两只猫"));
+
+    auto old_session = make_test_session(cfg);
+    old_session->commit_state(original, "system prompt");
+
+    // 热切换步骤1：备份当前消息
+    std::vector<ChatMessage> backup = old_session->get_messages();
+    REQUIRE(backup.size() == 2);
+
+    // 热切换步骤2：新 session 导入备份（清空自身消息后填入）
+    auto new_session = make_test_session(cfg);
+    new_session->set_system_prompt("old prompt");
+    new_session->commit_state({ChatMessage::user("旧消息占位")}, "old prompt");
+    new_session->import_messages(std::move(backup));
+
+    // 验证：消息完整保留（含图片路径），且替换而非追加
+    auto imported = new_session->get_messages();
+    REQUIRE(imported.size() == 2);
+    REQUIRE(imported[0].role == ChatMessage::Role::User);
+    REQUIRE(imported[0].content == "看图说话");
+    REQUIRE(imported[0].image_paths.size() == 2);
+    REQUIRE(imported[0].image_paths[0] == "C:/tmp/a.png");
+    REQUIRE(imported[0].image_paths[1] == "C:/tmp/b.png");
+    REQUIRE(imported[1].role == ChatMessage::Role::Assistant);
+    REQUIRE(imported[1].content == "图片中有两只猫");
+
+    // 导入空消息：清空历史（热切换时空对话场景）
+    new_session->import_messages({});
+    REQUIRE(new_session->get_messages().empty());
+}
