@@ -27,9 +27,11 @@
 
 #include "core/utils/result_v2.h"
 
+#include <nlohmann/json.hpp>
+
 namespace agent {
 
-using ConfigValue = std::variant<bool, int, double, std::string>;
+using ConfigValue = std::variant<bool, int, double, std::string, nlohmann::json>;
 
 /// @brief 只读配置访问接口（M-4：ISP 拆分）
 /// @details 暴露配置查询能力，供业务代码读取配置值。

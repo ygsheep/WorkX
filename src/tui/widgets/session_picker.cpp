@@ -130,10 +130,24 @@ std::string pick_session_interactive(
     int scroll_offset = 0;
 
     // 开启 overlay
+    int term_width = term->get_terminal_width();
     int term_height = term->get_terminal_height();
     int overlay_bottom = term_height - 2;
     if (overlay_bottom < 1) overlay_bottom = 1;
     term->begin_overlay(1, overlay_bottom);
+
+    // 差分渲染对齐终端实际尺寸（Screen 默认 80x24，不 resize 会渲染截断/越界，
+    // 破坏 overlay 区域外的状态栏/输入行且 end_overlay 不恢复）
+    scr->resize(term_width, term_height);
+
+    // 清空 overlay 区域：差分渲染首帧不会输出"空白行"（m_previous 同为空白），
+    // 若不显式清行会残留旧聊天内容（"没有清屏"）；结束后由 end_overlay() 从快照恢复
+    for (int r = 1; r <= overlay_bottom; ++r) {
+        char pos_cmd[32];
+        snprintf(pos_cmd, sizeof(pos_cmd), "\x1b[%d;1H\x1b[2K", r);
+        term->write(pos_cmd);
+    }
+    term->write("\x1b[1;1H");  // 光标归位 overlay 顶部，等待 Screen 差分渲染
 
     auto apply_filter = [&]() {
         filtered.clear();

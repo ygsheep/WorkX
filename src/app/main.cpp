@@ -45,7 +45,7 @@
 #include "app/ui/model_selector.h"
 #include "app/ui/path_completer.h"
 #include "app/ui/file_index.h"
-#include "app/ui/provider_selector.h"
+#include "app/ui/provider_form.h"
 #include "core/config/config_manager.h"
 #include "core/events/event_bus.h"
 #include "core/task/task_manager.h"
@@ -179,7 +179,7 @@ static int run(int argc, char* argv[]) {
 
     if (needs_wizard) {
         // H-A：SetupWizard 仅依赖 IConfigWriter + IConfigPersistence（M-4 ISP）
-        tui::SetupWizard wizard(terminal.platform(), &terminal, &screen, cfg, cfg);
+        tui::SetupWizard wizard(terminal.platform(), &terminal, &screen, cfg);
         bool ok = wizard.run_wizard();
         if (!ok) {
             terminal.restore();
@@ -191,6 +191,22 @@ static int run(int argc, char* argv[]) {
     // ---- 检查 Provider Preset ----
     std::string provider_name = cfg.get_or<std::string>(keys::PROVIDER, "");
     const ProviderPreset* preset = provider_name.empty() ? nullptr : find_preset(provider_name);
+
+    // ---- 上下文窗口镜像回填 ----
+    // backend.context_length 标量是"使用中供应商"的镜像，providers 数组才是源。
+    // 旧版切换写入 0 或用户手改配置导致标量缺失时，从数组回填当前使用中条目的显式配置，
+    // 保证 statusbar resolver 与压缩器水位（factory 读同一标量）一致。
+    if (cfg.get_or<int>(keys::CONTEXT_LENGTH, 0) <= 0) {
+        std::string active_id = cfg.get_or<std::string>(keys::PROVIDER, "");
+        if (!active_id.empty()) {
+            for (const auto& e : load_provider_configs(cfg)) {
+                if (e.id == active_id && e.context_length > 0) {
+                    cfg.set(keys::CONTEXT_LENGTH, static_cast<int>(e.context_length));
+                    break;
+                }
+            }
+        }
+    }
 
     // ---- models.dev 远程目录（ModelCatalog）----
     // 启动时先加载本地缓存（快、离线可用）→ 后台线程拉取远程 → 成功写缓存 + 更新内存。
@@ -414,19 +430,65 @@ static int run(int argc, char* argv[]) {
             terminal.reset_color();
         }
     };
-    sys_ctx.on_provider_select = [&terminal, &screen, &cfg]() {
-        ProviderSelection sel = select_provider_interactive(cfg, &terminal, &screen);
-        if (sel.provider.empty()) {
-            return;  // 用户取消
+    sys_ctx.on_provider_select = [&terminal, &screen, &cfg, &session, &backend_admin,
+                                  &renderer, &preset, &model_catalog]() {
+        ProviderSwitchResult sel = provider_manager_interactive(cfg, &terminal, &screen);
+        if (!sel.applied) {
+            return;  // 用户取消或仅编辑配置列表
         }
-        // 应用配置（重启生效）：provider + remote_url + api_key + model_name
-        apply_provider_selection(cfg, sel);
+        // 持久化多供应商列表 + 使用中标量键
         cfg.save_to_file(default_config_path());
 
+        // ---- 热切换：重建 session，保留当前对话继续 ----
+        if (!session) {
+            terminal.set_color(tui::ColorRole::System);
+            terminal.write(std::format(
+                "Provider set to: {} (model: {}). Restart to apply.\n",
+                sel.entry.name, sel.entry.model.empty() ? "(custom)" : sel.entry.model));
+            terminal.reset_color();
+            return;
+        }
+
+        // 1. 备份当前消息与 SessionStore（继续写同一会话文件）
+        std::vector<ChatMessage> messages = session->get_messages();
+        auto store = session->session_store();
+
+        // 2. 用新 provider 重建 session
+        const ProviderPreset* new_preset = find_preset(sel.entry.id);
+        auto new_result = create_session(
+            cfg, new_preset, TaskManager::instance(), EventBus::instance());
+        if (!new_result.session) {
+            terminal.set_color(tui::ColorRole::Error);
+            terminal.write("Provider 切换失败：无法创建后端（检查 URL 与网络）\n");
+            terminal.reset_color();
+            return;
+        }
+
+        // 3. 导入当前对话消息 + 延续 SessionStore（会话文件不中断）
+        new_result.session->import_messages(std::move(messages));
+        if (store) new_result.session->set_session_store(store);
+
+        // 4. 替换全局引用
+        session = std::move(new_result.session);
+        backend_admin = new_result.backend_admin;
+        preset = new_preset;
+
+        // 5. 状态栏 + 重放历史（保留当前对话继续）
+        if (auto* sb = renderer.status_bar()) {
+            sb->set_model_name(new_result.model_name.empty() ? "unknown" : new_result.model_name);
+            auto resolution = resolve_context_length(
+                new_result.model_name,
+                /*sel_context_length=*/0,
+                cfg.get_or<int>(keys::CONTEXT_LENGTH, 0),
+                new_preset,
+                model_catalog.load().get());
+            sb->set_context_limit(resolution.value);
+        }
+        renderer.replay_history(session->get_messages());
         terminal.set_color(tui::ColorRole::System);
         terminal.write(std::format(
-            "Provider set to: {} (model: {}). Restart to apply.\n",
-            sel.provider, sel.model_name.empty() ? "(custom)" : sel.model_name));
+            "已切换到 Provider: {} (model: {})\n",
+            sel.entry.name, new_result.model_name.empty() ? "(custom)" : new_result.model_name));
         terminal.reset_color();
     };
     sys_ctx.on_resume = [&session, &terminal, &screen, &renderer]() {
@@ -553,7 +615,7 @@ static int run(int argc, char* argv[]) {
                     } else {
                         query_text = e.text;
                     }
-                    session->send_message(query_text);
+                    session->send_message(query_text, std::move(result.image_paths));
                 } else {
                     // 无后端时回显
                     EventBus::instance().publish_async(StreamTokenEvent{

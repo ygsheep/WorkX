@@ -250,8 +250,15 @@ bool ChatSession::restore_from_file(const std::string& file_path) {
     return true;
 }
 
-bool ChatSession::switch_session(const std::string& file_path) {
-    // 加载历史消息和元信息（文件 I/O 在锁外执行）
+void ChatSession::import_messages(std::vector<ChatMessage> messages) {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    m_messages = std::move(messages);
+    // 重置压缩器与前缀形状基线（对齐 switch_session，新上下文从零开始）
+    m_compactor.reset();
+    m_last_prefix_shape = PrefixShape{};
+}
+
+bool ChatSession::switch_session(const std::string& file_path) {    // 加载历史消息和元信息（文件 I/O 在锁外执行）
     auto messages = agent::session::SessionStore::load_messages(file_path);
     if (messages.empty()) return false;
 
@@ -454,7 +461,12 @@ std::string ChatSession::summarize_with_llm(const std::vector<ChatMessage>& midd
     // system prompt 作为首条消息（对齐主推理流程的 messages 约定）
     req.messages.reserve(middle.size() + 1);
     req.messages.push_back(ChatMessage::system(k_summary_system_prompt));
-    req.messages.insert(req.messages.end(), middle.begin(), middle.end());
+    for (const auto& msg : middle) {
+        // 剥离图片附件：摘要请求只发文本（压缩模型可能不支持视觉）
+        ChatMessage copy = msg;
+        copy.image_paths.clear();
+        req.messages.push_back(std::move(copy));
+    }
     req.max_tokens = 1024;       // 摘要无需过长
     req.temperature = 0.3f;      // 低温度保证忠实
     req.stream = true;
@@ -511,6 +523,7 @@ void ChatSession::regenerate() {
     }
 
     std::string last_user_text;
+    std::vector<std::string> last_user_images;
     {
         std::lock_guard<std::mutex> lock(m_state_mutex);
         while (!m_messages.empty() &&
@@ -520,15 +533,17 @@ void ChatSession::regenerate() {
         if (!m_messages.empty() &&
             m_messages.back().role == ChatMessage::Role::User) {
             last_user_text = m_messages.back().content;
+            last_user_images = m_messages.back().image_paths;
             m_messages.pop_back();
         } else {
             return;  // 没有 user 消息可重生成
         }
     }
-    run_completion(last_user_text);
+    run_completion(last_user_text, last_user_images);
 }
 
-void ChatSession::send_message(const std::string& text) {
+void ChatSession::send_message(const std::string& text,
+                               const std::vector<std::string>& images) {
     if (m_generating.load()) {
         m_event_bus.get().publish_async(StreamErrorEvent{
             .session_id = m_session_id,
@@ -538,7 +553,7 @@ void ChatSession::send_message(const std::string& text) {
         return;
     }
 
-    run_completion(text);
+    run_completion(text, images);
 }
 
 std::vector<ChatMessage> ChatSession::get_messages() const {
@@ -548,13 +563,17 @@ std::vector<ChatMessage> ChatSession::get_messages() const {
 
 // DS_CACHE M-3：session_cache_stats() 已删除（死代码，TUI 使用 token_stats_model）
 
-void ChatSession::run_completion(const std::string& user_text, int retry_attempt) {
+void ChatSession::run_completion(const std::string& user_text,
+                                 const std::vector<std::string>& images,
+                                 int retry_attempt) {
     // B.1：拆分后的 run_completion 仅做顶层调度，agent 循环逻辑分发到子方法
     // 子方法返回 AgentStepResult，决定下一步动作（避免 goto 跨变量声明）
 
     // 仅首次请求时添加用户消息（重试时不重复添加）
     if (retry_attempt == 0) {
-        ChatMessage user_msg = ChatMessage::user(user_text);
+        ChatMessage user_msg = images.empty()
+            ? ChatMessage::user(user_text)
+            : ChatMessage::user(user_text, images);
         {
             std::lock_guard<std::mutex> lock(m_state_mutex);
             m_messages.push_back(user_msg);
@@ -702,7 +721,7 @@ void ChatSession::run_completion(const std::string& user_text, int retry_attempt
                         // 保留工具调用上下文：不删除已成功的 tool call/result 消息
                         // ReAct loop 在流式失败时不会添加 partial assistant 消息，
                         // 所以 m_messages 中只有成功的 round，直接重试即可
-                        run_completion(user_text, retry_attempt + 1);
+                        run_completion(user_text, {}, retry_attempt + 1);
                     }
                     break;
                 }

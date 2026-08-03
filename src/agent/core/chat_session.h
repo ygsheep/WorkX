@@ -156,6 +156,12 @@ public:
     ///          不写 session_end 到旧文件（会话可被多次 resume 继续）。
     bool switch_session(const std::string& file_path);
 
+    /// @brief 从内存导入消息历史（/provider 热切换后保留当前对话继续）
+    /// @param messages 待导入的消息（通常来自旧 session 的 get_messages）
+    /// @details 清空现有消息后填入，并重置压缩器与前缀形状基线（与 switch_session
+    ///          保持一致），不涉及文件 I/O、不改变 SessionStore。
+    void import_messages(std::vector<ChatMessage> messages);
+
     /// @brief 修改当前会话标题（/rename 命令调用）
     /// @param title 新标题
     /// @return true=成功追加 title 事件
@@ -177,7 +183,9 @@ public:
     bool is_generating() const { return m_generating.load(); }
 
     /// @brief 提交用户消息，触发 LLM 推理
-    void send_message(const std::string& text);
+    /// @param text 用户文本
+    /// @param images 图片附件绝对路径（多模态，可为空）
+    void send_message(const std::string& text, const std::vector<std::string>& images = {});
 
     /// @brief 保存对话历史到文件
     /// @details H-6：仅做 serialize_state() → ofstream，序列化逻辑在 serialize_state() 中
@@ -231,8 +239,11 @@ public:
 private:
     /// @brief 执行推理（在后台线程中运行，含 agent 循环）
     /// @param user_text 用户输入文本
+    /// @param images 图片附件绝对路径（仅首次请求使用，重试沿用已入列的图片消息）
     /// @param retry_attempt 当前重试次数（0=首次请求）
-    void run_completion(const std::string& user_text, int retry_attempt = 0);
+    void run_completion(const std::string& user_text,
+                        const std::vector<std::string>& images = {},
+                        int retry_attempt = 0);
 
     /// @brief 订阅中断事件
     void subscribe_interrupt();

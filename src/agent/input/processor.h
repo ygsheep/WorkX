@@ -8,6 +8,7 @@
 #include <vector>
 #include <optional>
 #include <fstream>
+#include <filesystem>
 #include <format>
 #include <memory>
 
@@ -75,11 +76,24 @@ private:
 
     ProcessResult process_text_prompt(const ParsedInput& parsed) {
         std::vector<std::string> messages;
+        std::vector<std::string> image_paths;
 
         // 添加文件内容（放在前面，作为上下文）
         for (const auto& path : parsed.attachments) {
             std::string content = read_file_content(path);
             messages.push_back(content);
+        }
+
+        // 图片附件：转绝对路径 + 存在性校验（失败的提示并跳过）
+        for (const auto& path : parsed.image_paths) {
+            std::error_code ec;
+            auto abs = std::filesystem::weakly_canonical(
+                std::filesystem::absolute(path, ec), ec);
+            if (ec || abs.empty() || !std::filesystem::exists(abs, ec)) {
+                messages.push_back(std::format("[Could not read image: {}]", path));
+                continue;
+            }
+            image_paths.push_back(abs.string());
         }
 
         // 添加文本内容
@@ -91,6 +105,7 @@ private:
             .should_query = true,
             .output_text = {},
             .messages = std::move(messages),
+            .image_paths = std::move(image_paths),
             .is_error = false,
         };
     }

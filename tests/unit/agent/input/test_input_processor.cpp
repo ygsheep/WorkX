@@ -210,3 +210,54 @@ TEST_CASE("InputProcessor requires explicit IFileLoader injection (H-C)", "[inpu
     InputProcessor processor(registry, loader);  // 显式注入
     (void)processor;
 }
+
+// ============================================================
+// 图片附件：@path → image_paths（绝对路径）
+// ============================================================
+
+TEST_CASE("InputProcessor converts image ref to absolute path", "[input][processor][vision]") {
+    // 真实临时图片文件（仅扩展名有意义，processor 不做内容校验）
+    namespace fs = std::filesystem;
+    auto img_path = fs::temp_directory_path() / "workx_input_test_img.png";
+    {
+        std::ofstream ofs(img_path, std::ios::binary);
+        ofs << "fake-image-bytes";
+    }
+    struct ScopeGuard {
+        fs::path p;
+        ~ScopeGuard() { fs::remove(p); }
+    } guard{img_path};
+
+    auto loader = std::make_shared<InMemoryFileLoader>();
+    auto registry = std::make_shared<CommandRegistry>();
+    InputProcessor processor(registry, loader);
+
+    // 带引号的绝对路径：@"<abs>"；parser 提取后 processor 校验存在并保留绝对路径
+    auto result = processor.process("描述这张图 @\"" + img_path.string() + "\"", CommandContext{});
+
+    REQUIRE(result.should_query);
+    REQUIRE(result.image_paths.size() == 1);
+    REQUIRE(result.image_paths[0] == fs::weakly_canonical(img_path).string());
+    // 文本保留在 messages
+    bool found_text = false;
+    for (const auto& m : result.messages) {
+        if (m.find("描述这张图") != std::string::npos) found_text = true;
+    }
+    REQUIRE(found_text);
+}
+
+TEST_CASE("InputProcessor reports missing image and skips it", "[input][processor][vision]") {
+    auto loader = std::make_shared<InMemoryFileLoader>();
+    auto registry = std::make_shared<CommandRegistry>();
+    InputProcessor processor(registry, loader);
+
+    auto result = processor.process("看图 @/nonexistent/workx_missing.png", CommandContext{});
+
+    REQUIRE(result.should_query);
+    REQUIRE(result.image_paths.empty());
+    bool found_error = false;
+    for (const auto& m : result.messages) {
+        if (m.find("[Could not read image:") != std::string::npos) found_error = true;
+    }
+    REQUIRE(found_error);
+}

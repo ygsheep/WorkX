@@ -4,6 +4,10 @@
  */
 
 #include <catch2/catch_test_macros.hpp>
+
+#include <filesystem>
+#include <fstream>
+
 #include "agent/api/provider/openai_adapter.h"
 
 using namespace agent;
@@ -144,6 +148,61 @@ TEST_CASE("OpenAIAdapter reasoning_content roundtrip (DS_CACHE P2)", "[provider]
         auto body = adapter.build_request_body(request, "deepseek-reasoner");
         REQUIRE(body.find("should not appear") == std::string::npos);
     }
+}
+
+TEST_CASE("OpenAIAdapter multimodal image content", "[provider][openai][vision]") {
+    OpenAIAdapter adapter;
+
+    // 临时小图片文件（内容无关紧要，仅验证 base64 data URI 与 mime）
+    auto img_path = std::filesystem::temp_directory_path() / "workx_test_img.png";
+    {
+        std::ofstream f(img_path, std::ios::binary);
+        f << "hello";
+    }
+
+    CompletionRequest request;
+    request.stream = false;
+    request.messages.push_back(ChatMessage::user("图里有什么?", {img_path.string()}));
+
+    auto body = adapter.build_request_body(request, "qwen2.5-vl-72b-instruct");
+
+    // content 序列化为块数组
+    REQUIRE(body.find("\"content\":[{") != std::string::npos);
+    // 文本块
+    REQUIRE(body.find("\"type\":\"text\"") != std::string::npos);
+    REQUIRE(body.find("\"text\":\"\xe5\x9b\xbe\xe9\x87\x8c\xe6\x9c\x89\xe4\xbb\x80\xe4\xb9\x88?\"") != std::string::npos);
+    // 图片块：base64 data URI（"hello" → aGVsbG8=）
+    REQUIRE(body.find("\"type\":\"image_url\"") != std::string::npos);
+    REQUIRE(body.find("\"url\":\"data:image/png;base64,aGVsbG8=\"") != std::string::npos);
+
+    std::filesystem::remove(img_path);
+}
+
+TEST_CASE("OpenAIAdapter multimodal skips missing image file", "[provider][openai][vision]") {
+    OpenAIAdapter adapter;
+
+    CompletionRequest request;
+    request.stream = false;
+    request.messages.push_back(ChatMessage::user("图里有什么?",
+        {std::filesystem::temp_directory_path().string() + "/workx_missing_img.png"}));
+
+    auto body = adapter.build_request_body(request, "qwen2.5-vl-72b-instruct");
+
+    // 图片读取失败被跳过：退回纯文本 content（无块数组）
+    REQUIRE(body.find("image_url") == std::string::npos);
+    REQUIRE(body.find("图里有什么?") != std::string::npos);
+}
+
+TEST_CASE("OpenAIAdapter content stays plain string without images", "[provider][openai]") {
+    OpenAIAdapter adapter;
+
+    CompletionRequest request;
+    request.stream = false;
+    request.messages.push_back(ChatMessage::user("Hello"));
+    auto body = adapter.build_request_body(request, "gpt-4o");
+
+    REQUIRE(body.find("\"content\":\"Hello\"") != std::string::npos);
+    REQUIRE(body.find("image_url") == std::string::npos);
 }
 
 TEST_CASE("OpenAIAdapter parse_sse_event", "[provider][openai]") {

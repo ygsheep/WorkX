@@ -10,5 +10,5 @@ target_sources(libworkx PRIVATE
     ui/model_selector.cpp
     ui/path_completer.cpp
     ui/file_index.cpp
-    ui/provider_selector.cpp
+    ui/provider_form.cpp
 )

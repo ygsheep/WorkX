@@ -49,6 +49,7 @@ struct ChatMessage {
     std::string tool_name;          ///< Tool 角色时的工具名
     std::vector<ToolUse> tool_uses; ///< Assistant 角色时的工具调用列表
     bool is_error = false;          ///< Tool 角色时标记工具执行失败（对齐 Anthropic is_error）
+    std::vector<std::string> image_paths; ///< User 消息携带的图片绝对路径（多模态）
 
     /// @brief 便捷构造
     static ChatMessage system(const std::string& text) {
@@ -56,6 +57,12 @@ struct ChatMessage {
     }
     static ChatMessage user(const std::string& text) {
         return {Role::User, text, {}, {}, {}, {}};
+    }
+    /// @brief 便捷构造（带图片附件，OpenAI 兼容多模态）
+    static ChatMessage user(const std::string& text, std::vector<std::string> images) {
+        ChatMessage msg = user(text);
+        msg.image_paths = std::move(images);
+        return msg;
     }
     static ChatMessage assistant(const std::string& text) {
         return {Role::Assistant, text, {}, {}, {}, {}};

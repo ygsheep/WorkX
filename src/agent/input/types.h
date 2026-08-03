@@ -38,6 +38,7 @@ namespace agent::input {
         bool should_query{false};                   /// 是否需要调用LLM
         std::string output_text;                    /// 命令执行输出
         std::vector<std::string> messages;          /// 待发送给LLM的消息列表
+        std::vector<std::string> image_paths;       /// 图片附件（已转为绝对路径）
         bool is_error{false};                       /// 是否发生错误
     };
 

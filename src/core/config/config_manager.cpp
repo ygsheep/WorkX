@@ -32,6 +32,8 @@ void set_nested_json(nlohmann::json& j, const std::string& key, const ConfigValu
                 (*current)[leaf] = std::get<double>(value);
             } else if (std::holds_alternative<std::string>(value)) {
                 (*current)[leaf] = std::get<std::string>(value);
+            } else if (std::holds_alternative<nlohmann::json>(value)) {
+                (*current)[leaf] = std::get<nlohmann::json>(value);
             }
             return;
         }
@@ -57,10 +59,13 @@ void flatten_json(const nlohmann::json& j, const std::string& prefix,
             values[full_key] = value.get<double>();
         } else if (value.is_string()) {
             values[full_key] = value.get<std::string>();
+        } else if (value.is_array()) {
+            // 数组整体保存为 JSON 值（如 backend.providers 多供应商列表）
+            values[full_key] = value;
         } else if (value.is_object()) {
             flatten_json(value, full_key, values);
         }
-        // 数组和 null 被忽略
+        // null 被忽略
     }
 }
 

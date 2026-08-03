@@ -8,11 +8,73 @@
 
 #include "agent/api/provider/openai_adapter.h"
 
+#include <fstream>
+#include <iterator>
+#include <string>
+
 #include <nlohmann/json.hpp>
 
 namespace agent {
 
 namespace {
+
+/// @brief base64 编码（OpenAI 多模态 image_url data URI 使用）
+std::string base64_encode(const std::string& data) {
+    static constexpr char kTable[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve((data.size() + 2) / 3 * 4);
+    size_t i = 0;
+    while (i + 2 < data.size()) {
+        uint32_t v = (static_cast<unsigned char>(data[i]) << 16)
+                   | (static_cast<unsigned char>(data[i + 1]) << 8)
+                   | static_cast<unsigned char>(data[i + 2]);
+        out.push_back(kTable[(v >> 18) & 0x3F]);
+        out.push_back(kTable[(v >> 12) & 0x3F]);
+        out.push_back(kTable[(v >> 6) & 0x3F]);
+        out.push_back(kTable[v & 0x3F]);
+        i += 3;
+    }
+    size_t remain = data.size() - i;
+    if (remain == 1) {
+        uint32_t v = static_cast<unsigned char>(data[i]) << 16;
+        out.push_back(kTable[(v >> 18) & 0x3F]);
+        out.push_back(kTable[(v >> 12) & 0x3F]);
+        out.push_back('=');
+        out.push_back('=');
+    } else if (remain == 2) {
+        uint32_t v = (static_cast<unsigned char>(data[i]) << 16)
+                   | (static_cast<unsigned char>(data[i + 1]) << 8);
+        out.push_back(kTable[(v >> 18) & 0x3F]);
+        out.push_back(kTable[(v >> 12) & 0x3F]);
+        out.push_back(kTable[(v >> 6) & 0x3F]);
+        out.push_back('=');
+    }
+    return out;
+}
+
+/// @brief 按扩展名映射图片 MIME 类型
+std::string mime_for_image(const std::string& path) {
+    auto dot = path.rfind('.');
+    if (dot == std::string::npos) return "image/png";
+    std::string ext = path.substr(dot);
+    for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (ext == ".jpg" || ext == ".jpeg") return "image/jpeg";
+    if (ext == ".gif") return "image/gif";
+    if (ext == ".bmp") return "image/bmp";
+    if (ext == ".webp") return "image/webp";
+    return "image/png";  // png 及其他未知扩展兜底
+}
+
+/// @brief 读取图片文件并构造 base64 data URI
+/// @return 失败（文件缺失/空文件）返回空字符串，调用方跳过该图片
+std::string build_image_data_uri(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return {};
+    std::string data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    if (data.empty()) return {};
+    return "data:" + mime_for_image(path) + ";base64," + base64_encode(data);
+}
 
 /// @brief 从 OpenAI usage 对象提取缓存命中 token 数
 /// @details OpenAI 标准缓存字段为 usage.prompt_tokens_details.cached_tokens（Azure/OpenAI/多数兼容网关）。
@@ -95,7 +157,22 @@ std::string OpenAIAdapter::build_request_body(const CompletionRequest& request,
         // content：assistant 带 tool_calls 时 content 可能为空，用 null 而非空字符串
         // Tool 角色 + is_error=true：用 <tool_use_error> 标签包裹，对齐 Claude Code 语义，
         // 让模型明确感知工具失败（OpenAI 格式无 is_error 字段，只能通过文本标识）
-        if (msg.role == ChatMessage::Role::Assistant && !msg.tool_uses.empty() && msg.content.empty()) {
+        // 多模态：user 消息带图片时 content 序列化为块数组（text + image_url）
+        if (msg.role == ChatMessage::Role::User && !msg.image_paths.empty()) {
+            nlohmann::json content = nlohmann::json::array();
+            if (!msg.content.empty()) {
+                content.push_back({{"type", "text"}, {"text", msg.content}});
+            }
+            for (const auto& path : msg.image_paths) {
+                std::string uri = build_image_data_uri(path);
+                if (uri.empty()) continue;
+                content.push_back({
+                    {"type", "image_url"},
+                    {"image_url", {{"url", uri}}}
+                });
+            }
+            m["content"] = std::move(content);
+        } else if (msg.role == ChatMessage::Role::Assistant && !msg.tool_uses.empty() && msg.content.empty()) {
             m["content"] = nullptr;
         } else if (msg.role == ChatMessage::Role::Tool && msg.is_error) {
             m["content"] = "<tool_use_error>" + msg.content + "</tool_use_error>";
