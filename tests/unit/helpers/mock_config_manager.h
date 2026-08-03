@@ -64,6 +64,12 @@ public:
         return ResultV2<void>::ok();
     }
 
+    ResultV2<void> remove_value(const std::string& key) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_values.erase(key);
+        return ResultV2<void>::ok();
+    }
+
     ResultV2<void> load_from_file(
         const std::filesystem::path& /*path*/) override {
         std::lock_guard<std::mutex> lock(m_mutex);

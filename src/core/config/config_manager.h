@@ -110,6 +110,7 @@ public:
     //       非模板扩展方法仍保留为 ConfigManager 专属。
 
     void remove(const std::string& key);
+    ResultV2<void> remove_value(const std::string& key) override;
     void register_meta(const std::string& key, ConfigMeta meta);
     [[nodiscard]] ResultV2<ConfigMeta> get_meta(const std::string& key) const;
 

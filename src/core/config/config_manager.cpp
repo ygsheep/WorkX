@@ -81,6 +81,11 @@ void ConfigManager::remove(const std::string& key) {
     m_values.erase(key);
 }
 
+ResultV2<void> ConfigManager::remove_value(const std::string& key) {
+    remove(key);
+    return ResultV2<void>::ok();
+}
+
 void ConfigManager::register_meta(const std::string& key, ConfigMeta meta) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_metas[key] = std::move(meta);

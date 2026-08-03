@@ -92,6 +92,10 @@ public:
     virtual ResultV2<void> set_value(
         const std::string& key, ConfigValue value) = 0;
 
+    /// @brief 删除配置键（key 不存在时视为成功）
+    /// @return 成功返回 void
+    virtual ResultV2<void> remove_value(const std::string& key) = 0;
+
     // === 模板包装（非虚，委托 set_value）===
 
     /// @brief 设置配置值（类型安全）
