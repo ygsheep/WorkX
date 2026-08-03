@@ -86,6 +86,10 @@ void register_config_defaults(ConfigManager& cfg) {
     });
     cfg.register_schema({
         .key = keys::PROVIDER,
+        // 注意：有意保持 Type::String（而非固定 Enum）。多供应商面板支持自定义
+        // 供应商（手输名称/URL，id 为 "new-provider-N" 占位或任意自定义值），
+        // 固定 6 值 Enum 会拒绝合法自定义 id 导致切换失败。
+        // CLI 侧（--provider）已有 find_preset 白名单校验（cli_args.cpp）。
         .description = "Provider name (deepseek, glm, kimi, qwen, minimax, openai-compatible, or custom)",
         .default_value = std::string(""),
         .type = ConfigSchema::Type::String
