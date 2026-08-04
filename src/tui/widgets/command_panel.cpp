@@ -8,6 +8,7 @@
 #include "tui/core/terminal.h"
 #include "tui/core/color_scheme.h"
 #include "tui/core/platform/i_platform.h"
+#include "tui/utils/utf8_utils.h"
 
 #include <cstdio>
 #include <algorithm>
@@ -156,7 +157,16 @@ void CommandPanel::render() {
 
         content += std::string(get_color_ansi(ColorRole::CommandPanelDesc));
         content += " ";
-        content += cmd.description;
+
+        // 描述按终端剩余宽度截断，防止超长描述物理换行导致面板行错位/残留
+        int max_desc_width = term_w - pad_base - 2;
+        if (max_desc_width < 4) max_desc_width = 4;
+        if (display_width(cmd.description) > max_desc_width) {
+            content += truncate_to_width(cmd.description, max_desc_width - 1);
+            content += "…";
+        } else {
+            content += cmd.description;
+        }
         content += std::string(get_color_ansi(ColorRole::Default));
 
 
