@@ -1,0 +1,231 @@
+{
+  "skill": "quality-postmortem",
+  "version": "2.0",
+  "evals": [
+    {
+      "id": "qp-001",
+      "prompt": "Analyze an escaped defect where a discount was not applied for a non-USD currency. Classify it and identify which test level should have caught it.",
+      "expected_patterns": [
+        "Logic error OR Integration failure",
+        "Should-catch OR Unit OR Integration",
+        "Prevention",
+        "Add test OR Improve existing test"
+      ],
+      "anti_patterns": [
+        "stops at 'developer made a mistake'",
+        "no classification across dimensions",
+        "missing prevention opportunity"
+      ],
+      "tags": [
+        "bug-analysis",
+        "classification",
+        "logic-error"
+      ]
+    },
+    {
+      "id": "qp-002",
+      "prompt": "Run a 5 Whys analysis for a payment API that was called twice on form submit, causing double charging.",
+      "expected_patterns": [
+        "Why 1",
+        "Why 5",
+        "process gap OR systemic OR structural",
+        "Root cause:",
+        "Owner:"
+      ],
+      "anti_patterns": [
+        "stops at individual error level (Why 3 or earlier)",
+        "fewer than 5 why steps",
+        "root cause is 'human error' without digging deeper",
+        "action is punishment or blame-based"
+      ],
+      "tags": [
+        "root-cause-analysis",
+        "5whys",
+        "systemic"
+      ]
+    },
+    {
+      "id": "qp-003",
+      "prompt": "Analyze a test suite where the escaped bug rate is increasing. Classify 10+ escaped bugs by root cause category, area, and should-catch level to identify patterns.",
+      "expected_patterns": [
+        "Total escaped bugs",
+        "By root cause",
+        "By area",
+        "By should-catch level",
+        "Top action themes"
+      ],
+      "anti_patterns": [
+        "analyzing only 1-2 bugs in isolation",
+        "no aggregation across dimensions",
+        "action items that are broad rather than scoped to high-impact themes",
+        "missing quantification (%)"
+      ],
+      "tags": [
+        "pattern-analysis",
+        "aggregation",
+        "data-driven"
+      ]
+    },
+    {
+      "id": "qp-004",
+      "prompt": "Conduct a quarterly test suite health review. Assess flaky test trends, execution time, coverage gaps, and quarantine inventory.",
+      "expected_patterns": [
+        "flaky rate OR Flaky Test",
+        "Execution Time",
+        "Coverage Gap",
+        "Quarantine",
+        "target: <2% OR target: <14"
+      ],
+      "anti_patterns": [
+        "missing trend data (just current state)",
+        "no root cause explanation for flaky tests",
+        "no comparison to targets (<2% flaky, <14 days quarantine)",
+        "skipping execution time or coverage"
+      ],
+      "tags": [
+        "health-review",
+        "proactive",
+        "metrics"
+      ]
+    },
+    {
+      "id": "qp-005",
+      "prompt": "Create a concrete action item from a postmortem with all required fields: deliverable, owner, deadline, and verification method.",
+      "expected_patterns": [
+        "integration tests OR specific deliverable",
+        "Owner: OR assigned to",
+        "Due: OR by end of sprint OR by March",
+        "PR merged OR tests passing OR verification"
+      ],
+      "anti_patterns": [
+        "vague deliverable like 'improve testing' or 'be more careful'",
+        "no owner",
+        "no due date",
+        "no way to measure completion",
+        "scope too large for one sprint"
+      ],
+      "tags": [
+        "action-items",
+        "concrete",
+        "tracking"
+      ]
+    },
+    {
+      "id": "qp-006",
+      "prompt": "Facilitate a quality retro meeting for Sprint 14. Review previous action items, present metrics, identify needs, run root cause on top issue, and define new action items.",
+      "expected_patterns": [
+        "Previous Action Items",
+        "Data Review",
+        "What Went Well",
+        "What Needs Improvement",
+        "5 Whys OR Root Cause",
+        "Action Items"
+      ],
+      "anti_patterns": [
+        "no review of previous items (breaks accountability loop)",
+        "missing metrics (opinion-based only)",
+        "action items too vague or too many (>3)",
+        "no owner or deadline on new items"
+      ],
+      "tags": [
+        "retro",
+        "meeting",
+        "cadence"
+      ]
+    },
+    {
+      "id": "qp-007",
+      "prompt": "Write a quality incident postmortem for a P0 production bug where user data was corrupted. Include timeline, root cause, 5 Whys, test gaps, and immediate/short-term/long-term action items.",
+      "expected_patterns": [
+        "Summary",
+        "Severity and Impact",
+        "Timeline",
+        "Root Cause",
+        "5 Whys",
+        "What Tests Existed",
+        "What Tests Were Missing",
+        "Immediate",
+        "Short-term",
+        "Long-term",
+        "Lessons Learned"
+      ],
+      "anti_patterns": [
+        "missing any major section",
+        "timeline missing specific times",
+        "5 Whys stops early at individual action",
+        "no distinction between immediate and long-term actions",
+        "vague action items"
+      ],
+      "tags": [
+        "incident-postmortem",
+        "p0",
+        "structured"
+      ]
+    },
+    {
+      "id": "qp-008",
+      "prompt": "Audit your postmortem action items and explain why they failed to close. Propose fixes for: no owner, no due date, scope too big, no review at next retro.",
+      "expected_patterns": [
+        "No owner",
+        "No due date",
+        "Scope too big OR single PR",
+        "No review OR calendar slot",
+        "named person OR specific sprint"
+      ],
+      "anti_patterns": [
+        "generic advice like 'just try harder'",
+        "missing any of the 4 anti-patterns",
+        "doesn't connect fix to concrete mechanism (e.g., calendar reminder)"
+      ],
+      "tags": [
+        "action-item-failure",
+        "follow-through",
+        "process"
+      ]
+    },
+    {
+      "id": "qp-009",
+      "prompt": "Propose improvement cycle solutions for flaky tests with effort estimates (Small/Medium/Large). For each, discuss tradeoffs: manual adherence vs. automation, time to implement vs. long-term benefit.",
+      "expected_patterns": [
+        "Solution A (Small",
+        "Solution B (Medium",
+        "Solution C (Large",
+        "flaky OR waitForTimeout OR quarantine",
+        "Recommendation"
+      ],
+      "anti_patterns": [
+        "only one solution size",
+        "no tradeoffs (just advantages)",
+        "no recommendation or sequencing",
+        "effort estimate missing"
+      ],
+      "tags": [
+        "solutions",
+        "effort-estimate",
+        "tradeoff-analysis"
+      ]
+    },
+    {
+      "id": "qp-010",
+      "prompt": "Explain how to measure postmortem improvement using two metrics together. What happens if one is high and the other is low?",
+      "expected_patterns": [
+        "Defect escape rate",
+        "Action-item-closure rate OR closure rate",
+        "wrong work",
+        "theater",
+        "both metrics OR two metrics"
+      ],
+      "anti_patterns": [
+        "only measures one metric",
+        "measures action item closure without escape rate context",
+        "no interpretation of metric combinations",
+        "treats closure rate as sufficient proof of success"
+      ],
+      "tags": [
+        "metrics",
+        "measurement",
+        "improvement-validation"
+      ]
+    }
+  ]
+}
