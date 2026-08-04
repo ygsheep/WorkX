@@ -56,6 +56,10 @@ public:
     ///          发布 TerminalResizeEvent；回调返回后 LineEditor 重新定位输入行。
     using ResizeCallback = std::function<void()>;
 
+    /// @brief 输入区行数变化通知（编辑多行文本时调整滚动区保护范围）
+    /// @param lines 当前输入区占用的终端行数（>= 1）
+    using EditLinesCallback = std::function<void(int lines)>;
+
     explicit LineEditor(IPlatform* platform);
 
     /// @brief 设置 Tab 补全回调
@@ -78,6 +82,9 @@ public:
 
     /// @brief 设置终端尺寸变更回调
     void set_resize_callback(ResizeCallback cb);
+
+    /// @brief 设置输入区行数变化回调
+    void set_edit_lines_callback(EditLinesCallback cb);
 
     /// @brief 批量加载历史条目（追加到现有历史）
     void load_history(const std::vector<std::string>& entries);
@@ -116,6 +123,19 @@ private:
     void move_to_line_end();
     void move_word_left();
     void move_word_right();
+    void move_cursor_to(size_t char_pos);
+
+    // 多行支持
+    size_t line_count() const;            ///< 文本行数（\n 数 + 1）
+    size_t cur_line_idx() const;          ///< 光标所在行索引（0-based）
+    size_t line_start_char(size_t line_idx) const;      ///< 行首字符索引
+    size_t line_char_count(size_t line_idx) const;      ///< 行内字符数（不含行尾 \n）
+    size_t char_to_byte(size_t char_pos) const;         ///< 字符索引 → 字节索引
+    char32_t char_at(size_t char_pos) const;            ///< 第 char_pos 个字符的码点
+    std::string line_text(size_t line_idx) const;       ///< 行文本（不含行尾 \n）
+    int line_prefix_width(size_t line_idx, size_t char_in_line) const;  ///< 行内前缀宽度
+    int input_area_max_lines() const;     ///< 输入区行数上限（终端高度 - 3）
+    void redraw_input();                  ///< 全量重绘输入区并定位光标
 
     // 历史
     void history_prev();
@@ -128,6 +148,8 @@ private:
     std::vector<int> m_widths;   ///< 每个字符的显示宽度
     size_t m_char_pos = 0;       ///< 字符位置（code point 索引）
     size_t m_byte_pos = 0;       ///< 字节位置
+    std::string m_prompt;        ///< 当前提示符（redraw 使用）
+    bool m_is_continuation = false;  ///< 续行模式标记
 
     // 历史状态
     std::vector<std::string> m_history;
@@ -141,6 +163,7 @@ private:
     CursorLeftOutputCallback m_cursor_left_output_cb;
     EditingChangedCallback m_editing_changed_cb;
     ResizeCallback m_resize_cb;
+    EditLinesCallback m_edit_lines_cb;
 };
 
 } // namespace tui

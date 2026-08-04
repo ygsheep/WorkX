@@ -62,6 +62,10 @@ void LineEditor::set_resize_callback(ResizeCallback cb) {
     m_resize_cb = std::move(cb);
 }
 
+void LineEditor::set_edit_lines_callback(EditLinesCallback cb) {
+    m_edit_lines_cb = std::move(cb);
+}
+
 void LineEditor::load_history(const std::vector<std::string>& entries) {
     for (const auto& entry : entries) {
         if (!entry.empty()) {
@@ -150,167 +154,224 @@ bool LineEditor::is_space_codepoint(char32_t cp) {
     return std::iswspace(static_cast<wint_t>(cp)) != 0;
 }
 
+// ---- 多行支持 ----
+
+size_t LineEditor::line_count() const {
+    size_t n = 1;
+    for (char c : m_line) {
+        if (c == '\n') ++n;
+    }
+    return n;
+}
+
+size_t LineEditor::cur_line_idx() const {
+    size_t byte = 0;
+    size_t line = 0;
+    for (size_t c = 0; c < m_char_pos && byte < m_line.size(); ++c) {
+        size_t advance = 0;
+        char32_t cp = decode_utf8(m_line, byte, advance);
+        if (cp == '\n') ++line;
+        byte += advance;
+    }
+    return line;
+}
+
+size_t LineEditor::line_start_char(size_t line_idx) const {
+    size_t byte = 0;
+    size_t line = 0;
+    for (size_t c = 0; c < m_widths.size(); ++c) {
+        if (line == line_idx) return c;
+        size_t advance = 0;
+        char32_t cp = decode_utf8(m_line, byte, advance);
+        if (cp == '\n') ++line;
+        byte += advance;
+    }
+    return m_widths.size();
+}
+
+size_t LineEditor::line_char_count(size_t line_idx) const {
+    size_t start = line_start_char(line_idx);
+    if (line_idx + 1 < line_count()) {
+        // 非最后一行：行尾还有一个 \n 字符
+        return line_start_char(line_idx + 1) - start - 1;
+    }
+    return m_widths.size() - start;
+}
+
+size_t LineEditor::char_to_byte(size_t char_pos) const {
+    if (char_pos >= m_widths.size()) return m_line.size();
+    size_t byte = 0;
+    for (size_t c = 0; c < char_pos; ++c) {
+        size_t advance = 0;
+        decode_utf8(m_line, byte, advance);
+        byte += advance;
+    }
+    return byte;
+}
+
+char32_t LineEditor::char_at(size_t char_pos) const {
+    size_t byte = char_to_byte(char_pos);
+    size_t advance = 0;
+    return decode_utf8(m_line, byte, advance);
+}
+
+std::string LineEditor::line_text(size_t line_idx) const {
+    size_t start_byte = 0;
+    for (size_t i = 0; i < line_idx; ++i) {
+        size_t pos = m_line.find('\n', start_byte);
+        start_byte = (pos == std::string::npos) ? m_line.size() : pos + 1;
+    }
+    size_t end_byte = m_line.find('\n', start_byte);
+    if (end_byte == std::string::npos) end_byte = m_line.size();
+    return m_line.substr(start_byte, end_byte - start_byte);
+}
+
+int LineEditor::line_prefix_width(size_t line_idx, size_t char_in_line) const {
+    size_t start = line_start_char(line_idx);
+    int w = 0;
+    for (size_t c = start; c < start + char_in_line && c < m_widths.size(); ++c) {
+        w += (m_widths[c] > 0 ? m_widths[c] : 1);
+    }
+    return w;
+}
+
+int LineEditor::input_area_max_lines() const {
+    int max_lines = m_platform->get_terminal_height() - 3;
+    if (max_lines < 1) max_lines = 1;
+    return max_lines;
+}
+
+void LineEditor::redraw_input() {
+    int term_h = m_platform->get_terminal_height();
+    size_t total = line_count();
+    int max_lines = input_area_max_lines();
+
+    // 显示窗口：始终包含光标所在行
+    size_t cur = cur_line_idx();
+    size_t win_start = 0;
+    if (total > static_cast<size_t>(max_lines)) {
+        if (cur + 1 > static_cast<size_t>(max_lines)) {
+            win_start = cur + 1 - static_cast<size_t>(max_lines);
+        }
+    }
+    size_t win_lines = std::min(total - win_start, static_cast<size_t>(max_lines));
+    if (win_lines < 1) win_lines = 1;
+
+    if (m_edit_lines_cb) {
+        m_edit_lines_cb(static_cast<int>(win_lines));
+    }
+
+    // 重绘输入区（每行清空后输出）
+    for (size_t i = 0; i < win_lines; ++i) {
+        char goto_cmd[32];
+        snprintf(goto_cmd, sizeof(goto_cmd), "\x1b[%d;1H", term_h - static_cast<int>(win_lines) + static_cast<int>(i));
+        m_platform->write_output(goto_cmd);
+        m_platform->write_output("\x1b[2K");
+        if (i == 0) {
+            m_platform->write_output(m_is_continuation ? "\xe2\x94\x82 " : m_prompt);
+        }
+        m_platform->write_output(line_text(win_start + i));
+    }
+
+    // 定位光标到编辑位置
+    char goto_cmd[32];
+    snprintf(goto_cmd, sizeof(goto_cmd), "\x1b[%d;1H",
+             term_h - static_cast<int>(win_lines) + static_cast<int>(cur - win_start));
+    m_platform->write_output(goto_cmd);
+    int col = line_prefix_width(cur, m_char_pos - line_start_char(cur));
+    if (col > 0) {
+        m_platform->move_cursor(col);
+    }
+    m_platform->flush();
+}
+
+// ---- 编辑操作 ----
+
+void LineEditor::move_cursor_to(size_t char_pos) {
+    if (char_pos > m_widths.size()) char_pos = m_widths.size();
+    m_char_pos = char_pos;
+    m_byte_pos = char_to_byte(char_pos);
+    redraw_input();
+}
+
 void LineEditor::delete_at_cursor() {
     if (m_char_pos >= m_widths.size()) return;
 
     size_t next_pos = next_utf8_char_pos(m_line, m_byte_pos);
-    int w = m_widths[m_char_pos];
     size_t char_len = next_pos - m_byte_pos;
 
     m_line.erase(m_byte_pos, char_len);
     m_widths.erase(m_widths.begin() + static_cast<ptrdiff_t>(m_char_pos));
 
-    // 重绘尾部
-    size_t p = m_byte_pos;
-    int tail_width = 0;
-    for (size_t i = m_char_pos; i < m_widths.size(); ++i) {
-        size_t following = next_utf8_char_pos(m_line, p);
-        m_platform->put_codepoint(m_line.c_str() + p, following - p, m_widths[i]);
-        tail_width += m_widths[i];
-        p = following;
-    }
-
-    // 清除残余
-    for (int i = 0; i < w; ++i) {
-        m_platform->write_output(" ");
-    }
-
-    m_platform->move_cursor(-(tail_width + w));
+    redraw_input();
 }
 
 void LineEditor::set_line_contents(const std::string& new_line, int cursor_byte_pos) {
-    move_to_line_start();
-
-    // 清除当前行
-    int total_width = std::accumulate(m_widths.begin(), m_widths.end(), 0,
-        [](int acc, int w) { return acc + (w > 0 ? w : 1); });
-    if (total_width > 0) {
-        std::string spaces(static_cast<size_t>(total_width), ' ');
-        m_platform->write_output(spaces);
-        m_platform->move_cursor(-total_width);
-    }
-
     m_line = new_line;
     m_widths.clear();
     m_byte_pos = 0;
     m_char_pos = 0;
 
     size_t idx = 0;
-    int back_width = 0;
     while (idx < m_line.size()) {
         size_t advance = 0;
         char32_t cp = decode_utf8(m_line, idx, advance);
-        int expected_width = estimate_width(cp);
-        int real_width = m_platform->put_codepoint(m_line.c_str() + idx, advance, expected_width);
-        if (real_width < 0) real_width = 0;
-        m_widths.push_back(real_width);
+        int w = (cp == '\n') ? 0 : std::max(estimate_width(cp), 1);
+        m_widths.push_back(w);
         idx += advance;
-        if (cursor_byte_pos >= 0 && static_cast<size_t>(cursor_byte_pos) < idx) {
-            back_width += real_width;
-        } else {
-            ++m_char_pos;
-            m_byte_pos = idx;
-        }
     }
+
     if (cursor_byte_pos >= 0) {
-        m_platform->move_cursor(-back_width);
+        size_t target = static_cast<size_t>(cursor_byte_pos);
+        size_t byte = 0;
+        size_t cp = 0;
+        while (cp < m_widths.size()) {
+            size_t adv = 0;
+            decode_utf8(m_line, byte, adv);
+            if (byte + adv > target) break;
+            byte += adv;
+            cp++;
+        }
+        m_char_pos = cp;
+        m_byte_pos = byte;
     }
+
+    redraw_input();
 }
 
 void LineEditor::move_to_line_start() {
-    int back_width = 0;
-    for (size_t i = 0; i < m_char_pos; ++i) {
-        back_width += m_widths[i];
-    }
-    m_platform->move_cursor(-back_width);
-    m_char_pos = 0;
-    m_byte_pos = 0;
+    move_cursor_to(line_start_char(cur_line_idx()));
 }
 
 void LineEditor::move_to_line_end() {
-    int forward_width = 0;
-    for (size_t i = m_char_pos; i < m_widths.size(); ++i) {
-        forward_width += m_widths[i];
-    }
-    m_platform->move_cursor(forward_width);
-    m_char_pos = m_widths.size();
-    m_byte_pos = m_line.length();
+    size_t line = cur_line_idx();
+    move_cursor_to(line_start_char(line) + line_char_count(line));
 }
 
 void LineEditor::move_word_left() {
     if (m_char_pos == 0) return;
 
-    size_t new_char_pos = m_char_pos;
-    size_t new_byte_pos = m_byte_pos;
-    int move_width = 0;
-
+    size_t pos = m_char_pos;
     // 跳过空格
-    while (new_char_pos > 0) {
-        size_t prev_byte = prev_utf8_char_pos(m_line, new_byte_pos);
-        size_t advance = 0;
-        char32_t cp = decode_utf8(m_line, prev_byte, advance);
-        if (!is_space_codepoint(cp)) break;
-        move_width += m_widths[new_char_pos - 1];
-        new_char_pos--;
-        new_byte_pos = prev_byte;
-    }
-
+    while (pos > 0 && is_space_codepoint(char_at(pos - 1))) --pos;
     // 跳过单词
-    while (new_char_pos > 0) {
-        size_t prev_byte = prev_utf8_char_pos(m_line, new_byte_pos);
-        size_t advance = 0;
-        char32_t cp = decode_utf8(m_line, prev_byte, advance);
-        if (is_space_codepoint(cp)) break;
-        move_width += m_widths[new_char_pos - 1];
-        new_char_pos--;
-        new_byte_pos = prev_byte;
-    }
+    while (pos > 0 && !is_space_codepoint(char_at(pos - 1))) --pos;
 
-    m_platform->move_cursor(-move_width);
-    m_char_pos = new_char_pos;
-    m_byte_pos = new_byte_pos;
+    move_cursor_to(pos);
 }
 
 void LineEditor::move_word_right() {
     if (m_char_pos >= m_widths.size()) return;
 
-    size_t new_char_pos = m_char_pos;
-    size_t new_byte_pos = m_byte_pos;
-    int move_width = 0;
-
+    size_t pos = m_char_pos;
     // 跳过空格
-    while (new_char_pos < m_widths.size()) {
-        size_t advance = 0;
-        char32_t cp = decode_utf8(m_line, new_byte_pos, advance);
-        if (!is_space_codepoint(cp)) break;
-        move_width += m_widths[new_char_pos];
-        new_char_pos++;
-        new_byte_pos += advance;
-    }
-
+    while (pos < m_widths.size() && is_space_codepoint(char_at(pos))) ++pos;
     // 跳过单词
-    while (new_char_pos < m_widths.size()) {
-        size_t advance = 0;
-        char32_t cp = decode_utf8(m_line, new_byte_pos, advance);
-        if (is_space_codepoint(cp)) break;
-        move_width += m_widths[new_char_pos];
-        new_char_pos++;
-        new_byte_pos += advance;
-    }
-
+    while (pos < m_widths.size() && !is_space_codepoint(char_at(pos))) ++pos;
     // 跳过尾部空格
-    while (new_char_pos < m_widths.size()) {
-        size_t advance = 0;
-        char32_t cp = decode_utf8(m_line, new_byte_pos, advance);
-        if (!is_space_codepoint(cp)) break;
-        move_width += m_widths[new_char_pos];
-        new_char_pos++;
-        new_byte_pos += advance;
-    }
+    while (pos < m_widths.size() && is_space_codepoint(char_at(pos))) ++pos;
 
-    m_platform->move_cursor(move_width);
-    m_char_pos = new_char_pos;
-    m_byte_pos = new_byte_pos;
+    move_cursor_to(pos);
 }
 
 void LineEditor::history_prev() {
@@ -370,41 +431,49 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
         m_widths.clear();
         m_char_pos = 0;
         m_byte_pos = 0;
-        bool is_special_char = false;
+        m_prompt = prompt;
+        m_is_continuation = is_continuation;
 
-        // 定位光标到输入行（倒数第 2 行）
+        // 定位光标到输入区并完整重绘（同时通知 Terminal 调整滚动区）
         // \x1b[row;1H 绝对定位可以到达滚动区域外的行
-        int term_h = m_platform->get_terminal_height();
-        int input_row = term_h - 1;
-        if (input_row < 1) input_row = 1;
-        char goto_input[32];
-        snprintf(goto_input, sizeof(goto_input), "\x1b[%d;1H", input_row);
-        m_platform->write_output(goto_input);
-        m_platform->write_output("\x1b[2K");  // 清除输入行残留
-        m_platform->flush();
+        redraw_input();
 
         // 通知 Terminal 光标已离开输出区
         if (m_cursor_left_output_cb) {
             m_cursor_left_output_cb();
         }
 
-        // 显示提示符（续行时用 "│ " 代替主提示符）
-        m_platform->write_output(is_continuation ? "\xe2\x94\x82 " : prompt);  // │
-        m_platform->flush();
-
         while (true) {
             assert(m_char_pos <= m_byte_pos);
             assert(m_char_pos <= m_widths.size());
 
-            m_platform->flush();
             char32_t input_char = m_platform->read_char();
 
-            if (input_char == '\r' || input_char == '\n') {
+            // Enter 提交（Shift/Ctrl+Enter 由平台层转换为 '\n'）
+            if (input_char == '\r') {
                 break;
             }
 
-            // Tab 补全
-            if (m_completion_cb && input_char == '\t') {
+            // 插入换行（Shift/Ctrl+Enter 或粘贴内容）
+            if (input_char == '\n') {
+                if (line_count() >= static_cast<size_t>(input_area_max_lines())) {
+                    // 输入区行数达到上限：转为空格，避免编辑区超出屏幕
+                    input_char = ' ';
+                }
+                std::string new_char_str;
+                append_utf8(input_char, new_char_str);
+                int w = (input_char == '\n') ? 0 : std::max(estimate_width(input_char), 1);
+                m_line.insert(m_byte_pos, new_char_str);
+                m_widths.insert(m_widths.begin() + static_cast<ptrdiff_t>(m_char_pos), w);
+                m_byte_pos += new_char_str.length();
+                m_char_pos++;
+                redraw_input();
+                if (m_input_changed_cb) m_input_changed_cb(m_line);
+                continue;
+            }
+
+            // Tab 补全（仅单行输入）
+            if (m_completion_cb && input_char == '\t' && line_count() == 1) {
                 // 命令面板 Tab 补全（/ 开头时优先）
                 if (!m_line.empty() && m_line[0] == '/' && m_command_tab_cb) {
                     auto completion = m_command_tab_cb();
@@ -469,67 +538,60 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
                 if (m_resize_cb) {
                     m_resize_cb();
                 }
-                // 重新定位光标到新输入行
-                int term_h = m_platform->get_terminal_height();
-                int input_row = term_h - 1;
-                if (input_row < 1) input_row = 1;
-                char goto_input[32];
-                snprintf(goto_input, sizeof(goto_input), "\x1b[%d;1H", input_row);
-                m_platform->write_output(goto_input);
-                m_platform->write_output("\x1b[2K");
-                m_platform->write_output(is_continuation ? "\xe2\x94\x82 " : prompt);
-                if (!m_line.empty()) {
-                    m_platform->write_output(m_line);
-                }
-                // 将光标移回编辑位置
-                int chars_after_cursor = 0;
-                for (size_t i = m_char_pos; i < m_widths.size(); ++i) {
-                    chars_after_cursor += m_widths[i];
-                }
-                if (chars_after_cursor > 0) {
-                    m_platform->move_cursor(-chars_after_cursor);
-                }
-                m_platform->flush();
+                redraw_input();
                 continue;
             }
 
-            // 反斜杠/斜杠特殊标记（续行和命令）
-            if (is_special_char) {
-                // 替换显示：恢复原始字符
-                m_platform->move_cursor(-1);
-                m_platform->write_output(m_line.substr(m_line.size() - 1));
-                is_special_char = false;
-            }
-
-            // 导航键（续行中禁用历史导航）
             if (input_char == KEY_ARROW_LEFT) {
                 if (m_char_pos > 0) {
-                    int w = m_widths[m_char_pos - 1];
-                    m_platform->move_cursor(-w);
                     m_char_pos--;
                     m_byte_pos = prev_utf8_char_pos(m_line, m_byte_pos);
+                    redraw_input();
                 }
             } else if (input_char == KEY_ARROW_RIGHT) {
                 if (m_char_pos < m_widths.size()) {
-                    int w = m_widths[m_char_pos];
-                    m_platform->move_cursor(w);
                     m_char_pos++;
                     m_byte_pos = next_utf8_char_pos(m_line, m_byte_pos);
+                    redraw_input();
                 }
             } else if (input_char == KEY_ARROW_UP) {
-                // 命令面板/文件搜索面板模式：↑ 转发给面板
-                if (!is_continuation && !m_line.empty() && m_command_nav_cb &&
-                    (m_line[0] == '/' || m_line.find('@') != std::string::npos)) {
-                    if (m_command_nav_cb(input_char)) continue;
+                if (line_count() > 1) {
+                    // 多行编辑：↑ 移动到上一行（保持列）
+                    size_t line = cur_line_idx();
+                    if (line > 0) {
+                        size_t col = m_char_pos - line_start_char(line);
+                        size_t target = line - 1;
+                        size_t target_count = line_char_count(target);
+                        if (col > target_count) col = target_count;
+                        move_cursor_to(line_start_char(target) + col);
+                    }
+                } else {
+                    // 命令面板/文件搜索面板模式：↑ 转发给面板
+                    if (!is_continuation && !m_line.empty() && m_command_nav_cb &&
+                        (m_line[0] == '/' || m_line.find('@') != std::string::npos)) {
+                        if (m_command_nav_cb(input_char)) continue;
+                    }
+                    if (!is_continuation) history_prev();
                 }
-                if (!is_continuation) history_prev();
             } else if (input_char == KEY_ARROW_DOWN) {
-                // 命令面板/文件搜索面板模式：↓ 转发给面板
-                if (!is_continuation && !m_line.empty() && m_command_nav_cb &&
-                    (m_line[0] == '/' || m_line.find('@') != std::string::npos)) {
-                    if (m_command_nav_cb(input_char)) continue;
+                if (line_count() > 1) {
+                    // 多行编辑：↓ 移动到下一行（保持列）
+                    size_t line = cur_line_idx();
+                    if (line + 1 < line_count()) {
+                        size_t col = m_char_pos - line_start_char(line);
+                        size_t target = line + 1;
+                        size_t target_count = line_char_count(target);
+                        if (col > target_count) col = target_count;
+                        move_cursor_to(line_start_char(target) + col);
+                    }
+                } else {
+                    // 命令面板/文件搜索面板模式：↓ 转发给面板
+                    if (!is_continuation && !m_line.empty() && m_command_nav_cb &&
+                        (m_line[0] == '/' || m_line.find('@') != std::string::npos)) {
+                        if (m_command_nav_cb(input_char)) continue;
+                    }
+                    if (!is_continuation) history_next();
                 }
-                if (!is_continuation) history_next();
             } else if (input_char == KEY_HOME) {
                 move_to_line_start();
             } else if (input_char == KEY_END) {
@@ -541,91 +603,32 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
             } else if (input_char == KEY_DELETE) {
                 delete_at_cursor();
             } else if (input_char == 0x08 || input_char == 0x7F) {
-                // Backspace
+                // Backspace（行首删除时合并上一行）
                 if (m_char_pos > 0) {
-                    int w = m_widths[m_char_pos - 1];
-                    m_platform->move_cursor(-w);
-                    m_char_pos--;
                     size_t prev_pos = prev_utf8_char_pos(m_line, m_byte_pos);
                     size_t char_len = m_byte_pos - prev_pos;
+
+                    m_line.erase(prev_pos, char_len);
+                    m_widths.erase(m_widths.begin() + static_cast<ptrdiff_t>(m_char_pos - 1));
+                    m_char_pos--;
                     m_byte_pos = prev_pos;
 
-                    m_line.erase(m_byte_pos, char_len);
-                    m_widths.erase(m_widths.begin() + static_cast<ptrdiff_t>(m_char_pos));
-
-                    // 重绘尾部
-                    size_t p = m_byte_pos;
-                    int tail_width = 0;
-                    for (size_t i = m_char_pos; i < m_widths.size(); ++i) {
-                        size_t next_p = next_utf8_char_pos(m_line, p);
-                        m_platform->put_codepoint(m_line.c_str() + p, next_p - p, m_widths[i]);
-                        tail_width += m_widths[i];
-                        p = next_p;
-                    }
-
-                    // 清除残余
-                    for (int i = 0; i < w; ++i) {
-                        m_platform->write_output(" ");
-                    }
-                    m_platform->move_cursor(-(tail_width + w));
+                    redraw_input();
                 }
+            } else if (input_char == 0x1B) {
+                // 独立 Esc 键：忽略，不插入控制字符
             } else {
                 // 插入字符
                 std::string new_char_str;
                 append_utf8(input_char, new_char_str);
-                int w = estimate_width(input_char);
+                int w = std::max(estimate_width(input_char), 1);
 
-                if (m_char_pos == m_widths.size()) {
-                    // 末尾插入
-                    m_line += new_char_str;
-                    int real_w = m_platform->put_codepoint(new_char_str.c_str(), new_char_str.length(), w);
-                    if (real_w < 0) real_w = 0;
-                    m_widths.push_back(real_w);
-                    m_byte_pos += new_char_str.length();
-                    m_char_pos++;
-                } else {
-                    // 中间插入
-                    m_line.insert(m_byte_pos, new_char_str);
-                    int real_w = m_platform->put_codepoint(new_char_str.c_str(), new_char_str.length(), w);
-                    if (real_w < 0) real_w = 0;
-                    m_widths.insert(m_widths.begin() + static_cast<ptrdiff_t>(m_char_pos), real_w);
+                m_line.insert(m_byte_pos, new_char_str);
+                m_widths.insert(m_widths.begin() + static_cast<ptrdiff_t>(m_char_pos), w);
+                m_byte_pos += new_char_str.length();
+                m_char_pos++;
 
-                    // 重绘尾部
-                    size_t p = m_byte_pos + new_char_str.length();
-                    int tail_width = 0;
-                    for (size_t i = m_char_pos + 1; i < m_widths.size(); ++i) {
-                        size_t next_p = next_utf8_char_pos(m_line, p);
-                        m_platform->put_codepoint(m_line.c_str() + p, next_p - p, m_widths[i]);
-                        tail_width += m_widths[i];
-                        p = next_p;
-                    }
-                    m_platform->move_cursor(-tail_width);
-
-                    m_byte_pos += new_char_str.length();
-                    m_char_pos++;
-                }
-            }
-
-            // 反斜杠续行 / 斜杠命令 标记
-            // E.8：使用 prev_utf8_char_pos 定位末尾完整字符的起始字节，
-            // 确保 multi-byte UTF-8 字符不会被 m_line.back() 取到的末尾字节
-            // 误判（虽然 UTF-8 续字节 0x80-0xBF 不包含 '\\' 或 '/'，但显式
-            // 检查字符长度更稳健，也为未来扩展留余地）
-            if (!m_line.empty()) {
-                size_t last_start = prev_utf8_char_pos(m_line, m_line.size());
-                size_t char_len = m_line.size() - last_start;
-                // 仅对单字节 ASCII backslash/slash 触发特殊标记
-                if (char_len == 1) {
-                    char last_ch = m_line[last_start];
-                    if (last_ch == '\\' || last_ch == '/') {
-                        // 在末尾显示高亮替换
-                        m_platform->move_cursor(-1);
-                        m_platform->write_output("\x1b[7m");  // 反色
-                        m_platform->write_output(m_line.substr(last_start, 1));
-                        m_platform->write_output("\x1b[0m");  // 重置
-                        is_special_char = true;
-                    }
-                }
+                redraw_input();
             }
 
             // 通知输入变化（用于命令面板过滤更新）
@@ -636,17 +639,12 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
 
         // ---- 回车处理 ----
 
-        if (is_special_char) {
-            // 恢复正常显示
-            m_platform->move_cursor(-1);
-            m_platform->write_output(" ");
-            m_platform->move_cursor(-1);
-
-            char last = m_line.back();
-            m_line.pop_back();
-
-            if (last == '\\') {
-                // 续行：累积当前行，进入续行循环
+        // 反斜杠续行（仅单行文本且末尾为 \ 时）
+        if (line_count() == 1 && !m_line.empty()) {
+            size_t last_start = prev_utf8_char_pos(m_line, m_line.size());
+            size_t char_len = m_line.size() - last_start;
+            if (char_len == 1 && m_line[last_start] == '\\') {
+                m_line.pop_back();
                 accumulated += m_line + "\n";
                 m_platform->write_output("\n");
                 is_continuation = true;
@@ -654,11 +652,9 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
                 m_backup_line.clear();
                 continue;  // 回到外层 while，读取下一行
             }
-            // 斜杠命令：直接提交
-            m_platform->write_output("\n");
-        } else {
-            m_platform->write_output("\n");
         }
+
+        m_platform->write_output("\n");
 
         // 拼接累积内容 + 当前行
         ReadResult result;
