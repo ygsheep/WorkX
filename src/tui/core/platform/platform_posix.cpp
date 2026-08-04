@@ -5,6 +5,7 @@
  */
 
 #include "tui/core/platform/i_platform.h"
+#include "tui/core/platform/vt_input_decoder.h"
 
 #include <termios.h>
 #include <unistd.h>
@@ -60,6 +61,9 @@ public:
             return Result<void, std::string>::err("Failed to set raw mode");
         }
 
+        // 启用 bracketed paste：终端把粘贴内容包裹在 ESC[200~ / ESC[201~ 中
+        write_output("\x1b[?2004h");
+
         // 注册 SIGWINCH 处理器：终端尺寸变更时置 flag，read_char() 据此返回 KEY_RESIZE。
         // 保存旧 handler 以便 disable_raw_mode 恢复。
         m_sigwinch_installed = (signal(SIGWINCH, sigwinch_handler) != SIG_ERR);
@@ -70,6 +74,8 @@ public:
 
     void disable_raw_mode() override {
         if (!m_raw_mode_enabled) return;
+        // 关闭 bracketed paste（在恢复 termios 之前发送，此时 OPOST 仍被禁用）
+        write_output("\x1b[?2004l");
         if (m_sigwinch_installed) {
             signal(SIGWINCH, SIG_DFL);
             m_sigwinch_installed = false;
@@ -98,67 +104,30 @@ public:
         } while (n < 0 && errno == EINTR);
         if (n <= 0) return WEOF;
 
-        if (buf[0] == 0x1b) {
-            unsigned char seq[2];
-            if (read(STDIN_FILENO, seq, 1) != 1) return 0x1b;
-            if (seq[0] == '[') {
-                if (read(STDIN_FILENO, seq, 1) != 1) return 0x1b;
-                switch (seq[0]) {
-                    case 'A': return KEY_ARROW_UP;
-                    case 'B': return KEY_ARROW_DOWN;
-                    case 'C': return KEY_ARROW_RIGHT;
-                    case 'D': return KEY_ARROW_LEFT;
-                    case 'H': return KEY_HOME;
-                    case 'F': return KEY_END;
-                    case '3': {
-                        if (read(STDIN_FILENO, seq, 1) == 1 && seq[0] == '~')
-                            return KEY_DELETE;
-                        return 0x1b;
-                    }
-                    case '1': {
-                        unsigned char tilde;
-                        if (read(STDIN_FILENO, &tilde, 1) != 1) return 0x1b;
-                        if (tilde == '~') return KEY_HOME;
-                        if (tilde == ';') {
-                            unsigned char mod;
-                            if (read(STDIN_FILENO, &mod, 1) != 1) return 0x1b;
-                            unsigned char final;
-                            if (read(STDIN_FILENO, &final, 1) != 1) return 0x1b;
-                            if (mod == '5' && final == 'C') return KEY_CTRL_ARROW_RIGHT;
-                            if (mod == '5' && final == 'D') return KEY_CTRL_ARROW_LEFT;
-                        }
-                        return 0x1b;
-                    }
-                    case '5': {
-                        unsigned char tilde;
-                        if (read(STDIN_FILENO, &tilde, 1) == 1 && tilde == '~')
-                            return KEY_HOME;
-                        return 0x1b;
-                    }
-                    case '4': {
-                        unsigned char tilde;
-                        if (read(STDIN_FILENO, &tilde, 1) == 1 && tilde == '~')
-                            return KEY_END;
-                        return 0x1b;
-                    }
-                    default: return 0x1b;
-                }
-            }
-            if (seq[0] == 'O') {
-                if (read(STDIN_FILENO, seq, 1) != 1) return 0x1b;
-                switch (seq[0]) {
-                    case 'H': return KEY_HOME;
-                    case 'F': return KEY_END;
-                    default: return 0x1b;
-                }
-            }
-            return 0x1b;
-        }
-
         if ((buf[0] & 0x80) == 0) {
+            // 单字节 ASCII：Ctrl 组合先映射（不喂解码器）
             if (buf[0] == 0x03) return KEY_CTRL_C;
             if (buf[0] == 0x0f) return KEY_CTRL_O;
-            return buf[0];
+
+            // 喂解码器（方向键/功能键序列、bracketed paste 标记）；
+            // 序列未完成时阻塞读取后续字节（与既有 ESC 处理行为一致）
+            while (true) {
+                switch (m_vt_decoder.feed(buf[0])) {
+                    case VtInputDecoder::Event::Char:
+                        return m_vt_decoder.code();
+                    default: {
+                        do {
+                            n = read(STDIN_FILENO, buf, 1);
+                            if (n < 0 && errno == EINTR && g_resize_pending) {
+                                g_resize_pending = 0;
+                                return KEY_RESIZE;
+                            }
+                        } while (n < 0 && errno == EINTR);
+                        if (n <= 0) return WEOF;
+                        break;
+                    }
+                }
+            }
         }
 
         size_t extra;
@@ -178,6 +147,7 @@ public:
         for (size_t i = 1; i <= extra; ++i)
             cp = (cp << 6) | (buf[i] & 0x3F);
 
+        // 多字节码点：粘贴内容里的中文等，直接返回（换行转换由解码器处理 ASCII 部分）
         return cp;
     }
 
@@ -260,6 +230,7 @@ private:
     struct termios m_original;
     bool m_raw_mode_enabled = false;
     bool m_sigwinch_installed = false;  ///< SIGWINCH 处理器是否已注册
+    VtInputDecoder m_vt_decoder;        ///< VT 输入序列解码器
 };
 
 std::unique_ptr<IPlatform> create_platform() {
