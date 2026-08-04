@@ -191,10 +191,20 @@ void ChatSession::set_system_prompt(const std::string& prompt) {
     m_system_prompt = prompt;
 }
 
+std::string ChatSession::system_prompt() const {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    return m_system_prompt;
+}
+
 void ChatSession::set_tool_registry(std::shared_ptr<tool::ToolRegistry> registry) {
     std::lock_guard<std::mutex> lock(m_state_mutex);
     m_tool_registry = std::move(registry);
     // executor 由 ReActLoop 内部创建，此处仅保存 registry
+}
+
+std::shared_ptr<tool::ToolRegistry> ChatSession::tool_registry() const {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    return m_tool_registry;
 }
 
 void ChatSession::clear_history() {

@@ -95,9 +95,15 @@ public:
     /// @brief 添加系统提示词
     void set_system_prompt(const std::string& prompt);
 
+    /// @brief 获取系统提示词（返回拷贝，线程安全）
+    std::string system_prompt() const;
+
     /// @brief 设置工具注册表（启用 function calling）
     /// @param registry 工具注册表（含已注册的工具实例）
     void set_tool_registry(std::shared_ptr<tool::ToolRegistry> registry);
+
+    /// @brief 获取工具注册表（返回拷贝，线程安全）
+    std::shared_ptr<tool::ToolRegistry> tool_registry() const;
 
     /// @brief 清空对话历史
     void clear_history();

@@ -1,0 +1,119 @@
+/**
+ * @file skill_loader.cpp
+ * @brief Skill 磁盘加载器实现
+ * @details 目录遍历 + SKILL.md 解析 + PromptCommand 构建。
+ *          仅支持 <name>/SKILL.md 目录格式（对齐 example/cc）。
+ * @version 1.0.0
+ * @date 2026-08
+ */
+
+#include "agent/skill/inclaude/skill_loader.h"
+#include "agent/skill/inclaude/frontmatter.h"
+
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <unordered_map>
+
+namespace fs = std::filesystem;
+
+namespace agent::skill {
+
+std::vector<std::string> find_skill_dirs_up_to_home(const std::string& cwd) {
+    std::vector<std::string> dirs;
+    fs::path p = cwd;
+    std::error_code ec;
+    for (;;) {
+        const auto candidate = p / ".claude" / "skills";
+        if (fs::is_directory(candidate, ec) && !ec) {
+            dirs.push_back(candidate.string());
+        }
+        ec.clear();
+        const auto parent = p.parent_path();
+        if (parent.empty() || parent == p) break;
+        p = parent;
+    }
+    return dirs;
+}
+
+namespace {
+
+/// @brief 读取文件内容；失败返回空 optional
+std::optional<std::string> read_file_text(const fs::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return std::nullopt;
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    if (in.bad()) return std::nullopt;
+    return ss.str();
+}
+
+/// @brief 由解析结果构建 PromptCommand（含别名命令）
+std::vector<std::shared_ptr<command::PromptCommand>> build_commands(
+    const ParsedSkill& parsed,
+    const fs::path& skill_dir) {
+    const auto& fm = parsed.frontmatter;
+
+    const auto gen = [body = parsed.body,
+                      base = skill_dir.string()](const std::string& /*args*/,
+                                                 const command::CommandContext& /*ctx*/) {
+        command::PromptBlock block;
+        block.type = command::PromptBlockType::Text;
+        block.text = "Base directory for this skill: " + base + "\n\n" + body;
+        return std::vector<command::PromptBlock>{std::move(block)};
+    };
+
+    std::vector<std::shared_ptr<command::PromptCommand>> cmds;
+    const auto make = [&](const std::string& name) {
+        auto cmd = std::make_shared<command::PromptCommand>(name, fm.description);
+        cmd->set_prompt_generator(gen);
+        cmd->set_loaded_from(command::LoadSource::Skills);
+        cmd->set_source("skills");
+        cmd->set_user_invocable(fm.user_invocable);
+        cmd->set_disable_model_invocation(fm.disable_model_invocation);
+        if (fm.argument_hint) cmd->set_argument_hint(*fm.argument_hint);
+        return cmd;
+    };
+
+    cmds.push_back(make(fm.name));
+    for (const auto& alias : fm.aliases) {
+        cmds.push_back(make(alias));
+    }
+    return cmds;
+}
+
+} // anonymous namespace
+
+std::vector<std::shared_ptr<command::PromptCommand>> load_skills_from_dirs(
+    const std::vector<std::string>& base_dirs) {
+    std::vector<std::shared_ptr<command::PromptCommand>> result;
+    std::unordered_map<std::string, bool> seen;  // canonical 路径去重
+
+    std::error_code ec;
+    for (const auto& base_dir : base_dirs) {
+        fs::directory_iterator it(base_dir, fs::directory_options::skip_permission_denied, ec);
+        if (ec) continue;
+        for (const auto& entry : it) {
+            ec.clear();
+            if (!entry.is_directory(ec) || ec) continue;
+
+            const auto skill_dir = entry.path();
+            const auto skill_file = skill_dir / "SKILL.md";
+            const auto content = read_file_text(skill_file);
+            if (!content) continue;
+
+            const auto canonical = fs::weakly_canonical(skill_file, ec);
+            if (ec) continue;
+            const auto key = canonical.string();
+            if (seen.contains(key)) continue;
+            seen[key] = true;
+
+            const auto parsed = parse_skill_content(*content, skill_dir.filename().string());
+            auto cmds = build_commands(parsed, skill_dir);
+            result.insert(result.end(), cmds.begin(), cmds.end());
+        }
+    }
+    return result;
+}
+
+} // namespace agent::skill

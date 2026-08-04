@@ -100,6 +100,26 @@ public:
         std::lock_guard<std::mutex> lock(m_mutex);
         argument_hint_ = std::move(hint);
     }
+    void set_loaded_from(LoadSource src) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        loaded_from_ = src;
+    }
+    void set_source(std::string src) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        source_ = std::move(src);
+    }
+    void set_user_invocable(bool v) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        user_invocable_ = v;
+    }
+    void set_disable_model_invocation(bool v) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        disable_model_invocation_ = v;
+    }
+    void set_when_to_use(std::string v) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        when_to_use_ = std::move(v);
+    }
 
 protected:
     CommandBase() = default;

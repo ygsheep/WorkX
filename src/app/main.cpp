@@ -38,8 +38,11 @@
 #include "agent/model/context_resolver.h"
 #include "agent/model/model_catalog.h"
 #include "agent/session/session_store.h"  // 项目会话恢复：get_project_session_dir
+#include "agent/skill/inclaude/skill_prompt.h"
+#include "agent/tool/SkillTool/skill_tool.h"
 #include "agent/tool/registry.h"
 #include "app/command/builtin_commands.h"
+#include "app/command/skill_commands.h"
 #include "app/config/app_config.h"
 #include "app/config/cli_args.h"
 #include "app/factory.h"
@@ -548,6 +551,28 @@ static int run(int argc, char* argv[]) {
         }
     };
     command::register_system_commands(*registry, sys_ctx);
+
+    // 加载磁盘 skills（.claude/skills）并注册为命令
+    {
+        namespace fs = std::filesystem;
+        const auto cwd = fs::current_path().string();
+        command::register_skill_commands(*registry, cwd);
+        // SkillTool 在 factory 中以空 registry 注册，此处注入命令注册表
+        if (session) {
+            const auto tool_registry = session->tool_registry();
+            if (tool_registry) {
+                if (auto* skill_tool = dynamic_cast<tool::SkillTool*>(
+                        tool_registry->find_by_name("Skill").get())) {
+                    skill_tool->set_registry(registry);
+                }
+            }
+            // 注入 skills 列表到 system prompt（factory 构建时 registry 尚不存在）
+            const auto skills_section = skill::build_skills_prompt_section(*registry);
+            if (!skills_section.empty()) {
+                session->set_system_prompt(session->system_prompt() + skills_section);
+            }
+        }
+    }
 
     // CommandPanel 初始化（从 CommandRegistry 获取命令列表）
     // registry 由 make_shared 创建，保证非空，无需空检查
