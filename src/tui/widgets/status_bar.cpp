@@ -106,6 +106,9 @@ std::string StatusBar::get_animated_color() const {
 
 void StatusBar::render() {
     std::lock_guard<std::mutex> lock(m_mutex);
+    // 多行输入编辑时输入区覆盖状态栏行，暂停渲染避免覆盖输入文本
+    if (m_terminal->is_multiline_editing()) return;
+
     auto bar = format_bar();
     if (bar.empty()) return;
 

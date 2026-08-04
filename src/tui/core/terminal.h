@@ -97,6 +97,15 @@ public:
     /// @details 供 handle_resize() 在单一锁内调用，避免分段加锁的窗口期
     void setup_scroll_region_locked();
 
+    /// @brief 仅更新滚动区下界（编辑期间输入区行数变化），不移动光标
+    void update_scroll_region_bottom();
+
+    /// @brief 滚动区下界行号（考虑编辑期间输入区行数）
+    int scroll_region_bottom() const;
+
+    /// @brief 是否处于多行输入编辑（输入区覆盖状态栏行，状态栏应暂停渲染）
+    bool is_multiline_editing() const { return m_editing && m_edit_lines > 1; }
+
     /// @brief 重置滚动区域为全屏
     void reset_scroll_region();
 
@@ -268,6 +277,7 @@ private:
     bool m_scroll_region_active = false;  ///< 滚动区域是否已激活
     bool m_editing = false;               ///< read_line() 是否正在运行
     bool m_cursor_in_output = true;       ///< 光标是否在输出区（滚动区域内）
+    int m_edit_lines = 1;                 ///< 编辑期间输入区占用的终端行数
     std::thread m_event_pump_thread;      ///< 后台事件泵线程
     std::atomic<bool> m_event_pump_running{false};  ///< 事件泵运行标志
 

@@ -76,6 +76,18 @@ Result<void, std::string> Terminal::initialize() {
     // write() 在 m_editing 时会恢复光标到输入行，避免异步输出干扰编辑
     m_editor->set_editing_changed_callback([this](bool editing) {
         m_editing = editing;
+        // 编辑结束：输入区恢复单行，滚动区恢复默认
+        if (!editing && m_edit_lines != 1) {
+            m_edit_lines = 1;
+            update_scroll_region_bottom();
+        }
+    });
+
+    // 编辑多行文本时输入区行数变化 → 调整滚动区保护范围
+    m_editor->set_edit_lines_callback([this](int lines) {
+        if (lines == m_edit_lines) return;
+        m_edit_lines = lines;
+        update_scroll_region_bottom();
     });
 
     // 加载历史文件
@@ -458,9 +470,7 @@ void Terminal::write(std::string_view text) {
     if (m_scroll_region_active) {
         if (!m_cursor_in_output) {
             // 光标不在输出区：归位到滚动区域底部再写入
-            int height = m_platform->get_terminal_height();
-            int scroll_bottom = height - 3;
-            if (scroll_bottom < 1) scroll_bottom = 1;
+            int scroll_bottom = scroll_region_bottom();
             char cmd[32];
             snprintf(cmd, sizeof(cmd), "\x1b[%d;1H", scroll_bottom);
             m_platform->write_output(cmd);
@@ -533,12 +543,19 @@ int Terminal::display_buffer_row_count() const {
     return m_display_buffer->row_count();
 }
 
-void Terminal::setup_scroll_region() {
+int Terminal::scroll_region_bottom() const {
     int height = get_terminal_height();
-    // 滚动区域: 行 1 ~ height-3（留出底部 3 行给 StatusBar + 输入行 + CommandPanel）
+    // 编辑多行文本时输入区向上扩展 [height-lines, height-1]；
+    // 单行时底部 3 行（状态栏 + 输入行 + 底栏）均为保护区。
+    int bottom = height - std::max(m_edit_lines, 2) - 1;
+    if (bottom < 1) bottom = 1;
+    return bottom;
+}
+
+void Terminal::setup_scroll_region() {
+    // 滚动区域: 行 1 ~ bottom（保护 StatusBar + 输入区 + 底栏）
     // ANSI: \x1b[top;bottomr  (1-based)
-    int scroll_bottom = height - 3;
-    if (scroll_bottom < 1) scroll_bottom = 1;
+    int scroll_bottom = scroll_region_bottom();
 
     std::lock_guard<std::mutex> lock(m_output_mutex);
     // 设置滚动区域
@@ -554,9 +571,7 @@ void Terminal::setup_scroll_region() {
 
 void Terminal::setup_scroll_region_locked() {
     // 调用方必须已持有 m_output_mutex
-    int height = get_terminal_height();
-    int scroll_bottom = height - 3;
-    if (scroll_bottom < 1) scroll_bottom = 1;
+    int scroll_bottom = scroll_region_bottom();
 
     char cmd[32];
     snprintf(cmd, sizeof(cmd), "\x1b[1;%dr", scroll_bottom);
@@ -565,6 +580,15 @@ void Terminal::setup_scroll_region_locked() {
     m_platform->flush();
     m_scroll_region_active = true;
     m_cursor_in_output = true;
+}
+
+void Terminal::update_scroll_region_bottom() {
+    // 仅更新滚动区下界（编辑期间输入区行数变化），不移动光标
+    std::lock_guard<std::mutex> lock(m_output_mutex);
+    char cmd[32];
+    snprintf(cmd, sizeof(cmd), "\x1b[1;%dr", scroll_region_bottom());
+    m_platform->write_output(cmd);
+    m_platform->flush();
 }
 
 void Terminal::reset_scroll_region() {
@@ -577,9 +601,7 @@ void Terminal::reset_scroll_region() {
 }
 
 void Terminal::cursor_to_output() {
-    int height = get_terminal_height();
-    int scroll_bottom = height - 3;
-    if (scroll_bottom < 1) scroll_bottom = 1;
+    int scroll_bottom = scroll_region_bottom();
 
     std::lock_guard<std::mutex> lock(m_output_mutex);
     char cmd[32];
