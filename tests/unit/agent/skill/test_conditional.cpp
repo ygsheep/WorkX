@@ -115,6 +115,16 @@ TEST_CASE("skill_matches_touch: absolute pattern", "[skill][conditional]") {
     REQUIRE_FALSE(skill_matches_touch("c:/elsewhere/data/app.log", *skill, "c:/proj"));
 }
 
+TEST_CASE("skill_matches_touch: windows drive absolute pattern", "[skill][conditional]") {
+    // 盘符绝对 pattern（POSIX 斜杠）：不再被误判为相对 pattern
+    const auto skill = make_skill_with_paths("wfe", {"c:/proj/src/**/*.ts"});
+    REQUIRE(skill_matches_touch("c:/proj/src/components/a.ts", *skill, "c:/proj"));
+    REQUIRE_FALSE(skill_matches_touch("c:/proj/tests/a.ts", *skill, "c:/proj"));
+    // 盘符绝对 pattern（反斜杠形式）：to_posix_path 归一后同样命中
+    const auto skill2 = make_skill_with_paths("wfe2", {"C:\\proj\\src\\*.ts"});
+    REQUIRE(skill_matches_touch("c:/proj/src/a.ts", *skill2, "c:/proj"));
+}
+
 TEST_CASE("skill with empty paths never matches", "[skill][conditional]") {
     const auto skill = make_skill_with_paths("plain", {});
     REQUIRE_FALSE(skill_matches_touch("c:/proj/src/a.cpp", *skill, "c:/proj"));

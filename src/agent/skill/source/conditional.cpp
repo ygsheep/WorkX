@@ -65,8 +65,12 @@ bool skill_matches_touch(const std::string& path,
 
     const std::string posix_path = agent::tool::to_posix_path(path);
     for (const auto& raw_pattern : patterns) {
-        auto pattern = agent::tool::expand_home(raw_pattern);
-        const bool is_absolute = !pattern.empty() && pattern[0] == '/';
+        auto pattern = agent::tool::to_posix_path(agent::tool::expand_home(raw_pattern));
+        // 绝对 pattern：POSIX '/' 开头，或 Windows 盘符（X:/）
+        const bool is_absolute = !pattern.empty() &&
+            (pattern[0] == '/' ||
+             (pattern.size() >= 2 && std::isalpha(static_cast<unsigned char>(pattern[0])) &&
+              pattern[1] == ':'));
         // 相对 pattern：touch 路径相对 cwd 后匹配；绝对 pattern：直接匹配
         const std::string& candidate = is_absolute ? posix_path : relativize(posix_path, cwd);
         if (agent::tool::match_path_glob(candidate, pattern)) {

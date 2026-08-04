@@ -670,8 +670,26 @@ static int run(int argc, char* argv[]) {
                             if (i > 0) query_text += "\n\n";
                             query_text += result.messages[i];
                         }
-                    } else {
+                    } else if (!e.text.empty() && e.text[0] != '/') {
                         query_text = e.text;
+                    } else {
+                        // 命令展开为空：不发原始命令给模型（避免 /skill xxx 原样注入）
+                        EventBus::instance().publish_async(StreamErrorEvent{
+                            .session_id = "default",
+                            .message = "命令展开为空，已取消发送",
+                            .retryable = false
+                        });
+                        return;
+                    }
+                    // 命令展开（非文本消息）给 TUI 即时反馈：本地不再回显全文
+                    if (!result.output_text.empty() && !e.text.empty() && e.text[0] == '/') {
+                        EventBus::instance().publish_async(StreamTokenEvent{
+                            .session_id = "default",
+                            .content_delta = "⏳ " + e.text + " 已执行，等待模型…\n",
+                            .reasoning_delta = "",
+                            .is_thinking = false,
+                            .token_count = 0
+                        });
                     }
                     session->send_message(query_text, std::move(result.image_paths));
                 } else {

@@ -51,7 +51,7 @@ std::string strip_quotes(std::string_view v) {
     return std::string(v);
 }
 
-/// @brief 解析 aliases：支持 `a, b` 与 `[a, b]` 形式
+/// @brief 解析 aliases：支持 `a, b` 与 `[a, b]` 形式，逐项剥离 YAML 引号
 std::vector<std::string> parse_aliases(std::string_view value) {
     auto v = trim(value);
     if (v.size() >= 2 && v.front() == '[' && v.back() == ']') {
@@ -62,20 +62,16 @@ std::vector<std::string> parse_aliases(std::string_view value) {
     while (pos <= v.size()) {
         const size_t comma = v.find(',', pos);
         const auto item = trim(v.substr(pos, comma == std::string_view::npos ? v.size() - pos : comma - pos));
-        if (!item.empty()) aliases.push_back(item);
+        if (!item.empty()) aliases.push_back(strip_quotes(item));
         if (comma == std::string_view::npos) break;
         pos = comma + 1;
     }
     return aliases;
 }
 
-/// @brief 解析 paths：同 aliases 的列表形式，额外剥离引号（YAML 数组项常带引号）
+/// @brief 解析 paths：同 aliases 的列表形式（引号剥离已在 parse_aliases 内完成）
 std::vector<std::string> parse_paths(std::string_view value) {
-    auto items = parse_aliases(value);
-    for (auto& item : items) {
-        item = strip_quotes(trim(item));
-    }
-    return items;
+    return parse_aliases(value);
 }
 
 /// @brief 从正文首行派生描述（去掉 # 前缀与空白）
@@ -145,7 +141,7 @@ ParsedSkill parse_skill_content(const std::string& content, const std::string& d
                 if (last_list_key == "paths") {
                     result.frontmatter.paths.push_back(strip_quotes(item));
                 } else if (last_list_key == "aliases") {
-                    result.frontmatter.aliases.push_back(item);
+                    result.frontmatter.aliases.push_back(strip_quotes(item));
                 }
             }
             continue;

@@ -92,6 +92,31 @@ TEST_CASE("aliases bracket form and whitespace", "[skill][frontmatter]") {
     REQUIRE(parsed.frontmatter.aliases[2] == "baz");
 }
 
+TEST_CASE("aliases strip yaml quotes in bracket and multiline forms", "[skill][frontmatter]") {
+    const std::string content =
+        "---\n"
+        "aliases: ['f1', \"f2\"]\n"
+        "---\n";
+
+    const auto parsed = parse_skill_content(content, "dir");
+    REQUIRE(parsed.frontmatter.aliases == std::vector<std::string>{"f1", "f2"});
+}
+
+TEST_CASE("multiline aliases strip yaml quotes", "[skill][frontmatter]") {
+    const std::string content =
+        "---\n"
+        "aliases:\n"
+        "- \"f3\"\n"
+        "- f4\n"
+        "paths:\n"
+        "- 'src/**/*.ts'\n"
+        "---\n";
+
+    const auto parsed = parse_skill_content(content, "dir");
+    REQUIRE(parsed.frontmatter.aliases == std::vector<std::string>{"f3", "f4"});
+    REQUIRE(parsed.frontmatter.paths == std::vector<std::string>{"src/**/*.ts"});
+}
+
 TEST_CASE("bool parsing variants", "[skill][frontmatter]") {
     const std::string content =
         "---\n"

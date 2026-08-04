@@ -252,6 +252,9 @@ void ChatSession::clear_history() {
     m_compactor.reset();
     // 重置前缀形状基线
     m_last_prefix_shape = PrefixShape{};
+    // 清理 conditional skills 会话级累积：过期 touch 不再触发激活
+    m_touch_collector.clear();
+    m_activated_skills.clear();
 }
 
 void ChatSession::set_compactor_context_window(int32_t context_window_tokens) {
