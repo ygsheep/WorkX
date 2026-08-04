@@ -10,10 +10,12 @@
 #include "agent/skill/inclaude/skill_loader.h"
 #include "agent/skill/inclaude/frontmatter.h"
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace fs = std::filesystem;
 
@@ -32,6 +34,45 @@ std::vector<std::string> find_skill_dirs_up_to_home(const std::string& cwd) {
         const auto parent = p.parent_path();
         if (parent.empty() || parent == p) break;
         p = parent;
+    }
+    return dirs;
+}
+
+namespace {
+
+/// @brief 获取用户 home 目录（Windows: USERPROFILE/HOMEDRIVE+HOMEPATH，POSIX: HOME）
+std::string get_home_dir() {
+#if defined(_WIN32)
+    if (const char* p = std::getenv("USERPROFILE")) {
+        if (p[0] != '\0') return p;
+    }
+    if (const char* drive = std::getenv("HOMEDRIVE")) {
+        if (const char* path = std::getenv("HOMEPATH")) {
+            return std::string(drive) + path;
+        }
+    }
+#else
+    if (const char* p = std::getenv("HOME")) {
+        if (p[0] != '\0') return p;
+    }
+#endif
+    return {};
+}
+
+} // anonymous namespace
+
+std::vector<std::string> find_user_skill_dirs() {
+    const auto home = get_home_dir();
+    if (home.empty()) return {};
+
+    std::vector<std::string> dirs;
+    std::error_code ec;
+    for (const auto& sub : {".claude", ".workx"}) {
+        const auto candidate = fs::path(home) / sub / "skills";
+        if (fs::is_directory(candidate, ec) && !ec) {
+            dirs.push_back(candidate.string());
+        }
+        ec.clear();
     }
     return dirs;
 }
@@ -72,6 +113,7 @@ std::vector<std::shared_ptr<command::PromptCommand>> build_commands(
         cmd->set_user_invocable(fm.user_invocable);
         cmd->set_disable_model_invocation(fm.disable_model_invocation);
         if (fm.argument_hint) cmd->set_argument_hint(*fm.argument_hint);
+        if (!fm.paths.empty()) cmd->set_paths(fm.paths);
         return cmd;
     };
 
@@ -87,7 +129,8 @@ std::vector<std::shared_ptr<command::PromptCommand>> build_commands(
 std::vector<std::shared_ptr<command::PromptCommand>> load_skills_from_dirs(
     const std::vector<std::string>& base_dirs) {
     std::vector<std::shared_ptr<command::PromptCommand>> result;
-    std::unordered_map<std::string, bool> seen;  // canonical 路径去重
+    std::unordered_map<std::string, bool> seen;       // canonical 路径去重
+    std::unordered_set<std::string> seen_names;       // 命令名去重（近目录优先）
 
     std::error_code ec;
     for (const auto& base_dir : base_dirs) {
@@ -110,10 +153,27 @@ std::vector<std::shared_ptr<command::PromptCommand>> load_skills_from_dirs(
 
             const auto parsed = parse_skill_content(*content, skill_dir.filename().string());
             auto cmds = build_commands(parsed, skill_dir);
-            result.insert(result.end(), cmds.begin(), cmds.end());
+            for (auto& cmd : cmds) {
+                if (!seen_names.insert(cmd->name()).second) continue;
+                result.push_back(std::move(cmd));
+            }
         }
     }
     return result;
+}
+
+size_t register_bundled_skill(command::CommandRegistry& registry,
+                              const std::string& skill_dir) {
+    const auto content = read_file_text(fs::path(skill_dir) / "SKILL.md");
+    if (!content) return 0;
+
+    const auto parsed = parse_skill_content(*content, fs::path(skill_dir).filename().string());
+    auto cmds = build_commands(parsed, fs::path(skill_dir));
+    for (auto& cmd : cmds) {
+        cmd->set_loaded_from(command::LoadSource::Bundled);
+        registry.register_command(cmd);
+    }
+    return cmds.size();
 }
 
 } // namespace agent::skill

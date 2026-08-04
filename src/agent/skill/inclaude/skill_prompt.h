@@ -27,6 +27,8 @@ inline std::string build_skills_prompt_section(const command::CommandRegistry& r
         if (cmd->loaded_from() != command::LoadSource::Skills) continue;
         if (cmd->is_model_invocation_disabled()) continue;
         if (cmd->description().empty() && !cmd->when_to_use().has_value()) continue;
+        // conditional skills（paths 非空）：不常驻 system prompt，命中才注入
+        if (!cmd->paths().empty()) continue;
 
         out += "- ";
         out += cmd->name();

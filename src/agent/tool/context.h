@@ -33,6 +33,12 @@ namespace tool {
 /// @param progress_text 进度文本
 using ProgressCallback = std::function<void(const std::string& progress_text)>;
 
+/// @brief 工具 touch 回调类型
+/// @details 工具执行过程中上报访问过的文件路径（绝对路径），
+///          由 ReActLoop 注入，用于 conditional skills 的路径匹配。
+/// @param path 访问的文件路径（绝对路径）
+using TouchCallback = std::function<void(const std::string& path)>;
+
 /// @brief 工具执行上下文
 ///
 /// 在工具执行过程中传递的运行时信息：
@@ -80,6 +86,11 @@ struct ToolContext {
     ///          默认为空（无进度上报）。生命周期由 ToolContext 所有者保证。
     ProgressCallback progress_callback = nullptr;
 
+    /// @brief touch 回调（可选）
+    /// @details 由调用方（ReActLoop）注入，工具访问文件时调用以上报路径，
+    ///          供 conditional skills 匹配激活。默认为空。生命周期由 ToolContext 所有者保证。
+    TouchCallback touch_callback = nullptr;
+
     /// @brief 解析配置管理器（H-5：nullptr 时抛异常，不再回退单例）
     /// @return IConfigManager 引用
     /// @throws std::logic_error 当 config_manager_ptr == nullptr
@@ -117,6 +128,14 @@ struct ToolContext {
     void report_progress(const std::string& progress_text) const {
         if (progress_callback) {
             progress_callback(progress_text);
+        }
+    }
+
+    /// @brief 上报 touch（若 touch_callback 已设置）
+    /// @param path 访问的文件路径（绝对路径）
+    void report_touch(const std::string& path) const {
+        if (touch_callback) {
+            touch_callback(path);
         }
     }
 

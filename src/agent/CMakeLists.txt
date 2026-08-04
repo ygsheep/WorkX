@@ -18,6 +18,7 @@ target_sources(libworkx PRIVATE
     # skill
     skill/source/frontmatter.cpp
     skill/source/skill_loader.cpp
+    skill/source/conditional.cpp
 
     # compact
     compact/token_count.cpp

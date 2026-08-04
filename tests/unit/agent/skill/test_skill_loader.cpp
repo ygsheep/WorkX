@@ -6,6 +6,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <random>
@@ -176,4 +177,132 @@ TEST_CASE("find_skill_dirs_up_to_home returns deepest first", "[skill][loader]")
     REQUIRE(dirs.size() >= 2);
     REQUIRE(dirs[0] == (fs::path(cwd) / ".claude" / "skills").string());
     REQUIRE(dirs[1] == (tmp.path() / "a" / ".claude" / "skills").string());
+}
+
+TEST_CASE("same name in two dirs keeps the first (nearer wins)", "[skill][loader]") {
+    TempDir tmp;
+    tmp.make_file("near/.claude/skills/dup/SKILL.md",
+                  "---\n"
+                  "name: dup\n"
+                  "description: near version\n"
+                  "---\n"
+                  "near body\n");
+    tmp.make_file("far/.claude/skills/dup/SKILL.md",
+                  "---\n"
+                  "name: dup\n"
+                  "description: far version\n"
+                  "---\n"
+                  "far body\n");
+    const auto near_dir = (tmp.path() / "near/.claude/skills").string();
+    const auto far_dir = (tmp.path() / "far/.claude/skills").string();
+
+    const auto cmds = load_skills_from_dirs({near_dir, far_dir});
+
+    REQUIRE(cmds.size() == 1);
+    REQUIRE(cmds[0]->description() == "near version");
+}
+
+TEST_CASE("alias conflict with another skill's name resolves to first", "[skill][loader]") {
+    TempDir tmp;
+    tmp.make_file("near/.claude/skills/dup/SKILL.md",
+                  "---\n"
+                  "name: dup\n"
+                  "description: near version\n"
+                  "aliases: shared\n"
+                  "---\n"
+                  "near body\n");
+    tmp.make_file("far/.claude/skills/other/SKILL.md",
+                  "---\n"
+                  "name: other\n"
+                  "description: far version\n"
+                  "aliases: shared\n"
+                  "---\n"
+                  "far body\n");
+    const auto near_dir = (tmp.path() / "near/.claude/skills").string();
+    const auto far_dir = (tmp.path() / "far/.claude/skills").string();
+
+    const auto cmds = load_skills_from_dirs({near_dir, far_dir});
+
+    // near: dup + shared；far: other（shared 冲突丢弃）
+    REQUIRE(cmds.size() == 3);
+}
+
+TEST_CASE("register_bundled_skill registers with Bundled source", "[skill][loader]") {
+    TempDir tmp;
+    tmp.make_file("bundled/alpha/SKILL.md",
+                  "---\n"
+                  "name: alpha\n"
+                  "description: built-in skill\n"
+                  "aliases: a\n"
+                  "---\n"
+                  "# Alpha\n"
+                  "Do alpha things\n");
+
+    CommandRegistry registry;
+    const auto count = register_bundled_skill(registry, (tmp.path() / "bundled" / "alpha").string());
+
+    REQUIRE(count == 2);
+    const auto cmd = registry.find_by_name("alpha");
+    REQUIRE(cmd != nullptr);
+    REQUIRE(cmd->type() == "prompt");
+    REQUIRE(cmd->loaded_from() == LoadSource::Bundled);
+    REQUIRE(registry.find_by_name("a") != nullptr);
+    REQUIRE(registry.find_by_name("a")->loaded_from() == LoadSource::Bundled);
+
+    const auto* prompt_cmd = dynamic_cast<const PromptCommand*>(cmd.get());
+    REQUIRE(prompt_cmd != nullptr);
+    const auto blocks = prompt_cmd->generate_prompt("", CommandContext{});
+    REQUIRE_FALSE(blocks.empty());
+    REQUIRE(blocks[0].text.find("Base directory for this skill:") != std::string::npos);
+}
+
+TEST_CASE("register_bundled_skill skips missing SKILL.md", "[skill][loader]") {
+    TempDir tmp;
+    fs::create_directories(tmp.path() / "bundled/empty");
+
+    CommandRegistry registry;
+    const auto count = register_bundled_skill(registry, (tmp.path() / "bundled" / "empty").string());
+
+    REQUIRE(count == 0);
+    REQUIRE(registry.size() == 0);
+}
+
+TEST_CASE("find_user_skill_dirs returns existing home dirs", "[skill][loader]") {
+    TempDir tmp;
+    tmp.make_file(".claude/skills/u1/SKILL.md", kSample);
+    tmp.make_file(".workx/skills/u2/SKILL.md", kSample);
+
+#if defined(_WIN32)
+    const char* env_var = "USERPROFILE";
+#else
+    const char* env_var = "HOME";
+#endif
+    const char* saved = std::getenv(env_var);
+    std::string saved_str = saved ? saved : "";
+    const auto set_env = [&](const std::string& v) {
+#if defined(_WIN32)
+        _putenv_s(env_var, v.c_str());
+#else
+        setenv(env_var, v.c_str(), 1);
+#endif
+    };
+
+    set_env(tmp.path().string());
+    const auto dirs = find_user_skill_dirs();
+    if (saved) {
+        set_env(saved_str);
+    }
+#if defined(_WIN32)
+    else {
+        _putenv_s(env_var, "");
+    }
+#else
+    else {
+        unsetenv(env_var);
+    }
+#endif
+
+    REQUIRE(dirs.size() == 2);
+    REQUIRE(dirs[0] == (tmp.path() / ".claude" / "skills").string());
+    REQUIRE(dirs[1] == (tmp.path() / ".workx" / "skills").string());
 }

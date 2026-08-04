@@ -25,6 +25,7 @@ struct SkillFrontmatter {
     std::optional<std::string> model;              ///< 指定模型
     bool user_invocable{true};                     ///< 是否用户可调用（/name）
     bool disable_model_invocation{false};          ///< 是否禁止模型自动调用
+    std::vector<std::string> paths;                ///< conditional 触发 glob（touch 匹配文件时激活）
 };
 
 /// @brief 解析结果：frontmatter + 正文

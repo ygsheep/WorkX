@@ -41,6 +41,16 @@ bool parse_bool(std::string_view value, bool fallback) {
     return fallback;
 }
 
+/// @brief 剥离成对引号（YAML 字符串字面量）
+std::string strip_quotes(std::string_view v) {
+    if (v.size() >= 2 &&
+        ((v.front() == '"' && v.back() == '"') ||
+         (v.front() == '\'' && v.back() == '\''))) {
+        return std::string(v.substr(1, v.size() - 2));
+    }
+    return std::string(v);
+}
+
 /// @brief 解析 aliases：支持 `a, b` 与 `[a, b]` 形式
 std::vector<std::string> parse_aliases(std::string_view value) {
     auto v = trim(value);
@@ -57,6 +67,15 @@ std::vector<std::string> parse_aliases(std::string_view value) {
         pos = comma + 1;
     }
     return aliases;
+}
+
+/// @brief 解析 paths：同 aliases 的列表形式，额外剥离引号（YAML 数组项常带引号）
+std::vector<std::string> parse_paths(std::string_view value) {
+    auto items = parse_aliases(value);
+    for (auto& item : items) {
+        item = strip_quotes(trim(item));
+    }
+    return items;
 }
 
 /// @brief 从正文首行派生描述（去掉 # 前缀与空白）
@@ -110,6 +129,7 @@ ParsedSkill parse_skill_content(const std::string& content, const std::string& d
 
     // 逐行解析 key: value
     size_t pos = 0;
+    std::string last_list_key;  // 最近一个列表 key（支持多行 `- item` 追加）
     while (pos <= front_part.size()) {
         const size_t nl = front_part.find('\n', pos);
         const auto line = front_part.substr(pos, nl == std::string_view::npos ? front_part.size() - pos : nl - pos);
@@ -118,8 +138,24 @@ ParsedSkill parse_skill_content(const std::string& content, const std::string& d
         const auto trimmed = trim(line);
         if (trimmed.empty() || trimmed.front() == '#') continue;
 
+        // 多行列表项：`- item` 追加到上一个列表 key
+        if (!last_list_key.empty() && trimmed.front() == '-') {
+            const auto item = trim(trimmed.substr(1));
+            if (!item.empty()) {
+                if (last_list_key == "paths") {
+                    result.frontmatter.paths.push_back(strip_quotes(item));
+                } else if (last_list_key == "aliases") {
+                    result.frontmatter.aliases.push_back(item);
+                }
+            }
+            continue;
+        }
+
         const size_t colon = trimmed.find(':');
-        if (colon == std::string::npos) continue;
+        if (colon == std::string::npos) {
+            last_list_key.clear();
+            continue;
+        }
 
         std::string key = trimmed.substr(0, colon);
         for (auto& c : key) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -128,22 +164,35 @@ ParsedSkill parse_skill_content(const std::string& content, const std::string& d
 
         if (key == "name") {
             if (!value.empty()) result.frontmatter.name = value;
+            last_list_key.clear();
         } else if (key == "description") {
             result.frontmatter.description = value;
+            last_list_key.clear();
         } else if (key == "aliases") {
             result.frontmatter.aliases = parse_aliases(value);
+            last_list_key = "aliases";
         } else if (key == "argument_hint") {
             result.frontmatter.argument_hint = value;
+            last_list_key.clear();
         } else if (key == "when_to_use") {
             result.frontmatter.when_to_use = value;
+            last_list_key.clear();
         } else if (key == "model") {
             result.frontmatter.model = value;
+            last_list_key.clear();
         } else if (key == "user_invocable") {
             result.frontmatter.user_invocable = parse_bool(value, true);
+            last_list_key.clear();
         } else if (key == "disable_model_invocation") {
             result.frontmatter.disable_model_invocation = parse_bool(value, false);
+            last_list_key.clear();
+        } else if (key == "paths") {
+            result.frontmatter.paths = parse_paths(value);
+            last_list_key = "paths";
+        } else {
+            // 未知字段忽略（扩展点：hooks 等后续实现）
+            last_list_key.clear();
         }
-        // 未知字段忽略（扩展点：paths/hooks 等一期不做）
     }
 
     if (result.frontmatter.description.empty()) {

@@ -75,3 +75,16 @@ TEST_CASE("non-skills commands are filtered", "[skill][prompt]") {
 
     REQUIRE(build_skills_prompt_section(registry).empty());
 }
+
+TEST_CASE("conditional skills (paths) are excluded from resident prompt", "[skill][prompt]") {
+    CommandRegistry registry;
+    registry.register_command(make_cmd("normal", "Resident", LoadSource::Skills));
+    auto cond = make_cmd("cond", "Conditional", LoadSource::Skills);
+    cond->set_paths({"src/**/*.tsx"});
+    registry.register_command(cond);
+
+    const auto section = build_skills_prompt_section(registry);
+
+    REQUIRE(section.find("- normal: Resident") != std::string::npos);
+    REQUIRE(section.find("cond") == std::string::npos);
+}

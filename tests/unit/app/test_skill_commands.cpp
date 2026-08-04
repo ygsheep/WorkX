@@ -7,6 +7,7 @@
 
 #include "app/command/skill_commands.h"
 #include "agent/command/inclaude/command.h"
+#include "agent/command/inclaude/executor.h"
 
 using namespace agent::command;
 
@@ -31,4 +32,23 @@ TEST_CASE("register_skill_commands loads repo skills", "[skill][commands]") {
     REQUIRE_FALSE(blocks.empty());
     REQUIRE(blocks[0].text.find("Base directory for this skill:") != std::string::npos);
     REQUIRE(blocks[0].text.find("cmake --preset default") != std::string::npos);
+}
+
+TEST_CASE("skill command execution requests model query", "[skill][commands]") {
+    auto registry = std::make_shared<CommandRegistry>();
+    register_skill_commands(*registry, SOURCE_DIR);
+
+    CommandExecutor executor(registry);
+    const auto result = executor.execute("/workx-build", CommandContext{});
+
+    // PromptCommand 展开后必须请求模型查询（而非本地回显），
+    // 否则 skill 内容不会发送给模型（回归：main.cpp 本地回显短路）
+    REQUIRE(result.should_query);
+    REQUIRE_FALSE(result.result.text.empty());
+    REQUIRE(result.result.text.find("cmake --preset default") != std::string::npos);
+
+    // 本地命令仍保持 should_query=false
+    CommandExecutor executor2(registry);
+    const auto clear_result = executor2.execute("/clear", CommandContext{});
+    REQUIRE_FALSE(clear_result.should_query);
 }

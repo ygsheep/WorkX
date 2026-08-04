@@ -557,6 +557,10 @@ static int run(int argc, char* argv[]) {
         namespace fs = std::filesystem;
         const auto cwd = fs::current_path().string();
         command::register_skill_commands(*registry, cwd);
+        // conditional skills：会话持有命令注册表（激活匹配用）
+        if (session) {
+            session->set_command_registry(registry);
+        }
         // SkillTool 在 factory 中以空 registry 注册，此处注入命令注册表
         if (session) {
             const auto tool_registry = session->tool_registry();
@@ -633,9 +637,9 @@ static int run(int argc, char* argv[]) {
                 return;
             }
 
-            // 命令有输出文本 → 直接发布
-            // is_local_command=true：本地命令输出不累加 token 统计
-            if (!result.output_text.empty()) {
+            // 本地命令有输出文本 → 直接发布（is_local_command=true：不累加 token 统计）
+            // PromptCommand（should_query=true）不在此分支：展开内容需发送给模型
+            if (!result.output_text.empty() && !result.should_query) {
                 EventBus::instance().publish_async(StreamTokenEvent{
                     .session_id = "default",
                     .content_delta = result.output_text,
@@ -656,9 +660,12 @@ static int run(int argc, char* argv[]) {
             // 需要调 LLM
             if (result.should_query) {
                 if (session) {
-                    // 使用处理后的文本（已展开 @file 引用为文件内容）
+                    // PromptCommand：展开内容（如 skill 全文）作为用户消息发送给模型
+                    // 其余场景：使用处理后的文本（已展开 @file 引用为文件内容）
                     std::string query_text;
-                    if (!result.messages.empty()) {
+                    if (!result.output_text.empty()) {
+                        query_text = result.output_text;
+                    } else if (!result.messages.empty()) {
                         for (size_t i = 0; i < result.messages.size(); ++i) {
                             if (i > 0) query_text += "\n\n";
                             query_text += result.messages[i];

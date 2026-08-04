@@ -84,6 +84,11 @@ public:
         return when_to_use_;
     }
 
+    /// 获取 conditional 触发路径 glob 列表
+    virtual const std::vector<std::string>& paths() const {
+        return paths_;
+    }
+
     /// 获取命令类型标识
     virtual const std::string& type() const = 0;
 
@@ -120,6 +125,10 @@ public:
         std::lock_guard<std::mutex> lock(m_mutex);
         when_to_use_ = std::move(v);
     }
+    void set_paths(std::vector<std::string> v) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        paths_ = std::move(v);
+    }
 
 protected:
     CommandBase() = default;
@@ -136,6 +145,7 @@ protected:
     std::optional<std::string> argument_hint_;
     std::optional<std::string> version_;
     std::optional<std::string> when_to_use_;
+    std::vector<std::string> paths_;      ///< conditional 触发路径 glob（空 = 非 conditional）
 
     std::function<bool()> is_enabled_;
     bool is_hidden_{false};

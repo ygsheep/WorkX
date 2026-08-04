@@ -10,6 +10,7 @@
 #include "agent/core/react_observer.h"
 #include "agent/api/i_stream_reader.h"
 #include "agent/compact/prefix_shape.h"  // DS_CACHE M-2: normalize_tools_schema
+#include "agent/skill/inclaude/conditional.h"
 #include "liblogger/logger.h"
 
 #include <cctype>
@@ -34,7 +35,8 @@ ReActLoop::ReActLoop(ICompletionProvider* provider,
                      ITaskManager* task_manager,
                      std::string cwd,
                      CacheAwareCompactor* external_compactor,
-                     IEventBus* event_bus)
+                     IEventBus* event_bus,
+                     skill::TouchCollector* touch_collector)
     : m_provider(provider)
     , m_registry(std::move(registry))
     , m_config(config)
@@ -45,6 +47,7 @@ ReActLoop::ReActLoop(ICompletionProvider* provider,
     , m_task_manager(task_manager)
     , m_event_bus(event_bus)
     , m_cwd(std::move(cwd))
+    , m_touch_collector(touch_collector)
 {
     // issue #15-F: 构造函数不变量从 assert 改为 throw，避免 Debug 构建直接 abort
     // 构造失败抛 std::invalid_argument 是 C++ 标准模式，调用方可用 try/catch 处理
@@ -566,6 +569,12 @@ ReActResult ReActLoop::run(
         ctx.task_manager_ptr = m_task_manager;
         // AskUserTool 事件发布 DI：注入事件总线（可选）
         ctx.event_bus_ptr = m_event_bus;
+        // conditional skills：注入 touch 回调（可选），工具上报访问过的文件
+        if (m_touch_collector) {
+            ctx.touch_callback = [collector = m_touch_collector](const std::string& path) {
+                collector->add(path);
+            };
+        }
 
         // 1. 同步发布所有 Action 步骤（UI 即时反馈工具调用开始）
         for (const auto& tu : thought.tool_uses) {
