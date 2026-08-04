@@ -6,6 +6,7 @@ target_sources(libworkx PRIVATE
     core/color_scheme.cpp
     core/screen.cpp
     core/display_buffer.cpp
+    core/platform/vt_input_decoder.cpp
 
     # input
     input/line_editor.cpp
