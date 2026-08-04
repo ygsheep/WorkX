@@ -5,6 +5,7 @@
  */
 
 #include "tui/core/platform/i_platform.h"
+#include "tui/core/platform/vt_input_decoder.h"
 
 #define WIN32_LEAN_AND_MEAN
 #ifndef NOMINMAX
@@ -18,6 +19,10 @@
 
 #ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
 #define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+#endif
+
+#ifndef ENABLE_VIRTUAL_TERMINAL_INPUT
+#define ENABLE_VIRTUAL_TERMINAL_INPUT 0x0200
 #endif
 
 namespace tui {
@@ -69,7 +74,11 @@ public:
             _setmode(_fileno(stdin), _O_U8TEXT);
             DWORD new_mode = m_original_input_mode;
             new_mode &= ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT);
+            // VT 输入模式：方向键/功能键以 ESC 序列到达，配合 bracketed paste 支持
+            new_mode |= ENABLE_VIRTUAL_TERMINAL_INPUT;
             SetConsoleMode(m_h_input, new_mode);
+            // 启用 bracketed paste：终端把粘贴内容包裹在 ESC[200~ / ESC[201~ 中
+            write_output("\x1b[?2004h");
         }
 
         // 创建手动复位事件，用于跨线程唤醒阻塞的 read_char
@@ -82,6 +91,9 @@ public:
 
     void disable_raw_mode() override {
         if (!m_raw_mode_enabled) return;
+
+        // 关闭 bracketed paste（在恢复终端模式之前发送，此时 VT 输出仍生效）
+        write_output("\x1b[?2004l");
 
         if (m_h_output) {
             SetConsoleMode(m_h_output, m_original_output_mode);
@@ -145,6 +157,7 @@ public:
                 wchar_t wc = record.Event.KeyEvent.uChar.UnicodeChar;
                 const DWORD ctrl_mask = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED;
                 const bool ctrl_pressed = (record.Event.KeyEvent.dwControlKeyState & ctrl_mask) != 0;
+                const bool shift_pressed = (record.Event.KeyEvent.dwControlKeyState & SHIFT_PRESSED) != 0;
 
                 // Ctrl 字母组合键：UnicodeChar 可能非 0（如 Ctrl+O=0x0F, Ctrl+C=0x03），
                 // 需在 wc==0 检查之前先拦截
@@ -154,8 +167,14 @@ public:
                         case 'O':       return KEY_CTRL_O;
                         case 'N':       return KEY_CTRL_N;
                         case 'D':       return KEY_CTRL_D;
+                        case VK_RETURN: return '\n';  // Ctrl+Enter：插入换行（不提交）
                         default:        break;  // 其他 Ctrl 组合键走默认逻辑
                     }
+                }
+
+                // Shift+Enter：插入换行（不提交）
+                if (shift_pressed && record.Event.KeyEvent.wVirtualKeyCode == VK_RETURN) {
+                    return '\n';
                 }
 
                 if (wc == 0) {
@@ -178,11 +197,52 @@ public:
                 }
                 if ((wc >= 0xDC00) && (wc <= 0xDFFF)) {
                     if (high_surrogate != 0) {
-                        return ((high_surrogate - 0xD800) << 10) + (wc - 0xDC00) + 0x10000;
+                        char32_t cp = ((high_surrogate - 0xD800) << 10) + (wc - 0xDC00) + 0x10000;
+                        high_surrogate = 0;
+                        // VT 输入模式下代理对直接喂解码器（粘贴内容可能含 emoji）
+                        switch (m_vt_decoder.feed(cp)) {
+                            case VtInputDecoder::Event::Char:
+                                return m_vt_decoder.code();
+                            default:
+                                continue;
+                        }
+                    }
+                    continue;
+                }
+
+                // 独立 ESC（非序列起始）：直接返回，避免进入解码器等待序列
+                if (wc == 0x1B) {
+                    high_surrogate = 0;
+                    INPUT_RECORD next{};
+                    DWORD peeked = 0;
+                    PeekConsoleInputW(m_h_input, &next, 1, &peeked);
+                    if (peeked == 0 || next.EventType != KEY_EVENT ||
+                        !next.Event.KeyEvent.bKeyDown ||
+                        (next.Event.KeyEvent.uChar.UnicodeChar != L'[' &&
+                         next.Event.KeyEvent.uChar.UnicodeChar != L'O')) {
+                        return 0x1B;
                     }
                 }
 
-                return static_cast<char32_t>(wc);
+                // 普通字符路径：清除残留的高代理（防御）
+                high_surrogate = 0;
+
+                // VT 输入模式（ENABLE_VIRTUAL_TERMINAL_INPUT）下 Ctrl 组合以控制字符到达
+                switch (wc) {
+                    case 0x03: return KEY_CTRL_C;
+                    case 0x0E: return KEY_CTRL_N;
+                    case 0x0F: return KEY_CTRL_O;
+                    case 0x04: return KEY_CTRL_D;
+                    default:   break;
+                }
+
+                // 喂解码器：方向键/功能键序列、bracketed paste 标记
+                switch (m_vt_decoder.feed(static_cast<char32_t>(wc))) {
+                    case VtInputDecoder::Event::Char:
+                        return m_vt_decoder.code();
+                    default:
+                        continue;  // None / PasteBegin / PasteEnd 内部消化
+                }
             }
         }
     }
@@ -290,6 +350,7 @@ private:
     DWORD m_original_output_mode = 0;
     DWORD m_original_input_mode = 0;
     bool m_raw_mode_enabled = false;
+    VtInputDecoder m_vt_decoder;    ///< VT 输入序列解码器
 };
 
 std::unique_ptr<IPlatform> create_platform() {
