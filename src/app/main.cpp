@@ -571,7 +571,12 @@ static int run(int argc, char* argv[]) {
                 }
             }
             // 注入 skills 列表到 system prompt（factory 构建时 registry 尚不存在）
-            const auto skills_section = skill::build_skills_prompt_section(*registry);
+            // agent 过滤：仅注入与当前 agent（config agent.active）匹配的 skill
+            const auto active_agent = cfg.get_or<std::string>(keys::AGENT_ACTIVE, "");
+            const auto skills_section = skill::build_skills_prompt_section(
+                *registry,
+                active_agent.empty() ? std::nullopt
+                                     : std::optional<std::string>{active_agent});
             if (!skills_section.empty()) {
                 session->set_system_prompt(session->system_prompt() + skills_section);
             }

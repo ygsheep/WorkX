@@ -13,6 +13,8 @@
 #include "agent/command/inclaude/command.h"
 #include "agent/command/inclaude/registry.h"
 #include "agent/skill/inclaude/conditional.h"
+#include "agent/skill/inclaude/hooks.h"
+#include "app/config/app_config.h"
 #include "core/task/task_manager.h"
 #include "core/config/config_manager.h"
 #include "core/utils/uuid.h"  // 项目会话恢复：UUID 生成
@@ -631,18 +633,32 @@ void ChatSession::run_completion(const std::string& user_text,
             // 2. 匹配激活的 skill 追加为用户消息前缀（已激活过的不重复注入）
             auto activated = skill::activate_conditional_skills(
                 touched, m_command_registry->get_by_type("prompt"), m_cwd);
+            // 3. agent 过滤：声明了 agent 且与当前 agent 不符 → 跳过激活
+            const auto active_agent =
+                m_config_manager.get().get_or<std::string>(agent::keys::AGENT_ACTIVE, "");
             std::string prefix;
             for (const auto& sk : activated) {
                 if (m_activated_skills.contains(sk->name())) continue;
+                if (sk->agent().has_value() &&
+                    (active_agent.empty() || sk->agent().value() != active_agent)) continue;
                 command::CommandContext sctx;
                 sctx.cwd = m_cwd;
                 sctx.session_id = m_session_id;
                 const auto blocks = sk->generate_prompt("", sctx);
+                std::string body;
                 for (const auto& b : blocks) {
-                    prefix += b.text;
-                    prefix += "\n";
+                    body += b.text;
+                    body += "\n";
                 }
-                prefix = "[Activated skill: " + sk->name() + "]\n" + prefix + "\n";
+                // PreActivate hooks：激活时执行，输出并入激活块
+                if (!sk->hooks().empty()) {
+                    const auto hook_lines = skill::run_preactivate_hooks(sk->hooks(), m_cwd);
+                    const auto hook_block = skill::format_hook_output(hook_lines);
+                    if (!hook_block.empty()) {
+                        body = "[skill hooks]\n" + hook_block + "\n" + body;
+                    }
+                }
+                prefix = "[Activated skill: " + sk->name() + "]\n" + prefix + body + "\n";
                 m_activated_skills.insert(sk->name());
             }
             if (!prefix.empty()) {

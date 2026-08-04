@@ -22,6 +22,7 @@ set(UNIT_TEST_SOURCES
     agent/skill/test_skill_loader.cpp
     agent/skill/test_skill_prompt.cpp
     agent/skill/test_conditional.cpp
+    agent/skill/test_hooks.cpp
     agent/model/test_provider_preset.cpp
     agent/model/test_model_config.cpp
     agent/model/test_model_catalog.cpp

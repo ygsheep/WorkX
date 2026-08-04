@@ -117,6 +117,41 @@ TEST_CASE("multiline aliases strip yaml quotes", "[skill][frontmatter]") {
     REQUIRE(parsed.frontmatter.paths == std::vector<std::string>{"src/**/*.ts"});
 }
 
+TEST_CASE("context agent and hooks fields parse", "[skill][frontmatter]") {
+    const std::string content =
+        "---\n"
+        "context: 处理 React 组件时\n"
+        "agent: frontend\n"
+        "hooks: echo a, echo b\n"
+        "---\n";
+
+    const auto parsed = parse_skill_content(content, "dir");
+    REQUIRE(parsed.frontmatter.context.value() == "处理 React 组件时");
+    REQUIRE(parsed.frontmatter.agent.value() == "frontend");
+    REQUIRE(parsed.frontmatter.hooks == std::vector<std::string>{"echo a", "echo b"});
+}
+
+TEST_CASE("multiline hooks strip quotes", "[skill][frontmatter]") {
+    const std::string content =
+        "---\n"
+        "hooks:\n"
+        "- \"echo one\"\n"
+        "- 'echo two'\n"
+        "---\n";
+
+    const auto parsed = parse_skill_content(content, "dir");
+    REQUIRE(parsed.frontmatter.hooks == std::vector<std::string>{"echo one", "echo two"});
+}
+
+TEST_CASE("context agent hooks absent by default", "[skill][frontmatter]") {
+    const std::string content = "---\nname: plain\n---\n";
+
+    const auto parsed = parse_skill_content(content, "dir");
+    REQUIRE_FALSE(parsed.frontmatter.context.has_value());
+    REQUIRE_FALSE(parsed.frontmatter.agent.has_value());
+    REQUIRE(parsed.frontmatter.hooks.empty());
+}
+
 TEST_CASE("bool parsing variants", "[skill][frontmatter]") {
     const std::string content =
         "---\n"

@@ -142,6 +142,8 @@ ParsedSkill parse_skill_content(const std::string& content, const std::string& d
                     result.frontmatter.paths.push_back(strip_quotes(item));
                 } else if (last_list_key == "aliases") {
                     result.frontmatter.aliases.push_back(strip_quotes(item));
+                } else if (last_list_key == "hooks") {
+                    result.frontmatter.hooks.push_back(strip_quotes(item));
                 }
             }
             continue;
@@ -173,6 +175,15 @@ ParsedSkill parse_skill_content(const std::string& content, const std::string& d
         } else if (key == "when_to_use") {
             result.frontmatter.when_to_use = value;
             last_list_key.clear();
+        } else if (key == "context") {
+            result.frontmatter.context = value;
+            last_list_key.clear();
+        } else if (key == "agent") {
+            result.frontmatter.agent = value;
+            last_list_key.clear();
+        } else if (key == "hooks") {
+            result.frontmatter.hooks = parse_paths(value);
+            last_list_key = "hooks";
         } else if (key == "model") {
             result.frontmatter.model = value;
             last_list_key.clear();
@@ -186,7 +197,7 @@ ParsedSkill parse_skill_content(const std::string& content, const std::string& d
             result.frontmatter.paths = parse_paths(value);
             last_list_key = "paths";
         } else {
-            // 未知字段忽略（扩展点：hooks 等后续实现）
+            // 未知字段忽略（扩展点）
             last_list_key.clear();
         }
     }

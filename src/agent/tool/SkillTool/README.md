@@ -202,7 +202,7 @@ if (r.is_ok()) {
 | 来源层级 | 5 类（managed/user/project/additional/commands） | 3 类（项目级向上遍历 + `~/.claude/skills` + `~/.workx/skills`） | 简化 |
 | baseDir 前缀 | ✅ | ✅ | 一致 |
 | aliases | ✅ | ✅ | 注册为同内容命令 |
-| frontmatter 字段 | name/description/aliases/argument_hint/when_to_use/model/user_invocable/disable_model_invocation 等 | 上述 8 个 | 一致（超集字段忽略） |
+| frontmatter 字段 | name/description/aliases/argument_hint/when_to_use/model/user_invocable/disable_model_invocation/context/agent/hooks 等 | 上述 11 个 | 一致（超集字段忽略） |
 | conditional skills（paths） | ✅ | ✅ | touch 回调 + `<file path>` 引用匹配 |
 | bundled skills 程序化注册 | ✅ | ✅ | `register_bundled_skill` |
 | MCP skill | ✅ | ❌ | 未实现 |
@@ -215,9 +215,10 @@ if (r.is_ok()) {
 
 | 模块 | 文件 | 覆盖 |
 |------|------|------|
-| frontmatter | test_skill_frontmatter.cpp | 完整字段/缺省 name/无 frontmatter/未闭合/aliases 格式/bool 变体/CRLF（11 用例） |
-| 加载器 | test_skill_loader.cpp | 有效加载/别名共享 prompt/baseDir 前缀/缺 SKILL.md 跳过/name 回退/去重/向上遍历（7 用例） |
-| 提示词小节 | test_skill_prompt.cpp | 空 registry/列出与描述/过滤条件（6 用例） |
+| frontmatter | test_skill_frontmatter.cpp | 完整字段/缺省 name/无 frontmatter/未闭合/aliases 格式/context+agent+hooks/bool 变体/CRLF（14 用例） |
+| 加载器 | test_skill_loader.cpp | 有效加载/别名共享 prompt/baseDir 前缀/缺 SKILL.md 跳过/name 回退/去重/向上遍历/字段附着（8 用例） |
+| 提示词小节 | test_skill_prompt.cpp | 空 registry/列出与描述/context 注入/agent 过滤（8 用例） |
+| 钩子执行器 | test_hooks.cpp | shell 执行/失败不中断/空跳过/输出格式化（4 用例） |
 | SkillTool | test_skill_tool.cpp | 按名返回/未找到/参数缺失/非 prompt 拒绝（4 用例） |
 | 端到端 | test_skill_commands.cpp | register_skill_commands 加载仓库真实 .claude/skills（1 用例） |
 
@@ -231,7 +232,7 @@ if (r.is_ok()) {
 | registry 延迟注入（`set_registry`） | CommandRegistry 在 main.cpp 晚于 factory 工具注册创建，先注册后注入 |
 | `weakly_canonical` 去重 | 容忍 symlink 场景下同一 SKILL.md 被多个目录发现 |
 | frontmatter 手写解析器 | 字段全为扁平标量，不引入 yaml-cpp 依赖；嵌套需求出现再升级 |
-| 过滤条件对齐 `getSlashCommandToolSkills` | 仅模型可调用（非 disabled、有描述或 when_to_use）的 skill 进 system prompt |
+| 过滤条件对齐 `getSlashCommandToolSkills` | 仅模型可调用（非 disabled、有描述或 when_to_use/context）且声明 agent 匹配当前 `agent.active` 的 skill 进 system prompt |
 | 别名注册为同内容命令 | 共享同一 `PromptGenerator`（std::function 可复制），无需新类型 |
 
 ---
@@ -254,5 +255,8 @@ if (r.is_ok()) {
 
 ### 中期
 
-- [ ] `hooks` / `context` / `agent` frontmatter 字段
+- [x] `hooks` / `context` / `agent` frontmatter 字段
+  - `context`：注入 Available skills 小节（`(context: ...)`，description 为空时兜底）
+  - `agent`：声明关联 agent；注入与 conditional 激活均按配置 `agent.active` 过滤（不匹配不注入/不激活；用户显式 `/name` 调用不受限）
+  - `hooks`：PreActivate 钩子（shell 命令，多行 `- cmd` 或逗号分隔）；用户显式调用（executor）与 conditional 激活（chat_session）时执行，输出并入提示块；单条失败不中断
 - [ ] MCP skill 支持

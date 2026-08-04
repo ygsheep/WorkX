@@ -88,3 +88,48 @@ TEST_CASE("conditional skills (paths) are excluded from resident prompt", "[skil
     REQUIRE(section.find("- normal: Resident") != std::string::npos);
     REQUIRE(section.find("cond") == std::string::npos);
 }
+
+TEST_CASE("context is appended when present", "[skill][prompt]") {
+    CommandRegistry registry;
+    auto cmd = make_cmd("fe", "Frontend skill", LoadSource::Skills);
+    cmd->set_context("React 组件场景");
+    registry.register_command(cmd);
+
+    const auto section = build_skills_prompt_section(registry);
+
+    REQUIRE(section.find("(context: React 组件场景)") != std::string::npos);
+}
+
+TEST_CASE("description-empty skill uses context as fallback", "[skill][prompt]") {
+    CommandRegistry registry;
+    auto cmd = make_cmd("fe", "", LoadSource::Skills);
+    cmd->set_context("React 组件场景");
+    registry.register_command(cmd);
+
+    const auto section = build_skills_prompt_section(registry);
+
+    REQUIRE(section.find("- fe: React 组件场景") != std::string::npos);
+}
+
+TEST_CASE("agent-scoped skills are filtered by active agent", "[skill][prompt]") {
+    CommandRegistry registry;
+    registry.register_command(make_cmd("generic", "All agents", LoadSource::Skills));
+    auto fe = make_cmd("fe", "Frontend only", LoadSource::Skills);
+    fe->set_agent("frontend");
+    registry.register_command(fe);
+    auto be = make_cmd("be", "Backend only", LoadSource::Skills);
+    be->set_agent("backend");
+    registry.register_command(be);
+
+    // 无 agent 上下文：声明了 agent 的 skill 全部不注入
+    const auto no_agent = build_skills_prompt_section(registry);
+    REQUIRE(no_agent.find("generic") != std::string::npos);
+    REQUIRE(no_agent.find("fe") == std::string::npos);
+    REQUIRE(no_agent.find("be") == std::string::npos);
+
+    // 匹配 agent：仅注入对应 skill
+    const auto frontend = build_skills_prompt_section(registry, std::string("frontend"));
+    REQUIRE(frontend.find("generic") != std::string::npos);
+    REQUIRE(frontend.find("fe") != std::string::npos);
+    REQUIRE(frontend.find("be") == std::string::npos);
+}

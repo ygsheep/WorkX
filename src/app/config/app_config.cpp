@@ -147,6 +147,15 @@ void register_config_defaults(ConfigManager& cfg) {
         .type = ConfigSchema::Type::String
     });
 
+    // === Agent ===
+    cfg.register_schema({
+        .key = keys::AGENT_ACTIVE,
+        .description = "Current agent name (empty = no agent context); "
+                       "skills declaring an agent field only inject/activate when it matches",
+        .default_value = std::string(""),
+        .type = ConfigSchema::Type::String
+    });
+
     // === Logging ===
     cfg.register_schema({
         .key = keys::LOG_LEVEL,

@@ -113,6 +113,9 @@ std::vector<std::shared_ptr<command::PromptCommand>> build_commands(
         cmd->set_user_invocable(fm.user_invocable);
         cmd->set_disable_model_invocation(fm.disable_model_invocation);
         if (fm.argument_hint) cmd->set_argument_hint(*fm.argument_hint);
+        if (fm.context) cmd->set_context(*fm.context);
+        if (fm.agent) cmd->set_agent(*fm.agent);
+        if (!fm.hooks.empty()) cmd->set_hooks(fm.hooks);
         if (!fm.paths.empty()) cmd->set_paths(fm.paths);
         return cmd;
     };

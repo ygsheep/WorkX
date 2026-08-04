@@ -78,6 +78,27 @@ TEST_CASE("load a valid skill from dir", "[skill][loader]") {
     REQUIRE(cmds[0]->type() == "prompt");
 }
 
+TEST_CASE("loader attaches context agent hooks", "[skill][loader]") {
+    TempDir tmp;
+    tmp.make_file("proj/.claude/skills/ctx/SKILL.md",
+        "---\n"
+        "name: ctx\n"
+        "context: React 场景\n"
+        "agent: frontend\n"
+        "hooks:\n"
+        "- echo one\n"
+        "---\n"
+        "body\n");
+    const auto dir = (tmp.path() / "proj/.claude/skills").string();
+
+    const auto cmds = load_skills_from_dirs({dir});
+
+    REQUIRE(cmds.size() == 1);
+    REQUIRE(cmds[0]->context().value() == "React 场景");
+    REQUIRE(cmds[0]->agent().value() == "frontend");
+    REQUIRE(cmds[0]->hooks() == std::vector<std::string>{"echo one"});
+}
+
 TEST_CASE("aliases become separate commands sharing the prompt", "[skill][loader]") {
     TempDir tmp;
     tmp.make_file("proj/.claude/skills/sample/SKILL.md", kSample);
