@@ -49,6 +49,7 @@ set(UNIT_TEST_SOURCES
     tui/core/test_display_buffer.cpp
     tui/core/test_terminal_overlay.cpp
     tui/core/test_tui_state.cpp
+    tui/core/test_vt_input_decoder.cpp
     tui/model/test_token_stats_model.cpp
     tui/model/test_tool_call_tracker.cpp
     tui/render/test_markdown_renderer.cpp
