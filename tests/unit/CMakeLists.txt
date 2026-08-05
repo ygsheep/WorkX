@@ -65,6 +65,7 @@ set(UNIT_TEST_SOURCES
     tui/utils/test_utf8_utils.cpp
     tui/widgets/test_status_bar.cpp
     tui/widgets/test_choice_panel.cpp
+    tui/widgets/test_command_panel.cpp
 )
 
 add_executable(workx_unit_tests ${UNIT_TEST_SOURCES})

@@ -75,7 +75,9 @@ void BottomBarManager::set_mode(BottomBarMode mode) {
             get_status_bar()->render();
             break;
         case BottomBarMode::COMMAND_PANEL:
-            m_terminal->begin_overlay(h - 8, h - 3);
+            // 面板区域 [h-12, h-3]：10 行显示上限（CommandPanel MAX_DISPLAY），
+            // 底行 h-3 与输入行(h-1)/状态栏区域保持隔离，快照恢复完整
+            m_terminal->begin_overlay(h - 12 > 1 ? h - 12 : 1, h - 3);
             m_command_panel->set_visible(true);
             m_command_panel->render();
             break;
@@ -83,7 +85,7 @@ void BottomBarManager::set_mode(BottomBarMode mode) {
             // SelectPanel 自己管理渲染
             break;
         case BottomBarMode::FILE_SEARCH_PANEL:
-            m_terminal->begin_overlay(h - 8, h - 3);
+            m_terminal->begin_overlay(h - 12 > 1 ? h - 12 : 1, h - 3);
             m_file_search_panel->set_visible(true);
             m_file_search_panel->render();
             break;

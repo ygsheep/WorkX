@@ -93,22 +93,28 @@ void CommandPanel::render() {
         return;
     }
 
-    static constexpr int MAX_DISPLAY = 7;
+    static constexpr int MAX_DISPLAY = 10;
 
     int height = m_terminal->get_terminal_height();
     int total = static_cast<int>(m_filtered.size());
+    // 显示行数上限：MAX_DISPLAY + 屏幕可用行（面板区域 [1, h-3]，输入行在 h-1）
     int display_count = std::min(MAX_DISPLAY, total);
+    int max_rows = height - 4;  // 行 1..h-3 可用（h-4 保底 1 行，h>=5）
+    if (display_count > max_rows) display_count = max_rows;
+    if (display_count < 1) display_count = 1;
 
     // 可滚动窗口：将选中项保持在可视区域中间
     int scroll_offset = m_selected - display_count / 2;
     if (scroll_offset < 0) scroll_offset = 0;
     if (scroll_offset + display_count > total) scroll_offset = total - display_count;
 
-    // 先清除所有 MAX_DISPLAY 行，避免过滤后旧行残留
-    int clear_start = height - 1 - MAX_DISPLAY;
+    // 先清除所有 MAX_DISPLAY 行，避免过滤后旧行残留。
+    // 面板底行固定 h-3（overlay 保护区 [h-12, h-3] 内），不得越界到 h-2/h-1，
+    // 否则关闭面板后该行无法由 overlay 快照恢复
+    int clear_start = height - 2 - MAX_DISPLAY;
     if (clear_start < 1) clear_start = 1;
 
-    int render_start = height - 1 - display_count;
+    int render_start = height - 2 - display_count;
     if (render_start < 1) render_start = 1;
 
     std::string content;
@@ -158,8 +164,12 @@ void CommandPanel::render() {
         content += std::string(get_color_ansi(ColorRole::CommandPanelDesc));
         content += " ";
 
-        // 描述按终端剩余宽度截断，防止超长描述物理换行导致面板行错位/残留
-        int max_desc_width = term_w - pad_base - 2;
+        // 描述按终端剩余宽度截断，防止超长描述物理换行导致面板行错位/残留。
+        // 行头固定宽度 = " /" + name + padding（可能为负不输出）+ 间隔空格，
+        // 行宽必须 ≤ term_w - 1，否则长命令名（如 artifacts-builder）会超宽折行
+        int header_w = 1 + static_cast<int>(cmd.name.size())
+                     + (padding > 0 ? padding : 0) + 1;
+        int max_desc_width = term_w - header_w - 1;
         if (max_desc_width < 4) max_desc_width = 4;
         if (display_width(cmd.description) > max_desc_width) {
             content += truncate_to_width(cmd.description, max_desc_width - 1);
