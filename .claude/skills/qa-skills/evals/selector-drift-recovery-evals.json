@@ -1,0 +1,239 @@
+{
+  "skill": "selector-drift-recovery",
+  "version": "2.1",
+  "evals": [
+    {
+      "id": "sdr-001",
+      "prompt": "Our team just shipped a component library redesign and now 23 tests are failing with TimeoutError on broken locators. Walk me through the process to bulk-regenerate selectors.",
+      "expected_patterns": [
+        "Phase 1 — Snapshot the old DOM OR old-dom snapshot",
+        "Phase 2 — Snapshot the new DOM OR new-dom snapshot",
+        "Phase 3 — Identify broken selectors OR capture failures",
+        "Phase 4 — Generate replacement candidates OR role-first",
+        "Phase 5 — Apply OR full affected suite",
+        "Phase 6 — Ship the PR OR per-change evidence",
+        "confidence score OR stability rubric"
+      ],
+      "anti_patterns": [
+        "auto-applying score-1 or score-2 candidates",
+        "single commit with all changes",
+        "no screenshots with PR",
+        "skipping validation step",
+        "just fixing one flaky test"
+      ],
+      "tags": [
+        "workflow",
+        "phases",
+        "bulk-update"
+      ]
+    },
+    {
+      "id": "sdr-002",
+      "prompt": "I have a Playwright JSON report showing 15 failed tests after a Tailwind CSS upgrade. Extract the broken locators, their line numbers, and what they're trying to interact with.",
+      "expected_patterns": [
+        "JSON reporter OR locator string",
+        "TimeoutError OR locator.* exceeded",
+        "line number OR source location",
+        "inferred intent OR what assertion follows",
+        "table OR structured output",
+        "Group the results by test file OR group by file"
+      ],
+      "anti_patterns": [
+        "guessing intent without reading code",
+        "mixing score-1 candidates into result",
+        "no line numbers in output",
+        "unmarked intent"
+      ],
+      "tags": [
+        "phase-3",
+        "broken-locators",
+        "analysis"
+      ]
+    },
+    {
+      "id": "sdr-003",
+      "prompt": "I need to snapshot the old DOM before our redesign. We have a green CI artifact with Playwright traces from the last successful run. How do I extract and save the HTML snapshots?",
+      "expected_patterns": [
+        "CI artifact OR trace extraction",
+        "npx playwright show-trace OR trace files",
+        "page.content() OR ariaSnapshot OR innerHTML",
+        "DOM snapshot panel OR snapshot panel OR ariaSnapshot",
+        ".drift-recovery/old OR snapshot directory",
+        "every page or component OR per affected unit"
+      ],
+      "anti_patterns": [
+        "Copy HTML at this step",
+        "no reference to CI artifacts OR baseline",
+        "manual DOM reconstruction",
+        "skipping snapshot phase"
+      ],
+      "tags": [
+        "phase-1",
+        "snapshots",
+        "ci-artifacts"
+      ]
+    },
+    {
+      "id": "sdr-004",
+      "prompt": "The old selector was 'locator(\".order-summary > h2\")' with intent 'verify order total visible'. Generate replacement candidates with confidence scores for the new DOM.",
+      "expected_patterns": [
+        "getByRole OR getByLabel OR getByTestId",
+        "data-testid OR score 5",
+        "accessible name OR score 4",
+        "region-scoped OR neighbor context OR score 3",
+        "visible text only OR score 2",
+        "CSS class OR score 1",
+        "no replacement OR score 0 OR human review",
+        "confidence score OR score, rationale"
+      ],
+      "anti_patterns": [
+        "recommending score-1 as primary candidate",
+        "no confidence scoring",
+        "xpath OR css= selectors in replacement",
+        ":near(",
+        ":right-of(",
+        "not preferring getByRole"
+      ],
+      "tags": [
+        "phase-4",
+        "candidates",
+        "confidence-scoring"
+      ]
+    },
+    {
+      "id": "sdr-005",
+      "prompt": "I've applied 47 selector replacements to a feature branch. Now I need to validate the full test suite before merging. What should I do if some tests pass and some fail?",
+      "expected_patterns": [
+        "full affected suite",
+        "revert that one OR mark the test for human review",
+        "keep the replacement",
+        "N recovered automatically OR M flagged",
+        "clear marking of flagged tests",
+        "Recovered tests pass"
+      ],
+      "anti_patterns": [
+        "silently including failed tests",
+        "not reverting individual broken replacements",
+        "skipping the full suite run",
+        "auto-merging without green CI"
+      ],
+      "tags": [
+        "phase-5",
+        "validation",
+        "test-pass"
+      ]
+    },
+    {
+      "id": "sdr-006",
+      "prompt": "Create a PR description for a selector recovery after a redesign. Include summary counts, per-file change tables with confidence scores, and guidance for the reviewer.",
+      "expected_patterns": [
+        "Trigger OR Link to refactor PR",
+        "Summary OR N test files, M selectors changed",
+        "Per-file changes OR table with line, old, new, score",
+        "Flagged for review OR manual review section",
+        "How to review OR screenshot verification",
+        "confidence score OR screenshot URL",
+        "chore(tests) OR PR title"
+      ],
+      "anti_patterns": [
+        "no confidence scores in table",
+        "no screenshots attached",
+        "all changes in one block without grouping",
+        "no guidance for reviewer",
+        "flagged tests mixed with recovered ones"
+      ],
+      "tags": [
+        "phase-6",
+        "pr-structure",
+        "documentation"
+      ]
+    },
+    {
+      "id": "sdr-007",
+      "prompt": "After recovering selectors, our average selector stability score dropped from 3.7 to 3.2. What went wrong?",
+      "expected_patterns": [
+        "score-2 replacements OR Auto-applying score",
+        "not preferring getByRole OR role-first",
+        "CSS class OR Score-2/CSS candidates",
+        "not ratcheting up stability after recovery",
+        "recovered tests should have higher score",
+        "update or revert low-scoring candidates"
+      ],
+      "anti_patterns": [
+        "accepting lower stability as acceptable",
+        "score-1 candidates auto-applied",
+        "no review of candidate quality"
+      ],
+      "tags": [
+        "quality",
+        "stability-rubric",
+        "anti-pattern"
+      ]
+    },
+    {
+      "id": "sdr-008",
+      "prompt": "Our designer removed the product carousel entirely in the redesign. Should we regenerate the selector for the carousel 'next' button, or handle this differently?",
+      "expected_patterns": [
+        "deletion pile OR tests deleted",
+        "refactor removed a feature OR no longer exist",
+        "prune its tests OR prune those tests",
+        "Phase 6 OR deleted tests section",
+        "not regenerating selectors for missing elements"
+      ],
+      "anti_patterns": [
+        "generating replacement for deleted component",
+        "keeping tests for removed features",
+        "not marking as deletion",
+        "silently reverting without documentation"
+      ],
+      "tags": [
+        "phase-6",
+        "feature-deletion",
+        "pruning"
+      ]
+    },
+    {
+      "id": "sdr-009",
+      "prompt": "I have 200 broken selectors across 50 test files. Is selector-drift-recovery the right skill?",
+      "expected_patterns": [
+        "bulk update OR many selectors",
+        "event-driven OR refactor shipped OR redesign",
+        "not single flaky test OR test-reliability",
+        "split by area OR split PR OR review scope",
+        "too large to review in one sitting OR gate"
+      ],
+      "anti_patterns": [
+        "using test-reliability for mass update",
+        "one giant PR with 200 changes",
+        "no mention of review scope"
+      ],
+      "tags": [
+        "scoping",
+        "skill-fit",
+        "review-capacity"
+      ]
+    },
+    {
+      "id": "sdr-010",
+      "prompt": "My team says we should auto-merge the selector recovery PR in CI once all tests pass. Is that appropriate?",
+      "expected_patterns": [
+        "Auto-merging the recovery OR Require a reviewer",
+        "PR is the deliverable OR PR .*is.* the artifact",
+        "eyeballing the per-change evidence",
+        "per-change screenshot is the only check OR Check each screenshot",
+        "need a human signoff OR Confidence-scored updates need",
+        "anti-pattern OR not recommended"
+      ],
+      "anti_patterns": [
+        "auto-merge without review",
+        "CI auto-approval",
+        "skipping human verification"
+      ],
+      "tags": [
+        "anti-pattern",
+        "review-gate",
+        "process"
+      ]
+    }
+  ]
+}

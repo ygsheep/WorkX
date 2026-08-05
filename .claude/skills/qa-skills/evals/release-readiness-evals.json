@@ -1,0 +1,219 @@
+{
+  "skill": "release-readiness",
+  "version": "2.0",
+  "evals": [
+    {
+      "id": "rr-001",
+      "prompt": "Design a go/no-go checklist for releasing a payment features update to production",
+      "expected_patterns": [
+        "CI pipeline.* OR pipelines green",
+        "smoke test",
+        "P0/P1 OR P0 OR P1",
+        "rollback",
+        "feature flag",
+        "blast radius",
+        "evidence"
+      ],
+      "anti_patterns": [
+        "seems ready",
+        "looks fine"
+      ],
+      "tags": [
+        "checklist",
+        "process",
+        "evidence-based"
+      ]
+    },
+    {
+      "id": "rr-002",
+      "prompt": "Create a smoke test suite for an e-commerce application with 5-8 tests",
+      "expected_patterns": [
+        "homepage OR 200",
+        "log in OR login OR authentication",
+        "cart OR purchase OR checkout",
+        "search OR product page OR dashboard",
+        "API",
+        "under 5 minutes OR 5 minutes",
+        "edge case"
+      ],
+      "anti_patterns": [
+        "sleep(3000) OR waitForTimeout",
+        "assert exact copy",
+        "validate every field"
+      ],
+      "tags": [
+        "smoke-test",
+        "design",
+        "critical-paths"
+      ]
+    },
+    {
+      "id": "rr-003",
+      "prompt": "Define rollback criteria and automated triggers for a production deployment",
+      "expected_patterns": [
+        "2x baseline OR 3x baseline",
+        "P95 OR latency",
+        "5 min OR 5 minutes",
+        "3 consecutive OR consecutive failures",
+        "customer-reported OR data integrity OR security",
+        "BEFORE OR before deployment OR in advance"
+      ],
+      "anti_patterns": [
+        "something looks wrong",
+        "decide during the incident"
+      ],
+      "tags": [
+        "rollback",
+        "incident-response",
+        "thresholds"
+      ]
+    },
+    {
+      "id": "rr-004",
+      "prompt": "Design a staged rollout plan for a new machine learning recommendation feature",
+      "expected_patterns": [
+        "1%",
+        "10%",
+        "50%",
+        "100%",
+        "canary",
+        "promotion criteria OR promote",
+        "error rate",
+        "business metric"
+      ],
+      "anti_patterns": [
+        "big-bang OR big bang",
+        "gut feeling"
+      ],
+      "tags": [
+        "staged-rollout",
+        "canary",
+        "gradual-deployment"
+      ]
+    },
+    {
+      "id": "rr-005",
+      "prompt": "You have a database migration that is irreversible. Document the rollback strategy",
+      "expected_patterns": [
+        "forward-fix OR forward fix",
+        "dual-write OR dual write OR shadow migration",
+        "point-in-time recovery OR backup",
+        "data loss"
+      ],
+      "anti_patterns": [
+        "rollback is always possible",
+        "just roll back the migration"
+      ],
+      "tags": [
+        "rollback",
+        "database",
+        "data-migrations"
+      ]
+    },
+    {
+      "id": "rr-006",
+      "prompt": "Outline post-deployment verification steps immediately after going live",
+      "expected_patterns": [
+        "0-15 OR immediate",
+        "smoke test",
+        "error rate",
+        "synthetic monitoring OR latency",
+        "business metric",
+        "curl",
+        "sentry OR datadog"
+      ],
+      "anti_patterns": [
+        "deploy and ignore",
+        "deploy and move on"
+      ],
+      "tags": [
+        "post-deployment",
+        "monitoring",
+        "verification"
+      ]
+    },
+    {
+      "id": "rr-007",
+      "prompt": "Set up feature flag gradual rollout for a redesigned checkout flow",
+      "expected_patterns": [
+        "flag OFF OR flag off",
+        "dogfooding OR internal users",
+        "1%",
+        "10%, 25%, 50%, 100% OR 25%",
+        "remove the flag OR 1 week",
+        "LaunchDarkly OR Statsig OR GrowthBook OR Unleash OR Flagsmith"
+      ],
+      "anti_patterns": [
+        "flip.* to 100% immediately",
+        "keep.* flag.* indefinitely OR never remove"
+      ],
+      "tags": [
+        "feature-flags",
+        "gradual-rollout",
+        "flag-management"
+      ]
+    },
+    {
+      "id": "rr-008",
+      "prompt": "You're releasing an AI feature. Design the rollout and monitoring approach",
+      "expected_patterns": [
+        "prompt.* version OR model ID",
+        "AI Configs OR feature-flag JSON OR LaunchDarkly",
+        "kill switch",
+        "hallucination OR jailbreak",
+        "cost per request OR circuit breaker",
+        "fallback"
+      ],
+      "anti_patterns": [
+        "treat.* like standard feature",
+        "no kill switch"
+      ],
+      "tags": [
+        "ai-features",
+        "llm",
+        "ai-rollout"
+      ]
+    },
+    {
+      "id": "rr-009",
+      "prompt": "Write a release communication message when rolling back a production deployment due to elevated error rates",
+      "expected_patterns": [
+        "[Rollback] OR Rollback",
+        "ROLLED BACK",
+        "Reason:",
+        "Impact:",
+        "running previous version OR Current state",
+        "Next steps OR investigation"
+      ],
+      "anti_patterns": [
+        "something went wrong",
+        "no next steps"
+      ],
+      "tags": [
+        "communication",
+        "rollback",
+        "incident"
+      ]
+    },
+    {
+      "id": "rr-010",
+      "prompt": "A teammate says 'we skipped smoke tests because the CI pipeline is green.' Explain why this is wrong and how to fix it",
+      "expected_patterns": [
+        "test data OR test environment",
+        "production configuration OR production data OR production infrastructure",
+        "Staging is not production OR staging vs production",
+        "non-negotiable OR never skip",
+        "fast OR flaky"
+      ],
+      "anti_patterns": [
+        "green CI is sufficient",
+        "skip.* for faster releases"
+      ],
+      "tags": [
+        "anti-pattern",
+        "smoke-test",
+        "pipeline"
+      ]
+    }
+  ]
+}

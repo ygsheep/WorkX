@@ -483,6 +483,8 @@ ResultV2<ToolResult> FileEditTool::call(
     if (ec) {
         ec.clear();
     }
+    // conditional skills：上报 touch 文件路径
+    ctx.report_touch(file_path.string());
 
     const std::string canonical_key = file_path.generic_string();
 

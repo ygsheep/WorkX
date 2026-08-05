@@ -255,6 +255,8 @@ ResultV2<ToolResult> FileReadTool::call(
     fs::path file_path(expanded);
     std::error_code ec;
     file_path = fs::weakly_canonical(file_path, ec);
+    // conditional skills：上报 touch 文件路径
+    ctx.report_touch(file_path.string());
     if (ec) {
         ec.clear();  // 规范化失败不中断，继续使用原路径
     }

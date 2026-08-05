@@ -15,6 +15,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <functional>
+#include <unordered_set>
 #include <utility>   // C-1：std::pair
 #include "agent/api/i_completion_provider.h"
 #include "agent/api/chat_types.h"
@@ -29,9 +30,13 @@
 #include "agent/compact/prefix_shape.h"  // DS_CACHE: 前缀形状追踪
 #include "agent/compact/cache_aware_compactor.h"  // DS_CACHE H-3: 跨 turn 持久化的压缩器
 #include "agent/session/session_store.h"  // 项目会话恢复：JSONL 持久化
+#include "agent/skill/inclaude/conditional.h"  // conditional skills：TouchCollector（按值成员）
 #include "core/task/task_manager.h"
 
 namespace agent {
+
+// 前向声明（conditional skills 支持）
+namespace command { class CommandRegistry; }
 
 /// @brief 后端接口前向声明（供 ChatSession::backend() 返回类型使用）
 class IBackend;
@@ -95,9 +100,26 @@ public:
     /// @brief 添加系统提示词
     void set_system_prompt(const std::string& prompt);
 
+    /// @brief 获取系统提示词（返回拷贝，线程安全）
+    std::string system_prompt() const;
+
     /// @brief 设置工具注册表（启用 function calling）
     /// @param registry 工具注册表（含已注册的工具实例）
     void set_tool_registry(std::shared_ptr<tool::ToolRegistry> registry);
+
+    /// @brief 获取工具注册表（返回拷贝，线程安全）
+    std::shared_ptr<tool::ToolRegistry> tool_registry() const;
+
+    /// @brief 设置命令注册表（conditional skills 激活匹配用）
+    /// @param registry 命令注册表（含磁盘 skill 命令）
+    void set_command_registry(std::shared_ptr<command::CommandRegistry> registry);
+
+    /// @brief 获取命令注册表（返回拷贝，线程安全）
+    std::shared_ptr<command::CommandRegistry> command_registry() const;
+
+    /// @brief 获取 touch 收集器（conditional skills 用）
+    /// @return TouchCollector 引用（会话内有效）
+    skill::TouchCollector& touch_collector();
 
     /// @brief 清空对话历史
     void clear_history();
@@ -300,6 +322,13 @@ private:
 
     // 工具注册表（可选，为空时不启用 function calling）
     std::shared_ptr<tool::ToolRegistry> m_tool_registry;
+
+    // conditional skills：命令注册表（激活匹配用，可选）
+    std::shared_ptr<command::CommandRegistry> m_command_registry;
+
+    // conditional skills：touch 路径收集器（会话级累积）+ 已激活 skill 名（避免重复注入）
+    skill::TouchCollector m_touch_collector;
+    std::unordered_set<std::string> m_activated_skills;
 
     // 项目会话恢复：JSONL 持久化（可选，设置后每条消息实时追加）
     std::shared_ptr<agent::session::SessionStore> m_session_store;

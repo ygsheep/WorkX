@@ -31,6 +31,7 @@ class IReActObserver;
 class IConfigManager;  // D-5：前向声明，避免头文件强依赖
 class ITaskManager;    // BashTool 后台任务 DI（agent 命名空间下）
 class IEventBus;       // AskUserTool 事件发布 DI
+namespace skill { class TouchCollector; }  // conditional skills touch 收集器
 
 // ============================================================
 // ReAct 步骤类型
@@ -195,6 +196,7 @@ public:
     /// @param external_compactor 外部压缩器（DS_CACHE H-3：跨 turn 持久化卡死/rewrite 状态，
     ///                            nullptr 则使用内部默认 compactor，状态仅 turn 内有效）
     /// @param event_bus 事件总线（可选，用于 AskUserTool 等需要发布事件的工具）
+    /// @param touch_collector 工具 touch 收集器（可选，用于 conditional skills）
     ReActLoop(ICompletionProvider* provider,
               std::shared_ptr<tool::ToolRegistry> registry,
               Config config,
@@ -202,7 +204,8 @@ public:
               ITaskManager* task_manager = nullptr,
               std::string cwd = "",
               CacheAwareCompactor* external_compactor = nullptr,
-              IEventBus* event_bus = nullptr);
+              IEventBus* event_bus = nullptr,
+              skill::TouchCollector* touch_collector = nullptr);
 
     /// @brief 构造（使用默认配置）
     /// @param config_manager 配置管理器（H-5：必须非空，注入到 ToolContext）
@@ -214,7 +217,7 @@ public:
               ITaskManager* task_manager = nullptr,
               std::string cwd = "",
               IEventBus* event_bus = nullptr)
-        : ReActLoop(provider, std::move(registry), Config{}, config_manager, task_manager, std::move(cwd), nullptr, event_bus) {}
+        : ReActLoop(provider, std::move(registry), Config{}, config_manager, task_manager, std::move(cwd), nullptr, event_bus, nullptr) {}
 
     ~ReActLoop() = default;
 
@@ -346,6 +349,7 @@ private:
     ITaskManager* m_task_manager = nullptr;       ///< BashTool 后台任务 DI（可选，注入到 ToolContext）
     IEventBus* m_event_bus = nullptr;             ///< AskUserTool 事件发布 DI（可选，注入到 ToolContext）
     std::string m_cwd;                            ///< 工作目录（会话启动时捕获，注入到 ToolContext.cwd）
+    skill::TouchCollector* m_touch_collector = nullptr;  ///< conditional skills touch 收集器（可选）
 };
 
 } // namespace agent

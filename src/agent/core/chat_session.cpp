@@ -10,6 +10,11 @@
 #include "agent/core/react_loop.h"
 #include "agent/message/types.h"
 #include "agent/tool/tool_kind.h"
+#include "agent/command/inclaude/command.h"
+#include "agent/command/inclaude/registry.h"
+#include "agent/skill/inclaude/conditional.h"
+#include "agent/skill/inclaude/hooks.h"
+#include "app/config/app_config.h"
 #include "core/task/task_manager.h"
 #include "core/config/config_manager.h"
 #include "core/utils/uuid.h"  // 项目会话恢复：UUID 生成
@@ -49,6 +54,26 @@ std::string now_iso() {
     char buf[32];
     std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tm);
     return buf;
+}
+
+} // anonymous namespace
+
+namespace {
+
+/// @brief 提取消息中的 <file path="..."> 引用（@file 展开产物），加入 touch 收集器
+/// @details 只识别显式 file 标签，避免裸路径误报
+void extract_file_path_touches(const std::string& text, skill::TouchCollector& collector) {
+    static const std::string kTag = "<file path=\"";
+    size_t pos = 0;
+    while (pos < text.size()) {
+        const size_t start = text.find(kTag, pos);
+        if (start == std::string::npos) break;
+        const size_t value_begin = start + kTag.size();
+        const size_t end = text.find("\">", value_begin);
+        if (end == std::string::npos) break;
+        collector.add(text.substr(value_begin, end - value_begin));
+        pos = end + 2;
+    }
 }
 
 } // anonymous namespace
@@ -191,10 +216,34 @@ void ChatSession::set_system_prompt(const std::string& prompt) {
     m_system_prompt = prompt;
 }
 
+std::string ChatSession::system_prompt() const {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    return m_system_prompt;
+}
+
 void ChatSession::set_tool_registry(std::shared_ptr<tool::ToolRegistry> registry) {
     std::lock_guard<std::mutex> lock(m_state_mutex);
     m_tool_registry = std::move(registry);
     // executor 由 ReActLoop 内部创建，此处仅保存 registry
+}
+
+std::shared_ptr<tool::ToolRegistry> ChatSession::tool_registry() const {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    return m_tool_registry;
+}
+
+void ChatSession::set_command_registry(std::shared_ptr<command::CommandRegistry> registry) {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    m_command_registry = std::move(registry);
+}
+
+std::shared_ptr<command::CommandRegistry> ChatSession::command_registry() const {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    return m_command_registry;
+}
+
+skill::TouchCollector& ChatSession::touch_collector() {
+    return m_touch_collector;
 }
 
 void ChatSession::clear_history() {
@@ -205,6 +254,9 @@ void ChatSession::clear_history() {
     m_compactor.reset();
     // 重置前缀形状基线
     m_last_prefix_shape = PrefixShape{};
+    // 清理 conditional skills 会话级累积：过期 touch 不再触发激活
+    m_touch_collector.clear();
+    m_activated_skills.clear();
 }
 
 void ChatSession::set_compactor_context_window(int32_t context_window_tokens) {
@@ -571,9 +623,51 @@ void ChatSession::run_completion(const std::string& user_text,
 
     // 仅首次请求时添加用户消息（重试时不重复添加）
     if (retry_attempt == 0) {
+        // conditional skills：提取用户消息中的 <file path> 引用 → touch，
+        // 匹配激活的 skill 追加为用户消息前缀（已激活过的不重复注入）
+        std::string effective_text = user_text;
+        if (m_command_registry) {
+            // 1. 用户消息 <file path> 引用 → touch 收集器（与工具上报合并）
+            extract_file_path_touches(user_text, m_touch_collector);
+            const auto touched = m_touch_collector.paths();
+            // 2. 匹配激活的 skill 追加为用户消息前缀（已激活过的不重复注入）
+            auto activated = skill::activate_conditional_skills(
+                touched, m_command_registry->get_by_type("prompt"), m_cwd);
+            // 3. agent 过滤：声明了 agent 且与当前 agent 不符 → 跳过激活
+            const auto active_agent =
+                m_config_manager.get().get_or<std::string>(agent::keys::AGENT_ACTIVE, "");
+            std::string prefix;
+            for (const auto& sk : activated) {
+                if (m_activated_skills.contains(sk->name())) continue;
+                if (sk->agent().has_value() &&
+                    (active_agent.empty() || sk->agent().value() != active_agent)) continue;
+                command::CommandContext sctx;
+                sctx.cwd = m_cwd;
+                sctx.session_id = m_session_id;
+                const auto blocks = sk->generate_prompt("", sctx);
+                std::string body;
+                for (const auto& b : blocks) {
+                    body += b.text;
+                    body += "\n";
+                }
+                // PreActivate hooks：激活时执行，输出并入激活块
+                if (!sk->hooks().empty()) {
+                    const auto hook_lines = skill::run_preactivate_hooks(sk->hooks(), m_cwd);
+                    const auto hook_block = skill::format_hook_output(hook_lines);
+                    if (!hook_block.empty()) {
+                        body = "[skill hooks]\n" + hook_block + "\n" + body;
+                    }
+                }
+                prefix += "[Activated skill: " + sk->name() + "]\n" + body + "\n";
+                m_activated_skills.insert(sk->name());
+            }
+            if (!prefix.empty()) {
+                effective_text = prefix + user_text;
+            }
+        }
         ChatMessage user_msg = images.empty()
-            ? ChatMessage::user(user_text)
-            : ChatMessage::user(user_text, images);
+            ? ChatMessage::user(effective_text)
+            : ChatMessage::user(effective_text, images);
         {
             std::lock_guard<std::mutex> lock(m_state_mutex);
             m_messages.push_back(user_msg);
@@ -612,7 +706,7 @@ void ChatSession::run_completion(const std::string& user_text,
             // AskUserTool DI：注入 EventBus，工具通过 ToolContext.event_bus() 发布事件
             ReActLoop loop(m_provider.get(), m_tool_registry, ReActLoop::Config{},
                            &m_config_manager.get(), &m_task_manager.get(), m_cwd,
-                           &m_compactor, &m_event_bus.get());
+                           &m_compactor, &m_event_bus.get(), &m_touch_collector);
 
             // 3.2：使用 IReActObserver 接口替代 lambda 回调
             // ReActEventPublisher 内部完成 ReActStep → IEventBus 事件转换

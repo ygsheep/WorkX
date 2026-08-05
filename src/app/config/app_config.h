@@ -41,6 +41,11 @@ namespace keys {
     constexpr const char* SYSTEM_PROMPT  = "session.system_prompt";
     constexpr const char* SAVE_PATH      = "session.save_path";
 
+    // Agent
+    /// 当前 agent 名（空 = 无 agent 上下文）。声明了 frontmatter agent 字段的
+    /// skill 仅在该 agent 匹配时注入 system prompt / 触发 conditional 激活
+    constexpr const char* AGENT_ACTIVE   = "agent.active";
+
     // Logging
     constexpr const char* LOG_LEVEL      = "logging.level";
     constexpr const char* LOG_FILE       = "logging.file";

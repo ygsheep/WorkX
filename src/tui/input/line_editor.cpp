@@ -279,6 +279,10 @@ void LineEditor::redraw_input() {
              term_h - static_cast<int>(win_lines) + static_cast<int>(cur - win_start));
     m_platform->write_output(goto_cmd);
     int col = line_prefix_width(cur, m_char_pos - line_start_char(cur));
+    // 窗口首行渲染了前缀（prompt 或 continuation 符号），光标列偏移需计入其显示宽度
+    if (cur == win_start) {
+        col += display_width(m_is_continuation ? "\xe2\x94\x82 " : m_prompt);
+    }
     if (col > 0) {
         m_platform->move_cursor(col);
     }

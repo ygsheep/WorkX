@@ -3,6 +3,7 @@
 
 target_sources(libworkx PRIVATE
     command/builtin_commands.cpp
+    command/skill_commands.cpp
     config/app_config.cpp
     config/cli_args.cpp
     factory.cpp

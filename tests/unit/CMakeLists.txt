@@ -7,6 +7,7 @@ set(UNIT_TEST_SOURCES
     app/test_factory.cpp
     app/test_cli_args.cpp
     app/test_provider_selector.cpp
+    app/test_skill_commands.cpp
     agent/api/test_anthropic_adapter.cpp
     agent/api/test_openai_adapter.cpp
     agent/api/test_http_response.cpp
@@ -17,6 +18,11 @@ set(UNIT_TEST_SOURCES
     agent/core/test_chat_session.cpp
     agent/core/test_react_loop.cpp
     agent/command/test_command_system.cpp
+    agent/skill/test_skill_frontmatter.cpp
+    agent/skill/test_skill_loader.cpp
+    agent/skill/test_skill_prompt.cpp
+    agent/skill/test_conditional.cpp
+    agent/skill/test_hooks.cpp
     agent/model/test_provider_preset.cpp
     agent/model/test_model_config.cpp
     agent/model/test_model_catalog.cpp
@@ -34,6 +40,7 @@ set(UNIT_TEST_SOURCES
     agent/tool/test_tool_registry.cpp
     agent/tool/test_bash_tool.cpp
     agent/tool/test_grep_tool.cpp
+    agent/tool/test_skill_tool.cpp
     core/config/test_config_manager.cpp
     core/events/test_event_bus.cpp
     core/process/test_subprocess.cpp

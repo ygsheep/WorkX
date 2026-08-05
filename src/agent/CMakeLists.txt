@@ -15,6 +15,12 @@ target_sources(libworkx PRIVATE
     command/source/registry.cpp
     command/source/executor.cpp
 
+    # skill
+    skill/source/frontmatter.cpp
+    skill/source/skill_loader.cpp
+    skill/source/conditional.cpp
+    skill/source/hooks.cpp
+
     # compact
     compact/token_count.cpp
     compact/prefix_shape.cpp
@@ -60,6 +66,7 @@ target_sources(libworkx PRIVATE
     tool/AskUser/AskUserTool.cpp
     tool/MCPTool/mcp_tool.cpp
     tool/WebFetchTool/web_fetch_tool.cpp
+    tool/SkillTool/skill_tool.cpp
 
     # input: 头文件（显式列入以便 IDE 导航）
     input/parser.h

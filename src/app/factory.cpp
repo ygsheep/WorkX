@@ -42,6 +42,7 @@
 #include "agent/tool/GrepTool/grep_tool.h"
 #include "agent/tool/PowerShellTool/powershell_tool.h"
 #include "agent/tool/ShellTool/shell_detector.h"
+#include "agent/tool/SkillTool/skill_tool.h"
 #include "agent/tool/registry.h"
 #include "core/config/config_manager.h"
 #include "core/events/event_bus.h"
@@ -227,6 +228,8 @@ void register_builtin_tools(tool::ToolRegistry& registry) {
     registry.register_tool(std::make_shared<tool::FileReadTool>());
     registry.register_tool(std::make_shared<tool::FileWriteTool>());
     registry.register_tool(std::make_shared<tool::FileEditTool>());
+    // SkillTool 的 CommandRegistry 晚于工具注册创建，先注册后注入
+    registry.register_tool(std::make_shared<tool::SkillTool>(nullptr));
     registry.register_tool(std::make_shared<tool::BashTool>());
     registry.register_tool(std::make_shared<tool::GlobTool>());
     registry.register_tool(std::make_shared<tool::GrepTool>());

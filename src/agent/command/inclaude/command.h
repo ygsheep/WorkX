@@ -84,6 +84,26 @@ public:
         return when_to_use_;
     }
 
+    /// 获取适用上下文（skill frontmatter context 字段）
+    virtual const std::optional<std::string>& context() const {
+        return context_;
+    }
+
+    /// 获取关联 agent 声明（空 = 不限 agent）
+    virtual const std::optional<std::string>& agent() const {
+        return agent_;
+    }
+
+    /// 获取 PreActivate 钩子命令列表
+    virtual const std::vector<std::string>& hooks() const {
+        return hooks_;
+    }
+
+    /// 获取 conditional 触发路径 glob 列表
+    virtual const std::vector<std::string>& paths() const {
+        return paths_;
+    }
+
     /// 获取命令类型标识
     virtual const std::string& type() const = 0;
 
@@ -99,6 +119,42 @@ public:
     void set_argument_hint(std::string hint) {
         std::lock_guard<std::mutex> lock(m_mutex);
         argument_hint_ = std::move(hint);
+    }
+    void set_loaded_from(LoadSource src) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        loaded_from_ = src;
+    }
+    void set_source(std::string src) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        source_ = std::move(src);
+    }
+    void set_user_invocable(bool v) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        user_invocable_ = v;
+    }
+    void set_disable_model_invocation(bool v) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        disable_model_invocation_ = v;
+    }
+    void set_when_to_use(std::string v) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        when_to_use_ = std::move(v);
+    }
+    void set_context(std::string v) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        context_ = std::move(v);
+    }
+    void set_agent(std::string v) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        agent_ = std::move(v);
+    }
+    void set_hooks(std::vector<std::string> v) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        hooks_ = std::move(v);
+    }
+    void set_paths(std::vector<std::string> v) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        paths_ = std::move(v);
     }
 
 protected:
@@ -116,6 +172,10 @@ protected:
     std::optional<std::string> argument_hint_;
     std::optional<std::string> version_;
     std::optional<std::string> when_to_use_;
+    std::optional<std::string> context_;    ///< 适用上下文（skill frontmatter）
+    std::optional<std::string> agent_;      ///< 关联 agent（空 = 不限）
+    std::vector<std::string> hooks_;        ///< PreActivate 钩子命令
+    std::vector<std::string> paths_;      ///< conditional 触发路径 glob（空 = 非 conditional）
 
     std::function<bool()> is_enabled_;
     bool is_hidden_{false};

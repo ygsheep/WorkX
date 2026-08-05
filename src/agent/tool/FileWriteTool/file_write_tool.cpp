@@ -285,6 +285,8 @@ ResultV2<ToolResult> FileWriteTool::call(
     if (ec) {
         ec.clear();  // 规范化失败不中断，继续使用原路径
     }
+    // conditional skills：上报 touch 文件路径
+    ctx.report_touch(file_path.string());
 
     // 3. 创建父目录（mkdir -p 语义，幂等）
     const fs::path parent_dir = file_path.parent_path();

@@ -8,6 +8,8 @@
 
 #include "agent/command/inclaude/executor.h"
 
+#include "agent/skill/inclaude/hooks.h"
+
 namespace agent::command {
 
 CommandExecutor::CommandExecutor(std::shared_ptr<CommandRegistry> registry)
@@ -62,6 +64,15 @@ ExecutorResult CommandExecutor::execute(const std::string& input, const CommandC
         for (auto& block : blocks) {
             if (!prompt_text.empty()) prompt_text += "\n";
             prompt_text += block.text;
+        }
+        // PreActivate hooks：用户显式调用时执行，输出并入提示文本
+        if (!prompt_cmd->hooks().empty()) {
+            const auto hook_lines = skill::run_preactivate_hooks(
+                prompt_cmd->hooks(), ctx.cwd);
+            const auto hook_block = skill::format_hook_output(hook_lines);
+            if (!hook_block.empty()) {
+                prompt_text = "[skill hooks]\n" + hook_block + "\n" + prompt_text;
+            }
         }
         result = CommandResult::ok(std::move(prompt_text));
         should_query = true;
