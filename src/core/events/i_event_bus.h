@@ -23,6 +23,8 @@
 #include <typeindex>
 #include <cstddef>
 
+#include "core/export.h"
+
 #include "core/events/event_token.h"
 
 namespace agent {
@@ -30,7 +32,7 @@ namespace agent {
 /// @brief 事件总线抽象接口
 /// @details 提供类型擦除的虚函数接口供 DI 注入；模板包装方法委托虚函数，
 ///          调用方可像使用 EventBus 一样使用 IEventBus&。
-class IEventBus {
+class WORKX_API IEventBus {
 public:
     virtual ~IEventBus() = default;
 

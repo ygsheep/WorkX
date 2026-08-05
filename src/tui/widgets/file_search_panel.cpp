@@ -10,7 +10,7 @@
 #include "tui/core/color_scheme.h"
 #include "tui/core/platform/i_platform.h"
 #include "tui/utils/utf8_utils.h"
-#include "app/ui/file_index.h"
+#include "core/utils/file_index.h"
 
 #include <cstdio>
 #include <algorithm>

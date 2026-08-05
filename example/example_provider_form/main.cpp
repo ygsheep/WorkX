@@ -27,7 +27,7 @@
 #include "agent/model/config.h"
 #include "agent/model/model_catalog.h"
 #include "agent/model/provider_preset.h"
-#include "app/config/app_config.h"
+#include "agent/config/app_config.h"
 #include "app/factory.h"
 #include "core/config/config_manager.h"
 #include "core/events/event_bus.h"

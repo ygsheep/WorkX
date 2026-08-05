@@ -4,4 +4,4 @@ add_executable(example_provider_form
     main.cpp
 )
 
-target_link_libraries(example_provider_form PRIVATE libworkx)
+target_link_libraries(example_provider_form PRIVATE workx_app)

@@ -11,12 +11,13 @@
 #include <memory>
 #include "agent/api/chat_types.h"
 #include "agent/api/i_stream_reader.h"
+#include "core/export.h"
 
 namespace agent {
 
 /// @brief 统一推理提供者接口
 /// @details ChatSession 依赖此接口而非具体 Backend/Agent
-class ICompletionProvider {
+class WORKX_API ICompletionProvider {
 public:
     virtual ~ICompletionProvider() = default;
 

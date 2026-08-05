@@ -12,6 +12,8 @@
 #include <functional>
 #include <string>
 #include <memory>
+
+#include "core/export.h"
 #include <vector>
 #include <atomic>
 #include <mutex>
@@ -182,7 +184,7 @@ private:
 /// @brief 任务管理器抽象接口
 /// @details 允许测试注入 MockTaskManager，解除对单例的硬依赖。
 ///          生产代码用 TaskManager（继承 ITaskManager）。
-class ITaskManager {
+class WORKX_API ITaskManager {
 public:
     virtual ~ITaskManager() = default;
 
@@ -218,7 +220,7 @@ public:
 // TaskManager 默认实现（基于 ThreadPool）
 // ============================================================
 
-class TaskManager final : public ITaskManager {
+class WORKX_API TaskManager final : public ITaskManager {
 public:
     /// @brief 单例访问（H-4：显式注入 EventBus::instance()，组装层使用）
     static TaskManager& instance() noexcept {

@@ -33,11 +33,16 @@ namespace tool {
 /// @param progress_text 进度文本
 using ProgressCallback = std::function<void(const std::string& progress_text)>;
 
-/// @brief 工具 touch 回调类型
-/// @details 工具执行过程中上报访问过的文件路径（绝对路径），
-///          由 ReActLoop 注入，用于 conditional skills 的路径匹配。
-/// @param path 访问的文件路径（绝对路径）
-using TouchCallback = std::function<void(const std::string& path)>;
+    /// @brief 工具 touch 回调类型
+    /// @details 工具执行过程中上报访问过的文件路径（绝对路径），
+    ///          由 ReActLoop 注入，用于 conditional skills 的路径匹配。
+    /// @param path 访问的文件路径（绝对路径）
+    using TouchCallback = std::function<void(const std::string& path)>;
+
+    /// @brief 文件系统变更回调类型
+    /// @details 工具写入/删除文件后调用（无参数），由宿主注入，
+    ///          用于通知宿主失效文件索引（如 TUI @ 补全索引）等缓存。
+    using FileSystemChangedCallback = std::function<void()>;
 
 /// @brief 工具执行上下文
 ///
@@ -90,6 +95,12 @@ struct ToolContext {
     /// @details 由调用方（ReActLoop）注入，工具访问文件时调用以上报路径，
     ///          供 conditional skills 匹配激活。默认为空。生命周期由 ToolContext 所有者保证。
     TouchCallback touch_callback = nullptr;
+
+    /// @brief 文件系统变更回调（可选）
+    /// @details 由调用方（ReActLoop）注入，工具写入/删除文件后调用，
+    ///          宿主据此失效文件索引等缓存。默认为空（无宿主，no-op）。
+    ///          生命周期由 ToolContext 所有者保证。
+    FileSystemChangedCallback on_file_system_changed = nullptr;
 
     /// @brief 解析配置管理器（H-5：nullptr 时抛异常，不再回退单例）
     /// @return IConfigManager 引用

@@ -11,7 +11,7 @@
 
 #include <string>
 #include <vector>
-#include "app/ui/file_index.h"
+#include "core/utils/file_index.h"
 
 namespace tui {
 

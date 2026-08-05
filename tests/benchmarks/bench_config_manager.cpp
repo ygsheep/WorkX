@@ -8,7 +8,7 @@
 #include <catch2/benchmark/catch_benchmark.hpp>
 
 #include "core/config/config_manager.h"
-#include "app/config/app_config.h"
+#include "agent/config/app_config.h"
 
 #include <string>
 

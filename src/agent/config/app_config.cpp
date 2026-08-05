@@ -25,7 +25,7 @@
 #include <unistd.h>   // readlink（Debug 日志路径用）
 #endif
 
-#include "app/config/app_config.h"
+#include "agent/config/app_config.h"
 #include "core/config/config_manager.h"
 #include "core/config/i_config_manager.h"
 #include "agent/tool/constants.h"

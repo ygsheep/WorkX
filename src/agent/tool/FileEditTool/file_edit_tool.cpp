@@ -28,7 +28,7 @@
 #include "agent/tool/encoding.h"
 #include "agent/tool/file_history.h"
 #include "core/config/config_manager.h"
-#include "app/config/app_config.h"
+#include "agent/config/app_config.h"
 
 #include <fstream>
 #include <iterator>

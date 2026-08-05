@@ -17,7 +17,7 @@
 #include <catch2/matchers/catch_matchers.hpp>
 
 #include "app/factory.h"
-#include "app/config/app_config.h"
+#include "agent/config/app_config.h"
 #include "core/config/config_manager.h"
 #include "agent/api/backend_factory.h"  // H-C：BackendFactory::create
 #include "agent/api/backend_types.h"    // H-C：BackendConfig

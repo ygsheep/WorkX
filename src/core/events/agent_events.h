@@ -18,11 +18,20 @@
 
 #include "core/tool_kind.h"  // C-3：直接引用 core 层规范位置，避免 core→agent 分层越界
 
-namespace tui {
-struct ChoiceResult;  // 前向声明，避免本头强依赖 choice_panel.h
-}
-
 namespace agent {
+
+// ============================================================
+// AskUser 宿主交互结果（宿主无关，TUI 等宿主自行转换自有类型）
+// ============================================================
+
+/// @brief AskUser 提问结果（宿主无关类型）
+/// @details 由 TUI ChoicePanel 等宿主在 set_value 时填回，
+///          与 tui::ChoiceResult 同构，避免 core/agent 依赖 UI 层。
+struct AskUserResult {
+    bool submitted = false;      ///< true=用户提交, false=取消/超时
+    /// @brief 答案映射: question → answer（单选/多选/自定义输入）
+    std::vector<std::pair<std::string, std::string>> answers;
+};
 
 // ============================================================
 // Agent 事件（Agent → TUI，未来）
@@ -95,7 +104,7 @@ struct AskUserRequestEvent {
     int32_t timeout_ms = 0;     ///< 超时毫秒（0=不限时；>0 超时自动返回）
     /// @brief 结果回填通道：TUI 设置 value 后唤醒阻塞的 AskUserTool
     /// @details shared_ptr 使事件按值传递时 promise 仍共享同一实例
-    std::shared_ptr<std::promise<tui::ChoiceResult>> result_promise;
+    std::shared_ptr<std::promise<AskUserResult>> result_promise;
     /// @brief 取消标志：工作线程超时后置位，TUI 主循环检查后关闭 ChoicePanel
     /// @details shared_ptr<atomic<bool>> 使事件按值传递时标志仍共享同一实例。
     ///          nullptr 表示不支持取消（timeout_ms == 0 时可为空）。

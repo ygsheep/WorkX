@@ -9,7 +9,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "app/config/app_config.h"
+#include "agent/config/app_config.h"
 #include "app/ui/provider_form.h"
 #include "core/config/config_manager.h"
 

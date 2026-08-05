@@ -96,7 +96,7 @@ endfunction()
 workx_fetch_ts_runtime()
 
 # 通过 FetchContent 拉取 grammar 仓库 (各仓库已 commit 预生成的 src/parser.c, 无需 tree-sitter-cli)
-# 每个 grammar 编译为独立静态库; 收集到 WORKX_TS_GRAMMAR_LIBS/DEFS, 在 libworkx 创建后统一链接
+# 每个 grammar 编译为独立静态库; 收集到 WORKX_TS_GRAMMAR_LIBS/DEFS, 由 workx_tui 统一链接
 function(workx_fetch_ts_grammar name git_repo git_tag)
     if(NOT WORKX_HAS_TREE_SITTER)
         return()
@@ -141,7 +141,7 @@ function(workx_fetch_ts_grammar name git_repo git_tag)
         target_compile_options("ts_${name}" PRIVATE /utf-8)
     endif()
 
-    # 累积到 parent scope, 等 libworkx 创建后再 target_link_libraries
+    # 累积到 parent scope, 等 workx_tui 创建后再 target_link_libraries
     list(APPEND WORKX_TS_GRAMMAR_LIBS "ts_${name}")
     list(APPEND WORKX_TS_GRAMMAR_DEFS "WORKX_TS_${_upper}")
     set(WORKX_TS_GRAMMAR_LIBS "${WORKX_TS_GRAMMAR_LIBS}" PARENT_SCOPE)
@@ -166,8 +166,10 @@ endif()
 # ---- liblogger (lib/liblogger/CMakeLists.txt 提供 logger target) ----
 add_subdirectory(lib/liblogger)
 
-# 让 libworkx / workx 能 #include <liblogger/...>
-include_directories(${CMAKE_SOURCE_DIR}/lib)
+# 让 workx 相关目标能 #include <liblogger/...>
+# 用 CMAKE_CURRENT_LIST_DIR 而非 CMAKE_SOURCE_DIR：workx 被外部工程
+# add_subdirectory 纳入时，CMAKE_SOURCE_DIR 指向外部工程根，此处仍须指向 workx 根
+include_directories(${CMAKE_CURRENT_LIST_DIR}/lib)
 
 # ============================================================
 # vendor/ripgrep: 构建时拷贝到 workx 输出目录的 tools/ 子目录
@@ -210,6 +212,13 @@ option(WORKX_BUILD_TESTS "Build tests" ON)
 if(WORKX_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+option(WORKX_BUILD_CONSUMER "Build external-consumer smoke (tests/consumer, add_subdirectory mode)" OFF)
+if(WORKX_BUILD_CONSUMER)
+    set(WORKX_CONSUMER_ADD_SUBDIRECTORY ON)
+    set(WORKX_SOURCE_DIR ${CMAKE_SOURCE_DIR})
+    add_subdirectory(tests/consumer)
 endif()
 
 option(WORKX_BUILD_EXAMPLES "Build examples" ON)

@@ -36,7 +36,8 @@ ReActLoop::ReActLoop(ICompletionProvider* provider,
                      std::string cwd,
                      CacheAwareCompactor* external_compactor,
                      IEventBus* event_bus,
-                     skill::TouchCollector* touch_collector)
+                     skill::TouchCollector* touch_collector,
+                     std::function<void()> file_index_invalidator)
     : m_provider(provider)
     , m_registry(std::move(registry))
     , m_config(config)
@@ -48,6 +49,7 @@ ReActLoop::ReActLoop(ICompletionProvider* provider,
     , m_event_bus(event_bus)
     , m_cwd(std::move(cwd))
     , m_touch_collector(touch_collector)
+    , m_file_index_invalidator(std::move(file_index_invalidator))
 {
     // issue #15-F: 构造函数不变量从 assert 改为 throw，避免 Debug 构建直接 abort
     // 构造失败抛 std::invalid_argument 是 C++ 标准模式，调用方可用 try/catch 处理
@@ -575,6 +577,8 @@ ReActResult ReActLoop::run(
                 collector->add(path);
             };
         }
+        // 宿主文件索引失效回调（可选）：FileWriteTool 写文件后通知宿主重建索引
+        ctx.on_file_system_changed = m_file_index_invalidator;
 
         // 1. 同步发布所有 Action 步骤（UI 即时反馈工具调用开始）
         for (const auto& tu : thought.tool_uses) {

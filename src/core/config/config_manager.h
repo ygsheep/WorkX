@@ -11,6 +11,7 @@
 #include "core/utils/result.h"          // 旧 Result（过渡期保留，V2-8 标记 deprecated）
 #include "core/utils/result_v2.h"       // V2-1：新 ResultV2
 #include "core/config/i_config_manager.h"
+#include "core/export.h"
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -75,7 +76,7 @@ struct ConfigSchema {
     [[nodiscard]] ResultV2<void> validate_value(const ConfigValue& value) const;
 };
 
-class ConfigManager final : public IConfigManager {
+class WORKX_API ConfigManager final : public IConfigManager {
 public:
     static ConfigManager& instance() noexcept {
         static ConfigManager inst;

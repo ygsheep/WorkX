@@ -23,8 +23,9 @@
 
 #include <liblogger/logger.h>
 
-#include "app/config/app_config.h"
+#include "agent/config/app_config.h"
 #include "app/factory.h"
+#include "core/utils/file_index.h"
 #include "agent/api/backend_factory.h"
 #include "agent/api/chat_types.h"
 #include "agent/api/i_backend.h"
@@ -169,6 +170,9 @@ SessionResult create_session(IConfigManager& cfg,
     auto tool_registry = std::make_shared<tool::ToolRegistry>();
     register_builtin_tools(*tool_registry);
     result.session->set_tool_registry(tool_registry);
+
+    // 宿主接线：FileWriteTool 写文件后失效 TUI @ 补全索引（mark_dirty 仅原子置位）
+    result.session->set_file_index_invalidator([] { global_file_index().mark_dirty(); });
 
     // 系统提示词
     std::string sys_prompt = build_system_prompt(

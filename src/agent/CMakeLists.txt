@@ -1,6 +1,34 @@
-# Agent 层：api / command / compact / core / input / message / model / tool
+# Agent 层：api / command / compact / config / core / input / message / model / tool
+# 定义 workx_agent 静态库（Agent Harness：ReAct 循环 + 工具运行时，宿主无关）
 
-target_sources(libworkx PRIVATE
+add_library(workx_agent STATIC)
+
+target_include_directories(workx_agent PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
+    $<INSTALL_INTERFACE:include>
+)
+
+target_compile_definitions(workx_agent PUBLIC
+    WORKX_VERSION="${PROJECT_VERSION}"
+)
+
+# 第三方依赖（PUBLIC：公共头暴露 nlohmann_json / CURL / logger）
+if(nlohmann_json_FOUND)
+    target_link_libraries(workx_agent PUBLIC nlohmann_json::nlohmann_json)
+    target_compile_definitions(workx_agent PUBLIC WORKX_HAS_NLOHMANN_JSON)
+endif()
+
+target_link_libraries(workx_agent PUBLIC
+    workx_core
+    CURL::libcurl
+    logger
+)
+target_compile_definitions(workx_agent PUBLIC WORKX_HAS_CURL)
+
+target_sources(workx_agent PRIVATE
+    # config
+    config/app_config.cpp
+
     # api
     api/sse_parser.cpp
     api/backend_factory.cpp
@@ -64,6 +92,7 @@ target_sources(libworkx PRIVATE
     tool/ShellTool/shell_detector.cpp
     tool/AgentTool/agent_tool.cpp
     tool/AskUser/AskUserTool.cpp
+    tool/AskUser/ask_user_config.cpp
     tool/MCPTool/mcp_tool.cpp
     tool/WebFetchTool/web_fetch_tool.cpp
     tool/SkillTool/skill_tool.cpp

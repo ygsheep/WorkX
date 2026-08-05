@@ -22,6 +22,8 @@
 #include <string>
 #include <vector>
 #include <optional>
+
+#include "core/export.h"
 #include <fstream>
 #include <filesystem>
 
@@ -46,7 +48,7 @@ struct SessionMeta {
 
 /// @brief JSONL 会话存储（每条消息实时追加）
 /// @details 写入时 open + append（flush 保证崩溃不丢），读取时逐行解析。
-class SessionStore {
+class WORKX_API SessionStore {
 public:
     /// @brief 构造
     /// @param file_path JSONL 文件路径

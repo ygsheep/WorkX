@@ -17,6 +17,7 @@ set(UNIT_TEST_SOURCES
     agent/api/test_client.cpp
     agent/core/test_chat_session.cpp
     agent/core/test_react_loop.cpp
+    agent/test_layer_boundary.cpp
     agent/command/test_command_system.cpp
     agent/skill/test_skill_frontmatter.cpp
     agent/skill/test_skill_loader.cpp
@@ -71,7 +72,7 @@ set(UNIT_TEST_SOURCES
 add_executable(workx_unit_tests ${UNIT_TEST_SOURCES})
 target_include_directories(workx_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(workx_unit_tests PRIVATE SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-target_link_libraries(workx_unit_tests PRIVATE libworkx Catch2::Catch2WithMain)
+target_link_libraries(workx_unit_tests PRIVATE workx_app Catch2::Catch2WithMain)
 
 include(Catch)
 catch_discover_tests(workx_unit_tests

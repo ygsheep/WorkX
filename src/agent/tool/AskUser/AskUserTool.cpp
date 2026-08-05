@@ -6,13 +6,13 @@
  */
 
 #include "agent/tool/AskUser/AskUserTool.h"
+#include "agent/tool/AskUser/ask_user_config.h"
 #include "agent/tool/context.h"
 #include "agent/tool/result.h"
 #include "core/events/i_event_bus.h"
 #include "core/events/agent_events.h"
 #include "core/utils/result_v2.h"
 #include "core/utils/error.h"
-#include "tui/widgets/choice_panel.h"
 
 #include <future>
 #include <memory>
@@ -143,16 +143,15 @@ ResultV2<ToolResult> AskUserTool::call(
     // 2. 解析超时（默认 5 分钟）
     int32_t timeout_ms = input.value("timeout_ms", DEFAULT_TIMEOUT_MS);
 
-    // 3. 校验 questions 可被 ChoicePanel 解析
-    auto config = tui::parse_choice_config(input);
-    if (!config) {
+    // 3. 校验 questions 结构（宿主无关校验，TUI 渲染时自行二次解析）
+    if (!validate_ask_user_json(input)) {
         return ResultV2<ToolResult>::err(
             Error::Code::InvalidInput, "AskUser: failed to parse 'questions' as choice config");
     }
 
     // 4. 创建 promise/future 通道 + 取消标志
-    auto promise = std::make_shared<std::promise<tui::ChoiceResult>>();
-    std::future<tui::ChoiceResult> future = promise->get_future();
+    auto promise = std::make_shared<std::promise<AskUserResult>>();
+    std::future<AskUserResult> future = promise->get_future();
     // cancel_flag：工作线程超时后置位，TUI 主循环检查后关闭 ChoicePanel。
     // timeout_ms > 0 时才需要取消机制；timeout_ms == 0（不限时）传 nullptr。
     std::shared_ptr<std::atomic<bool>> cancel_flag;
@@ -172,7 +171,7 @@ ResultV2<ToolResult> AskUserTool::call(
     bus.publish_async(evt);
 
     // 6. 阻塞等待结果（支持超时）
-    tui::ChoiceResult result;
+    AskUserResult result;
     bool timed_out = false;
 
     if (timeout_ms > 0) {

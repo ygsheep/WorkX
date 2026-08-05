@@ -15,7 +15,7 @@
 #include "agent/tool/FileReadState/file_read_state.h"
 #include "agent/tool/path_expand.h"
 #include "core/config/config_manager.h"
-#include "app/config/app_config.h"
+#include "agent/config/app_config.h"
 
 #include <fstream>
 #include <sstream>

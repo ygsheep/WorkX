@@ -22,7 +22,7 @@ set(BENCHMARK_SOURCES
 
 add_executable(workx_benchmarks ${BENCHMARK_SOURCES})
 target_include_directories(workx_benchmarks PRIVATE ${CMAKE_SOURCE_DIR}/tests/unit)
-target_link_libraries(workx_benchmarks PRIVATE libworkx Catch2::Catch2 Catch2::Catch2WithMain)
+target_link_libraries(workx_benchmarks PRIVATE workx_agent Catch2::Catch2 Catch2::Catch2WithMain)
 
 # 基准测试不参与 catch_discover_tests（避免 ctest 默认运行时拖慢 CI）
 # 需手动运行可执行文件

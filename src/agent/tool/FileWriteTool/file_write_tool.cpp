@@ -22,7 +22,6 @@
 #include "agent/tool/FileReadState/file_read_state.h"
 #include "agent/tool/path_expand.h"
 #include "agent/tool/types.h"
-#include "app/ui/file_index.h"
 
 #include <fstream>
 #include <iterator>
@@ -422,9 +421,11 @@ ResultV2<ToolResult> FileWriteTool::call(
         );
     }
 
-    // 8b. 标记 FileIndex 为脏（方案 E-D：TUI @ 补全下次触发时会重建索引）
-    //     覆盖 create/update 两种模式，mark_dirty 仅原子置位，不触发立即重建
-    global_file_index().mark_dirty();
+    // 8b. 通知宿主文件系统已变更（如 TUI @ 补全索引下次触发时会重建）
+    //     覆盖 create/update 两种模式；无宿主注入回调时 no-op
+    if (ctx.on_file_system_changed) {
+        ctx.on_file_system_changed();
+    }
 
     // 9. 生成 diff（update 模式）并返回结果
     if (is_update) {

@@ -60,7 +60,7 @@ struct RetryDecision {
 /// @details 由外部驱动（main.cpp），通过 send_message() 提交文本，
 ///          后台 Task 调用 ICompletionProvider，发布 StreamTokenEvent/StepDoneEvent/StreamDoneEvent。
 ///          支持工具调用（function calling）：LLM 返回 tool_use → 执行工具 → tool_result → 继续推理
-class ChatSession {
+class WORKX_API ChatSession {
 public:
     /// @brief ReAct 循环事件发布器（3.2 IReActObserver 实现）
     /// @details 将 ReActLoop 步骤事件转换为 IEventBus 异步事件，
@@ -109,6 +109,12 @@ public:
 
     /// @brief 获取工具注册表（返回拷贝，线程安全）
     std::shared_ptr<tool::ToolRegistry> tool_registry() const;
+
+    /// @brief 设置宿主文件索引失效回调（可选）
+    /// @details FileWriteTool 写入文件后调用（如 TUI @ 补全索引 mark_dirty）。
+    ///          必须在首次 send_message 前调用；不设置则工具写文件不通知宿主。
+    /// @param invalidator 宿主回调（空 = 取消注册）
+    void set_file_index_invalidator(std::function<void()> invalidator);
 
     /// @brief 设置命令注册表（conditional skills 激活匹配用）
     /// @param registry 命令注册表（含磁盘 skill 命令）
@@ -329,6 +335,9 @@ private:
     // conditional skills：touch 路径收集器（会话级累积）+ 已激活 skill 名（避免重复注入）
     skill::TouchCollector m_touch_collector;
     std::unordered_set<std::string> m_activated_skills;
+
+    // 宿主文件索引失效回调（FileWriteTool 写文件后调用，由 m_state_mutex 保护）
+    std::function<void()> m_file_index_invalidator;
 
     // 项目会话恢复：JSONL 持久化（可选，设置后每条消息实时追加）
     std::shared_ptr<agent::session::SessionStore> m_session_store;

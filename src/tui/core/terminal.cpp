@@ -356,7 +356,7 @@ void Terminal::run_advanced() {
                 // 检查是否已被取消（超时发生在面板打开前）
                 if (pending->cancel_flag &&
                     pending->cancel_flag->load(std::memory_order_acquire)) {
-                    ChoiceResult cancelled;
+                    agent::AskUserResult cancelled;
                     cancelled.submitted = false;
                     pending->result_promise->set_value(std::move(cancelled));
                     continue;
@@ -368,11 +368,14 @@ void Terminal::run_advanced() {
                     Screen scr(this);
                     ChoiceResult choice = run_choice_panel(
                         this, &scr, *config, pending->cancel_flag.get());
-                    // 回填结果唤醒工作线程
-                    pending->result_promise->set_value(std::move(choice));
+                    // 回填结果唤醒工作线程（tui::ChoiceResult → 宿主无关 agent::AskUserResult）
+                    agent::AskUserResult result;
+                    result.submitted = choice.submitted;
+                    result.answers = std::move(choice.answers);
+                    pending->result_promise->set_value(std::move(result));
                 } else {
                     // 解析失败：回填取消结果
-                    ChoiceResult cancelled;
+                    agent::AskUserResult cancelled;
                     cancelled.submitted = false;
                     pending->result_promise->set_value(std::move(cancelled));
                 }

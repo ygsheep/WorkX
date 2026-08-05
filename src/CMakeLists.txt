@@ -1,48 +1,9 @@
 # src/CMakeLists.txt
-# 创建 libworkx 静态库（聚合 core/agent/tui/app 四大模块源文件）
-# 创建 workx 可执行文件（main.cpp + libworkx）
+# 分层库目标：workx_core（底层）→ workx_agent（Agent Harness，可安装）→ workx_tui（内部）
+# workx 可执行文件 = main.cpp + app 层源码 + workx_tui
 
 # ============================================================
-# libworkx 静态库
-# ============================================================
-# 初始为空，由各子模块通过 target_sources() 追加源文件
-add_library(libworkx STATIC)
-
-# 公共 include 路径（src/ 作为根，所有模块以 src/ 为基准 #include）
-target_include_directories(libworkx PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
-    $<INSTALL_INTERFACE:include>
-)
-
-# 版本宏
-target_compile_definitions(libworkx PUBLIC
-    WORKX_VERSION="${PROJECT_VERSION}"
-)
-
-# 第三方依赖（PUBLIC：使用 libworkx 的目标也会继承）
-if(nlohmann_json_FOUND)
-    target_link_libraries(libworkx PUBLIC nlohmann_json::nlohmann_json)
-    target_compile_definitions(libworkx PUBLIC WORKX_HAS_NLOHMANN_JSON)
-endif()
-
-target_link_libraries(libworkx PUBLIC
-    CURL::libcurl
-    logger
-)
-target_compile_definitions(libworkx PUBLIC WORKX_HAS_CURL)
-
-# Tree-sitter（可选，由根 CMakeLists.txt 探测后传入变量）
-if(WORKX_HAS_TREE_SITTER)
-    target_link_libraries(libworkx PUBLIC ${WORKX_TS_RUNTIME_LIB})
-    target_compile_definitions(libworkx PUBLIC WORKX_HAS_TREE_SITTER)
-    if(WORKX_TS_GRAMMAR_LIBS)
-        target_link_libraries(libworkx PRIVATE ${WORKX_TS_GRAMMAR_LIBS})
-        target_compile_definitions(libworkx PUBLIC ${WORKX_TS_GRAMMAR_DEFS})
-    endif()
-endif()
-
-# ============================================================
-# 引入各业务模块（通过 target_sources 追加源文件到 libworkx）
+# 引入各分层（各自定义库目标）
 # ============================================================
 add_subdirectory(core)
 add_subdirectory(agent)
@@ -53,13 +14,13 @@ add_subdirectory(app)
 # workx 可执行文件
 # ============================================================
 add_executable(workx app/main.cpp)
-target_link_libraries(workx PRIVATE libworkx)
+target_link_libraries(workx PRIVATE workx_app)
 
 # ============================================================
-# choice_preview 可执行文件（ChoiceTool TUI 预览）
+# choice_preview 可执行文件（ChoiceTool TUI 预览，依赖 app 工厂函数）
 # ============================================================
 add_executable(choice_preview example/choice_preview.cpp)
-target_link_libraries(choice_preview PRIVATE libworkx)
+target_link_libraries(choice_preview PRIVATE workx_app)
 
 # ============================================================
 # 应用图标：从 src/icon.png 生成各平台格式
@@ -158,3 +119,98 @@ if(WORKX_HAS_VENDOR_RIPGREP)
     )
     target_compile_definitions(workx PRIVATE WORKX_HAS_BUNDLED_RIPGREP=1)
 endif()
+
+# ============================================================
+# 安装与包导出（M2 库化：外部工程可 find_package(workx)）
+# 参考 lib/liblogger 的 install/EXPORT 模板
+# 仅安装 workx_core + workx_agent（Agent Harness）；workx_tui 为内部目标
+# ============================================================
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
+# 公共头清单（M3 白名单；未列入即私有，不安装）
+set(WORKX_PUBLIC_HEADERS
+    core/events/agent_events.h
+    core/export.h
+    core/events/event_bus.h
+    core/events/i_event_bus.h
+    core/events/event_token.h
+    core/events/events.h
+    core/events/stream_events.h
+    core/events/system_events.h
+    core/config/config_manager.h
+    core/config/i_config_manager.h
+    core/task/task_manager.h
+    core/task/thread_pool.h
+    core/tool_kind.h
+    core/utils/error.h
+    core/utils/result.h
+    core/utils/result_v2.h
+    agent/core/chat_session.h
+    agent/core/react_loop.h
+    agent/core/react_observer.h
+    agent/api/backend_types.h
+    agent/api/chat_types.h
+    agent/api/client.h
+    agent/api/i_backend.h
+    agent/api/i_backend_admin.h
+    agent/api/i_completion_provider.h
+    agent/api/i_stream_reader.h
+    agent/api/retry.h
+    agent/message/types.h
+    agent/model/provider_type.h
+    agent/compact/prefix_shape.h
+    agent/compact/cache_aware_compactor.h
+    agent/command/inclaude/command.h
+    agent/command/inclaude/types.h
+    agent/skill/inclaude/conditional.h
+    agent/tool/registry.h
+    agent/tool/executor.h
+    agent/tool/context.h
+    agent/tool/types.h
+    agent/tool/itool.h
+    agent/tool/result.h
+    agent/session/session_store.h
+    agent/config/app_config.h
+    agent/tool/AskUser/ask_user_config.h
+)
+
+install(TARGETS workx_core workx_agent
+    EXPORT workx_targets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+# 安装到 include/ 根并保持目录结构（install(FILES) 会拍平子目录，
+# 必须按目录分组；源码以 agent/...、core/... 风格 include，
+# 与 INSTALL_INTERFACE:include 对应，参考 liblogger 布局）
+foreach(_hdr IN LISTS WORKX_PUBLIC_HEADERS)
+    get_filename_component(_hdir "${_hdr}" DIRECTORY)
+    install(FILES "${_hdr}" DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${_hdir}")
+endforeach()
+
+install(EXPORT workx_targets
+    FILE workxTargets.cmake
+    NAMESPACE workx::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/workx
+)
+
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/workxConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/workxConfig.cmake"
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/workx
+)
+
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/workxConfigVersion.cmake"
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+    ARCH_INDEPENDENT
+)
+
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/workxConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/workxConfigVersion.cmake"
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/workx
+)

@@ -24,7 +24,7 @@
 #include "agent/model/config.h"
 #include "agent/model/model_catalog.h"
 #include "agent/model/provider_preset.h"
-#include "app/config/app_config.h"
+#include "agent/config/app_config.h"
 #include "core/config/i_config_manager.h"
 #include "tui/core/color_scheme.h"
 #include "tui/core/platform/i_platform.h"

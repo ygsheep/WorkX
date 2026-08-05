@@ -22,6 +22,8 @@
 #include <string>
 #include <vector>
 #include <filesystem>
+
+#include "core/export.h"
 #include <format>
 #include <variant>
 
@@ -132,7 +134,7 @@ public:
 /// 历史说明：
 /// - 类型擦除的虚函数接口供 DI 注入
 /// - 模板包装方法委托虚函数，调用方可像使用 ConfigManager 一样使用 IConfigManager&
-class IConfigManager : public IConfigReader, public IConfigWriter, public IConfigPersistence {
+class WORKX_API IConfigManager : public IConfigReader, public IConfigWriter, public IConfigPersistence {
     // 纯抽象组合。模板包装方法已分别移至 IConfigReader / IConfigWriter。
     // 保留 IConfigManager 类型供现有代码作为 DI 注入点，无需改动。
 };

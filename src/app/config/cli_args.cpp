@@ -11,7 +11,7 @@
 #include <string>
 
 #include "agent/model/provider_preset.h"
-#include "app/config/app_config.h"
+#include "agent/config/app_config.h"
 #include "app/config/cli_args.h"
 #include "core/config/i_config_manager.h"
 

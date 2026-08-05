@@ -1,7 +1,29 @@
 # 核心基础模块：config / events / task / utils / process
-# 仅头文件接口 + 少量实现，无外部依赖
+# 定义 workx_core 静态库（最底层，只依赖 nlohmann_json / liblogger）
 
-target_sources(libworkx PRIVATE
+add_library(workx_core STATIC)
+
+# 公共 include 路径（src/ 作为根，所有模块以 src/ 为基准 #include）
+target_include_directories(workx_core PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
+    $<INSTALL_INTERFACE:include>
+)
+
+target_compile_definitions(workx_core PUBLIC
+    WORKX_VERSION="${PROJECT_VERSION}"
+)
+
+# 第三方依赖（PUBLIC：公共头暴露 nlohmann_json / liblogger 类型）
+if(nlohmann_json_FOUND)
+    target_link_libraries(workx_core PUBLIC nlohmann_json::nlohmann_json)
+    target_compile_definitions(workx_core PUBLIC WORKX_HAS_NLOHMANN_JSON)
+endif()
+
+target_link_libraries(workx_core PUBLIC
+    logger
+)
+
+target_sources(workx_core PRIVATE
     config/config_manager.cpp
     process/sandbox/sandbox_adapter.cpp
     process/sandbox/sandbox_detector.cpp
@@ -10,6 +32,7 @@ target_sources(libworkx PRIVATE
     task/task_manager.cpp
     tool_kind.cpp
     utils/error.cpp
+    utils/file_index.cpp
     utils/uuid.cpp
     utils/path_encoder.cpp
 )

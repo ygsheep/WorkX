@@ -24,6 +24,7 @@
 #include "tui/input/history.h"
 #include "tui/core/display_buffer.h"
 #include "core/events/i_event_bus.h"
+#include "core/events/agent_events.h"  // agent::AskUserResult（宿主无关的 AskUser 结果类型）
 #include "core/config/i_config_manager.h"
 #include "core/task/task_manager.h"  // ITaskManager + TaskManager::instance() 默认实参
 
@@ -41,9 +42,11 @@ struct ChoiceResult;
 
 namespace detail {
 /// @brief 待处理的 AskUser 请求（由事件泵线程设置，主循环消费）
+/// @details result_promise 为宿主无关的 agent::AskUserResult，TUI 在
+///          set_value 前将 tui::ChoiceResult 转换为 agent::AskUserResult。
 struct PendingAskRequest {
     nlohmann::json questions;
-    std::shared_ptr<std::promise<ChoiceResult>> result_promise;
+    std::shared_ptr<std::promise<agent::AskUserResult>> result_promise;
     /// @brief 取消标志：工作线程超时后置位，run_choice_panel 检查后关闭面板
     std::shared_ptr<std::atomic<bool>> cancel_flag;
 };

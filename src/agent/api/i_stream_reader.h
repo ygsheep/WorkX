@@ -10,6 +10,7 @@
 
 #include <functional>
 #include "agent/api/chat_types.h"
+#include "core/export.h"
 
 namespace agent {
 
@@ -23,7 +24,7 @@ enum class StreamState {
 
 /// @brief 流式读取器接口
 /// @details 从后端增量读取响应，阻塞等待下一个 chunk
-class IStreamReader {
+class WORKX_API IStreamReader {
 public:
     virtual ~IStreamReader() = default;
 

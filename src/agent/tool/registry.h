@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 #include <memory>
+
+#include "core/export.h"
 #include <unordered_map>
 #include <nlohmann/json.hpp>
 #include "itool.h"
@@ -23,7 +25,7 @@ namespace agent::tool {
 /// - 注册/注销工具实例
 /// - 按名称查找工具
 /// - 列举所有工具的 schema（供 LLM function calling 使用）
-class ToolRegistry {
+class WORKX_API ToolRegistry {
 public:
     /// @brief 注册工具
     /// @param tool 工具实例

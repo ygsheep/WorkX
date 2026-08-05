@@ -14,6 +14,8 @@
 #include <string>
 #include <memory>
 #include <chrono>
+
+#include "core/export.h"
 #include <filesystem>
 #include <utility>
 #include <nlohmann/json.hpp>
@@ -103,7 +105,7 @@ inline std::pair<std::string, bool> truncate_result(std::string_view text, size_
 ///   - lookup_tool()：纯查找，无副作用
 ///   - run_with_safety()：try-catch 包装工具调用，返回 ResultV2<ToolResult>
 ///   - finalize_result()：组装 ExecutionResult + 截断 + 日志
-class ToolExecutor {
+class WORKX_API ToolExecutor {
 public:
     /// @brief 构造函数
     /// @param registry 工具注册表

@@ -11,7 +11,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "app/config/app_config.h"
+#include "agent/config/app_config.h"
 #include "app/config/cli_args.h"
 #include "helpers/mock_config_manager.h"  // H-B：替代 ConfigManager::instance()
 

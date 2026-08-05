@@ -51,9 +51,11 @@ add_library(logger STATIC ${LOGGER_SOURCES})
 target_compile_features(logger PUBLIC cxx_std_20)
 
 # 导出包含目录
+# BUILD_INTERFACE 指向 lib/（父目录）：workx 以 <liblogger/logger.h> 风格 include，
+# 该风格在构建树与安装树（include/liblogger/logger.h）保持一致
 target_include_directories(logger
     PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
     $<INSTALL_INTERFACE:include>
 )
 
@@ -86,14 +88,16 @@ install(TARGETS logger
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
+# 安装到 include/liblogger/，与 <liblogger/logger.h> include 风格对应
 install(FILES ${LOGGER_HEADERS}
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/logger
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/liblogger
 )
 
 # 导出配置
+# 无 NAMESPACE：目标在安装树中仍名为 logger（与构建树一致），
+# workx 导出文件中的 "logger" 引用在 find_dependency(logger) 后才能解析
 install(EXPORT logger_targets
     FILE logger_targets.cmake
-    NAMESPACE logger
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/logger)
 
 

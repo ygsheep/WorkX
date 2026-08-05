@@ -5,7 +5,7 @@ add_executable(example_code_highlight
     main.cpp
 )
 
-target_link_libraries(example_code_highlight PRIVATE libworkx)
+target_link_libraries(example_code_highlight PRIVATE workx_tui)
 
 # 确保启用 tree-sitter 时, example 也能感知 grammar 定义 (从 libworkx PUBLIC 继承)
 # WORKX_HAS_TREE_SITTER / WORKX_TS_<NAME> 已经通过 libworkx PUBLIC 传播

@@ -26,7 +26,7 @@
 #include "agent/tool/file_history.h"
 #include "agent/tool/context.h"
 #include "core/config/config_manager.h"
-#include "app/config/app_config.h"
+#include "agent/config/app_config.h"
 
 namespace fs = std::filesystem;
 using namespace agent;

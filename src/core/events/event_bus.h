@@ -11,6 +11,8 @@
 #include <functional>
 #include <vector>
 #include <mutex>
+
+#include "core/export.h"
 #include <unordered_map>
 #include <typeindex>
 #include <cstdint>
@@ -21,7 +23,7 @@
 
 namespace agent {
 
-class EventBus final : public IEventBus {
+class WORKX_API EventBus final : public IEventBus {
 public:
     static EventBus& instance() noexcept {
         static EventBus inst;

@@ -6,7 +6,7 @@
  * @date 2026-07
  */
 
-#include "app/ui/file_index.h"
+#include "core/utils/file_index.h"
 
 #include <algorithm>
 #include <cctype>

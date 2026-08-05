@@ -14,7 +14,7 @@
 #include "agent/command/inclaude/registry.h"
 #include "agent/skill/inclaude/conditional.h"
 #include "agent/skill/inclaude/hooks.h"
-#include "app/config/app_config.h"
+#include "agent/config/app_config.h"
 #include "core/task/task_manager.h"
 #include "core/config/config_manager.h"
 #include "core/utils/uuid.h"  // 项目会话恢复：UUID 生成
@@ -230,6 +230,11 @@ void ChatSession::set_tool_registry(std::shared_ptr<tool::ToolRegistry> registry
 std::shared_ptr<tool::ToolRegistry> ChatSession::tool_registry() const {
     std::lock_guard<std::mutex> lock(m_state_mutex);
     return m_tool_registry;
+}
+
+void ChatSession::set_file_index_invalidator(std::function<void()> invalidator) {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    m_file_index_invalidator = std::move(invalidator);
 }
 
 void ChatSession::set_command_registry(std::shared_ptr<command::CommandRegistry> registry) {
@@ -704,9 +709,11 @@ void ChatSession::run_completion(const std::string& user_text,
             // cwd：注入会话启动时捕获的工作目录，避免运行中 cwd 漂移导致工具在错误目录执行
             // DS_CACHE H-3：注入 m_compactor 引用，使卡死守卫/rewrite_version 跨 turn 持久化
             // AskUserTool DI：注入 EventBus，工具通过 ToolContext.event_bus() 发布事件
+            // 宿主文件索引失效回调：FileWriteTool 写文件后通知宿主（TUI @ 补全）重建索引
             ReActLoop loop(m_provider.get(), m_tool_registry, ReActLoop::Config{},
                            &m_config_manager.get(), &m_task_manager.get(), m_cwd,
-                           &m_compactor, &m_event_bus.get(), &m_touch_collector);
+                           &m_compactor, &m_event_bus.get(), &m_touch_collector,
+                           m_file_index_invalidator);
 
             // 3.2：使用 IReActObserver 接口替代 lambda 回调
             // ReActEventPublisher 内部完成 ReActStep → IEventBus 事件转换

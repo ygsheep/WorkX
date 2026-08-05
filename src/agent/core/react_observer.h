@@ -12,13 +12,14 @@
 
 #include <string>
 #include "agent/core/react_loop.h"
+#include "core/export.h"
 
 namespace agent {
 
 /// @brief ReAct 循环观察者接口
 /// @details 所有方法由 ReActLoop 在对应阶段同步调用，实现方应避免阻塞。
 ///          默认空实现，子类按需覆盖。
-class IReActObserver {
+class WORKX_API IReActObserver {
 public:
     virtual ~IReActObserver() = default;
 

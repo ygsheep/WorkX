@@ -14,7 +14,7 @@
 #include "agent/api/i_backend_admin.h"
 #include "agent/model/config.h"
 #include "agent/model/provider_preset.h"
-#include "app/config/app_config.h"
+#include "agent/config/app_config.h"
 #include "app/ui/model_selector.h"
 #include "core/config/i_config_manager.h"
 #include "tui/core/platform/i_platform.h"
