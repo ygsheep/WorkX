@@ -12,7 +12,6 @@
 
 #include <cstdio>
 #include <algorithm>
-#include "logger.h"
 
 namespace tui {
 
@@ -117,10 +116,6 @@ void CommandPanel::render() {
 
     int render_start = height - 2 - display_count;
     if (render_start < 1) render_start = 1;
-
-    // 临时诊断：定位"滚动后行数增加"问题
-    LOG_INFO("[dbg] CommandPanel render: height={} total={} display_count={} render_start={} clear_start={} scroll_offset={} selected={}",
-             height, total, display_count, render_start, clear_start, scroll_offset, m_selected);
 
     std::string content;
     content += "\x1b[?25l";
