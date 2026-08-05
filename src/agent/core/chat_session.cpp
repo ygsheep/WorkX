@@ -658,7 +658,7 @@ void ChatSession::run_completion(const std::string& user_text,
                         body = "[skill hooks]\n" + hook_block + "\n" + body;
                     }
                 }
-                prefix = "[Activated skill: " + sk->name() + "]\n" + prefix + body + "\n";
+                prefix += "[Activated skill: " + sk->name() + "]\n" + body + "\n";
                 m_activated_skills.insert(sk->name());
             }
             if (!prefix.empty()) {
