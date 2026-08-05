@@ -13,6 +13,6 @@ include("${CMAKE_CURRENT_LIST_DIR}/workxTargets.cmake")
 # 顶层变量
 set(workx_VERSION "@PROJECT_VERSION@")
 set(workx_FOUND TRUE)
-set(workx_LIBRARIES workx::workx_agent workx::workx_core)
+set(workx_LIBRARIES workx::agent workx::core)
 
 check_required_components(workx)

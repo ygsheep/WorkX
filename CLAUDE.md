@@ -104,7 +104,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ### Agent Harness 目标
 
-- `workx_core` + `workx_agent` 通过 install/EXPORT 对外发布（包名 `workx`，目标 `workx::workx_core` / `workx::workx_agent`）；`workx_tui`/`workx_app` 不安装
+- `workx_core` + `workx_agent` 通过 install/EXPORT 对外发布（包名 `workx`，目标 `workx::core` / `workx::agent`）；`workx_tui`/`workx_app` 不安装
 - 外部工程三种消费模式均有验证（`tests/consumer/`：find_package / add_subdirectory / 仓库内）：注入 fake `ICompletionProvider` + 订阅 EventBus 即可驱动 ReAct 循环，**零 TUI 依赖**
 - 公共 API 面 = `WORKX_PUBLIC_HEADERS` 白名单（`src/CMakeLists.txt`，未列入即私有）；`WORKX_API` 导出宏（`src/core/export.h`）为未来 DLL/插件化预留
 - 改动公共头 = 改动白名单闭包（`tests/consumer` 编译验证）；改动分层边界需过 `[layer_boundary]` 单测

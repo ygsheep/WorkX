@@ -27,7 +27,7 @@ elseif(WORKX_SOURCE_DIR)
     set(AGENT_TARGET workx_agent)
 else()
     find_package(workx CONFIG REQUIRED)
-    set(AGENT_TARGET workx::workx_agent)
+    set(AGENT_TARGET workx::agent)
 endif()
 
 add_executable(consumer main.cpp)

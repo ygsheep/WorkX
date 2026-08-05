@@ -3,6 +3,9 @@
 
 add_library(workx_agent STATIC)
 
+# 导出名不带 workx_ 前缀（安装树中为 workx::agent，避免 workx::workx_agent 重复命名）
+set_target_properties(workx_agent PROPERTIES EXPORT_NAME agent)
+
 target_include_directories(workx_agent PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
     $<INSTALL_INTERFACE:include>

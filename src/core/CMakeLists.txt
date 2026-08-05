@@ -3,6 +3,9 @@
 
 add_library(workx_core STATIC)
 
+# 导出名不带 workx_ 前缀（安装树中为 workx::core，避免 workx::workx_core 重复命名）
+set_target_properties(workx_core PROPERTIES EXPORT_NAME core)
+
 # 公共 include 路径（src/ 作为根，所有模块以 src/ 为基准 #include）
 target_include_directories(workx_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
