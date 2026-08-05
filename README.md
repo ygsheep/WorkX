@@ -2,6 +2,8 @@
 
 > 一个现代化的终端 Code Agent / Work Agent，基于 ReAct 循环与工具调用架构，能够自主完成编码、调试、文件操作与任务编排。
 
+> **Agent Harness 定位**：除终端客户端外，`src/core` + `src/agent` 构成可复用的 Agent Harness 库（`workx::workx_agent`）。外部工程可通过 `find_package(workx)` 或 `add_subdirectory` 链接并驱动 ReAct Agent 循环（注入 `ICompletionProvider`、订阅 `EventBus` 事件即可），**无需任何 TUI/应用层依赖**——`src/tui` 与 `src/app` 只是参考宿主实现。消费示例见 `tests/consumer/`。
+
 ## 特性
 
 - **自主任务执行**: 基于 ReAct 循环（推理 + 行动），Agent 自主规划并调用工具完成任务，而非简单问答
@@ -20,6 +22,8 @@
 ## 架构概览
 
 ![Workx 四层架构图（鲸鱼娘解说版）](docs/architecture_overview.jpg)
+
+**分层与单向依赖**：`core ← agent ← tui ← app`，禁止反向依赖（由 `test_layer_boundary` 编译期校验）。其中 `workx_core` + `workx_agent` 可安装供外部消费（Agent Harness），`workx_tui` / `workx_app` 为内部宿主目标；公共 API 面由 `WORKX_PUBLIC_HEADERS` 白名单界定（`src/CMakeLists.txt`）。
 
 ### 核心工作流（鲸鱼娘图解）
 
