@@ -9,6 +9,7 @@
 #include "tui/core/terminal.h"
 #include "tui/core/color_scheme.h"
 #include "tui/core/platform/i_platform.h"
+#include "tui/utils/utf8_utils.h"
 #include "app/ui/file_index.h"
 
 #include <cstdio>
@@ -89,22 +90,28 @@ void FileSearchPanel::render() {
         return;
     }
 
-    static constexpr int MAX_DISPLAY = 7;
+    static constexpr int MAX_DISPLAY = 10;
 
     int height = m_terminal->get_terminal_height();
     int total = static_cast<int>(m_results.size());
+    // 显示行数上限：MAX_DISPLAY + 屏幕可用行（面板区域 [1, h-3]，输入行在 h-1）
     int display_count = std::min(MAX_DISPLAY, total);
+    int max_rows = height - 4;  // 行 1..h-3 可用（h-4 保底 1 行，h>=5）
+    if (display_count > max_rows) display_count = max_rows;
+    if (display_count < 1) display_count = 1;
 
     // 可滚动窗口：将选中项保持在可视区域中间
     int scroll_offset = m_selected - display_count / 2;
     if (scroll_offset < 0) scroll_offset = 0;
     if (scroll_offset + display_count > total) scroll_offset = total - display_count;
 
-    // 清除所有 MAX_DISPLAY 行
-    int clear_start = height - 1 - MAX_DISPLAY;
+    // 清除所有 MAX_DISPLAY 行。
+    // 面板底行固定 h-3（overlay 保护区 [h-12, h-3] 内），不得越界到 h-2/h-1，
+    // 否则关闭面板后该行无法由 overlay 快照恢复
+    int clear_start = height - 2 - MAX_DISPLAY;
     if (clear_start < 1) clear_start = 1;
 
-    int render_start = height - 1 - display_count;
+    int render_start = height - 2 - display_count;
     if (render_start < 1) render_start = 1;
 
     std::string content;
@@ -138,9 +145,20 @@ void FileSearchPanel::render() {
             content += "   ";
         }
 
-        content += entry.relative_path;
+        // 路径按终端剩余宽度截断，防止超宽物理换行导致面板行错位/残留
+        // 行头固定 3 字符（" > " / "   "），行宽必须 ≤ term_w - 1
+        int header_w = 3;
+        int max_path_width = m_terminal->get_terminal_width() - header_w - 1;
+        if (max_path_width < 4) max_path_width = 4;
+        std::string path = entry.relative_path;
         if (entry.is_directory) {
-            content += "/";
+            path += "/";
+        }
+        if (display_width(path) > max_path_width) {
+            content += truncate_to_width(path, max_path_width - 1);
+            content += "…";
+        } else {
+            content += path;
         }
 
         if (is_selected) {
