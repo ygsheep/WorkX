@@ -113,7 +113,8 @@
   - 导出目标无 NAMESPACE（与构建树同名 `logger`，workx 导出引用才能解析）；头安装到 `include/liblogger/`（原 `include/logger/` 与 `<liblogger/logger.h>` 风格不符）
   - 教训：别名 `logger::logger` 会被 CMake 导出为 `loggerlogger`（别名目标导出拼接 bug），不可用
 - **白名单闭包**：按 chat_session.h 传递闭包补齐 14 个头（`agent/model/provider_type.h`、`agent/compact/*`、`agent/command/inclaude/*`、`agent/skill/inclaude/conditional.h`、`core/events/{event_token,events,stream_events,system_events}.h`、`core/task/thread_pool.h`、`core/tool_kind.h`、`agent/tool/{itool,result}.h`）
-- **消费验证全绿**：仓库内（WORKX_BUILD_CONSUMER=ON）✓ / 外部 add_subdirectory（独立 configure，`-DWORKX_SOURCE_DIR`，`WORKX_FETCH_GRAMMARS=OFF`）✓ / 外部 find_package（`cmake --install` → `workx::workx_agent`）✓ —— 三模式均输出 `OK: agent loop driven without TUI`
+- **消费验证全绿**：仓库内（WORKX_BUILD_CONSUMER=ON）✓ / 外部 add_subdirectory（独立 configure，`-DWORKX_SOURCE_DIR`，`WORKX_FETCH_GRAMMARS=OFF`）✓ / 外部 find_package（`cmake --install` → `workx::agent`）✓ —— 三模式均输出 `OK: agent loop driven without TUI`
+- **导出名去重**（`9fbfd44`）：`EXPORT_NAME` 令安装树目标为 `workx::agent` / `workx::core`（内部目标名 workx_agent/workx_core 不变）；`workx_LIBRARIES=workx::agent workx::core`
 - 回归：790 单测 = 789 通过 / 1 失败（`BashTool reports non-zero exit code`，Windows `exit /b 42` 环境性，既有失败）
 - 已知约束：多配置消费者（如 VS 全配置生成）在只安装了 Debug 时会报 `IMPORTED_LOCATION not set` —— 需 `-DCMAKE_CONFIGURATION_TYPES=Debug` 或安装全部构建配置
 
