@@ -6,7 +6,11 @@
         "nlohmann-json",
         "catch2",
         "curl",
-        "tree-sitter"
+        "tree-sitter",
+        {
+            "name": "imgui",
+            "features": ["dx11-binding", "win32-binding"]
+        }
     ],
     "overrides": []
 }
