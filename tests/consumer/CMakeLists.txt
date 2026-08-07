@@ -5,8 +5,11 @@
 # 2. 外部 add_subdirectory 模式：单独 configure，把 workx 源码树加进来
 #    cmake -S tests/consumer -B <build> -DWORKX_SOURCE_DIR=<workx 根> \
 #          -DCMAKE_TOOLCHAIN_FILE=<vcpkg> -DWORKX_FETCH_GRAMMARS=OFF
+#    注意：vcpkg manifest 只对顶层工程生效，本目录自带 vcpkg.json
+#    （nlohmann-json + curl，workx 的硬依赖），依赖由本工程自行安装
 # 3. 外部 find_package 模式（M2 验收）：
 #    cmake -S tests/consumer -B <build> -DCMAKE_PREFIX_PATH=<workx install 前缀>
+#    依赖由安装树的 workxConfig.cmake 内 find_dependency 保证
 # 注意：模式 2/3 是独立 configure；模式 1 才是仓库根的子目录。
 
 cmake_minimum_required(VERSION 3.21)

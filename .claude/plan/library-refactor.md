@@ -71,6 +71,7 @@
 
 - `include(GNUInstallDirs)` + `install(TARGETS workx_core workx_agent EXPORT workx_targets ...)`，`NAMESPACE workx::`（`workx::core` / `workx::agent`）；workx_tui 为内部目标不安装
 - 新 `workxConfig.cmake.in`：`@PACKAGE_INIT@` + `find_dependency(nlohmann_json)` + `find_dependency(CURL)`（两个都是公共头暴露的硬依赖）+ `include(workxTargets.cmake)` + `set(workx_LIBRARIES workx::agent)`
+- 依赖必选化（PR 评审 P1/P2 修复）：构建侧与安装侧语义一致 —— 根 CMakeLists `find_package(nlohmann_json CONFIG REQUIRED)`（原 QUIET 静默失败 → 编译期 C1083），src/core、src/agent 无条件链接 json（删 `if(nlohmann_json_FOUND)` 死分支与 `WORKX_HAS_NLOHMANN_JSON` 死宏）。注意 add_subdirectory 消费模式下 vcpkg manifest 只对顶层生效，消费方须自带 vcpkg.json 声明依赖（`tests/consumer/vcpkg.json` 已提供 nlohmann-json + curl）
 - `write_basic_package_version_file(... COMPATIBILITY SameMajorVersion)`，版本承诺锚定 `PROJECT_VERSION`（0.2.0）
 - 公共头安装由 M3 白名单驱动，目标目录 `include/workx/...`
 - `INSTALL_INTERFACE:include` 已存在于 libworkx 目标，拆分后逐个目标保留
@@ -96,6 +97,7 @@
 2. 回归：`cmake --preset default && cmake --build build --config Debug --target workx_unit_tests && ctest --test-dir build -C Debug --output-on-failure`（重点 `[choice_panel]`、`[chat_session]`、`[tool]`）
 3. consumer 冒烟：`tests/consumer/` 用 fake provider 驱动 ChatSession 跑一轮 ReAct 循环，仅订阅 EventBus 打印输出，**不链任何 tui/app 目标**
 4. 可选：`cmake --install` 到临时目录 + consumer `find_package(workx CONFIG)` 编译链接
+5. add_subdirectory 全量实测（PR 评审 P1）：`cmake -S tests/consumer -B <b> -DWORKX_SOURCE_DIR=<workx 根> -DCMAKE_TOOLCHAIN_FILE=<vcpkg> -DWORKX_FETCH_GRAMMARS=OFF` 完整编译（含 workx.exe）通过；顺带修复 tree-sitter=OFF 降级路径缺失 `highlight_diff` 定义的既有链接缺陷
 
 ## 进度记录（2026-08-06）
 

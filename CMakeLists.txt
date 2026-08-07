@@ -16,7 +16,13 @@ else()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-find_package(nlohmann_json CONFIG QUIET)
+# nlohmann_json / CURL 是硬依赖：公共头无条件 include <nlohmann/json.hpp>
+# （见 core/config/i_config_manager.h 等 17 处），src/agent 无条件编译
+# http_client.cpp。REQUIRED 让依赖缺失在 configure 期直接失败（错误可定位），
+# 而不是静默跳过链接后到编译期才爆 C1083。
+# 注意 add_subdirectory 消费模式：vcpkg manifest 只对顶层工程生效，消费方
+# 须自行提供这两个包（manifest 声明或已安装实例），workx 无法代为获取。
+find_package(nlohmann_json CONFIG REQUIRED)
 
 find_package(CURL CONFIG REQUIRED)
 
