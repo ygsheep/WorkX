@@ -17,12 +17,9 @@ target_compile_definitions(workx_core PUBLIC
 )
 
 # 第三方依赖（PUBLIC：公共头暴露 nlohmann_json / liblogger 类型）
-if(nlohmann_json_FOUND)
-    target_link_libraries(workx_core PUBLIC nlohmann_json::nlohmann_json)
-    target_compile_definitions(workx_core PUBLIC WORKX_HAS_NLOHMANN_JSON)
-endif()
-
+# nlohmann_json 必选（根 CMakeLists 已 find_package REQUIRED），无条件链接
 target_link_libraries(workx_core PUBLIC
+    nlohmann_json::nlohmann_json
     logger
 )
 

@@ -105,6 +105,10 @@ std::string highlight_code(std::string_view /*lang*/, std::string_view code) {
     return std::string(code);
 }
 
+std::string highlight_diff(std::string_view /*file_lang*/, std::string_view diff) {
+    return std::string(diff);
+}
+
 #else // WORKX_HAS_TREE_SITTER
 
 bool syntax_highlighting_enabled() { return true; }
