@@ -14,6 +14,8 @@
 
 #pragma once
 
+#include <cstdint>
+#include <utility>
 #include <vector>
 #include <atomic>
 #include <functional>
@@ -83,7 +85,12 @@ public:
         std::string notice;           ///< 人类可读通知
     };
 
-    explicit CacheAwareCompactor(Config cfg = {}, SummarizeFn summarize_fn = {});
+    CacheAwareCompactor() : CacheAwareCompactor(Config{}, SummarizeFn{}) {}
+
+    explicit CacheAwareCompactor(Config cfg)
+        : CacheAwareCompactor(std::move(cfg), SummarizeFn{}) {}
+
+    CacheAwareCompactor(Config cfg, SummarizeFn summarize_fn);
 
     /// @brief 设置暂停事件回调（H-3：卡死守卫触发/恢复时通知调用方）
     void set_paused_callback(PausedCallback cb) { m_paused_cb = std::move(cb); }

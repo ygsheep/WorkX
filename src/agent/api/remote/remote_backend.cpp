@@ -12,6 +12,7 @@
 // H-1：不再 include core/events/event_bus.h，避免重新引入 EventBus::instance() 依赖
 #include "agent/message/types.h"
 
+#include <format>
 #include <nlohmann/json.hpp>
 
 #include <liblogger/logger.h>

@@ -11,6 +11,7 @@
 #include "tui/core/color_scheme.h"
 #include "tui/core/platform/i_platform.h"
 
+#include <format>
 #include <algorithm>
 #include <sstream>
 

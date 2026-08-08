@@ -20,6 +20,7 @@
 #include "core/task/task_events.h"
 #include "agent/message/types.h"
 
+#include <format>
 #include <cassert>
 #include <chrono>
 #include <thread>
