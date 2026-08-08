@@ -19,6 +19,7 @@
 #include "core/events/agent_events.h"  // CacheDiagnosticsEvent
 #include "core/task/task_events.h"
 #include "agent/message/types.h"
+#include "liblogger/logger.h"
 
 #include <format>
 #include <cassert>
@@ -1028,6 +1029,7 @@ void ChatRenderer::start() {
     // 主循环取出 pending 后弹出 ChoicePanel 模态，结果回填 promise 唤醒工作线程。
     m_token_ask_user = std::make_unique<agent::EventToken>(
         bus.subscribe<AskUserRequestEvent>([this](const AskUserRequestEvent& e) {
+            LOG_INFO("[ChatRenderer] AskUserRequestEvent received, timeout_ms={}", e.timeout_ms);
             tui::detail::PendingAskRequest req;
             req.questions = e.questions;
             req.result_promise = e.result_promise;

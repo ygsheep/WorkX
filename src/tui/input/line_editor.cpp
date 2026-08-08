@@ -7,6 +7,7 @@
 #include "tui/input/line_editor.h"
 #include "tui/core/platform/i_platform.h"
 #include "tui/utils/utf8_utils.h"
+#include "liblogger/logger.h"
 #include <cassert>
 #include <cstdio>
 #include <cwctype>
@@ -452,6 +453,7 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
             assert(m_char_pos <= m_widths.size());
 
             char32_t input_char = m_platform->read_char();
+            LOG_INFO("[LineEditor] read_char returned input_char=0x{:X}", static_cast<unsigned>(input_char));
 
             // Enter 提交（Shift/Ctrl+Enter 由平台层转换为 '\n'）
             if (input_char == '\r') {
@@ -531,6 +533,7 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
 
             // 跨线程唤醒（AskUser 等）：立即返回空结果，主循环检查 pending 事件
             if (input_char == KEY_WAKE) {
+                LOG_INFO("[LineEditor] KEY_WAKE branch hit, returning woken_by_ask=true");
                 ReadResult r;
                 r.woken_by_ask = true;
                 return r;

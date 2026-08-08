@@ -6,10 +6,12 @@
 
 #include "tui/core/platform/i_platform.h"
 #include "tui/core/platform/vt_input_decoder.h"
+#include "liblogger/logger.h"
 
 #include <termios.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include <poll.h>
 #include <csignal>
 #include <cerrno>
 #include <cstdio>
@@ -21,6 +23,7 @@ namespace tui {
 using namespace agent;  // P0: tui→agent 类型引用过渡方案，后续 P2/P3 收紧到显式前缀
 
 // POSIX 特殊键码
+static constexpr char32_t KEY_WAKE             = 0xE010;  // 跨线程唤醒（AskUser 等）
 static constexpr char32_t KEY_ARROW_LEFT       = 0xE000;
 static constexpr char32_t KEY_ARROW_RIGHT      = 0xE001;
 static constexpr char32_t KEY_ARROW_UP         = 0xE002;
@@ -64,6 +67,11 @@ public:
         // 启用 bracketed paste：终端把粘贴内容包裹在 ESC[200~ / ESC[201~ 中
         write_output("\x1b[?2004h");
 
+        // 创建 self-pipe，用于跨线程唤醒阻塞的 read_char（notify_wake 写一字节触发）
+        if (pipe(m_wake_pipe) != 0) {
+            m_wake_pipe[0] = m_wake_pipe[1] = -1;
+        }
+
         // 注册 SIGWINCH 处理器：终端尺寸变更时置 flag，read_char() 据此返回 KEY_RESIZE。
         // 保存旧 handler 以便 disable_raw_mode 恢复。
         m_sigwinch_installed = (signal(SIGWINCH, sigwinch_handler) != SIG_ERR);
@@ -80,8 +88,22 @@ public:
             signal(SIGWINCH, SIG_DFL);
             m_sigwinch_installed = false;
         }
+        // 关闭 self-pipe
+        if (m_wake_pipe[0] != -1) close(m_wake_pipe[0]);
+        if (m_wake_pipe[1] != -1) close(m_wake_pipe[1]);
+        m_wake_pipe[0] = m_wake_pipe[1] = -1;
         tcsetattr(STDIN_FILENO, TCSAFLUSH, &m_original);
         m_raw_mode_enabled = false;
+    }
+
+    void notify_wake() override {
+        LOG_INFO("[PosixPlatform] notify_wake called, pipe_w={}", m_wake_pipe[1]);
+        if (m_wake_pipe[1] != -1) {
+            char byte = 1;
+            ssize_t n = write(m_wake_pipe[1], &byte, 1);
+            LOG_INFO("[PosixPlatform] notify_wake wrote {} bytes", n);
+            (void)n;  // 非阻塞写失败可忽略（管道缓冲满说明已有待处理唤醒）
+        }
     }
 
     char32_t read_char() override {
@@ -89,6 +111,37 @@ public:
         if (g_resize_pending) {
             g_resize_pending = 0;
             return KEY_RESIZE;
+        }
+
+        // 用 poll 同时监听 stdin 和 self-pipe，任一就绪即返回。
+        // self-pipe 就绪时返回 KEY_WAKE 唤醒主循环（AskUser 请求/超时等）。
+        if (m_wake_pipe[0] != -1) {
+            struct pollfd fds[2];
+            fds[0].fd = STDIN_FILENO;
+            fds[0].events = POLLIN;
+            fds[0].revents = 0;
+            fds[1].fd = m_wake_pipe[0];
+            fds[1].events = POLLIN;
+            fds[1].revents = 0;
+            int pr = poll(fds, 2, -1);
+            LOG_INFO("[PosixPlatform] read_char poll returned, pr={}, stdin_rev={}, pipe_rev={}",
+                     pr, fds[0].revents, fds[1].revents);
+            if (pr < 0) {
+                if (errno == EINTR && g_resize_pending) {
+                    g_resize_pending = 0;
+                    return KEY_RESIZE;
+                }
+                // poll 失败（非 EINTR）按无输入处理，避免死循环
+                return WEOF;
+            }
+            // self-pipe 就绪：清空并返回 KEY_WAKE
+            if (fds[1].revents & POLLIN) {
+                LOG_INFO("[PosixPlatform] read_char returning KEY_WAKE");
+                char dummy;
+                while (read(m_wake_pipe[0], &dummy, 1) > 0) {}
+                return KEY_WAKE;
+            }
+            // stdin 未就绪（理论上 poll 已保证就绪），继续走正常读取
         }
 
         unsigned char buf[4];
@@ -231,6 +284,7 @@ private:
     bool m_raw_mode_enabled = false;
     bool m_sigwinch_installed = false;  ///< SIGWINCH 处理器是否已注册
     VtInputDecoder m_vt_decoder;        ///< VT 输入序列解码器
+    int m_wake_pipe[2] = {-1, -1};      ///< self-pipe：notify_wake 写端，read_char poll 读端
 };
 
 std::unique_ptr<IPlatform> create_platform() {
