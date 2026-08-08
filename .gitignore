@@ -47,6 +47,9 @@ workx_session.json
 config.json
 *.env
 
+# Runtime-generated history file (created by Terminal in home dir)
+.workx_history
+
 # models.dev catalog data (large local test fixtures, ~17MB)
 models-*.json
 
