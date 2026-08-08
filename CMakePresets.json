@@ -27,8 +27,8 @@
       "name": "Linux_Debug",
       "displayName": "Linux_Debug (vcpkg)",
       "description": "Linux_Debug build using vcpkg toolchain",
-      "toolchainFile": "/home/young/WorkSpace/vcpkg/scripts/buildsystems/vcpkg.cmake",
-      "binaryDir": "${sourceDir}/build_Linux",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
       }
