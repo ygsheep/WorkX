@@ -36,7 +36,9 @@ public:
 
     /// @brief 查找 ripgrep 路径
     /// @return rg 可执行文件绝对路径；未找到返回 nullopt
-    /// @note 首次调用时探测，结果缓存。线程安全。
+    /// @note 首次调用时探测，结果缓存（包括 nullopt：未找到也会被缓存，
+    ///       后续调用直接返回 nullopt 而不重新探测，需 clear_cache() 重置）。
+    ///       线程安全。
     std::optional<std::string> resolve_ripgrep() const;
 
     /// @brief 查找指定工具路径（通用接口，未来扩展 fd/bat/jq 等）
@@ -44,6 +46,7 @@ public:
     /// @param bundled_relative_path bundled 目录下相对路径（如 "tools/rg.exe"）
     /// @param path_name PATH 中查找的命令名（如 "rg" 或 "rg.exe"）
     /// @return 可执行文件绝对路径；未找到返回 nullopt
+    /// @note 首次调用时探测，结果缓存（包括 nullopt：未找到也会被缓存）。
     std::optional<std::string> resolve_tool(
         const std::string& tool_name,
         const std::string& bundled_relative_path,

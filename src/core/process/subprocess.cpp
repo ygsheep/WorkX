@@ -182,6 +182,8 @@ struct HandleGuard {
     HandleGuard& operator=(const HandleGuard&) = delete;
     operator HANDLE() const { return h; }
     HANDLE* operator&() { return &h; }
+    /// 释放所有权（返回 handle，不再负责关闭）
+    HANDLE release() { HANDLE tmp = h; h = INVALID_HANDLE_VALUE; return tmp; }
 };
 
 /// 创建匿名管道，读端不继承（父进程持有），写端可继承（子进程持有）
@@ -329,10 +331,8 @@ ResultV2<ExecOutput> exec_windows(const std::string& cmd, const ExecOptions& opt
     HandleGuard g_process(pi.hProcess), g_thread(pi.hThread);
 
     // 4. 关闭父进程持有的写端，让子进程的 EOF 能传到读端
-    g_stdout_write.h = INVALID_HANDLE_VALUE;
-    CloseHandle(stdout_write);
-    g_stderr_write.h = INVALID_HANDLE_VALUE;
-    CloseHandle(stderr_write);
+    CloseHandle(g_stdout_write.release());
+    CloseHandle(g_stderr_write.release());
 
     // 5. 循环读取管道 + 检查超时/取消
     ExecOutput output;
@@ -359,40 +359,58 @@ ResultV2<ExecOutput> exec_windows(const std::string& cmd, const ExecOptions& opt
         bool got_data = false;
         // 读 stdout
         if (stdout_open) {
-            bool read_ok;
-            if (output.stdout_text.size() < opts.max_output_bytes) {
-                read_ok = read_pipe(stdout_read, output.stdout_text, opts.max_output_bytes);
-            } else {
-                // 缓冲区已满，读弃数据以防止子进程管道阻塞
+            if (output.stdout_text.size() >= opts.max_output_bytes) {
+                // 缓冲区已满，标记截断，读弃数据以防止子进程管道阻塞
+                output.stdout_truncated = true;
                 std::string discard;
-                read_ok = read_pipe(stdout_read, discard, 65536);
-            }
-            if (read_ok) {
-                got_data = true;
+                if (read_pipe(stdout_read, discard, 65536)) {
+                    got_data = true;
+                } else {
+                    DWORD available = 0;
+                    if (!PeekNamedPipe(stdout_read, nullptr, 0, nullptr, &available, nullptr) && available == 0) {
+                        stdout_open = false;
+                    }
+                }
             } else {
-                // 检查是否 EOF
-                DWORD available = 0;
-                if (!PeekNamedPipe(stdout_read, nullptr, 0, nullptr, &available, nullptr) && available == 0) {
-                    stdout_open = false;
+                if (read_pipe(stdout_read, output.stdout_text, opts.max_output_bytes)) {
+                    got_data = true;
+                    // 读取后再次检查是否到达上限
+                    if (output.stdout_text.size() >= opts.max_output_bytes) {
+                        output.stdout_truncated = true;
+                    }
+                } else {
+                    DWORD available = 0;
+                    if (!PeekNamedPipe(stdout_read, nullptr, 0, nullptr, &available, nullptr) && available == 0) {
+                        stdout_open = false;
+                    }
                 }
             }
         }
 
         // 读 stderr
         if (stderr_open) {
-            bool read_ok;
-            if (output.stderr_text.size() < opts.max_output_bytes) {
-                read_ok = read_pipe(stderr_read, output.stderr_text, opts.max_output_bytes);
-            } else {
+            if (output.stderr_text.size() >= opts.max_output_bytes) {
+                output.stderr_truncated = true;
                 std::string discard;
-                read_ok = read_pipe(stderr_read, discard, 65536);
-            }
-            if (read_ok) {
-                got_data = true;
+                if (read_pipe(stderr_read, discard, 65536)) {
+                    got_data = true;
+                } else {
+                    DWORD available = 0;
+                    if (!PeekNamedPipe(stderr_read, nullptr, 0, nullptr, &available, nullptr) && available == 0) {
+                        stderr_open = false;
+                    }
+                }
             } else {
-                DWORD available = 0;
-                if (!PeekNamedPipe(stderr_read, nullptr, 0, nullptr, &available, nullptr) && available == 0) {
-                    stderr_open = false;
+                if (read_pipe(stderr_read, output.stderr_text, opts.max_output_bytes)) {
+                    got_data = true;
+                    if (output.stderr_text.size() >= opts.max_output_bytes) {
+                        output.stderr_truncated = true;
+                    }
+                } else {
+                    DWORD available = 0;
+                    if (!PeekNamedPipe(stderr_read, nullptr, 0, nullptr, &available, nullptr) && available == 0) {
+                        stderr_open = false;
+                    }
                 }
             }
         }
@@ -437,7 +455,9 @@ bool set_nonblocking(int fd) {
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK) >= 0;
 }
 
-/// 从非阻塞 fd 读取数据到 buf，返回读取字节数（0 表示 EOF，-1 表示暂无数据/EAGAIN）
+/// 从非阻塞 fd 读取数据到 buf
+/// @return 读取字节数（>0 成功）；0 表示 EOF 或错误（调用方应关闭管道）；
+///         -1 表示暂无数据（EAGAIN/EWOULDBLOCK，应继续轮询）
 ssize_t read_nonblocking(int fd, std::string& buf, size_t max_bytes) {
     if (buf.size() >= max_bytes) return 0;
     size_t to_read = std::min<size_t>(8192, max_bytes - buf.size());
@@ -449,8 +469,10 @@ ssize_t read_nonblocking(int fd, std::string& buf, size_t max_bytes) {
         return n;
     }
     if (n == 0) return 0; // EOF
+    // EAGAIN/EWOULDBLOCK：暂无数据，继续轮询
     if (errno == EAGAIN || errno == EWOULDBLOCK) return -1;
-    return -1; // 其他错误也视为无数据
+    // 其他错误（EIO/EBADF 等）：视为 EOF，调用方应关闭管道
+    return 0;
 }
 
 ResultV2<ExecOutput> exec_posix(const std::string& cmd, const ExecOptions& opts) {
@@ -586,27 +608,35 @@ ResultV2<ExecOutput> exec_posix(const std::string& cmd, const ExecOptions& opts)
         int fd_idx = 0;
         if (stdout_open) {
             if (fds[fd_idx].revents & (POLLIN | POLLHUP | POLLERR)) {
-                if (output.stdout_text.size() < opts.max_output_bytes) {
-                    ssize_t n = read_nonblocking(stdout_pipe[0], output.stdout_text, opts.max_output_bytes);
-                    if (n == 0) stdout_open = false; // EOF
-                } else {
-                    // 缓冲区已满，读弃数据以防止子进程管道阻塞
+                if (output.stdout_text.size() >= opts.max_output_bytes) {
+                    // 缓冲区已满，标记截断，读弃数据以防止子进程管道阻塞
+                    output.stdout_truncated = true;
                     char discard[8192];
                     ssize_t n = read(stdout_pipe[0], discard, sizeof(discard));
                     if (n == 0) stdout_open = false; // EOF
+                } else {
+                    ssize_t n = read_nonblocking(stdout_pipe[0], output.stdout_text, opts.max_output_bytes);
+                    if (n == 0) stdout_open = false; // EOF
+                    else if (n > 0 && output.stdout_text.size() >= opts.max_output_bytes) {
+                        output.stdout_truncated = true;
+                    }
                 }
             }
             ++fd_idx;
         }
         if (stderr_open) {
             if (fds[fd_idx].revents & (POLLIN | POLLHUP | POLLERR)) {
-                if (output.stderr_text.size() < opts.max_output_bytes) {
-                    ssize_t n = read_nonblocking(stderr_pipe[0], output.stderr_text, opts.max_output_bytes);
-                    if (n == 0) stderr_open = false;
-                } else {
+                if (output.stderr_text.size() >= opts.max_output_bytes) {
+                    output.stderr_truncated = true;
                     char discard[8192];
                     ssize_t n = read(stderr_pipe[0], discard, sizeof(discard));
                     if (n == 0) stderr_open = false;
+                } else {
+                    ssize_t n = read_nonblocking(stderr_pipe[0], output.stderr_text, opts.max_output_bytes);
+                    if (n == 0) stderr_open = false;
+                    else if (n > 0 && output.stderr_text.size() >= opts.max_output_bytes) {
+                        output.stderr_truncated = true;
+                    }
                 }
             }
         }
