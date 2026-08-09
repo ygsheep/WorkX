@@ -13,6 +13,7 @@
 #include "core/events/agent_events.h"
 #include "core/utils/result_v2.h"
 #include "core/utils/error.h"
+#include "liblogger/logger.h"
 
 #include <future>
 #include <memory>
@@ -130,6 +131,8 @@ ResultV2<ToolResult> AskUserTool::call(
     const nlohmann::json& input,
     const ToolContext& ctx
 ) const {
+    LOG_INFO("[AskUserTool] call() entered, has_questions={}",
+             input.contains("questions"));
     // 1. 校验输入基本结构
     if (!input.contains("questions") || !input["questions"].is_array()) {
         return ResultV2<ToolResult>::err(
@@ -169,6 +172,7 @@ ResultV2<ToolResult> AskUserTool::call(
         .cancel_flag = cancel_flag
     };
     bus.publish_async(evt);
+    LOG_INFO("[AskUserTool] published AskUserRequestEvent, timeout_ms={}, waiting for TUI response", timeout_ms);
 
     // 6. 阻塞等待结果（支持超时）
     AskUserResult result;

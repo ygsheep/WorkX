@@ -17,6 +17,7 @@
 #include "core/config/config_manager.h"
 #include "agent/config/app_config.h"
 
+#include <format>
 #include <fstream>
 #include <sstream>
 #include <algorithm>

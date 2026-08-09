@@ -12,6 +12,11 @@
 
 namespace tui {
 
+/// @brief 跨线程唤醒码：notify_wake() 使阻塞的 read_char() 返回该值（AskUser 等）
+/// @details 由平台层（Win32 Event / POSIX self-pipe）触发，调用方（LineEditor）
+///          据此退出输入循环返回 woken_by_ask。统一在此导出，避免各平台重复定义。
+inline constexpr char32_t KEY_WAKE = 0xE010;
+
 /**
  * @brief 终端平台接口
  */

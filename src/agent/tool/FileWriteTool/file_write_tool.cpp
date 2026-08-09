@@ -23,6 +23,7 @@
 #include "agent/tool/path_expand.h"
 #include "agent/tool/types.h"
 
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <sstream>

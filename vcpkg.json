@@ -2,6 +2,7 @@
     "name": "workx",
     "version-string": "0.2.0",
     "description": "Terminal AI chat client with multi-provider support and event-driven architecture",
+    "builtin-baseline": "56bb2411609227288b70117ead2c47585ba07713",
     "dependencies": [
         "nlohmann-json",
         "catch2",
@@ -9,7 +10,8 @@
         "tree-sitter",
         {
             "name": "imgui",
-            "features": ["dx11-binding", "win32-binding"]
+            "features": ["dx11-binding", "win32-binding"],
+            "platform": "windows"
         }
     ],
     "overrides": []

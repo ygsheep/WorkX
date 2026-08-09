@@ -5,6 +5,7 @@
 
 #include "core/config/config_manager.h"
 
+#include <format>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>

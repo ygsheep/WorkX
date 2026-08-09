@@ -16,6 +16,7 @@
 #include "core/config/config_manager.h"
 #include "core/task/task_manager.h"
 #include "agent/message/types.h"
+#include "liblogger/logger.h"
 
 #include <iostream>
 #include <chrono>
@@ -350,6 +351,8 @@ void Terminal::run_advanced() {
         }
 
         // 跨线程唤醒（AskUser 请求）：弹出 ChoicePanel 模态，结果回填 promise
+        LOG_INFO("[Terminal] read_line returned, woken_by_ask={}, text_empty={}",
+                 result.woken_by_ask, result.text.empty());
         if (result.woken_by_ask) {
             auto pending = take_pending_ask();
             if (pending) {
@@ -424,18 +427,24 @@ void Terminal::set_pending_ask(detail::PendingAskRequest req) {
         std::lock_guard<std::mutex> lock(m_pending_ask_mutex);
         m_pending_ask = std::move(req);
     }
+    LOG_INFO("[Terminal] set_pending_ask, calling wake_main_loop");
     wake_main_loop();
 }
 
 std::optional<detail::PendingAskRequest> Terminal::take_pending_ask() {
     std::lock_guard<std::mutex> lock(m_pending_ask_mutex);
-    if (!m_pending_ask) return std::nullopt;
+    if (!m_pending_ask) {
+        LOG_INFO("[Terminal] take_pending_ask: empty");
+        return std::nullopt;
+    }
+    LOG_INFO("[Terminal] take_pending_ask: got pending request");
     auto req = std::move(m_pending_ask);
     m_pending_ask.reset();
     return req;
 }
 
 void Terminal::wake_main_loop() {
+    LOG_INFO("[Terminal] wake_main_loop called");
     if (m_platform) {
         m_platform->notify_wake();
     }

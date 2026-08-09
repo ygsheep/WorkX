@@ -21,6 +21,7 @@
 
 #include "agent/api/i_backend.h"
 #include "agent/api/i_stream_reader.h"
+#include <format>
 #include <nlohmann/json.hpp>
 
 #include <chrono>

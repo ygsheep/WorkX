@@ -30,6 +30,7 @@
 #include "core/config/config_manager.h"
 #include "agent/config/app_config.h"
 
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <system_error>

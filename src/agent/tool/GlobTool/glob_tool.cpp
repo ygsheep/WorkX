@@ -8,6 +8,7 @@
 
 #include "agent/tool/GlobTool/glob_tool.h"
 
+#include <format>
 #include <filesystem>
 #include <algorithm>
 #include <vector>
