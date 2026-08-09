@@ -28,7 +28,7 @@ static constexpr char32_t KEY_DELETE           = 0xE008;
 static constexpr char32_t KEY_CTRL_C           = 0xE009;
 static constexpr char32_t KEY_CTRL_O           = 0xE00A;
 static constexpr char32_t KEY_RESIZE           = 0xE00B;  // 终端尺寸变更
-static constexpr char32_t KEY_WAKE             = 0xE010;  // 跨线程唤醒（AskUser 等）
+// KEY_WAKE 由 i_platform.h 统一导出（跨线程唤醒，AskUser 等）
 
 LineEditor::LineEditor(IPlatform* platform)
     : m_platform(platform)

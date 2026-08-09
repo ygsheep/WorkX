@@ -45,6 +45,9 @@ public:
     /// @brief 是否处于 bracketed paste 粘贴模式
     bool paste_active() const { return m_paste_active; }
 
+    /// @brief 重置解码状态（丢弃半截序列，如跨线程唤醒打断 ESC/CSI 时）
+    void reset() { m_state = State::Idle; m_params.clear(); }
+
 private:
     enum class State { Idle, Esc, Ss3, Csi, CsiParam };
     State m_state = State::Idle;
@@ -53,7 +56,6 @@ private:
     bool m_last_was_cr_in_paste = false;  ///< 粘贴内上一个字符是 \r（\r\n 归一化）
     char32_t m_code = 0;
 
-    void reset() { m_state = State::Idle; m_params.clear(); }
     Event finish(char32_t final_byte);
 };
 

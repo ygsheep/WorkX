@@ -135,7 +135,7 @@ public:
             // wake_event 触发：返回 KEY_WAKE 并复位事件
             if (n_handles == 2 && wait_result == WAIT_OBJECT_0 + 1) {
                 ResetEvent(m_wake_event);
-                return 0xE010;  // KEY_WAKE
+                return KEY_WAKE;
             }
             // stdin 未就绪或其他错误：继续等待
             if (wait_result != WAIT_OBJECT_0) {

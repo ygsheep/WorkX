@@ -30,7 +30,7 @@ constexpr char32_t KEY_SPACE = 0x20;
 constexpr char32_t KEY_CTRL_C = 0xE009;
 constexpr char32_t KEY_BACKSPACE = 0x08;
 constexpr char32_t KEY_DELETE = 0x7F;
-constexpr char32_t KEY_WAKE  = 0xE010;  // 跨线程唤醒（AskUser 超时等）
+// KEY_WAKE 由 i_platform.h 统一导出（跨线程唤醒，AskUser 超时等）
 
 // 显示常量
 constexpr int MAX_DISPLAY_ITEMS = 8;   ///< 最多显示的选项数（超出滚动）
