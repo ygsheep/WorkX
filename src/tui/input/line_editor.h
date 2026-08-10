@@ -150,6 +150,7 @@ private:
     size_t m_byte_pos = 0;       ///< 字节位置
     std::string m_prompt;        ///< 当前提示符（redraw 使用）
     bool m_is_continuation = false;  ///< 续行模式标记
+    size_t m_last_win_lines = 1; ///< 上一次渲染的输入区行数（行数减少时用于清除残留）
 
     // 历史状态
     std::vector<std::string> m_history;

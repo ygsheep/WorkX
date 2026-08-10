@@ -30,6 +30,9 @@ constexpr char32_t KEY_SPACE = 0x20;
 constexpr char32_t KEY_CTRL_C = 0xE009;
 constexpr char32_t KEY_BACKSPACE = 0x08;
 constexpr char32_t KEY_DELETE = 0x7F;
+constexpr char32_t KEY_TAB = 0x09;
+constexpr char32_t KEY_BACKTAB = 0xE00C;  // Shift+Tab = ESC [ Z（与 platform 序列对应）
+constexpr char32_t KEY_RESIZE = 0xE00B;   // 终端尺寸变更（SIGWINCH → platform 返回）
 // KEY_WAKE 由 i_platform.h 统一导出（跨线程唤醒，AskUser 超时等）
 
 // 显示常量
@@ -327,6 +330,27 @@ ChoiceResult run_choice_panel(Terminal* term, Screen* scr, const ChoiceConfig& c
             continue;
         }
 
+        // 终端尺寸变更：清屏并强制全量重绘（模态面板内自处理，不走 Terminal::handle_resize，
+        // overlay 期间其会跳过快照重放，且面板自身管理 overlay/Screen）
+        if (key == KEY_RESIZE) {
+            int new_w = term->get_terminal_width();
+            int new_h = term->get_terminal_height();
+            if (new_w == term_width && new_h == term_height) {
+                // 尺寸未真实变化（resize 信号抖动），保持现状
+                continue;
+            }
+            term_width = new_w;
+            term_height = new_h;
+            overlay_bottom = new_h - 2;
+            if (overlay_bottom < 1) overlay_bottom = 1;
+            // 面板自绘区域为 1..overlay_bottom。resize 需"全部重新绘制"：
+            // Screen::resize 保留 m_previous 旧尺寸内容，差分 flush 会跳过内容未变的行，
+            // 故清物理屏并重置双缓冲（dirty=false），迫使 do_render 后全量输出
+            scr->resize(new_w, new_h);
+            scr->clear_terminal();  // \x1b[2J\x1b[H + 双缓冲重置 → 全量重绘
+            continue;  // 回到循环顶部 do_render() 全量重绘
+        }
+
         if (input_mode) {
             // ===== 输入模式：所有按键都给输入框 =====
             if (key == KEY_ENTER) {
@@ -459,7 +483,7 @@ ChoiceResult run_choice_panel(Terminal* term, Screen* scr, const ChoiceConfig& c
             if (tab.cursor < static_cast<int>(tab.items.size()) && tab.items[tab.cursor].is_custom_input) {
                 input_mode = true;
             }
-        } else if (key == KEY_LEFT) {
+        } else if (key == KEY_LEFT || key == KEY_BACKTAB) {
             if (current_tab > 0) {
                 current_tab--;
             } else {
@@ -471,7 +495,7 @@ ChoiceResult run_choice_panel(Terminal* term, Screen* scr, const ChoiceConfig& c
             if (new_tab.cursor < static_cast<int>(new_tab.items.size()) && new_tab.items[new_tab.cursor].is_custom_input) {
                 input_mode = true;
             }
-        } else if (key == KEY_RIGHT) {
+        } else if (key == KEY_RIGHT || key == KEY_TAB) {
             if (current_tab < static_cast<int>(tabs.size()) - 1) {
                 current_tab++;
             } else {

@@ -23,6 +23,7 @@ constexpr char32_t VT_KEY_END              = 0xE005;
 constexpr char32_t VT_KEY_CTRL_ARROW_LEFT  = 0xE006;
 constexpr char32_t VT_KEY_CTRL_ARROW_RIGHT = 0xE007;
 constexpr char32_t VT_KEY_DELETE           = 0xE008;
+constexpr char32_t VT_KEY_BACKTAB          = 0xE00C;  // Shift+Tab = ESC [ Z
 
 /**
  * @brief VT 输入序列解码器
@@ -44,6 +45,10 @@ public:
 
     /// @brief 是否处于 bracketed paste 粘贴模式
     bool paste_active() const { return m_paste_active; }
+
+    /// @brief 是否处于序列中间态（已收到 ESC，等待序列续字节）
+    /// @details 平台层据此决定 poll 超时：超时无续字节则把孤立 ESC 作为普通 ESC 返回。
+    bool pending() const { return m_state != State::Idle; }
 
     /// @brief 重置解码状态（丢弃半截序列，如跨线程唤醒打断 ESC/CSI 时）
     void reset() { m_state = State::Idle; m_params.clear(); }

@@ -41,6 +41,7 @@ ModelSelection select_model_interactive(
     constexpr char32_t KEY_ESC   = 0x1B;
     constexpr char32_t KEY_SPACE = 0x20;
     constexpr char32_t KEY_CTRL_C = 0xE009;
+    constexpr char32_t KEY_RESIZE = 0xE00B;  // 终端尺寸变更（SIGWINCH → platform 返回）
 
     // 获取 base_url
     std::string base_url;
@@ -123,6 +124,12 @@ ModelSelection select_model_interactive(
 
         if (select_panel.is_input_mode()) {
             // ---- 输入模式（Custom Model...）----
+            // KEY_RESIZE：终端尺寸变更，清屏强制全量重绘
+            if (key == KEY_RESIZE) {
+                scr->resize(term->get_terminal_width(), term->get_terminal_height());
+                scr->clear_terminal();
+                continue;
+            }
             switch (key) {
                 case KEY_ENTER: {
                     std::string text = select_panel.get_input_text();
@@ -192,6 +199,10 @@ ModelSelection select_model_interactive(
                 case KEY_UP:    select_panel.move_up(); break;
                 case KEY_DOWN:  select_panel.move_down(); break;
                 case KEY_TAB:   select_panel.move_down(); break;
+                case KEY_RESIZE:
+                    scr->resize(term->get_terminal_width(), term->get_terminal_height());
+                    scr->clear_terminal();
+                    break;
                 case KEY_SPACE:
                 case KEY_ENTER: {
                     std::string chosen;

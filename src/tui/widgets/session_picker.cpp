@@ -35,6 +35,7 @@ constexpr char32_t KEY_ESC   = 0x1B;
 constexpr char32_t KEY_CTRL_C = 0xE009;
 constexpr char32_t KEY_BACKSPACE = 0x08;
 constexpr char32_t KEY_DELETE = 0x7F;
+constexpr char32_t KEY_RESIZE = 0xE00B;  // 终端尺寸变更（SIGWINCH → platform 返回）
 
 /// 每条会话占 3 行（标题 + 副信息 + 空行），最多显示 5 条
 constexpr int MAX_DISPLAY_ITEMS = 5;
@@ -309,6 +310,18 @@ std::string pick_session_interactive(
     while (true) {
         do_render();
         char32_t key = term->platform()->read_char();
+
+        if (key == KEY_RESIZE) {
+            // 终端尺寸变更：清屏强制全量重绘（Screen::resize 保留 m_previous，
+            // 差分会跳过内容未变行，故清物理屏 + 重置双缓冲）
+            term_width = term->get_terminal_width();
+            term_height = term->get_terminal_height();
+            overlay_bottom = term_height - 2;
+            if (overlay_bottom < 1) overlay_bottom = 1;
+            scr->resize(term_width, term_height);
+            scr->clear_terminal();
+            continue;
+        }
 
         if (key == KEY_UP) {
             if (selected > 0) selected--;

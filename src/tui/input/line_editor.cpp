@@ -258,6 +258,20 @@ void LineEditor::redraw_input() {
     size_t win_lines = std::min(total - win_start, static_cast<size_t>(max_lines));
     if (win_lines < 1) win_lines = 1;
 
+    // 行数减少时（删除换行/删除整行等），窗口顶部下移，
+    // 需清空上一帧窗口上方多出的行，否则残留旧文本
+    if (m_last_win_lines > win_lines) {
+        int top_old = term_h - static_cast<int>(m_last_win_lines);
+        int top_new = term_h - static_cast<int>(win_lines);
+        for (int r = top_old; r < top_new; ++r) {
+            char goto_cmd[32];
+            snprintf(goto_cmd, sizeof(goto_cmd), "\x1b[%d;1H", r);
+            m_platform->write_output(goto_cmd);
+            m_platform->write_output("\x1b[2K");
+        }
+    }
+    m_last_win_lines = win_lines;
+
     if (m_edit_lines_cb) {
         m_edit_lines_cb(static_cast<int>(win_lines));
     }
@@ -411,6 +425,8 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
     // m_history_idx = SIZE_MAX 表示未在浏览历史
     m_history_idx = SIZE_MAX;
     m_backup_line.clear();
+    // 重置行数残留跟踪：本次会话从单行开始，避免沿用上次多行会话的清理范围
+    m_last_win_lines = 1;
 
     // 通知 Terminal：read_line() 开始运行
     if (m_editing_changed_cb) {
@@ -546,6 +562,12 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
                     m_resize_cb();
                 }
                 redraw_input();
+                // handle_resize() 内部 setup_scroll_region_locked() 会把光标标记为"在输出区"，
+                // 但 redraw_input() 后光标实际位于输入行。若不重新标记光标离开输出区，
+                // 后台流式线程 write() 会误判光标位置，把输出文本写到输入行区域。
+                if (m_cursor_left_output_cb) {
+                    m_cursor_left_output_cb();
+                }
                 continue;
             }
 
