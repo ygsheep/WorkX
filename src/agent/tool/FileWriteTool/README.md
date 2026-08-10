@@ -114,7 +114,7 @@ call(input, ctx)
     ▼
 4. 判断 create/update（fs::exists）
     │
-    ├─ 不存在 ──→ 7. 写入文件（std::ofstream binary）
+    ├─ 不存在 ──→ 7. 写入文件（原子写：临时文件 `.workx.tmp` → rename，含取消点）
     │                │
     │                ▼
     │           8. 刷新 FileReadStateTracker（写入后状态）
@@ -140,7 +140,7 @@ call(input, ctx)
                  6. 读取旧内容（std::ifstream binary，用于 diff）
                     │
                     ▼
-                 7. 写入文件（std::ofstream binary）
+                 7. 写入文件（原子写：临时文件 `.workx.tmp` → rename，含取消点）
                     │
                     ▼
                  8. 刷新 FileReadStateTracker（写入后状态）
@@ -151,6 +151,15 @@ call(input, ctx)
                     ▼
                  10. 返回 "File <path> has been updated." + diff 文本
 ```
+
+### 写入策略：原子写 + 取消点（#23 P2）
+
+- **原子写**：内容先写入同目录临时文件 `<name>.workx.tmp`，成功后再 `fs::rename` 原子替换原文件。
+  写入失败 / 中断只会遗留临时文件（随后清理），原文件始终保持完整，杜绝 `trunc` 直写的半写损坏。
+- **取消点**：在 rname 前与回退直接写路径前检查 `ctx.is_cancelled()`，已取消则删除临时文件并返回
+  `Error{Code::Cancelled}`（原文件未受影响）。`ctx.cancel_flag` 由 ReActLoop 注入
+  （`Task::m_should_cancel`），运行中打断即时生效。
+- **回退路径**：Windows 下 rename 失败（跨卷 / 目标被占用）时回退直接写入，由 `.bak` 备份兜底。
 
 ### 错误处理
 
