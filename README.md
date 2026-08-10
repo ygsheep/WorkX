@@ -177,7 +177,7 @@ cmake --build . --config Release
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     workx = {
-      url = "github:young/WorkX";           # 请替换为实际仓库地址
+      url = "github:ygsheep/WorkX/develop"; # 指定 develop 分支为源码
       inputs.nixpkgs.follows = "nixpkgs";   # 对齐系统 nixpkgs
     };
   };
@@ -211,9 +211,9 @@ home-manager 应用同理：`home.packages = [ inputs.workx.packages.${pkgs.syst
   home.packages = [
     (pkgs.callPackage ./nix/workx.nix {
       src = pkgs.fetchFromGitHub {
-        owner = "young";                    # 请替换为实际 owner/repo/rev
+        owner = "ygsheep";                  # 仓库实际 owner/repo
         repo = "WorkX";
-        rev = "v0.2.0";
+        rev = "develop";                    # 分支或 tag
         hash = "sha256-...";                # 先用占位,构建报错后填真实值
       };
     })

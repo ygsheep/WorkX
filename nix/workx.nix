@@ -87,7 +87,7 @@ stdenv.mkDerivation (finalAttrs: {
 
   meta = {
     description = "Terminal AI chat client with multi-provider support and event-driven architecture";
-    homepage = "https://github.com/young/WorkX";
+    homepage = "https://github.com/ygsheep/WorkX";
     license = lib.licenses.mit;
     platforms = lib.platforms.linux;
     mainProgram = "workx";
