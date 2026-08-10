@@ -92,6 +92,44 @@ TEST_CASE("TokenStatsModel increment_message_count", "[token_stats][count]") {
 }
 
 // ============================================================================
+// restore_from_history
+// ============================================================================
+
+TEST_CASE("TokenStatsModel restore_from_history estimates history tokens", "[token_stats][restore]") {
+    TokenStatsModel m;
+    // 先污染统计（模拟 /resume 前已有其他会话的残留值）
+    m.add_user_input("residual content from previous session");
+    m.update_from_usage(9000, 2000, 0, 1000);
+    m.increment_message_count();
+    REQUIRE(m.total_tokens() > 0);
+
+    std::vector<agent::ChatMessage> history;
+    history.push_back(agent::ChatMessage::user("hello world"));
+    history.push_back(agent::ChatMessage::assistant("hi there response"));
+    history.push_back(agent::ChatMessage::user("follow up question"));
+
+    m.restore_from_history(history);
+
+    REQUIRE(m.total_tokens() == agent::compact::estimate_messages_tokens(history));
+    REQUIRE(m.total_tokens() > 0);
+    REQUIRE(m.message_count() == static_cast<int32_t>(history.size()));
+    REQUIRE(m.cache_read_tokens() == 0);
+}
+
+TEST_CASE("TokenStatsModel restore_from_history empty history resets to zero", "[token_stats][restore]") {
+    TokenStatsModel m;
+    m.add_user_input("content");
+    m.update_from_usage(100, 50, 0, 30);
+    m.increment_message_count();
+
+    m.restore_from_history({});
+
+    REQUIRE(m.total_tokens() == 0);
+    REQUIRE(m.message_count() == 0);
+    REQUIRE(m.cache_read_tokens() == 0);
+}
+
+// ============================================================================
 // reset
 // ============================================================================
 

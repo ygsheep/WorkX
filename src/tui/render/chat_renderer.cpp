@@ -1318,6 +1318,13 @@ void ChatRenderer::toggle_thinking_view() {
 }
 
 void ChatRenderer::replay_history(const std::vector<agent::ChatMessage>& messages, bool show_welcome) {
+    // /resume 或启动恢复：token 统计对齐到历史会话，
+    // 使状态栏的已使用上下文窗口大小立即反映之前的值（而非从 0 开始）
+    m_token_stats.restore_from_history(messages);
+    m_status_bar->set_token_count(m_token_stats.total_tokens());
+    m_status_bar->set_cache_read_tokens(m_token_stats.cache_read_tokens());
+    m_status_bar->set_ds_cache_hit_rate(m_token_stats.ds_cache_hit_rate());
+
     // 清空输出区域并重置 formatter 状态
     m_formatter->reset();
 

@@ -79,6 +79,18 @@ public:
     /// @brief 消息计数 +1
     void increment_message_count() { m_message_count.fetch_add(1); }
 
+    /// @brief 从历史消息集合重建统计（/resume、启动恢复会话后调用）
+    /// @details 清空后按历史消息重新估算已使用上下文占用，
+    ///          使状态栏立即反映恢复会话的上下文窗口大小（而非从 0 开始）。
+    /// @param messages 已加载的历史消息
+    void restore_from_history(const std::vector<agent::ChatMessage>& messages) {
+        m_message_count.store(static_cast<int32_t>(messages.size()));
+        m_total_tokens.store(agent::compact::estimate_messages_tokens(messages));
+        m_cache_read_tokens.store(0);
+        m_ds_cache_hit_total.store(0);
+        m_ds_cache_miss_total.store(0);
+    }
+
     /// @brief 重置所有统计（新会话）
     void reset() {
         m_message_count.store(0);
