@@ -375,6 +375,15 @@ ResultV2<ToolResult> FileWriteTool::call(
     }
 
     if (atomic_ok) {
+        // 取消点（#23 P2）：已取消则删除临时文件，原文件保持完好
+        if (ctx.is_cancelled()) {
+            std::error_code rm_ec;
+            fs::remove(tmp_path, rm_ec);
+            return ResultV2<ToolResult>::err(Error::Code::Cancelled,
+                std::format("File write cancelled for: {}", write_input.file_path)
+            );
+        }
+
         // fsync（POSIX 用 fsync，Windows 用 _commit）
         std::error_code sync_ec;
         do_sync(tmp_path, sync_ec);
@@ -393,6 +402,13 @@ ResultV2<ToolResult> FileWriteTool::call(
 
     if (!atomic_ok) {
         // 回退路径：直接写入（保留原 .bak 备份兜底）
+        // 取消点：fallback 直接 trunc 原文件，已取消则避免触碰
+        if (ctx.is_cancelled()) {
+            return ResultV2<ToolResult>::err(Error::Code::Cancelled,
+                std::format("File write cancelled for: {}", write_input.file_path)
+            );
+        }
+
         std::ofstream out(file_path, std::ios::binary | std::ios::trunc);
         if (!out.is_open()) {
             return ResultV2<ToolResult>::err(Error::Code::InternalError,

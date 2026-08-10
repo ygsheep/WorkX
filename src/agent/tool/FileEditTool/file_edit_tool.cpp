@@ -513,17 +513,20 @@ ResultV2<ToolResult> FileEditTool::call(
             }
         }
 
-        // 写入文件（binary 模式，避免平台自动转换行尾）
-        std::ofstream out(file_path, std::ios::binary | std::ios::trunc);
-        if (!out.is_open()) {
-            return ResultV2<ToolResult>::err(Error::Code::InternalError,
-                std::format("Failed to open file for writing: {}", edit_input.file_path)
+        // 写入文件（原子写 + 取消点，#23 P2：临时文件 + rename，中断不留半写）
+        if (ctx.is_cancelled()) {
+            return ResultV2<ToolResult>::err(Error::Code::Cancelled,
+                std::format("File creation cancelled for: {}", edit_input.file_path)
             );
         }
-        out << edit_input.new_string;
-        out.flush();
-        out.close();
-        if (out.fail()) {
+        if (!write_file_with_encoding(file_path, edit_input.new_string, Encoding::Utf8,
+                                      [&ctx]() { return ctx.is_cancelled(); })) {
+            // 取消发生在写临时文件之后：报告 Cancelled 而非写入失败
+            if (ctx.is_cancelled()) {
+                return ResultV2<ToolResult>::err(Error::Code::Cancelled,
+                    std::format("File creation cancelled for: {}", edit_input.file_path)
+                );
+            }
             return ResultV2<ToolResult>::err(Error::Code::InternalError,
                 std::format("Failed to write file: {}", edit_input.file_path)
             );
@@ -619,9 +622,25 @@ ResultV2<ToolResult> FileEditTool::call(
     //         保存的是 LF 规范化版本（与 FileReadStateTracker 约定一致）
     FileHistory::instance().save_version(canonical_key, old_content, "before_edit");
 
-    // 5e. 写入文件（保留原行尾风格 + 原编码 + BOM）
+    // 5e-bis. 取消点（#23 P2）：备份已完成、尚未触碰原文件，可安全中止
+    //                 （.bak 保留供人工回滚，原文件未受影响）
+    if (ctx.is_cancelled()) {
+        return ResultV2<ToolResult>::err(Error::Code::Cancelled,
+            std::format("File edit cancelled for: {}", edit_input.file_path)
+        );
+    }
+
+    // 5e. 写入文件（保留原行尾风格 + 原编码 + BOM；原子写 #23 P2：
+    //     临时文件 + rename，写入中断/取消不会破坏原文件）
     std::string write_content = apply_line_ending(new_content, original_ending);
-    if (!write_file_with_encoding(file_path, write_content, original_encoding)) {
+    if (!write_file_with_encoding(file_path, write_content, original_encoding,
+                                  [&ctx]() { return ctx.is_cancelled(); })) {
+        // 取消发生在写临时文件之后：报告 Cancelled 而非写入失败
+        if (ctx.is_cancelled()) {
+            return ResultV2<ToolResult>::err(Error::Code::Cancelled,
+                std::format("File edit cancelled for: {}", edit_input.file_path)
+            );
+        }
         return ResultV2<ToolResult>::err(Error::Code::InternalError,
             std::format("Failed to write file: {}", edit_input.file_path)
         );

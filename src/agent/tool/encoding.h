@@ -14,6 +14,7 @@
 #include <vector>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 
 namespace agent::tool {
 
@@ -65,21 +66,25 @@ std::string read_file_as_utf8(
     Encoding encoding
 );
 
-/// @brief 将 UTF-8 内容按指定编码写入文件（保留原编码 + BOM）
+/// @brief 将 UTF-8 内容按指定编码原子写入文件（保留原编码 + BOM）
 /// @details 用于 FileEditTool 写回时保留原文件编码：
 ///          - UTF-8/ASCII：原样写入（不加 BOM，对齐 CC 行为）
 ///          - UTF-16LE：写入 FF FE BOM + UTF-16LE 编码字节
 ///          - UTF-16BE：写入 FE FF BOM + UTF-16BE 编码字节
 ///          - GBK：转换为 GBK 字节流写入
 ///          Binary/Unknown 回退为 UTF-8 原样写入。
+///          写入先落盘同目录临时文件（<name>.workx.tmp），成功后再
+///          rename 原子替换，避免中断/崩溃导致原文件半写损坏（#23 P2）。
 /// @param path 文件路径
 /// @param utf8_content UTF-8 文本内容
 /// @param encoding 目标编码类型
-/// @return true 成功；false 失败（写入错误）
+/// @param is_cancelled 可选取消回调：rename 前检查，已取消则删除临时文件并返回 false
+/// @return true 成功；false 失败（写入错误或已取消）
 bool write_file_with_encoding(
     const std::filesystem::path& path,
     const std::string& utf8_content,
-    Encoding encoding
+    Encoding encoding,
+    const std::function<bool()>& is_cancelled = {}
 );
 
 /// @brief 获取编码名称（用于日志/错误信息）
