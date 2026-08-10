@@ -27,6 +27,8 @@
 #include "agent/tool/BashTool/bash_tool.h"
 #include "agent/tool/context.h"
 #include "agent/tool/result.h"
+#include "core/task/task_manager.h"
+#include "core/events/event_bus.h"
 #include "core/config/config_manager.h"
 #include "core/utils/error.h"
 
@@ -198,6 +200,56 @@ TEST_CASE("BashTool background requires TaskManager", "[tool][bash][background]"
     REQUIRE(r.is_err());
     REQUIRE(r.error().code == Error::Code::ConfigInvalid);
 }
+
+#ifndef _WIN32
+TEST_CASE("BashTool background cancel kills process and marks Cancelled", "[tool][bash][background][cancel]") {
+    // #23 P3：run_in_background 任务取消联动。
+    // task->cancel() → should_cancel → subprocess 轮询 → 进程组 kill（P1 已通），
+    // 任务以 Cancelled 结束但 BashTool::call 不报错（后台立即返回 task_id）。
+    EventBus::instance().clear();
+    auto& task_mgr = TaskManager::instance();
+    task_mgr.cancelAll();
+    task_mgr.waitForAll();
+    task_mgr.update();
+
+    ToolContext ctx; fill_ctx(ctx);
+    ctx.task_manager_ptr = &task_mgr;
+
+    BashTool tool;
+    nlohmann::json input = {
+        {"command", "sleep 30"},
+        {"run_in_background", true}
+    };
+
+    auto r = tool.call(input, ctx);
+    REQUIRE(r.is_ok());
+
+    // 从返回文本提取 task_id（格式 "ID: bash:<n>:<cmd>"）
+    std::string text = r.value().text;
+    const std::string prefix = "ID: ";
+    REQUIRE(text.find(prefix) != std::string::npos);
+    std::string id = text.substr(text.find(prefix) + prefix.size());
+    id = id.substr(0, id.find('\n'));
+    REQUIRE(id.rfind("bash:", 0) == 0);
+
+    // 找到后台任务并取消
+    std::shared_ptr<Task> bg_task;
+    for (const auto& t : task_mgr.getTasks()) {
+        if (t->getName() == id) { bg_task = t; break; }
+    }
+    REQUIRE(bg_task != nullptr);
+
+    task_mgr.cancel(bg_task);
+    task_mgr.wait(bg_task);
+    REQUIRE(bg_task->getStatus() == TaskStatus::Cancelled);
+
+    // 清理：取消全部遗留任务并清空事件队列，避免影响其他测试
+    task_mgr.cancelAll();
+    task_mgr.waitForAll();
+    task_mgr.update();
+    EventBus::instance().clear();
+}
+#endif // !_WIN32
 
 // ============================================================
 // 进度回调

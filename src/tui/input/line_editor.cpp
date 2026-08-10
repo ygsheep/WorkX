@@ -544,7 +544,7 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
 
             // Ctrl+O 切换思考视图
             if (input_char == KEY_CTRL_O) {
-                return {std::string(), false, false, false, true};
+                return {std::string(), false, false, false, false, true};
             }
 
             // 跨线程唤醒（AskUser 等）：立即返回空结果，主循环检查 pending 事件
@@ -645,7 +645,10 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
                     redraw_input();
                 }
             } else if (input_char == 0x1B) {
-                // 独立 Esc 键：忽略，不插入控制字符
+                // 独立 Esc 键（#23 P3）：等同打断，与 Ctrl+C 语义一致。
+                // 注意：转义序列已被解码器转换为 KEY_*，能走到这里的一定是孤立 Esc。
+                m_platform->write_output("ESC\n");
+                return {std::string(), false, false, true, true};
             } else {
                 // 插入字符
                 std::string new_char_str;

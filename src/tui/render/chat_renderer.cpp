@@ -993,6 +993,17 @@ void ChatRenderer::start() {
         })
     );
 
+    // ---- TaskCancelledEvent（后台任务取消通知，#23 P3）----
+    m_token_task_cancelled = std::make_unique<EventToken>(
+        bus.subscribe<TaskCancelledEvent>([this](const TaskCancelledEvent& e) {
+            if (e.task_name.rfind("bash:", 0) != 0) return;
+            m_terminal->set_color(ColorRole::System);
+            m_terminal->write(std::format(
+                "[bg] {} cancelled ({:.0f}ms)\n", e.task_name, e.duration_ms));
+            m_terminal->reset_color();
+        })
+    );
+
     // ---- TaskFailedEvent（后台任务失败通知）----
     m_token_task_failed = std::make_unique<EventToken>(
         bus.subscribe<TaskFailedEvent>([this](const TaskFailedEvent& e) {
@@ -1094,6 +1105,9 @@ void ChatRenderer::stop() {
     }
     if (m_token_task_completed && m_token_task_completed->is_valid()) {
         bus.unsubscribe<TaskCompletedEvent>(*m_token_task_completed);
+    }
+    if (m_token_task_cancelled && m_token_task_cancelled->is_valid()) {
+        bus.unsubscribe<TaskCancelledEvent>(*m_token_task_cancelled);
     }
     if (m_token_task_failed && m_token_task_failed->is_valid()) {
         bus.unsubscribe<TaskFailedEvent>(*m_token_task_failed);

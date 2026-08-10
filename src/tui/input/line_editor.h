@@ -99,6 +99,7 @@ public:
         bool stream_end = false;
         bool is_command = false;  ///< 以 / 开头的命令
         bool interrupted = false; ///< Ctrl+C 中断
+        bool escape = false;      ///< 独立 Esc 键（等同打断，与 Ctrl+C 语义一致）
         bool ctrl_o = false;      ///< Ctrl+O 按下（切换思考视图）
         bool woken_by_ask = false; ///< 被跨线程唤醒（如 AskUser 请求），主循环需检查 pending 事件
     };

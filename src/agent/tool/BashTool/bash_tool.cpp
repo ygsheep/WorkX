@@ -69,9 +69,21 @@ public:
         return it->second;
     }
 
+    /// 移除条目（#23 P3：后台任务被取消后清理，不提供无意义的取消输出查询）
+    void remove(const std::string& task_name) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_outputs.erase(task_name);
+    }
+
     void clear() {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_outputs.clear();
+    }
+
+    /// 当前条目数（仅日志/测试用）
+    size_t size() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_outputs.size();
     }
 
 private:
@@ -402,7 +414,13 @@ ResultV2<ToolResult> BashTool::execute_background(
             }
             // 2. exec 成功（即使非零退出/超时/取消）→ 保存输出到注册表，供 LLM 查询
             //    非零退出/超时不视为 task 失败（命令执行了，只是结果非成功），符合 cc 行为
-            BashOutputRegistry::instance().store(task_name, exec_result.value());
+            //    任务被取消（#23 P3）：进程组已被销毁，输出无意义 → 清理注册表
+            auto& out = exec_result.value();
+            if (out.cancelled) {
+                BashOutputRegistry::instance().remove(task_name);
+            } else {
+                BashOutputRegistry::instance().store(task_name, out);
+            }
         },
         TaskType::Background);
 
