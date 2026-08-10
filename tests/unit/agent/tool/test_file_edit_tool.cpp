@@ -680,6 +680,51 @@ TEST_CASE("FileEditTool call rejects when not pre-read", "[file_edit_tool][call]
     REQUIRE_THAT(r.error().message, Catch::Matchers::ContainsSubstring("not been read"));
 }
 
+TEST_CASE("FileEditTool update cancelled keeps original file intact", "[file_edit_tool][call][cancel]") {
+    // #23 P2：打断发生在备份完成后、写文件前（取消点），
+    // 原文件完整、.bak 保留、无残留临时文件。
+    TestEnv env;
+    TempDir tmp;
+    auto fp = tmp.make_file("cancel_update.txt", "old line\nkeep line\n");
+    record_file_read(fp, "old line\nkeep line");
+
+    FileEditTool tool;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
+    ctx.cwd = tmp.path().string();
+    ctx.cancel();  // 置位内部取消标志
+
+    auto r = tool.call(make_edit_input(fp.string(), "old line", "NEW LINE"), ctx);
+    REQUIRE(r.is_err());
+    REQUIRE(r.error().code == Error::Code::Cancelled);
+
+    // 原文件内容不变
+    std::ifstream in(fp);
+    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    REQUIRE(content == "old line\nkeep line\n");
+
+    // 无残留临时文件（原子写：临时文件 + rename，取消时已清理）
+    REQUIRE_FALSE(fs::exists(fs::path(fp.string() + ".workx.tmp")));
+}
+
+TEST_CASE("FileEditTool create cancelled leaves no file", "[file_edit_tool][call][cancel]") {
+    // #23 P2：新建模式取消点，原文件（不存在）依旧不存在、无残留临时文件。
+    TestEnv env;
+    TempDir tmp;
+    auto fp = tmp.path() / "cancel_create.txt";
+
+    FileEditTool tool;
+    ToolContext ctx; TestEnv::setup_ctx(ctx);
+    ctx.cwd = tmp.path().string();
+    ctx.cancel();
+
+    auto r = tool.call(make_edit_input(fp.string(), "", "content\n"), ctx);
+    REQUIRE(r.is_err());
+    REQUIRE(r.error().code == Error::Code::Cancelled);
+
+    REQUIRE_FALSE(fs::exists(fp));
+    REQUIRE_FALSE(fs::exists(fs::path(fp.string() + ".workx.tmp")));
+}
+
 // ============================================================
 // line_endings 单元测试
 // ============================================================
@@ -1276,6 +1321,30 @@ TEST_CASE("encoding write_file_with_encoding round-trip", "[encoding]") {
         std::string read_back = read_file_as_utf8(fp, Encoding::Utf16LE);
         REQUIRE(read_back == original);
     }
+}
+
+TEST_CASE("encoding write_file_with_encoding cancel leaves original intact", "[encoding][cancel]") {
+    // #23 P2：取消回调返回 true 时（rename 前），函数返回 false、
+    // 原文件不变、无残留临时文件。
+    TestEnv env;
+    TempDir tmp;
+    auto fp = tmp.make_file("enc_cancel.txt", "original\n");
+    std::ifstream before(fp);
+    std::string original((std::istreambuf_iterator<char>(before)),
+                         std::istreambuf_iterator<char>());
+    REQUIRE(original == "original\n");
+
+    auto always_cancel = []() { return true; };
+    REQUIRE_FALSE(write_file_with_encoding(fp, "replaced\n", Encoding::Utf8, always_cancel));
+
+    // 原文件未被覆盖
+    std::ifstream after(fp);
+    std::string after_content((std::istreambuf_iterator<char>(after)),
+                              std::istreambuf_iterator<char>());
+    REQUIRE(after_content == "original\n");
+
+    // 无残留临时文件
+    REQUIRE_FALSE(fs::exists(fs::path(fp.string() + ".workx.tmp")));
 }
 
 TEST_CASE("encoding encoding_name", "[encoding]") {

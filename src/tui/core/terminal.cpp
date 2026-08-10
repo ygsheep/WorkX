@@ -285,6 +285,7 @@ void Terminal::echo_input(const std::string& text) {
 void Terminal::run_advanced() {
     using clock = std::chrono::steady_clock;
     auto last_interrupt_time = clock::time_point{};
+    bool last_was_escape = false;  // #23 P3：强制退出仅限定"同键"连按（Ctrl+C / Esc 各自计数）
     static constexpr auto DOUBLE_PRESS_TIMEOUT = std::chrono::milliseconds(1000);
 
     while (m_running) {
@@ -322,8 +323,11 @@ void Terminal::run_advanced() {
         if (result.interrupted) {
             auto now = clock::now();
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_interrupt_time);
+            // #23 P3：强制退出仅在"同键"1s 内连按时触发
+            // （Ctrl+C 双击 / Esc 连按各自计数，混合按键只打断不强退）
+            bool same_key = (result.escape == last_was_escape);
 
-            if (elapsed < DOUBLE_PRESS_TIMEOUT) {
+            if (elapsed < DOUBLE_PRESS_TIMEOUT && same_key) {
                 set_color(ColorRole::System);
                 write("Force exit.\n");
                 reset_color();
@@ -334,8 +338,10 @@ void Terminal::run_advanced() {
             }
 
             last_interrupt_time = now;
+            last_was_escape = result.escape;
             set_color(ColorRole::System);
-            write("(Press Ctrl+C again to exit)\n");
+            write(result.escape ? "(Press Esc again to exit)\n"
+                                : "(Press Ctrl+C again to exit)\n");
             reset_color();
             event_bus().publish(InterruptEvent{.force = false});
             event_bus().process_async_events();

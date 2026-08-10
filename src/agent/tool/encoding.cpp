@@ -525,42 +525,72 @@ std::string read_file_as_utf8(const fs::path& path, Encoding encoding) {
 bool write_file_with_encoding(
     const fs::path& path,
     const std::string& utf8_content,
-    Encoding encoding
+    Encoding encoding,
+    const std::function<bool()>& is_cancelled
 ) {
-    std::ofstream file(path, std::ios::binary | std::ios::trunc);
-    if (!file.is_open()) return false;
+    namespace fsx = std::filesystem;
 
-    switch (encoding) {
-        case Encoding::Utf16LE: {
-            // FF FE BOM
-            file.put(static_cast<char>(0xFF));
-            file.put(static_cast<char>(0xFE));
-            const std::string encoded = utf8_to_utf16le(utf8_content);
-            file.write(encoded.data(), static_cast<std::streamsize>(encoded.size()));
-            break;
+    // 原子写（#23 P2）：先写同目录临时文件，rename 原子替换。
+    // 写入失败/取消只清理临时文件，原文件始终保持完整。
+    fsx::path tmp_path = path;
+    tmp_path += ".workx.tmp";
+    std::error_code ec;
+    fsx::remove(tmp_path, ec);  // 清理可能残留的旧临时文件
+
+    {
+        std::ofstream file(tmp_path, std::ios::binary | std::ios::trunc);
+        if (!file.is_open()) return false;
+
+        switch (encoding) {
+            case Encoding::Utf16LE: {
+                // FF FE BOM
+                file.put(static_cast<char>(0xFF));
+                file.put(static_cast<char>(0xFE));
+                const std::string encoded = utf8_to_utf16le(utf8_content);
+                file.write(encoded.data(), static_cast<std::streamsize>(encoded.size()));
+                break;
+            }
+            case Encoding::Utf16BE: {
+                // FE FF BOM
+                file.put(static_cast<char>(0xFE));
+                file.put(static_cast<char>(0xFF));
+                const std::string encoded = utf8_to_utf16be(utf8_content);
+                file.write(encoded.data(), static_cast<std::streamsize>(encoded.size()));
+                break;
+            }
+            case Encoding::Gbk: {
+                const std::string encoded = utf8_to_gbk(utf8_content);
+                file.write(encoded.data(), static_cast<std::streamsize>(encoded.size()));
+                break;
+            }
+            default:
+                // UTF-8/ASCII/Binary/Unknown：原样写入（不加 BOM，对齐 CC 行为）
+                file.write(utf8_content.data(),
+                           static_cast<std::streamsize>(utf8_content.size()));
+                break;
         }
-        case Encoding::Utf16BE: {
-            // FE FF BOM
-            file.put(static_cast<char>(0xFE));
-            file.put(static_cast<char>(0xFF));
-            const std::string encoded = utf8_to_utf16be(utf8_content);
-            file.write(encoded.data(), static_cast<std::streamsize>(encoded.size()));
-            break;
+
+        file.flush();
+        if (!file) {
+            file.close();
+            fsx::remove(tmp_path, ec);
+            return false;
         }
-        case Encoding::Gbk: {
-            const std::string encoded = utf8_to_gbk(utf8_content);
-            file.write(encoded.data(), static_cast<std::streamsize>(encoded.size()));
-            break;
-        }
-        default:
-            // UTF-8/ASCII/Binary/Unknown：原样写入（不加 BOM，对齐 CC 行为）
-            file.write(utf8_content.data(),
-                       static_cast<std::streamsize>(utf8_content.size()));
-            break;
     }
 
-    file.flush();
-    return static_cast<bool>(file);
+    // 取消点：rename 前检查，已取消则不触碰原文件
+    if (is_cancelled && is_cancelled()) {
+        fsx::remove(tmp_path, ec);
+        return false;
+    }
+
+    fsx::rename(tmp_path, path, ec);
+    if (ec) {
+        // rename 失败（跨卷/目标占用等）：清理临时文件，原文件未受影响
+        fsx::remove(tmp_path, ec);
+        return false;
+    }
+    return true;
 }
 
 const char* encoding_name(Encoding encoding) {

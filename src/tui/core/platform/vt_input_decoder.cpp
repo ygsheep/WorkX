@@ -94,6 +94,7 @@ VtInputDecoder::Event VtInputDecoder::finish(char32_t final_byte) {
         case 'D': m_code = ctrl_mod ? VT_KEY_CTRL_ARROW_LEFT : VT_KEY_ARROW_LEFT; return Event::Char;
         case 'H': m_code = VT_KEY_HOME; return Event::Char;
         case 'F': m_code = VT_KEY_END; return Event::Char;
+        case 'Z': m_code = VT_KEY_BACKTAB; return Event::Char;  // Shift+Tab
         case '~':
             if (params == "200") { m_paste_active = true; return Event::PasteBegin; }
             if (params == "201") { m_paste_active = false; return Event::PasteEnd; }

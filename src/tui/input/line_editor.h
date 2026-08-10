@@ -99,6 +99,7 @@ public:
         bool stream_end = false;
         bool is_command = false;  ///< 以 / 开头的命令
         bool interrupted = false; ///< Ctrl+C 中断
+        bool escape = false;      ///< 独立 Esc 键（等同打断，与 Ctrl+C 语义一致）
         bool ctrl_o = false;      ///< Ctrl+O 按下（切换思考视图）
         bool woken_by_ask = false; ///< 被跨线程唤醒（如 AskUser 请求），主循环需检查 pending 事件
     };
@@ -150,6 +151,7 @@ private:
     size_t m_byte_pos = 0;       ///< 字节位置
     std::string m_prompt;        ///< 当前提示符（redraw 使用）
     bool m_is_continuation = false;  ///< 续行模式标记
+    size_t m_last_win_lines = 1; ///< 上一次渲染的输入区行数（行数减少时用于清除残留）
 
     // 历史状态
     std::vector<std::string> m_history;

@@ -633,6 +633,20 @@ ReActResult ReActLoop::run(
         for (auto& exec : executions) {
             auto action_start = std::chrono::steady_clock::now();
 
+            // 协作式等待（#23 P1）：工具已绑定 ctx.cancel_flag=should_cancel，
+            // 用户中断后工具会自己退出（bash 由 subprocess 杀进程树），
+            // 这里用 wait_for 轮询替代阻塞的 future.get()，使打断即时生效，
+            // 且 loop 在工具返回前不丢消息（Observation 照常先生成）。
+            // 注意：不做超时脱离 —— std::async(future) 析构会隐式等待线程，
+            //           孤儿线程不可真正 detach（残余风险记入 P3 保险丝）。
+            while (exec.future.wait_for(std::chrono::milliseconds(100))
+                   != std::future_status::ready) {
+                if (should_cancel) {
+                    LOG_DEBUG("[react_loop] tool={} waiting for cooperative "
+                              "cancel (user interrupt)", exec.tool_name);
+                }
+            }
+
             auto [result_text, tool_error] = exec.future.get();
 
             auto action_end = std::chrono::steady_clock::now();

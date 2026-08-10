@@ -50,6 +50,7 @@ constexpr char32_t KEY_CTRL_N    = 0xE00C;
 constexpr char32_t KEY_CTRL_D    = 0xE00D;
 constexpr char32_t KEY_BACKSPACE = 0x08;
 constexpr char32_t KEY_DELETE    = 0x7F;
+constexpr char32_t KEY_RESIZE    = 0xE00B;  // 终端尺寸变更（SIGWINCH → platform 返回）
 
 /// Custom URL 预设内部名
 constexpr const char* CUSTOM_PROVIDER_ID = "openai-compatible";
@@ -643,6 +644,18 @@ ProviderSwitchResult provider_manager_interactive(
         do_render();
         char32_t key = term->platform()->read_char();
         status_msg.clear();
+
+        // 终端尺寸变更：清屏强制全量重绘（Screen::resize 保留 m_previous，
+        // 差分会跳过内容未变行，故清物理屏 + 重置双缓冲）
+        if (key == KEY_RESIZE) {
+            term_width = term->get_terminal_width();
+            term_height = term->get_terminal_height();
+            overlay_bottom = term_height - 1;
+            if (overlay_bottom < 1) overlay_bottom = 1;
+            scr->resize(term_width, term_height);
+            scr->clear_terminal();
+            continue;
+        }
 
         // ============ 第一层：配置列表 ============
         if (layer == Layer::List) {

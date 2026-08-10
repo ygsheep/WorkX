@@ -163,111 +163,33 @@ cmake .. -DCMAKE_TOOLCHAIN_FILE=[vcpkg_root]/scripts/buildsystems/vcpkg.cmake
 cmake --build . --config Release
 ```
 
-### NixOS 安装
+## Nix / NixOS 安装
 
-#### 方式一：workx.nix（无需 Flake，最简单）
+> 不依赖 vcpkg/FetchContent：`nix/` 目录下的 `workx.nix` + `workx.patch` 将依赖全部换成 nixpkgs 提供。
+> 其中 `workx.patch` 对 nlohmann_json 3.12.0 打上 vcpkg 同款补丁（官方版在 GCC 下 `value("key", std::optional<...>)` SFINAE 实例化失败）。
 
-在 NixOS 机器上新建一个 `workx.nix`（如 `/etc/nixos/workx.nix`），内容如下——无需 Flake，无 `inputs`/`follows`，依赖全部取自 nixpkgs：
+### 方式一：flake（推荐，NixOS 系统安装）
 
-```nix
-{ lib, stdenv, cmake, ninja, pkg-config, nlohmann_json, curl
-, fetchFromGitHub
-, enableTreeSitter ? false
-}:
-stdenv.mkDerivation {
-  pname = "workx";
-  version = "0.2.0";
-
-  src = fetchFromGitHub {
-    owner = "ygsheep";
-    repo = "WorkX";
-    rev = "137675f";   # 换成最新 tag / commit
-    # 真实值用 nix-prefetch-github ygsheep WorkX 生成；
-    # 或先留 lib.fakeSha256，首次 nix build 报错会给出正确哈希
-    sha256 = lib.fakeSha256;
-  };
-
-  nativeBuildInputs = [ cmake ninja pkg-config ];
-  buildInputs = [ nlohmann_json curl ];
-
-  cmakeFlags = [
-    "-DWORKX_WITH_TREE_SITTER=${if enableTreeSitter then "ON" else "OFF"}"
-    "-DWORKX_FETCH_GRAMMARS=${if enableTreeSitter then "ON" else "OFF"}"
-    "-DWORKX_BUILD_TESTS=OFF"
-    "-DWORKX_BUILD_EXAMPLES=OFF"
-  ];
-
-  installPhase = ''
-    runHook preInstall
-    install -Dm755 build/bin/workx $out/bin/workx
-    runHook postInstall
-  '';
-
-  meta = with lib; {
-    description = "A modern terminal Code Agent / Work Agent";
-    homepage = "https://github.com/ygsheep/WorkX";
-    license = licenses.mit;
-    platforms = platforms.linux;
-  };
-}
-```
-
-NixOS 系统级安装：
+在 NixOS 系统的 `flake.nix` 中加入 input：
 
 ```nix
-# /etc/nixos/configuration.nix
-{ config, pkgs, ... }:
-{
-  environment.systemPackages = [
-    (pkgs.callPackage ./workx.nix {})   # 需要语法高亮时传 { enableTreeSitter = true; }
-  ];
-}
-```
-
-```bash
-sudo nixos-rebuild switch
-```
-
-home-manager 同样适用：
-
-```nix
-# home.nix
-{ config, pkgs, ... }:
-{
-  home.packages = [
-    (pkgs.callPackage ./workx.nix {})
-  ];
-}
-```
-
-```bash
-home-manager switch
-```
-
-#### 方式二：Flake
-
-Workx 提供 Nix Flake，支持系统级与 home-manager 两种安装方式（先推送 flake.nix 到 GitHub 再执行切换，`github:` 引用拉取的是远程版本）。
-
-**系统级安装（`environment.systemPackages`）**
-
-```nix
-# /etc/nixos/flake.nix
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     workx = {
-      url = "github:ygsheep/WorkX";
-      inputs.nixpkgs.follows = "nixpkgs";   # 与系统 nixpkgs 对齐
+      url = "github:ygsheep/WorkX/develop"; # 指定 develop 分支为源码
+      inputs.nixpkgs.follows = "nixpkgs";   # 对齐系统 nixpkgs
     };
   };
 
   outputs = { self, nixpkgs, workx, ... }@inputs: {
-    nixosConfigurations.nixos = nixpkgs.lib.nixosSystem {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       modules = [
         ({ pkgs, ... }: {
-          nix.settings.experimental-features = [ "nix-command" "flakes" ];  # 未启用时需添加
-          environment.systemPackages = [ workx.packages.${pkgs.system}.default ];
+          environment.systemPackages = [
+            inputs.workx.packages.${pkgs.system}.default
+          ];
         })
       ];
     };
@@ -275,45 +197,34 @@ Workx 提供 Nix Flake，支持系统级与 home-manager 两种安装方式（�
 }
 ```
 
-```bash
-sudo nixos-rebuild switch --flake /etc/nixos#nixos
-```
+home-manager 应用同理：`home.packages = [ inputs.workx.packages.${pkgs.system}.default ];`
 
-**home-manager（`home.packages`）**
+本仓库内可直接试用：`nix build .#default` 或 `nix profile install .#default`。
+
+### 方式二：callPackage（home-manager / NixOS 直接引用）
+
+将 `nix/workx.nix` 与 `nix/workx.patch` 拷入配置仓库（保持同目录），`src` 指向源码：
 
 ```nix
-# flake.nix（home-manager）
+{ pkgs, ... }:
 {
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
-    home-manager = {
-      url = "github:nix-community/home-manager";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-    workx = {
-      url = "github:ygsheep/WorkX";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-  };
-
-  outputs = { self, nixpkgs, home-manager, workx, ... }@inputs: {
-    homeConfigurations.user = home-manager.lib.homeManagerConfiguration {
-      pkgs = nixpkgs.legacyPackages.x86_64-linux;
-      modules = [
-        ({ pkgs, ... }: {
-          home.packages = [ workx.packages.${pkgs.system}.default ];
-        })
-      ];
-    };
-  };
+  home.packages = [
+    (pkgs.callPackage ./nix/workx.nix {
+      src = pkgs.fetchFromGitHub {
+        owner = "ygsheep";                  # 仓库实际 owner/repo
+        repo = "WorkX";
+        rev = "develop";                    # 分支或 tag
+        hash = "sha256-...";                # 先用占位,构建报错后填真实值
+      };
+    })
+  ];
 }
 ```
 
-```bash
-home-manager switch
-```
-
-> 注：两种方式的 tree-sitter 默认值不同。`workx.nix` 默认 `OFF`（构建无需额外网络，需高亮时 `callPackage` 传 `{ enableTreeSitter = true; }`）；Flake 构建默认 `ON`（grammar 经 FetchContent 在 configure 期拉取，Nix 沙箱默认禁网，需 `nix.settings.sandbox = false`）。若 configure 报 `Could NOT find CURL`，在 `cmakeFlags` 加 `-DCURL_DIR=${curl}/lib/cmake/CURL`。
+> **说明**
+> - Nix 构建沙箱无网络，tree-sitter runtime/grammars 的 FetchContent 拉取失败，故设 `WORKX_FETCH_GRAMMARS=OFF`，语法高亮降级为 no-op（渲染管线不受影响）。
+> - CMake 的 install 规则只安装 `workx_core` / `workx_agent` 库，可执行文件在 `postInstall` 手动拷贝（含 `icon.png` / `tools/rg`）。
+> - ripgrep 通过 `wrapProgram` 注入 PATH：workx 按 `bundled(<exe_dir>/tools/rg)` > PATH 顺序解析，Nix 下走 PATH 分支。
 
 ## 运行
 

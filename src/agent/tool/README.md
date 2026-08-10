@@ -44,6 +44,11 @@ class ITool {
 };
 ```
 
+> **call 协作取消契约**：`call()` 收到的 `ctx` 已绑定外部 `cancel_flag`（`const std::atomic<bool>*`，
+> 由 ReActLoop 注入为 `Task::m_should_cancel`）。长操作 / 有副作用的工具应在执行中轮询
+> `ctx.is_cancelled()` 并在取消时及时返回 `Error{Code::Cancelled}`（协作取消），
+> 短操作可依赖执行器的前置检查。
+
 ### ToolRegistry
 
 工具注册表，管理所有工具实例的生命周期：
@@ -170,6 +175,34 @@ sequenceDiagram
 | `AskUser/` | `AskUser` | 向用户提问（TUI 选择面板，阻塞 + 超时） | `questions`, `timeout_ms` |
 | `MCPTool/` | `MCP` | 调用 MCP 协议外部工具 | `server`, `tool`, `input` |
 
+## 打断与取消（interrupt / cancel）
+
+> 关联：Issue #23 运行中打断生命周期。取消统一复用 `ctx.cancel_flag`（`Task::m_should_cancel`），
+> 不引入独立 CancellationToken；分层各司其职，运行中打断即时生效且不留半写文件。
+
+取消信号来源：用户 Ctrl+C / Esc → `InterruptEvent` → `ChatSession::subscribe_interrupt`
+同时（1）`m_provider->interrupt()` 断开 LLM 流；（2）`m_current_task->cancel()` 置位 `should_cancel`
+（P1 修复），随后 ReActLoop 与工具通过 `ctx.is_cancelled()` 即时感知。
+
+执行分三个阶段，取消由三层协作：
+
+| 阶段 | 层 | 取消机制 |
+|------|----|----------|
+| 前置（未开始） | `ToolExecutor::execute` | 统一检查 `ctx.is_cancelled()`，已取消立即返回 `Cancelled`，不进入 `call` |
+| 执行中（长操作） | 工具内部 `call()` | 轮询 `ctx.is_cancelled()` 协作退出（协作取消；executor 是同步调用，进不了工具内部） |
+| 等待工具返回 | ReActLoop 工具等待循环 | `future.wait_for(100ms)` 轮询（P1），工具协作退出后照常生成 Observation，消息不丢 |
+
+**工具内取消点现状**：
+
+| 工具 | 取消实现 |
+|------|----------|
+| BashTool / GlobTool(rg) / GrepTool(rg) | `exec` 的 `ExecOptions::is_cancelled` 绑定 `ctx.cancel_flag`；POSIX `setpgid + kill(-pid)` 销毁进程组（含 bash 子孙进程），SIGTERM → 5s 后 SIGKILL 升级（P1） |
+| FileEditTool / FileWriteTool | 原子写：同目录临时文件 `.workx.tmp` → `fs::rename` 原子替换；取消点位于写临时文件前后，已取消则删除临时文件、返回 `Cancelled`，原文件保持完整（P2） |
+| 其余短操作工具 | 依赖执行器前置检查 + 下一轮 Thought 取消，不额外插桩 |
+
+**不丢会话记录的保证**：取消置位后 ReActLoop 必定从规范分支（Thought Cancelled / 工具 Cancelled）
+返回，`persist_messages_range` 与 partial 持久化路径必然可达；文件工具的原子写保证写入中断不产生半写文件。
+
 ## 添加新工具
 
 1. 创建目录 `src/agent/tool/YourTool/`
@@ -203,6 +236,8 @@ public:
 - **header-only 核心**：基础设施（itool/registry/executor/result/context/types）全部 header-only
 - **工具隔离**：每个工具独立目录，互不依赖
 - **统一管道**：所有调用经 `ToolExecutor` 执行权限检查 → 验证 → 执行
+- **协作取消**：取消信号经 `ctx.cancel_flag`（唯一取消源）下发，工具在执行中自行轮询协作退出
+- **原子写**：文件写入先落盘临时文件再 rename，中断不留半写文件
 - **Result 类型**：错误处理使用 `Result<T, E>`，不抛异常
 
 ## 外部工具集成

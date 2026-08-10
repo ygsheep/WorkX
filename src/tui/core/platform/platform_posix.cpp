@@ -10,6 +10,7 @@
 
 #include <termios.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/ioctl.h>
 #include <poll.h>
 #include <csignal>
@@ -35,6 +36,11 @@ static constexpr char32_t KEY_DELETE           = 0xE008;
 static constexpr char32_t KEY_CTRL_C           = 0xE009;
 static constexpr char32_t KEY_CTRL_O           = 0xE00A;
 static constexpr char32_t KEY_RESIZE           = 0xE00B;  // 终端尺寸变更（SIGWINCH）
+
+/// @brief ESC 序列续字节试探超时（毫秒）
+/// @details 收到独立 ESC 前缀后在此窗口内等待续字节；超时判定为孤立 ESC（取消键）。
+///          需大于序列组包间隔又足够短，Linux 终端方向键序列连续到达通常 < 16ms。
+static constexpr int ESC_SEQ_TIMEOUT_MS = 50;
 
 // SIGWINCH 到 KEY_RESIZE 的桥接：信号处理器只置 flag，read_char() 检测后返回 KEY_RESIZE。
 // 使用 sig_atomic_t 保证信号上下文写入的原子性。
@@ -71,6 +77,13 @@ public:
             m_wake_pipe[0] = m_wake_pipe[1] = -1;
             // 自检失败：notify_wake 将无法唤醒主循环，AskUser 等跨线程通知不可用
             LOG_ERROR("[PosixPlatform] pipe() failed (errno={}), cross-thread wake disabled", errno);
+        } else {
+            // 读端设为非阻塞：drain（while read > 0）读空后返回 EAGAIN 而非永久阻塞，
+            // 否则第二次 read 会在空管道上挂死，导致 KEY_WAKE 永远无法返回主循环。
+            int flags = fcntl(m_wake_pipe[0], F_GETFL, 0);
+            if (flags < 0 || fcntl(m_wake_pipe[0], F_SETFL, flags | O_NONBLOCK) < 0) {
+                LOG_ERROR("[PosixPlatform] fcntl(O_NONBLOCK) failed (errno={}), cross-thread wake disabled", errno);
+            }
         }
 
         // 注册 SIGWINCH 处理器：终端尺寸变更时置 flag，read_char() 据此返回 KEY_RESIZE。
@@ -130,12 +143,21 @@ public:
                 fds[1].fd = m_wake_pipe[0];
                 fds[1].events = POLLIN;
                 fds[1].revents = 0;
-                int pr = poll(fds, 2, -1);
+                // 解码器处于序列中间态（已收到 ESC 前缀）时用短超时试探续字节：
+                // 有续字节则继续组码；超时则判定为孤立 ESC 返回 0x1B。
+                // 否则孤立 ESC 后会永久阻塞在 poll(-1)，ChoicePanel 无法用 Esc 取消。
+                int timeout_ms = m_vt_decoder.pending() ? ESC_SEQ_TIMEOUT_MS : -1;
+                int pr = poll(fds, 2, timeout_ms);
                 LOG_INFO("[PosixPlatform] read_char poll returned, pr={}, stdin_rev={}, pipe_rev={}",
                          pr, fds[0].revents, fds[1].revents);
                 if (pr < 0) {
                     if (errno == EINTR) continue;  // 信号打断：回顶部重查 resize/pipe
                     return WEOF;                   // poll 失败（非 EINTR）按无输入处理
+                }
+                if (pr == 0) {
+                    // 序列中间态超时：孤立 ESC（用户按 Esc 取消），丢弃半截序列
+                    m_vt_decoder.reset();
+                    return 0x1B;
                 }
                 // self-pipe 就绪：丢弃半截输入序列，清空管道并返回 KEY_WAKE
                 if (fds[1].revents & POLLIN) {
@@ -145,12 +167,28 @@ public:
                     while (read(m_wake_pipe[0], &dummy, 1) > 0) {}
                     return KEY_WAKE;
                 }
+                // self-pipe 未就绪而 poll 返回：stdin 有字节，继续读取
             }
 
             // stdin 就绪：读取一字节（poll 已保证可读；EINTR 回顶部重试）
             ssize_t n = read(STDIN_FILENO, buf + buf_len, 1);
             if (n < 0 && errno == EINTR) continue;
             if (n <= 0) return WEOF;
+
+            // 解码器序列中间态（已收到 ESC）：续字节直接喂解码器，不并入 UTF-8 缓冲。
+            // 修复：方向键等 `ESC [ A` 序列中，`[` 和 `A` 原会因 buf_len 递增
+            // 误入 UTF-8 续字节分支（把 0x1B 当头字节算出垃圾码），并使解码器
+            // 滞留在 Esc 态把 `A` 当孤立 ESC 返回 0x1B（ChoicePanel 误判为取消）。
+            if (m_vt_decoder.pending()) {
+                switch (m_vt_decoder.feed(buf[buf_len])) {
+                    case VtInputDecoder::Event::Char:
+                        return m_vt_decoder.code();
+                    default:
+                        buf_len = 0;  // 序列字节已消费，重置 UTF-8 缓冲
+                        continue;
+                }
+            }
+
             ++buf_len;
 
             if (buf_len == 1) {
@@ -164,6 +202,7 @@ public:
                         case VtInputDecoder::Event::Char:
                             return m_vt_decoder.code();
                         default:
+                            buf_len = 0;  // 序列中间态：重置缓冲，续字节走 pending 分支
                             continue;
                     }
                 }

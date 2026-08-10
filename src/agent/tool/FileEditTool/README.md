@@ -549,6 +549,19 @@ WorkX 已确认采用**同步返回类型**（见项目工程约定：`ToolResul
 
 **方案**：C++ 无此限制，但为对齐源码行为并防止极端情况，保留 1 GiB 上限。
 
+### 7.6 为什么原子写 + 取消点？（#23 P2）
+
+**问题**：旧实现 `std::ofstream(path, trunc)` 直写，大文件写入中途被打断/崩溃 → 原文件半写损坏；
+且运行中打断不感知（旧 subscribe_interrupt 只断 LLM 流）。
+
+**方案**：
+- **原子写**：经 `write_file_with_encoding` 先写同目录 `.workx.tmp` 临时文件，再 `fs::rename`
+  原子替换（新建模式与更新模式统一走该路径）。写入失败/取消只清理临时文件，原文件始终完整。
+- **取消点**：更新模式在 `.bak` 备份完成后、写文件前检查 `ctx.is_cancelled()`，已取消返回
+  `Error{Code::Cancelled}`（保留备份、原文件未动）。
+- **取消回调**：`write_file_with_encoding` 接受 `is_cancelled` 回调，rename 前再次校准，覆盖
+  "写临时文件后才收到取消"的窗口。
+
 ---
 
 ## 8. 测试策略

@@ -518,6 +518,11 @@ ResultV2<ExecOutput> exec_posix(const std::string& cmd, const ExecOptions& opts)
         signal(SIGQUIT, SIG_DFL);
         signal(SIGTERM, SIG_DFL);
 
+        // #23 P1：建立独立进程组，使父进程可用 kill(-pid) 销毁整棵进程树
+        // （bash -c "sleep 1000" 的 sleep 等子孙进程与 bash 同组，一并被清）。
+        // 父子双侧都调用：子侧保证自身入组，父侧兜底竞态窗口（幂等，可忽略失败）。
+        setpgid(0, 0);
+
         // 构建 argv
         std::vector<const char*> argv;
         argv.reserve(opts.args.size() + 2);
@@ -535,6 +540,10 @@ ResultV2<ExecOutput> exec_posix(const std::string& cmd, const ExecOptions& opts)
     // ---- 父进程 ----
     close(stdout_pipe[1]); close(stderr_pipe[1]);
 
+    // #23 P1：竞态兜底 —— 与子进程的 setpgid(0,0) 幂等，确保 kill(-pid)
+    //         在进入取消/超时分支前进程组一定已建立（失败可忽略）。
+    setpgid(pid, pid);
+
     // 设置读端非阻塞
     set_nonblocking(stdout_pipe[0]);
     set_nonblocking(stderr_pipe[0]);
@@ -547,7 +556,7 @@ ResultV2<ExecOutput> exec_posix(const std::string& cmd, const ExecOptions& opts)
     while (stdout_open || stderr_open) {
         // 检查取消
         if (opts.is_cancelled && opts.is_cancelled()) {
-            kill(pid, SIGTERM);
+            kill(-pid, SIGTERM);  // 杀整个进程组（含 bash 的子孙进程）
             // 给 5s 升级到 SIGKILL
             int status = 0;
             for (int i = 0; i < 50; ++i) { // 5s = 50 * 100ms
@@ -555,7 +564,7 @@ ResultV2<ExecOutput> exec_posix(const std::string& cmd, const ExecOptions& opts)
                 if (w == pid || w == -1) goto kill_done_cancelled;
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
-            kill(pid, SIGKILL);
+            kill(-pid, SIGKILL);
             waitpid(pid, &status, 0);
         kill_done_cancelled:
             output.cancelled = true;
@@ -566,7 +575,7 @@ ResultV2<ExecOutput> exec_posix(const std::string& cmd, const ExecOptions& opts)
         if (opts.timeout) {
             auto elapsed = std::chrono::steady_clock::now() - start;
             if (elapsed >= *opts.timeout) {
-                kill(pid, SIGTERM);
+                kill(-pid, SIGTERM);  // 杀整个进程组（含 bash 的子孙进程）
                 // 5s 升级 SIGKILL
                 int status = 0;
                 for (int i = 0; i < 50; ++i) {
@@ -574,7 +583,7 @@ ResultV2<ExecOutput> exec_posix(const std::string& cmd, const ExecOptions& opts)
                     if (w == pid || w == -1) goto kill_done_timeout;
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 }
-                kill(pid, SIGKILL);
+                kill(-pid, SIGKILL);
                 waitpid(pid, &status, 0);
             kill_done_timeout:
                 output.timed_out = true;

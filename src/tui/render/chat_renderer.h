@@ -87,6 +87,7 @@ private:
     std::unique_ptr<agent::EventToken> m_token_resize;      ///< 终端尺寸变更事件
     std::unique_ptr<agent::EventToken> m_token_task_completed;  ///< 后台任务完成事件
     std::unique_ptr<agent::EventToken> m_token_task_failed;     ///< 后台任务失败事件
+    std::unique_ptr<agent::EventToken> m_token_task_cancelled;  ///< 后台任务取消事件（#23 P3）
     std::unique_ptr<agent::EventToken> m_token_cache_diag;      ///< 缓存诊断事件
     std::unique_ptr<agent::EventToken> m_token_ask_user;        ///< AskUser 请求事件
     std::unique_ptr<agent::EventToken> m_token_ask_timeout;     ///< AskUser 超时事件
