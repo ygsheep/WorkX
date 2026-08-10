@@ -1,5 +1,5 @@
 {
-  description = "Workx development environment";
+  description = "Workx TUI chat client - flake 提供 devShell 与可安装 package";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
@@ -8,8 +8,32 @@
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
+
+      # flake 源码本体（self.outPath）排掉 build/.git/.claude/vendor 后再打包，
+      # 避免把构建产物和仓库元数据带进 src。
+      src = builtins.path {
+        path = self.outPath;
+        name = "workx-src";
+        filter = path: type:
+          let base = baseNameOf path;
+          in !(type == "directory" && (
+            base == "build" || base == ".git" || base == ".claude" || base == "vendor"
+          ));
+      };
     in
     {
+      # 可直接安装的 package：NixOS/home-manager 端用
+      #   inputs.workx.packages.${pkgs.system}.default
+      # 或 `nix profile install .#default` / `nix build .#default`
+      packages = forAllSystems (system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+        in
+        {
+          workx = pkgs.callPackage ./nix/workx.nix { inherit src; };
+          default = self.packages.${system}.workx;
+        });
+
       devShells = forAllSystems (system:
         let
           pkgs = import nixpkgs { inherit system; };

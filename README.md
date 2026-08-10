@@ -163,6 +163,69 @@ cmake .. -DCMAKE_TOOLCHAIN_FILE=[vcpkg_root]/scripts/buildsystems/vcpkg.cmake
 cmake --build . --config Release
 ```
 
+## Nix / NixOS 安装
+
+> 不依赖 vcpkg/FetchContent：`nix/` 目录下的 `workx.nix` + `workx.patch` 将依赖全部换成 nixpkgs 提供。
+> 其中 `workx.patch` 对 nlohmann_json 3.12.0 打上 vcpkg 同款补丁（官方版在 GCC 下 `value("key", std::optional<...>)` SFINAE 实例化失败）。
+
+### 方式一：flake（推荐，NixOS 系统安装）
+
+在 NixOS 系统的 `flake.nix` 中加入 input：
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    workx = {
+      url = "github:young/WorkX";           # 请替换为实际仓库地址
+      inputs.nixpkgs.follows = "nixpkgs";   # 对齐系统 nixpkgs
+    };
+  };
+
+  outputs = { self, nixpkgs, workx, ... }@inputs: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        ({ pkgs, ... }: {
+          environment.systemPackages = [
+            inputs.workx.packages.${pkgs.system}.default
+          ];
+        })
+      ];
+    };
+  };
+}
+```
+
+home-manager 应用同理：`home.packages = [ inputs.workx.packages.${pkgs.system}.default ];`
+
+本仓库内可直接试用：`nix build .#default` 或 `nix profile install .#default`。
+
+### 方式二：callPackage（home-manager / NixOS 直接引用）
+
+将 `nix/workx.nix` 与 `nix/workx.patch` 拷入配置仓库（保持同目录），`src` 指向源码：
+
+```nix
+{ pkgs, ... }:
+{
+  home.packages = [
+    (pkgs.callPackage ./nix/workx.nix {
+      src = pkgs.fetchFromGitHub {
+        owner = "young";                    # 请替换为实际 owner/repo/rev
+        repo = "WorkX";
+        rev = "v0.2.0";
+        hash = "sha256-...";                # 先用占位,构建报错后填真实值
+      };
+    })
+  ];
+}
+```
+
+> **说明**
+> - Nix 构建沙箱无网络，tree-sitter runtime/grammars 的 FetchContent 拉取失败，故设 `WORKX_FETCH_GRAMMARS=OFF`，语法高亮降级为 no-op（渲染管线不受影响）。
+> - CMake 的 install 规则只安装 `workx_core` / `workx_agent` 库，可执行文件在 `postInstall` 手动拷贝（含 `icon.png` / `tools/rg`）。
+> - ripgrep 通过 `wrapProgram` 注入 PATH：workx 按 `bundled(<exe_dir>/tools/rg)` > PATH 顺序解析，Nix 下走 PATH 分支。
+
 ## 运行
 
 ![Setup Wizard 首次启动引导（4 步配置）](docs/img/06_setup_wizard.jpg)
