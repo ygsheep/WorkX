@@ -27,6 +27,12 @@
 #include <string>
 #include <thread>
 
+#ifndef _WIN32
+#include <cerrno>
+#include <csignal>
+#include <unistd.h>
+#endif
+
 using namespace agent;
 using namespace agent::process;
 namespace fs = std::filesystem;
@@ -185,6 +191,49 @@ TEST_CASE("subprocess cancels via is_cancelled callback", "[subprocess][cancel]"
     REQUIRE(r.value().cancelled);
     REQUIRE_FALSE(r.value().timed_out);
 }
+
+#ifndef _WIN32
+TEST_CASE("subprocess cancel kills descendant processes via process group", "[subprocess][cancel][posix]") {
+    // #23 P1：取消应杀整个进程组（setpgid + kill(-pid)），
+    // 而非只杀 shell 直接 pid。验证 bash -c 的子孙（sleep）也被一并销毁。
+    auto pidfile = fs::temp_directory_path() / "workx_subprocess_child_pid.txt";
+    std::error_code ec;
+    fs::remove(pidfile, ec);
+
+    std::atomic<bool> cancel_flag{false};
+    std::thread canceler([&cancel_flag]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        cancel_flag = true;
+    });
+
+    // shell 后台派生 sleep（子孙进程）并记录其 pid，再 wait 等待
+    ExecOptions opts;
+    opts.args = {"-c",
+        "sleep 30 & echo $! > '" + pidfile.string() + "'; wait"};
+    opts.is_cancelled = [&cancel_flag]() { return cancel_flag.load(); };
+    auto r = exec(kShell, opts);
+    canceler.join();
+
+    REQUIRE(r.is_ok());
+    REQUIRE(r.value().cancelled);
+
+    // 读取子孙进程（sleep）pid
+    REQUIRE(fs::exists(pidfile));
+    std::ifstream ifs(pidfile);
+    pid_t child_pid = 0;
+    ifs >> child_pid;
+    fs::remove(pidfile, ec);
+    REQUIRE(child_pid > 0);
+
+    // 等 init reaps：进程组 kill 应已让 sleep 退出并被回收，
+    // kill(pid, 0) 探活应返回 ESRCH（进程不存在）
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    errno = 0;
+    int alive = kill(child_pid, 0);
+    REQUIRE(alive == -1);
+    REQUIRE(errno == ESRCH);
+}
+#endif // !_WIN32
 
 // ============================================================
 // 参数转义（多参数传递给非 shell 命令）

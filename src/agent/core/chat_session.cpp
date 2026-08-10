@@ -1162,8 +1162,20 @@ Result<void, std::string> ChatSession::load_session(const std::string& path) {
 void ChatSession::subscribe_interrupt() {
     m_interrupt_token = m_event_bus.get().subscribe<InterruptEvent>(
         [this](const InterruptEvent& /*e*/) {
+            // 1) 快速断开 LLM 流（保留原有路径）
             if (m_provider) {
                 m_provider->interrupt();
+            }
+            // 2) 置位当前任务的 should_cancel（#23 P1：运行中中断也要打通
+            //    协作取消链路，使 ReActLoop 与工具能即时感知，而非只断流）。
+            //    task->cancel() 只置原子标志，线程安全，可在任意线程调用。
+            std::shared_ptr<Task> task;
+            {
+                std::lock_guard<std::mutex> lock(m_state_mutex);
+                task = m_current_task;
+            }
+            if (task) {
+                task->cancel();
             }
         }
     );

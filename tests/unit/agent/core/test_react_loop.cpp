@@ -127,6 +127,41 @@ public:
 };
 
 // ============================================================
+// CooperativeSlowTool — 协作式慢工具（响应 is_cancelled 即可退出）
+// ============================================================
+
+class CooperativeSlowTool : public ITool {
+public:
+    const std::string& name() const override {
+        static const std::string n = "Slow";
+        return n;
+    }
+    const std::string& description() const override {
+        static const std::string d = "Cooperative slow tool that exits on cancel";
+        return d;
+    }
+    const std::string& prompt() const override {
+        static const std::string p = "Slow tool for testing";
+        return p;
+    }
+    nlohmann::json input_schema() const override {
+        return {{"type", "object"}, {"properties", {}}};
+    }
+    ResultV2<ToolResult> call(const nlohmann::json&, const ToolContext& ctx) const override {
+        // 协作式取消：每 50ms 轮询一次；无取消则 1s 后正常完成
+        constexpr int kTicks = 20;
+        for (int i = 0; i < kTicks; ++i) {
+            if (ctx.is_cancelled()) {
+                return ResultV2<ToolResult>::err(
+                    Error::Code::Cancelled, "Slow tool cancelled");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        return ResultV2<ToolResult>::ok(ToolResult::ok(std::string("slow done")));
+    }
+};
+
+// ============================================================
 // Helper: 构建 ReActLoop
 // ============================================================
 
@@ -364,6 +399,40 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop cancels during Thought phase", "[r
     REQUIRE(result.was_interrupted);
     REQUIRE_FALSE(result.was_error);
     REQUIRE(result.partial_content == "partial");
+}
+
+TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop cooperative cancel during tool execution preserves tool messages", "[react_loop][cancel]") {
+    // #23 P1：工具执行期间置位 should_cancel（等价于用户 Ctrl+C），
+    // ReActLoop 应等待工具协作退出后仍生成 Observation（消息不丢），
+    // 再在下一轮 Thought 走 was_interrupted 分支。
+    auto slow_tool = std::make_shared<CooperativeSlowTool>();
+    registry->register_tool(slow_tool);
+
+    make_tool_call_reader("tu_01", "Slow", R"({})");
+
+    // 第二轮 Thought 需要一个 reader 才能进入 while 检查 should_cancel
+    make_text_reader("second round");
+
+    std::vector<ChatMessage> messages = {ChatMessage::user("slow tool")};
+    auto loop = make_loop();
+
+    // 模拟工具执行中途用户打断
+    std::thread canceler([&should_cancel = this->should_cancel]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        should_cancel = true;
+    });
+    auto result = loop->run(messages, "", registry->get_all_schemas(), should_cancel);
+    canceler.join();
+
+    // 中断被感知 → 走 was_interrupted 分支
+    REQUIRE(result.was_interrupted);
+    REQUIRE_FALSE(result.was_error);
+    REQUIRE(result.total_tool_calls == 1);
+
+    // 工具结果消息仍被完整记录（协作取消后 Observation 照常生成）
+    REQUIRE(messages.size() >= 3);
+    REQUIRE(messages[2].role == ChatMessage::Role::Tool);
+    REQUIRE(messages[2].content.find("cancelled") != std::string::npos);
 }
 
 // ============================================================================
