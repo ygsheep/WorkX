@@ -88,9 +88,9 @@ void IslandServer::stop() {
     m_cv.notify_all();
 
     // 关闭监听/连接句柄，打断阻塞的 accept/read
-    m_listener->close();
     {
         std::lock_guard<std::mutex> lock(m_conn_mutex);
+        if (m_listener) m_listener->close();
         if (m_conn) m_conn->close();
     }
     if (m_accept_thread.joinable()) m_accept_thread.join();
@@ -146,10 +146,11 @@ void IslandServer::accept_loop() {
 
         // accept 成功后 listener 已转化为连接，创建独立实例供下轮监听
         // （注：传输实现内 accept 后 close 了监听端点）
-        auto conn = std::shared_ptr<ipc::ITransport>(std::move(m_listener));
-        m_listener = ipc::create_listener();
+        std::shared_ptr<ipc::ITransport> conn;
         {
             std::lock_guard<std::mutex> lock(m_conn_mutex);
+            conn = std::shared_ptr<ipc::ITransport>(std::move(m_listener));
+            m_listener = ipc::create_listener();
             m_conn = conn;
             // 连接建立后先不推送，等 hello 握手指定 last_seq（防重复）
             m_hello_received.store(false);
@@ -295,14 +296,16 @@ void IslandServer::handle_request(const std::shared_ptr<ipc::ITransport>& conn,
 void IslandServer::replay_from(const std::shared_ptr<ipc::ITransport>& conn,
                                int64_t last_seq) {
     std::vector<std::string> lines;
-    std::lock_guard<std::mutex> lock(m_ring_mutex);
-    for (const auto& e : m_ring) {
-        if (e.seq > last_seq) lines.push_back(e.line);
-    }
-    // 修正实时推送游标：回放完成后从缓冲最新位置继续
-    if (!lines.empty()) {
-        const int64_t sentinel = m_ring.back().seq;
-        m_next_seq.store(std::max<int64_t>(m_next_seq.load(), sentinel + 1));
+    {
+        std::lock_guard<std::mutex> lock(m_ring_mutex);
+        for (const auto& e : m_ring) {
+            if (e.seq > last_seq) lines.push_back(e.line);
+        }
+        // 修正实时推送游标：回放完成后从缓冲最新位置继续
+        if (!lines.empty()) {
+            const int64_t sentinel = m_ring.back().seq;
+            m_next_seq.store(std::max<int64_t>(m_next_seq.load(), sentinel + 1));
+        }
     }
     write_lines(conn, lines);
 }

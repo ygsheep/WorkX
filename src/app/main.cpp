@@ -737,15 +737,16 @@ static int run(int argc, char* argv[]) {
     std::unique_ptr<island::BalanceFetcher> balance_fetcher;
     std::unique_ptr<island::IslandEventBridge> island_bridge;
     if (cfg.get_or<bool>(keys::ISLAND_ENABLED, true)) {
+        const std::string model = cfg.get_or<std::string>(keys::MODEL_NAME, "");
         island::IslandServerConfig srv_cfg;
         srv_cfg.project_root = std::filesystem::current_path().string();
-        srv_cfg.model = cfg.get_or<std::string>(keys::MODEL_NAME, "");
+        srv_cfg.model = model;
         island_server = std::make_unique<island::IslandServer>(
             std::move(srv_cfg), nullptr, &island_registry_writer);
         island_server->start();
 
         cost_acc = std::make_unique<island::CostAccumulator>(
-            EventBus::instance(), island::PricingTable::deepseek_default(), srv_cfg.model);
+            EventBus::instance(), island::PricingTable::deepseek_default(), model);
 
         // 余额拉取：仅 DeepSeek 后端（余额 API 为 DeepSeek 专属）
         const std::string api_key = cfg.get_or<std::string>(keys::API_KEY, "");

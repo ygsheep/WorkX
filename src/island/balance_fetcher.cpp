@@ -186,11 +186,12 @@ void BalanceFetcher::run_loop() {
         m_cv.wait_for(lock, m_interval, [this] {
             return m_stop.load() || m_refresh_requested.load();
         });
-        m_refresh_requested.store(false);
+        const bool manual = m_refresh_requested.exchange(false);
         lock.unlock();
 
         if (m_stop.load()) break;
-        if (m_auth_failed.load()) continue;  // 401：停止定时拉取
+        // 401 后：定时拉取跳过，手动刷新放行（可解除冻结）
+        if (m_auth_failed.load() && !manual) continue;
 
         const BalanceResult result = do_fetch();
         if (result.success) {
