@@ -1,7 +1,24 @@
 # Workx
 
-> 一个现代化的终端 Code Agent / Work Agent，基于 ReAct 循环与工具调用架构，能够自主完成编码、调试、文件操作与任务编排。
+<div align="center">
 
+<img src="src/icon.png" alt="Workx Icon" width="128" height="128"/>
+
+**基于 ReAct 循环与工具调用架构的现代终端 Code Agent / Work Agent，能够自主完成编码、调试、文件操作与任务编排**
+
+[![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20NixOS-2ea44f.svg)](#构建步骤)
+[![License](https://img.shields.io/badge/license-MIT-purple.svg)](LICENSE)
+[![CI](https://github.com/ygsheep/WorkX/actions/workflows/code-quality.yml/badge.svg)](https://github.com/ygsheep/WorkX/actions/workflows/code-quality.yml)
+
+[功能特性](#特性) • [快速开始](#构建步骤) • [运行](#运行) • [命令参考](#命令参考) • [配置](#配置) • [测试](#测试)
+
+</div>
+
+---
+
+> 一个现代化的终端 Code Agent / Work Agent，基于 ReAct 循环与工具调用架构，能够自主完成编码、调试、文件操作与任务编排。
+>
 > **Agent Harness 定位**：除终端客户端外，`src/core` + `src/agent` 构成可复用的 Agent Harness 库（`workx::agent`）。外部工程可通过 `find_package(workx)` 或 `add_subdirectory` 链接并驱动 ReAct Agent 循环（注入 `ICompletionProvider`、订阅 `EventBus` 事件即可），**无需任何 TUI/应用层依赖**——`src/tui` 与 `src/app` 只是参考宿主实现。消费示例见 `tests/consumer/`。
 
 ## 特性
@@ -23,7 +40,9 @@
 
 ![Workx 四层架构图（鲸鱼娘解说版）](docs/architecture_overview.jpg)
 
-**分层与单向依赖**：`core ← agent ← tui ← app`，禁止反向依赖（由 `test_layer_boundary` 编译期校验）。其中 `workx_core` + `workx_agent` 可安装供外部消费（Agent Harness），`workx_tui` / `workx_app` 为内部宿主目标；公共 API 面由 `WORKX_PUBLIC_HEADERS` 白名单界定（`src/CMakeLists.txt`）。
+一个现代化的终端 Code Agent / Work Agent，基于 ReAct 循环与工具调用架构，能够自主完成编码、调试、文件操作与任务编排。
+
+**Agent Harness 定位**：除终端客户端外，`src/core` + `src/agent` 构成可复用的 Agent Harness 库（`workx::agent`）。外部工程可通过 `find_package(workx)` 或 `add_subdirectory` 链接并驱动 ReAct Agent 循环（注入 `ICompletionProvider`、订阅 `EventBus` 事件即可），**无需任何 TUI/应用层依赖**——`src/tui` 与 `src/app` 只是参考宿主实现。消费示例见 `tests/consumer/`。
 
 ### 核心工作流（鲸鱼娘图解）
 

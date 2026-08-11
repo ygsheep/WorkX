@@ -20,8 +20,8 @@ target_link_libraries(workx PRIVATE workx_island workx_app)
 # ============================================================
 # choice_preview 可执行文件（ChoiceTool TUI 预览，依赖 app 工厂函数）
 # ============================================================
-add_executable(choice_preview example/choice_preview.cpp)
-target_link_libraries(choice_preview PRIVATE workx_app)
+#add_executable(choice_preview example/choice_preview.cpp)
+#target_link_libraries(choice_preview PRIVATE workx_app)
 
 # ============================================================
 # 应用图标：从 src/icon.png 生成各平台格式
