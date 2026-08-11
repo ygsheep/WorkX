@@ -149,7 +149,15 @@ WorkX 的核心是 Agent 自主调用工具完成任务。内置工具集如下�
 
 - **CMake**: 3.21 或更高版本
 - **C++ 编译器**: 支持 C++20（MSVC 14.5+ 或 GCC 10+）
-- **vcpkg**: 依赖包管理器
+- **vcpkg**: 依赖包管理器，依赖库如下：
+
+| 库 | 说明 |
+|----|------|
+| `nlohmann-json` | JSON 解析（所有平台） |
+| `catch2` | 单元测试框架（所有平台） |
+| `curl` | HTTP 客户端（所有平台） |
+| `tree-sitter` | 语法高亮（所有平台） |
+| `imgui` | 调试用原生窗口（仅 Windows，`dx11-binding` + `win32-binding`） |
 
 ## 构建步骤
 
@@ -159,10 +167,14 @@ WorkX 的核心是 Agent 自主调用工具完成任务。内置工具集如下�
 
 ### Linux
 ```bash
-cmake -B _build -DCMAKE_TOOLCHAIN_FILE=/home/young/WorkSpace/vcpkg/scripts/buildsystems/vcpkg.cmake
-cd _build && make
+# 初始化 vcpkg 依赖（首次使用，${VCPKG_ROOT} 为你的 vcpkg 安装路径）
+${VCPKG_ROOT}/vcpkg install nlohmann-json catch2 curl tree-sitter
 
+# 配置 CMake
+cmake -B build -DCMAKE_TOOLCHAIN_FILE=${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake
 
+# 构建
+cmake --build build
 ```
 
 ### Windows (MSVC)
