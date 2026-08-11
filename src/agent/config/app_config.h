@@ -59,6 +59,12 @@ namespace keys {
     constexpr const char* EDIT_DENY_PATTERNS  = "tool.edit.deny_patterns";
     /// 是否启用密钥扫描（写入内容包含疑似密钥时拒绝）
     constexpr const char* EDIT_SCAN_SECRETS   = "tool.edit.scan_secrets";
+
+    // Island（灵动岛 GUI IPC）
+    /// 是否启用 Island IPC 服务（默认 true；GUI 通过 named pipe/socket 发现本 TUI）
+    constexpr const char* ISLAND_ENABLED      = "island.enabled";
+    /// 余额拉取汇率（CNY → USD 折算，DeepSeek 余额以 CNY 返回）
+    constexpr const char* ISLAND_USD_CNY_RATE = "island.usd_cny_rate";
 }
 
 /// @brief 注册所有配置项的结构化 Schema（类型/默认值/范围/枚举/环境变量映射）

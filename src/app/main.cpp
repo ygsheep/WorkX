@@ -53,6 +53,12 @@
 #include "core/config/config_manager.h"
 #include "core/events/event_bus.h"
 #include "core/task/task_manager.h"
+#include "island/balance_fetcher.h"
+#include "island/cost_accumulator.h"
+#include "island/island_event_bridge.h"
+#include "island/island_server.h"
+#include "island/pricing_table.h"
+#include "island/registry_writer.h"
 #include "tui/core/platform/i_platform.h"
 #include "tui/core/screen.h"
 #include "tui/core/terminal.h"
@@ -723,6 +729,74 @@ static int run(int argc, char* argv[]) {
         }
     );
 
+    // ---- Island IPC（灵动岛 GUI 联动）----
+    // 注册文件写入器先声明（后析构）：server.stop() 移除记录时仍需访问
+    island::RegistryWriter island_registry_writer(island::RegistryWriter::default_registry_path());
+    std::unique_ptr<island::IslandServer> island_server;
+    std::unique_ptr<island::CostAccumulator> cost_acc;
+    std::unique_ptr<island::BalanceFetcher> balance_fetcher;
+    std::unique_ptr<island::IslandEventBridge> island_bridge;
+    if (cfg.get_or<bool>(keys::ISLAND_ENABLED, true)) {
+        island::IslandServerConfig srv_cfg;
+        srv_cfg.project_root = std::filesystem::current_path().string();
+        srv_cfg.model = cfg.get_or<std::string>(keys::MODEL_NAME, "");
+        island_server = std::make_unique<island::IslandServer>(
+            std::move(srv_cfg), nullptr, &island_registry_writer);
+        island_server->start();
+
+        cost_acc = std::make_unique<island::CostAccumulator>(
+            EventBus::instance(), island::PricingTable::deepseek_default(), srv_cfg.model);
+
+        // 余额拉取：仅 DeepSeek 后端（余额 API 为 DeepSeek 专属）
+        const std::string api_key = cfg.get_or<std::string>(keys::API_KEY, "");
+        const std::string remote_url = cfg.get_or<std::string>(keys::REMOTE_URL, "");
+        if (!api_key.empty() && remote_url.find("deepseek") != std::string::npos) {
+            balance_fetcher = std::make_unique<island::BalanceFetcher>(
+                EventBus::instance(), api_key, remote_url,
+                cfg.get_or<double>(keys::ISLAND_USD_CNY_RATE, 7.2));
+            balance_fetcher->start();
+        }
+
+        island_server->set_request_handler(
+            [&balance_fetcher, &cost_acc](const std::string& type, const nlohmann::json&) {
+                if (type == "refresh_balance") {
+                    if (!balance_fetcher) return nlohmann::json(nullptr);
+                    const auto result =
+                        balance_fetcher->refresh_and_wait(std::chrono::seconds(3));
+                    return nlohmann::json{
+                        {"success", result.success},
+                        {"balance_usd", result.balance_usd},
+                        {"cny_balance", result.cny_balance},
+                        {"fetched_at", result.fetched_at},
+                        {"error", result.error},
+                        {"source", result.source},
+                    };
+                }
+                if (type == "get_session_summary") {
+                    if (!cost_acc) return nlohmann::json(nullptr);
+                    const auto snap = cost_acc->snapshot();
+                    return nlohmann::json{
+                        {"task_cost", {{"input_usd", snap.task_cost.input_usd},
+                                       {"output_usd", snap.task_cost.output_usd},
+                                       {"cache_read_usd", snap.task_cost.cache_read_usd},
+                                       {"cache_write_usd", snap.task_cost.cache_write_usd},
+                                       {"total_usd", snap.task_cost.total_usd}}},
+                        {"session_cost", {{"input_usd", snap.session_cost.input_usd},
+                                          {"output_usd", snap.session_cost.output_usd},
+                                          {"cache_read_usd", snap.session_cost.cache_read_usd},
+                                          {"cache_write_usd", snap.session_cost.cache_write_usd},
+                                          {"total_usd", snap.session_cost.total_usd}}},
+                        {"is_estimated", snap.is_estimated},
+                        {"model", snap.model},
+                    };
+                }
+                return nlohmann::json(nullptr);  // 未支持 → ok=false
+            });
+
+        island_bridge = std::make_unique<island::IslandEventBridge>(
+            EventBus::instance(), *island_server);
+    }
+
     // ---- 运行主循环 ----
     terminal.run();
 
@@ -731,6 +805,12 @@ static int run(int argc, char* argv[]) {
     // 先取消订阅，避免 cancelAll 触发的事件进入已失效的回调
     EventBus::instance().unsubscribe<UserInputEvent>(input_token);
     EventBus::instance().unsubscribe<ShutdownEvent>(shutdown_token);
+
+    // Island 清理：先停 fetcher（可能还有 HTTP 在途）→ 桥退订 → server stop（移除 registry）
+    // 必须在 EventBus clear 之前完成（桥/累积器仍持有订阅）
+    if (balance_fetcher) balance_fetcher->stop();
+    if (island_bridge) island_bridge->unsubscribe_all();
+    if (island_server) island_server->stop();
 
     // 先取消并等待所有任务，再恢复终端
     // 这样任务完成时发的 UI 事件还能正常处理
