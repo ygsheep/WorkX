@@ -2,7 +2,21 @@
 # @date 2026-07
 
 cmake_minimum_required(VERSION 3.21)
-project(workx VERSION 0.2.0 LANGUAGES C CXX)
+
+# workx 仓库根（外部工程 add_subdirectory 时 CMAKE_SOURCE_DIR 指向外部，此处仍须指向 workx 根）
+set(WORKX_ROOT "${CMAKE_CURRENT_LIST_DIR}")
+
+# 版本单一事实源（含多文件一致性校验与构建版本派生，见 cmake/version.cmake）
+include(cmake/version.cmake)
+
+project(workx VERSION ${WORKX_VERSION_MAJOR}.${WORKX_VERSION_MINOR}.${WORKX_VERSION_PATCH} LANGUAGES C CXX)
+
+# ---- 版本一致性校验 + 构建版本号派生（需在 project() 之后）----
+workx_check_version_file("vcpkg.json"                 "\"version-string\": \"${PROJECT_VERSION}\"")
+workx_check_version_file("tests/consumer/vcpkg.json"  "\"version-string\": \"${PROJECT_VERSION}\"")
+workx_check_version_file("flake.nix"                  "version = \"${PROJECT_VERSION}\";")
+workx_check_version_file("nix/workx.nix"              "version = \"${PROJECT_VERSION}\";")
+workx_derive_build_info()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,7 +24,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 if(MSVC)
-    add_compile_options(/W4 /utf-8 /Zc:preprocessor)
+    add_compile_options(/W4 /utf-8 /Zc:preprocessor /FS)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 else()
     add_compile_options(-Wall -Wextra -Wpedantic)

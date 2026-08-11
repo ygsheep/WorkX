@@ -806,8 +806,13 @@ void Terminal::display_welcome() {
     int width = m_platform->get_terminal_width();
 
     std::string version_str = "0.2.0";
-#ifdef WORKX_VERSION
+#ifdef WORKX_BUILD_INFO
+    version_str = WORKX_BUILD_INFO;
+#elif defined(WORKX_VERSION)
     version_str = WORKX_VERSION;
+#endif
+#ifdef WORKX_FILE_VERSION
+    version_str += " (files: " WORKX_FILE_VERSION ")";
 #endif
 
     if (width >= 60) {

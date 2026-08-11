@@ -93,6 +93,8 @@
 
 #### 3.7 注释
 - [ ] **文件头**：每个文件 `@file @brief @details @version @date`
+- [ ] **@version 语义**（文件级版本号）：`@version M.N.P`；小改（bugfix/签名不变）**PATCH+1**（+0.0.1）；大改（公共 API/行为/语义变更）**MINOR+1、PATCH 归零**（+0.1）
+- [ ] **@version 维护**：`src/core`、`src/agent` 的文件头版本号由 `scripts/version_files.py` 维护（小改自动 +0.0.1，`--minor <file>` 标大改 +0.1），**禁止手改**
 - [ ] **函数注释**：复杂函数用 `@brief @param @return @details`
 - [ ] **TODO**：`// TODO(name): issue #N - description`
 - [ ] **意图**：注释说明"为什么"，不说明"是什么"

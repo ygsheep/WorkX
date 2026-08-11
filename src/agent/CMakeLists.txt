@@ -13,7 +13,13 @@ target_include_directories(workx_agent PUBLIC
 
 target_compile_definitions(workx_agent PUBLIC
     WORKX_VERSION="${PROJECT_VERSION}"
+    WORKX_BUILD_INFO="${WORKX_BUILD_INFO}"
 )
+if(WORKX_FILE_VERSION)
+    target_compile_definitions(workx_agent PUBLIC
+        WORKX_FILE_VERSION="${WORKX_FILE_VERSION}"
+    )
+endif()
 
 # 第三方依赖（PUBLIC：公共头暴露 nlohmann_json / CURL / logger）
 # nlohmann_json 必选（根 CMakeLists 已 find_package REQUIRED），无条件链接
