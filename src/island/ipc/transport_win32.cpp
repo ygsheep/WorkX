@@ -15,8 +15,10 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 
 #include "island/ipc/itransport.h"
 
@@ -30,22 +32,31 @@ public:
 
     bool listen(const std::string& endpoint) override {
         close();  // 支持重 listen（断连后重新创建实例）
-        m_endpoint = endpoint;
-        m_handle = CreateNamedPipeA(
+        const HANDLE h = CreateNamedPipeA(
             endpoint.c_str(),
             PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
             1,  // 单客户端实例
             65536, 65536, 0, nullptr);
-        return m_handle != INVALID_HANDLE_VALUE;
+        {
+            std::lock_guard<std::mutex> lock(m_handle_mutex);
+            m_endpoint = endpoint;
+            m_handle = h;
+        }
+        return h != INVALID_HANDLE_VALUE;
     }
 
     bool accept() override {
-        if (m_handle == INVALID_HANDLE_VALUE) return false;
+        HANDLE h;
+        {
+            std::lock_guard<std::mutex> lock(m_handle_mutex);
+            h = m_handle;  // 快照：阻塞调用期间 close() 可并发关闭句柄
+        }
+        if (h == INVALID_HANDLE_VALUE) return false;
         // OVERLAPPED 模式：使阻塞的 accept 可被另一线程 CancelIoEx 取消（stop() 场景）
         OVERLAPPED ov{};
         ov.hEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
-        const BOOL ok = ConnectNamedPipe(m_handle, &ov);
+        const BOOL ok = ConnectNamedPipe(h, &ov);
         if (ok) {
             CloseHandle(ov.hEvent);
             return true;
@@ -60,47 +71,58 @@ public:
             return false;
         }
         DWORD unused = 0;
-        const BOOL done = GetOverlappedResult(m_handle, &ov, &unused, TRUE);
+        const BOOL done = GetOverlappedResult(h, &ov, &unused, TRUE);
         CloseHandle(ov.hEvent);
         return done;  // 被 CancelIoEx 取消（stop）或出错
     }
 
     bool connect(const std::string& endpoint) override {
         close();
+        HANDLE h = INVALID_HANDLE_VALUE;
         for (int attempt = 0; attempt < 3; ++attempt) {
-            m_handle = CreateFileA(
+            const HANDLE fd = CreateFileA(
                 endpoint.c_str(),
                 GENERIC_READ | GENERIC_WRITE,
                 0, nullptr, OPEN_EXISTING, 0, nullptr);
-            if (m_handle != INVALID_HANDLE_VALUE) {
-                // byte 模式无需 SetNamedPipeHandleState
-                return true;
+            if (fd != INVALID_HANDLE_VALUE) {
+                h = fd;  // byte 模式无需 SetNamedPipeHandleState
+                break;
             }
             const DWORD err = GetLastError();
             // 实例忙（已连接）或不存在（服务器 accept 循环重 listen 间隙）：
             // WaitNamedPipe 在实例不存在时会立即失败，需短暂退避后重试
-            if (err != ERROR_PIPE_BUSY && err != ERROR_FILE_NOT_FOUND) return false;
+            if (err != ERROR_PIPE_BUSY && err != ERROR_FILE_NOT_FOUND) break;
             if (WaitNamedPipeA(endpoint.c_str(), 5000)) continue;
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-        return false;
+        {
+            std::lock_guard<std::mutex> lock(m_handle_mutex);
+            m_endpoint = endpoint;
+            m_handle = h;
+        }
+        return h != INVALID_HANDLE_VALUE;
     }
 
     ssize_t read(std::span<std::byte> buf) override {
-        if (m_handle == INVALID_HANDLE_VALUE) return -1;
+        HANDLE h;
+        {
+            std::lock_guard<std::mutex> lock(m_handle_mutex);
+            h = m_handle;
+        }
+        if (h == INVALID_HANDLE_VALUE) return -1;
         // 句柄以 FILE_FLAG_OVERLAPPED 打开（accept 可取消），读写必须走
         // OVERLAPPED，禁止同步调用（未定义行为，会偶发返回 0/EOF）
         OVERLAPPED ov{};
         ov.hEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
         if (!ov.hEvent) return -1;
         DWORD nread = 0;
-        if (!ReadFile(m_handle, buf.data(), static_cast<DWORD>(buf.size()), &nread, &ov)) {
+        if (!ReadFile(h, buf.data(), static_cast<DWORD>(buf.size()), &nread, &ov)) {
             const DWORD err = GetLastError();
             if (err != ERROR_IO_PENDING) {
                 CloseHandle(ov.hEvent);
                 return -1;
             }
-            if (!GetOverlappedResult(m_handle, &ov, &nread, TRUE)) {
+            if (!GetOverlappedResult(h, &ov, &nread, TRUE)) {
                 CloseHandle(ov.hEvent);
                 return -1;
             }
@@ -110,7 +132,12 @@ public:
     }
 
     ssize_t write(std::span<const std::byte> data) override {
-        if (m_handle == INVALID_HANDLE_VALUE) return -1;
+        HANDLE h;
+        {
+            std::lock_guard<std::mutex> lock(m_handle_mutex);
+            h = m_handle;
+        }
+        if (h == INVALID_HANDLE_VALUE) return -1;
         const char* p = reinterpret_cast<const char*>(data.data());
         size_t remaining = data.size();
         while (remaining > 0) {
@@ -119,13 +146,13 @@ public:
             OVERLAPPED ov{};
             ov.hEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
             if (!ov.hEvent) return -1;
-            if (!WriteFile(m_handle, p, chunk, &written, &ov)) {
+            if (!WriteFile(h, p, chunk, &written, &ov)) {
                 const DWORD err = GetLastError();
                 if (err != ERROR_IO_PENDING) {
                     CloseHandle(ov.hEvent);
                     return -1;
                 }
-                if (!GetOverlappedResult(m_handle, &ov, &written, TRUE)) {
+                if (!GetOverlappedResult(h, &ov, &written, TRUE)) {
                     CloseHandle(ov.hEvent);
                     return -1;
                 }
@@ -139,19 +166,25 @@ public:
     }
 
     void close() override {
-        if (m_handle != INVALID_HANDLE_VALUE) {
+        HANDLE h;
+        {
+            std::lock_guard<std::mutex> lock(m_handle_mutex);
+            h = std::exchange(m_handle, INVALID_HANDLE_VALUE);
+        }
+        if (h != INVALID_HANDLE_VALUE) {
             // 先取消本句柄上挂起的 I/O（阻塞中的 accept/read），再关闭句柄
-            CancelIoEx(m_handle, nullptr);
-            CloseHandle(m_handle);
-            m_handle = INVALID_HANDLE_VALUE;
+            CancelIoEx(h, nullptr);
+            CloseHandle(h);
         }
     }
 
     bool is_connected() const override {
+        std::lock_guard<std::mutex> lock(m_handle_mutex);
         return m_handle != INVALID_HANDLE_VALUE;
     }
 
 private:
+    mutable std::mutex m_handle_mutex;
     HANDLE m_handle = INVALID_HANDLE_VALUE;
     std::string m_endpoint;
 };

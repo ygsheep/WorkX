@@ -142,6 +142,38 @@ TEST_CASE("balance: 401 marks auth failure", "[island][balance]") {
     REQUIRE(r.error.find("401") != std::string::npos);
 }
 
+TEST_CASE("balance: 401 freezes periodic fetch", "[island][balance]") {
+    FakeGetter fake;
+    fake.status = 401;
+    fake.body = "{}";
+    BalanceFetcher fetcher(EventBus::instance(), "sk-bad", "https://api.deepseek.com",
+                           7.2, fake.fn(), std::chrono::seconds(1));
+    fetcher.start();  // 启动即拉一次（401 → auth_failed）
+    // 覆盖多个定时周期（1s）：401 冻结后定时拉取全部跳过，仅保留启动那 1 次
+    std::this_thread::sleep_for(std::chrono::milliseconds(2500));
+    fetcher.stop();
+    REQUIRE(fake.calls == 1);
+}
+
+TEST_CASE("balance: manual refresh releases 401 freeze", "[island][balance]") {
+    FakeGetter fake;
+    fake.status = 401;
+    fake.body = "{}";
+    BalanceFetcher fetcher(EventBus::instance(), "sk-bad", "https://api.deepseek.com",
+                           7.2, fake.fn(), std::chrono::hours(1));  // 定时周期极长，排除定时干扰
+    const auto bad = fetcher.refresh_and_wait(std::chrono::seconds(2));  // 同步 401 → auth_failed
+    REQUIRE_FALSE(bad.success);
+    REQUIRE(bad.error.find("401") != std::string::npos);
+    const int calls_after_401 = fake.calls.load();
+
+    fake.status = 200;  // API Key 已修正
+    fake.body = cny_body(12.34);
+    const auto good = fetcher.refresh_and_wait(std::chrono::seconds(2));  // 手动刷新放行
+    REQUIRE(good.success);  // 手动刷新解除冻结
+    REQUIRE(fake.calls > calls_after_401);  // 确实发起了新请求
+    fetcher.stop();
+}
+
 TEST_CASE("balance: network error surfaces message", "[island][balance]") {
     FakeGetter fake;
     fake.err_msg = "connection refused";
