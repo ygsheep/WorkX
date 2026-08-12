@@ -47,18 +47,18 @@ public:
     [[nodiscard]] agent::ResultV2<void> remove(uint32_t pid);
 
     /// @brief 读取全部记录；文件不存在返回空列表（非错误）
-    static [[nodiscard]] agent::ResultV2<std::vector<RegistryEntry>> read_all(
+    [[nodiscard]] static agent::ResultV2<std::vector<RegistryEntry>> read_all(
         const std::filesystem::path& path);
 
     /// @brief 平台相关默认路径：%USERPROFILE%/.workx/island.registry
     ///        POSIX: $HOME/.workx/island.registry
-    static [[nodiscard]] std::filesystem::path default_registry_path();
+    [[nodiscard]] static std::filesystem::path default_registry_path();
 
     /// @brief 序列化为 JSON（{sessions:[...]}，供 GUI）
-    static [[nodiscard]] nlohmann::json to_json(const std::vector<RegistryEntry>& entries);
+    [[nodiscard]] static nlohmann::json to_json(const std::vector<RegistryEntry>& entries);
 
     /// @brief 解析文件内容；损坏/格式错误返回 Error（ConfigParseFailed）
-    static [[nodiscard]] agent::ResultV2<std::vector<RegistryEntry>> parse(
+    [[nodiscard]] static agent::ResultV2<std::vector<RegistryEntry>> parse(
         const std::string& text);
 
 private:
