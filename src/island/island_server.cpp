@@ -137,6 +137,8 @@ void IslandServer::accept_loop() {
             m_listening_ok.store(true);
         }
         m_listening_cv.notify_all();
+        // stop 已触发则不再 accept（listen 窗口创建的新句柄成孤儿时随进程回收）
+        if (m_stop.load()) break;
 
         if (!m_listener->accept()) {
             if (m_stop.load()) break;
