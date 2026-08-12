@@ -7,6 +7,7 @@
 # ============================================================
 add_subdirectory(core)
 add_subdirectory(agent)
+add_subdirectory(island)
 add_subdirectory(tui)
 add_subdirectory(app)
 
@@ -14,7 +15,7 @@ add_subdirectory(app)
 # workx 可执行文件
 # ============================================================
 add_executable(workx app/main.cpp)
-target_link_libraries(workx PRIVATE workx_app)
+target_link_libraries(workx PRIVATE workx_island workx_app)
 
 # ============================================================
 # choice_preview 可执行文件（ChoiceTool TUI 预览，依赖 app 工厂函数）

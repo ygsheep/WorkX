@@ -203,6 +203,20 @@ void register_config_defaults(ConfigManager& cfg) {
         .default_value = false,
         .type = ConfigSchema::Type::Bool
     });
+
+    // === Island（灵动岛 GUI IPC）===
+    cfg.register_schema({
+        .key = keys::ISLAND_ENABLED,
+        .description = "Enable Island IPC server (GUI discovers this TUI via registry)",
+        .default_value = true,
+        .type = ConfigSchema::Type::Bool
+    });
+    cfg.register_schema({
+        .key = keys::ISLAND_USD_CNY_RATE,
+        .description = "CNY to USD exchange rate for balance display (DeepSeek returns CNY)",
+        .default_value = 7.2,
+        .type = ConfigSchema::Type::Double
+    });
 }
 
 void load_from_env(ConfigManager& cfg) {

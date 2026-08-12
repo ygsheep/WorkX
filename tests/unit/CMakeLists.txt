@@ -67,12 +67,21 @@ set(UNIT_TEST_SOURCES
     tui/widgets/test_status_bar.cpp
     tui/widgets/test_choice_panel.cpp
     tui/widgets/test_command_panel.cpp
+    island/test_jsonl_protocol.cpp
+    island/test_pricing_table.cpp
+    island/test_cost_accumulator.cpp
+    island/test_registry_writer.cpp
+    island/test_ipc_transport.cpp
+    island/test_island_server.cpp
+    island/test_island_event_bridge.cpp
+    island/test_balance_fetcher.cpp
+    island/test_layer_boundary.cpp
 )
 
 add_executable(workx_unit_tests ${UNIT_TEST_SOURCES})
 target_include_directories(workx_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(workx_unit_tests PRIVATE SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-target_link_libraries(workx_unit_tests PRIVATE workx_app Catch2::Catch2WithMain)
+target_link_libraries(workx_unit_tests PRIVATE workx_app workx_island Catch2::Catch2WithMain)
 
 include(Catch)
 catch_discover_tests(workx_unit_tests
