@@ -188,9 +188,9 @@ TEST_CASE("balance: refresh_and_wait with 3s timeout returns cached on slow gett
           "[island][balance]") {
     FakeGetter fake_slow;
     std::atomic<int> slow_calls{0};
-    BalanceFetcher::HttpGetFn slow_fn = [&](const std::string& url,
-                                            const std::vector<std::pair<std::string, std::string>>& headers,
-                                            int timeout_ms) {
+    BalanceFetcher::HttpGetFn slow_fn = [&](const std::string&,
+                                            const std::vector<std::pair<std::string, std::string>>&,
+                                            int) {
         ++slow_calls;
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
         while (std::chrono::steady_clock::now() < deadline) {

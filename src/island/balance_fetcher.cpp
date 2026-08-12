@@ -1,7 +1,7 @@
 /**
  * @file balance_fetcher.cpp
  * @brief 余额拉取器实现
- * @version 1.0.0
+ * @version 1.0.1
  * @date 2026-08
  */
 

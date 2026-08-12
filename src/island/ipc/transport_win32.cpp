@@ -3,7 +3,7 @@
  * @brief Windows named pipe 传输实现（CreateNamedPipe / ConnectNamedPipe）
  * @details 单客户端实例（PIPE_NUM_INSTANCES=1）：一个 GUI 连一个 TUI。
  *          stop() 关闭句柄使阻塞的 ConnectNamedPipe/ReadFile 返回错误。
- * @version 1.0.0
+ * @version 1.0.1
  * @date 2026-08
  */
 
