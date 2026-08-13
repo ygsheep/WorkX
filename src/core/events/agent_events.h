@@ -119,4 +119,22 @@ struct AskUserTimeoutEvent {
     std::string session_id;
 };
 
+/// @brief 进入计划模式事件（#28：EnterPlanModeTool → TUI/宿主）
+/// @details AI 主动请求进入计划模式（只读调研阶段）。宿主收到后可展示
+///          "计划模式"状态；权限模式切换由 ToolContext 回调完成，
+///          本事件仅用于 UI 通知。
+struct EnterPlanModeEvent {
+    std::string session_id;
+    std::string reason;   ///< 进入计划模式的原因（AI 说明，可空）
+};
+
+/// @brief 退出计划模式事件（#28：ExitPlanModeV2Tool → TUI/宿主）
+/// @details AI 完成规划后发布：携带方案文本与用户批准结果。
+///          approved=true 表示用户批准方案，可进入执行阶段。
+struct ExitPlanModeEvent {
+    std::string session_id;
+    std::string plan;       ///< 方案文本（改哪些文件、风险点等）
+    bool approved = false;  ///< 用户是否批准
+};
+
 } // namespace agent

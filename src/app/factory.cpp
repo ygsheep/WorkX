@@ -36,6 +36,8 @@
 #include "agent/session/session_store.h"  // 项目会话恢复
 #include "agent/tool/BashTool/bash_tool.h"
 #include "agent/tool/AskUser/AskUserTool.h"
+#include "agent/tool/PlanMode/enter_plan_mode_tool.h"
+#include "agent/tool/PlanMode/exit_plan_mode_v2_tool.h"
 #include "agent/tool/FileEditTool/file_edit_tool.h"
 #include "agent/tool/FileReadTool/file_read_tool.h"
 #include "agent/tool/FileWriteTool/file_write_tool.h"
@@ -238,6 +240,9 @@ void register_builtin_tools(tool::ToolRegistry& registry) {
     registry.register_tool(std::make_shared<tool::GlobTool>());
     registry.register_tool(std::make_shared<tool::GrepTool>());
     registry.register_tool(std::make_shared<tool::AskUserTool>());
+    // #28：计划模式工具（大型任务先规划后执行）
+    registry.register_tool(std::make_shared<tool::EnterPlanModeTool>());
+    registry.register_tool(std::make_shared<tool::ExitPlanModeV2Tool>());
 
     // Windows 平台额外注册 PowerShellTool（对齐 Claude Code 的条件注册策略）
     // BashTool（cmd.exe）和 PowerShellTool 并存，由模型根据任务特征自行选用

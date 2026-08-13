@@ -277,6 +277,12 @@ public:
     /// @brief DS_CACHE M-5：重置压缩器状态（clear_history 时调用）
     void reset_compactor() { m_compactor.reset(); }
 
+    /// @brief #28：设置/读取会话级权限模式
+    /// @details EnterPlanModeTool/ExitPlanModeV2Tool 通过 ToolContext 回调
+    ///          切换该值；构造 ToolContext 时注入当前值。
+    void set_permission_mode(tool::PermissionMode mode) { m_permission_mode = mode; }
+    tool::PermissionMode permission_mode() const { return m_permission_mode; }
+
 private:
     // ============================================================
     // 内部类型
@@ -356,6 +362,7 @@ private:
     std::string m_cwd;                            ///< 工作目录（会话启动时捕获，注入到 ToolContext.cwd）
     skill::TouchCollector* m_touch_collector = nullptr;  ///< conditional skills touch 收集器（可选）
     std::function<void()> m_file_index_invalidator;     ///< 宿主文件索引失效回调（可选，注入到 ToolContext）
+    tool::PermissionMode m_permission_mode{tool::PermissionMode::Default};  ///< #28：会话级权限模式
 };
 
 } // namespace agent

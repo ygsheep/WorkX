@@ -579,6 +579,11 @@ ReActResult ReActLoop::run(
         }
         // 宿主文件索引失效回调（可选）：FileWriteTool 写文件后通知宿主重建索引
         ctx.on_file_system_changed = m_file_index_invalidator;
+        // #28：注入会话级权限模式 + 模式变更回调（EnterPlanMode/ExitPlanMode 工具切换）
+        ctx.permission_mode = m_permission_mode;
+        ctx.on_permission_mode_changed = [this](tool::PermissionMode mode) {
+            m_permission_mode = mode;
+        };
 
         // 1. 同步发布所有 Action 步骤（UI 即时反馈工具调用开始）
         for (const auto& tu : thought.tool_uses) {
