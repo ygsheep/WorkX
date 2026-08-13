@@ -42,6 +42,7 @@ set(UNIT_TEST_SOURCES
     agent/tool/test_bash_tool.cpp
     agent/tool/test_grep_tool.cpp
     agent/tool/test_skill_tool.cpp
+    agent/audit/test_audit_logger.cpp
     agent/tool/test_permission_security.cpp
     agent/tool/test_plan_mode_tools.cpp
     agent/tool/test_task_tools.cpp
