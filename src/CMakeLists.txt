@@ -174,6 +174,7 @@ set(WORKX_PUBLIC_HEADERS
     agent/tool/result.h
     agent/session/session_store.h
     agent/config/app_config.h
+    agent/audit/audit_logger.h
     agent/tool/AskUser/ask_user_config.h
 )
 

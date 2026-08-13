@@ -3,7 +3,7 @@
  * @brief 审计日志系统实现（#37）
  * @details JSONL 格式写入、脱敏、轮转、过期清理。
  *          脱敏复用 agent::tool::scan_for_secrets 规则集。
- * @version 1.0.0
+ * @version 1.0.1
  * @date 2026-08
  */
 
@@ -147,17 +147,7 @@ void AuditLogger::log_tool_invoke(
     ev.duration_ms = duration_ms;
     ev.output_summary = redact(std::string(output)).substr(0, 200);
     ev.security_flags = security_flags;
-
-    // 获取用户@主机
-    {
-        const char* user = std::getenv("USERNAME");
-        if (!user || user[0] == '\0') user = std::getenv("USER");
-        if (!user || user[0] == '\0') user = "unknown";
-        const char* host = std::getenv("COMPUTERNAME");
-        if (!host || host[0] == '\0') host = std::getenv("HOSTNAME");
-        if (!host || host[0] == '\0') host = "unknown";
-        ev.user = std::string(user) + "@" + host;
-    }
+    ev.user = current_user_host();
 
     log(std::move(ev));
 }
@@ -174,6 +164,7 @@ void AuditLogger::log_security(
     ev.session_id = session_id;
     ev.tool_name = std::string(tool_name);
     ev.input = {{"detail", redact(detail)}};
+    ev.user = current_user_host();
 
     log(std::move(ev));
 }
@@ -183,6 +174,7 @@ void AuditLogger::log_session_lifecycle(EventType type, const std::string& sessi
     ev.type = type;
     ev.severity = Severity::Info;
     ev.session_id = session_id;
+    ev.user = current_user_host();
     log(std::move(ev));
 }
 
@@ -192,6 +184,7 @@ void AuditLogger::log_agent_lifecycle(EventType type, const std::string& session
     ev.severity = (type == EventType::AgentInterrupted || type == EventType::AgentMaxIterations)
                   ? Severity::Warn : Severity::Info;
     ev.session_id = session_id;
+    ev.user = current_user_host();
     if (iteration > 0) {
         ev.input = {{"iteration", iteration}};
     }
@@ -361,6 +354,16 @@ std::string AuditLogger::timestamp_now() const {
        << sign << std::setfill('0') << std::setw(2) << oh
        << ':' << std::setfill('0') << std::setw(2) << om;
     return ss.str();
+}
+
+std::string AuditLogger::current_user_host() const {
+    const char* user = std::getenv("USERNAME");
+    if (!user || user[0] == '\0') user = std::getenv("USER");
+    if (!user || user[0] == '\0') user = "unknown";
+    const char* host = std::getenv("COMPUTERNAME");
+    if (!host || host[0] == '\0') host = std::getenv("HOSTNAME");
+    if (!host || host[0] == '\0') host = "unknown";
+    return std::string(user) + "@" + host;
 }
 
 } // namespace agent::audit

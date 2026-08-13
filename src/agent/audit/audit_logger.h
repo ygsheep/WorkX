@@ -10,15 +10,16 @@
  * - **不可屏蔽**：审计事件必须记录，不受 LogLevel 影响（安全合规要求）
  * - **脱敏**：记录输入/输出时经 SecretScanner 扫描，命中则脱敏
  * - **轮转**：按日期 + 大小双触发，保留最近 N 天
- * - **线程安全**：mutex 保护写入
+ * - **线程安全**：mutex 保护写入（同步写入，每次 log 落盘）
  * - **append-only**：以 std::ios::app 打开，工具无法篡改历史记录
  *
- * @version 1.0.0
+ * @version 1.0.1
  * @date 2026-08
  */
 
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <string>
@@ -88,7 +89,7 @@ struct AuditEvent {
 
 /// @brief 审计日志记录器（单例）
 /// @details 独立于 liblogger 的运行日志，专用于安全审计。
-///          线程安全，异步写入，不可屏蔽。
+///          线程安全，同步写入，不可屏蔽。
 class AuditLogger {
 public:
     /// @brief 获取单例实例
@@ -107,7 +108,7 @@ public:
     bool is_enabled() const noexcept { return enabled_; }
 
     /// @brief 记录审计事件（核心方法）
-    /// @details 将事件序列化为 JSONL 并异步写入文件。
+    /// @details 将事件序列化为 JSONL 并同步写入文件。
     ///          输入/输出字段经脱敏处理后记录。
     ///          若未启用则 no-op。
     void log(AuditEvent event);
@@ -179,12 +180,15 @@ private:
     /// @brief 获取当前时间戳（ISO 8601 带时区）
     std::string timestamp_now() const;
 
+    /// @brief 获取当前用户@主机（USERNAME/USER + COMPUTERNAME/HOSTNAME）
+    std::string current_user_host() const;
+
     std::mutex mutex_;
     std::string file_path_;
     size_t max_size_bytes_ = 10 * 1024 * 1024;  ///< 10 MB
     size_t retention_days_ = 30;
-    bool enabled_ = false;
-    bool initialized_ = false;
+    std::atomic<bool> enabled_{false};
+    std::atomic<bool> initialized_{false};
 };
 
 } // namespace agent::audit

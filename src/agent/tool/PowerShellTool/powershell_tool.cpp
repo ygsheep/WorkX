@@ -3,7 +3,7 @@
  * @brief PowerShellTool 实现
  * @details Windows PowerShell 命令执行工具的具体实现。
  *          结构对齐 BashTool，复用 shell_tool_common 的辅助函数。
- * @version 1.0.0
+ * @version 1.0.1
  * @date 2026-07
  */
 
@@ -12,6 +12,8 @@
 #include "agent/tool/ShellTool/shell_tool_common.h"
 #include "agent/tool/permission_ask.h"
 #include "agent/tool/secret_scanner.h"
+#include "agent/tool/shell_guard.h"
+#include "agent/audit/audit_logger.h"
 #include "core/process/subprocess.h"
 #include "core/process/exec_output.h"
 #include "core/process/sandbox/sandbox_adapter.h"
@@ -33,6 +35,7 @@
 #include <stdexcept>
 
 using namespace agent::tool::shell_common;
+using namespace agent::audit;
 
 namespace agent::tool {
 
@@ -243,6 +246,21 @@ ResultV2<ToolResult> PowerShellTool::call(
     if (command.empty()) {
         return ResultV2<ToolResult>::err(
             Error::Code::InvalidInput, "PowerShellTool: 'command' must not be empty");
+    }
+
+    // #35：命令级风险检测（破坏性/SSRF/env 泄露）——执行前硬拦截 + 审计
+    const auto risk = detect_shell_risk(command);
+    if (risk != ShellRisk::None) {
+        const std::string reason = shell_risk_description(risk);
+        auto guard_event = [&](EventType t) {
+            audit::AuditLogger::instance().log_security(t, reason, ctx.session_id, name());
+        };
+        if ((risk & ShellRisk::Destructive) != ShellRisk::None) guard_event(EventType::SecurityDangerousCommand);
+        if ((risk & ShellRisk::SSRF) != ShellRisk::None) guard_event(EventType::SecuritySSRFAttempt);
+        if ((risk & ShellRisk::EnvLeak) != ShellRisk::None) guard_event(EventType::SecurityEnvVarLeak);
+        return ResultV2<ToolResult>::err(
+            Error::Code::PermissionDenied,
+            "Command blocked by security guard: " + reason);
     }
 
     int timeout_ms = kDefaultTimeoutMs;

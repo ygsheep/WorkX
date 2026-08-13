@@ -6,7 +6,7 @@
  *          - SSRF 防护（curl/wget/iwr 指向内网/云元数据地址）
  *          - 环境变量泄露（env / printenv / /proc/<pid>/environ / PowerShell env:）
  *          - cwd 限制（在项目根或 allowlist 内）
- * @version 1.0.0
+ * @version 1.0.1
  * @date 2026-08
  */
 
@@ -136,6 +136,11 @@ bool url_ssrf(std::string_view cmd) {
         if (!clean.empty() && clean.front() == '[' && clean.back() == ']') {
             clean = clean.substr(1, clean.size() - 2);
         }
+        // 剥显式端口（评审 H-2：http://169.254.169.254:8080/ 不得绕过）
+        const size_t colon = clean.find(':');
+        if (colon != std::string_view::npos) {
+            clean = clean.substr(0, colon);
+        }
         if (is_private_ip_host(clean)) return true;
         pos = host_end;
     }
@@ -228,8 +233,8 @@ bool destructive_regex(std::string_view command) {
     // Windows format C: / format.com
     if (std::regex_search(c, std::regex(R"(\bformat\s+[a-z]:)"))) return true;
     if (std::regex_search(c, std::regex(R"(\bformat\.com\b)"))) return true;
-    // Windows 级联删除 del /f/s/q + 盘符根
-    if (std::regex_search(c, std::regex(R"(\bdel\s+/(?:f|s|q)+\s+[a-z]:\\?)"))) return true;
+    // Windows 级联删除 del /f/s/q + 盘符根（允许任意数量开关）
+    if (std::regex_search(c, std::regex(R"(\bdel\s+(?:/[a-z]+\s+)+[a-z]:\\?)"))) return true;
     if (std::regex_search(c, std::regex(R"(\b(?:rmdir|rd)\s+/(?:s|q)+\s+[a-z]:\\?)"))) return true;
     // 关机/重启
     if (std::regex_search(c, std::regex(R"(\b(shutdown|reboot|halt|poweroff)\b)"))) return true;
@@ -323,9 +328,11 @@ bool is_command_cwd_allowed(
         return false;
     };
     const std::string n = norm.generic_string();
-    if (under(n, base)) return true;
+    // 评审 H-3：base/allowlist 也统一为 / 分隔，避免 Windows 反斜杠误拒
+    const std::string b = std::filesystem::path(base).generic_string();
+    if (under(n, b)) return true;
     for (const auto& root : allowlist) {
-        if (under(n, root)) return true;
+        if (under(n, std::filesystem::path(root).generic_string())) return true;
     }
     return false;
 }
