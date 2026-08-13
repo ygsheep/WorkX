@@ -78,6 +78,25 @@ struct ToolContext {
     ///          工具 check_permissions 依据该模式决定放行/确认/拒绝。
     PermissionMode permission_mode{PermissionMode::Default};
 
+    /// @brief 权限模式变更回调类型（#28：EnterPlanMode/ExitPlanMode 注入路径）
+    /// @details 工具通过 set_permission_mode() 请求模式切换，由宿主（ReActLoop）
+    ///          接线更新会话级权限模式。非空时调用，空则忽略（工具仅提示）。
+    using PermissionModeChangedCallback = std::function<void(PermissionMode)>;
+
+    /// @brief 权限模式变更回调（可选）
+    /// @details 由调用方（ReActLoop）注入，EnterPlanModeTool/ExitPlanModeV2Tool
+    ///          调用 set_permission_mode() 时触发。生命周期由 ToolContext 所有者保证。
+    PermissionModeChangedCallback on_permission_mode_changed = nullptr;
+
+    /// @brief 请求切换权限模式（#28）
+    /// @details 仅当回调非空时生效（宿主接线后才能改变会话级模式）。
+    ///          const 语义：仅通过回调间接修改宿主状态，不改自身。
+    void set_permission_mode(PermissionMode mode) const {
+        if (on_permission_mode_changed) {
+            on_permission_mode_changed(mode);
+        }
+    }
+
     /// @brief 外部取消信号指针（可选）
     /// @details 2.3 修复：由调用方（ReActLoop）传入 should_cancel 的地址，
     ///          使工具能即时感知外部取消请求。nullptr 时回退到内部 cancelled_。

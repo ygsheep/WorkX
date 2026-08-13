@@ -85,6 +85,11 @@ public:
 
     void publish_async_raw(std::type_index type,
                            std::function<void()> emitter) override {
+        // auto-flush 模式：模拟宿主即时响应（工具阻塞等待 result_promise 时用）
+        if (m_async_auto_flush) {
+            emitter();  // 锁外调用：emitter 内部 publish_raw 会自行加锁
+            return;
+        }
         std::lock_guard<std::mutex> lock(m_mutex);
         m_async_queue.push_back({type, std::move(emitter)});
     }
@@ -128,6 +133,14 @@ public:
     void set_dispatch_enabled(bool enabled) {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_dispatch_enabled = enabled;
+    }
+
+    /// @brief 启用/禁用异步事件自动派发（默认禁用，入队等待 process_async_events）
+    /// @details 启用后 publish_async 立即执行 emitter（同步派发），
+    ///          用于模拟宿主即时响应工具线程的阻塞等待场景（如 AskUserRequestEvent）。
+    void set_async_auto_flush(bool enabled) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_async_auto_flush = enabled;
     }
 
     /// @brief 获取某类型事件的发布次数
@@ -182,6 +195,7 @@ private:
     std::vector<std::type_index> m_published_types;
     size_t m_unsubscribe_count = 0;
     bool m_dispatch_enabled = false;
+    bool m_async_auto_flush = false;
 
     static EventToken make_token() {
         static std::atomic<EventToken::ID> counter{1};
