@@ -123,13 +123,17 @@ ResultV2<ToolResult> AgentTool::call(
     ITaskManager* task_manager = ctx.task_manager_ptr;
     IEventBus* event_bus = ctx.event_bus_ptr;
     std::string cwd = ctx.cwd;
+    // #26 评审 #1：继承父会话权限模式，防止子 Agent 提升权限（父 Plan 只读时子 Agent 也受限）
+    const tool::PermissionMode permission_mode = ctx.permission_mode;
 
     auto task = task_manager->launch(task_id,
         [task_id, provider, sub_registry, config_manager, task_manager,
-         event_bus, cwd, prompt](const std::atomic<bool>& should_cancel) {
+         event_bus, cwd, prompt, permission_mode](const std::atomic<bool>& should_cancel) {
             // 子会话：全新消息历史，system_prompt = 任务 prompt
             ReActLoop loop(provider, sub_registry, config_manager,
                            task_manager, cwd, event_bus);
+            // 评审 #1：子 Agent 继承父会话权限模式，避免 Plan 只读边界被绕过
+            loop.set_permission_mode(permission_mode);
             std::vector<ChatMessage> messages;
             nlohmann::json tools_schema = sub_registry
                 ? sub_registry->get_all_schemas()
@@ -155,10 +159,17 @@ ResultV2<ToolResult> AgentTool::call(
             }
         });
 
-    // 同步模式：等待任务完成再返回（Blocking 类型不登记 m_entries，find_task 查不到，
-    // 因此统一用 Normal + wait 保证子任务输出缓冲可被读取）
+    // 同步模式：等待任务完成再返回。TaskManager::wait 内部已带 30s 兜底超时；
+    // 超时后返回但任务可能仍在运行，返回时明确提示，避免工具调用线程无限阻塞
+    // （评审 #3）
     if (!run_in_background) {
         task_manager->wait(task);
+        if (!task->isFinished()) {
+            return ResultV2<ToolResult>::ok(ToolResult::ok(std::format(
+                "Sub-agent timed out waiting (task: {}). It may still be running; "
+                "use TaskStop to cancel it. Partial output:\n{}",
+                task_id, task->output())));
+        }
         return ResultV2<ToolResult>::ok(ToolResult::ok(std::format(
             "Sub-agent completed (task: {}).\n{}", task_id, task->output())));
     }

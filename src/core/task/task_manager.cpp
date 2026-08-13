@@ -31,9 +31,9 @@ void Task::append_output(const std::string& line) {
         m_output += line;
         m_output += '\n';
     }
-    const auto task_ptr = shared_from_this();
+    // #26 评审 #6：TaskOutputEvent 仅传 task_name + line，不持有 shared_ptr<Task>，
+    // 避免经 event_bus 异步发布时延长任务对象（及输出缓冲）生命周期
     m_event_bus.publish_async(TaskOutputEvent{
-        .task = task_ptr,
         .task_name = m_name,
         .line = line
     });

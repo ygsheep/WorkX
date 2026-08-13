@@ -11,8 +11,8 @@
 #include <thread>
 
 #include "agent/tool/AgentTool/agent_tool.h"
-#include "agent/tool/Task/TaskOutputTool.h"
-#include "agent/tool/Task/TaskStopTool.h"
+#include "agent/tool/Task/task_output_tool.h"
+#include "agent/tool/Task/task_stop_tool.h"
 #include "core/task/task_manager.h"
 #include "core/task/task_events.h"
 
@@ -156,6 +156,32 @@ TEST_CASE_METHOD(TaskToolsFixture, "AgentTool synchronous mode returns completed
     REQUIRE(r.is_ok());
     REQUIRE(r.value().text.find("Sub-agent completed") != std::string::npos);
     REQUIRE(r.value().text.find("sync answer") != std::string::npos);
+}
+
+TEST_CASE_METHOD(TaskToolsFixture, "AgentTool inherits parent permission mode (Plan read-only)", "[agent_tool][review]") {
+    MockEventBus bus;
+    auto& tm = TaskManager::instance();
+    MockConfigManager cfg;
+    ToolContext ctx;
+
+    auto provider = std::make_shared<MockCompletionProvider>();
+    auto reader = std::make_shared<MockStreamReader>();
+    reader->add_content_chunk("plan result");
+    provider->set_next_reader(reader);
+    fill_ctx(ctx, bus, tm, cfg, provider.get());
+    ctx.permission_mode = PermissionMode::Plan;  // 父会话处于 Plan（只读）
+
+    AgentTool tool;
+    // 评审 #1：父 Plan 模式下仍允许启动，但子 Agent 继承 Plan 只读权限，
+    // 不会以 Default 全权执行（写/执行被拒绝）
+    auto r = tool.call(nlohmann::json{{"prompt", "research only"}}, ctx);
+    REQUIRE(r.is_ok());
+    REQUIRE(r.value().text.find("Sub-agent") != std::string::npos);
+
+    auto tasks = tm.getTasks();
+    REQUIRE(tasks.size() == 1);
+    tm.wait(tasks[0]);
+    REQUIRE(tasks[0]->isFinished());
 }
 
 // ============================================================

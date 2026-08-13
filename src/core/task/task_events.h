@@ -45,7 +45,6 @@ struct TaskCancelledEvent {
 };
 
 struct TaskOutputEvent {
-    std::shared_ptr<Task> task;
     std::string task_name;
     std::string line;
 };
