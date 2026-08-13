@@ -104,6 +104,12 @@ public:
         const ToolContext& ctx
     ) const override;
 
+    /// @brief 权限检查（#34/#36：路径边界 + 敏感路径拦截 + Plan/Bypass 模式）
+    PermissionResult check_permissions(
+        const nlohmann::json& input,
+        const ToolContext& ctx
+    ) const override;
+
     /// @brief 执行文件编辑
     /// @param input 输入 JSON 对象（符合 input_schema）
     /// @param ctx 工具执行上下文（用于获取 cwd 解析相对路径）

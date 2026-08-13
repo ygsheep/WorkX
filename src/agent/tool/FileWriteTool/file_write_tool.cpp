@@ -21,6 +21,9 @@
 #include "agent/tool/FileWriteTool/diff.h"
 #include "agent/tool/FileReadState/file_read_state.h"
 #include "agent/tool/path_expand.h"
+#include "agent/tool/path_validator.h"
+#include "agent/tool/permission_ask.h"
+#include "agent/tool/secret_scanner.h"
 #include "agent/tool/types.h"
 
 #include <format>
@@ -193,7 +196,51 @@ ValidationResult FileWriteTool::validate_input(
     if (!input.contains("content") || !input["content"].is_string()) {
         return ValidationResult::err(Error::Code::MissingArgument, "Missing required field: content");
     }
+    // #40：写入内容密钥扫描（拒绝把密钥写进文件）
+    const std::string content = input["content"].get<std::string>();
+    const std::string secret_err = scan_for_secret_error(content);
+    if (!secret_err.empty()) {
+        return ValidationResult::err(Error::Code::PermissionDenied, secret_err);
+    }
     return ValidationResult::ok();
+}
+
+// ============================================================
+// 权限检查
+// ============================================================
+
+PermissionResult FileWriteTool::check_permissions(
+    const nlohmann::json& input,
+    const ToolContext& ctx
+) const {
+    // #36：Bypass 模式完全放行
+    if (is_bypass_mode(ctx.permission_mode)) {
+        return PermissionResult::ok();
+    }
+    // #36：Plan 模式禁止写文件
+    if (deny_write_by_mode(ctx.permission_mode)) {
+        return PermissionResult::err(
+            Error::Code::PermissionDenied,
+            "Write operations are not allowed in plan mode. "
+            "Switch to default mode to edit files.");
+    }
+    // #34：路径边界 + 敏感路径拦截
+    const std::string path_str = input.value("file_path", "");
+    if (path_str.empty()) return PermissionResult::ok();  // 空路径由 validate_input 拦截
+    try {
+        const std::string expanded = expand_path(path_str, ctx.cwd);
+        auto res = validate_path_access(expanded, ctx.cwd);
+        if (res.is_err()) {
+            return PermissionResult::err(
+                Error::Code::PermissionDenied,
+                res.error().message);
+        }
+    } catch (const std::exception& e) {
+        return PermissionResult::err(
+            Error::Code::PermissionDenied,
+            std::string("Write path error: ") + e.what());
+    }
+    return PermissionResult::ok();
 }
 
 // ============================================================

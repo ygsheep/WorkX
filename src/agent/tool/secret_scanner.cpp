@@ -174,4 +174,17 @@ std::string scan_for_secret_error(const std::string& content) {
     );
 }
 
+std::string redact_secrets(const std::string& content) {
+    if (content.empty()) return content;
+    std::string out(content);
+    for (const auto& rule : rules()) {
+        try {
+            out = std::regex_replace(out, rule.re, "[REDACTED:" + rule.label + "]");
+        } catch (const std::regex_error&) {
+            // 规则异常时跳过（不阻断脱敏）
+        }
+    }
+    return out;
+}
+
 } // namespace agent::tool

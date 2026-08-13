@@ -10,6 +10,8 @@
 
 #include "agent/tool/ShellTool/shell_detector.h"
 #include "agent/tool/ShellTool/shell_tool_common.h"
+#include "agent/tool/permission_ask.h"
+#include "agent/tool/secret_scanner.h"
 #include "core/process/subprocess.h"
 #include "core/process/exec_output.h"
 #include "core/process/sandbox/sandbox_adapter.h"
@@ -236,6 +238,46 @@ nlohmann::json BashTool::input_schema() const {
 // call() — 入口分发
 // ============================================================
 
+// ============================================================
+// 权限检查
+// ============================================================
+
+PermissionResult BashTool::check_permissions(
+    const nlohmann::json& input,
+    const ToolContext& ctx
+) const {
+    // #36：Bypass 模式完全放行
+    if (is_bypass_mode(ctx.permission_mode)) {
+        return PermissionResult::ok();
+    }
+    // #36：Plan 模式禁止执行命令
+    if (deny_execute_by_mode(ctx.permission_mode)) {
+        return PermissionResult::err(
+            Error::Code::PermissionDenied,
+            "Command execution is not allowed in plan mode. "
+            "Switch to default mode to run commands.");
+    }
+    // #36：Default 模式危险命令需用户确认
+    if (input.contains("command") && input["command"].is_string()) {
+        const std::string command = input["command"].get<std::string>();
+        if (is_dangerous_command(command)) {
+            const std::string question = std::format(
+                "The command contains destructive patterns and requires your approval:\n\n"
+                "```\n{}\n```\n\nAllow running this command?", command);
+            if (!ask_user_confirm(ctx, question)) {
+                return PermissionResult::err(
+                    Error::Code::PermissionDenied,
+                    "Command execution denied by user: " + command.substr(0, 120));
+            }
+        }
+    }
+    return PermissionResult::ok();
+}
+
+// ============================================================
+// 执行
+// ============================================================
+
 ResultV2<ToolResult> BashTool::call(
     const nlohmann::json& input,
     const ToolContext& ctx
@@ -344,6 +386,8 @@ ResultV2<ToolResult> BashTool::execute_sync(
     const auto& out = exec_result.value();
     std::string formatted = format_result(out);
     formatted = truncate_output(std::move(formatted), kMaxOutputChars);
+    // #36：输出脱敏，密钥内容替换为 [REDACTED:label]
+    formatted = redact_secrets(formatted);
 
     // 上报完成
     if (out.is_success()) {
