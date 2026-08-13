@@ -95,11 +95,12 @@ TEST_CASE("register_builtin_tools registers expected tools", "[factory][tools]")
 
     auto tools = registry.get_all_tools();
 
-    // 基础工具数：8（Read/Write/Edit/Bash/Glob/Grep/AskUser/Skill），Windows 额外注册 PowerShellTool
+    // 基础工具数：13（Read/Write/Edit/Bash/Glob/Grep/AskUser/Skill/EnterPlanMode/
+    // ExitPlanModeV2/Agent/TaskOutput/TaskStop），Windows 额外注册 PowerShellTool
 #ifdef _WIN32
-    constexpr size_t kExpectedCount = 9;
+    constexpr size_t kExpectedCount = 14;
 #else
-    constexpr size_t kExpectedCount = 8;
+    constexpr size_t kExpectedCount = 13;
 #endif
     REQUIRE(tools.size() == kExpectedCount);
 

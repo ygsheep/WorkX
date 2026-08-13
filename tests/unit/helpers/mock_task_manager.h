@@ -16,6 +16,7 @@
 #pragma once
 
 #include <atomic>
+#include <algorithm>
 #include <mutex>
 #include <vector>
 #include <memory>
@@ -98,6 +99,13 @@ public:
 
     [[nodiscard]] size_t getRunningTaskCount() const override {
         return getRunningTasks().size();
+    }
+
+    [[nodiscard]] std::shared_ptr<Task> find_task(const std::string& name) const override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        const auto it = std::find_if(m_tasks.begin(), m_tasks.end(),
+            [&name](const std::shared_ptr<Task>& t) { return t->getName() == name; });
+        return it == m_tasks.end() ? nullptr : *it;
     }
 
     void update() override {

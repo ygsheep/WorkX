@@ -277,6 +277,15 @@ public:
     /// @brief DS_CACHE M-5：重置压缩器状态（clear_history 时调用）
     void reset_compactor() { m_compactor.reset(); }
 
+    /// @brief #28：设置/读取会话级权限模式
+    /// @details EnterPlanModeTool/ExitPlanModeV2Tool 通过 ToolContext 回调
+    ///          切换该值；构造 ToolContext 时注入当前值。
+    /// @note 评审 #2：该模式为 ReActLoop 内存成员，不随会话压缩/恢复或
+    ///       /resume 切换持久化，跨这些操作会重置为 Default（Plan 只读边界
+    ///       静默丢失）。如需跨会话保留只读状态，需纳入会话恢复流程。
+    void set_permission_mode(tool::PermissionMode mode) { m_permission_mode = mode; }
+    tool::PermissionMode permission_mode() const { return m_permission_mode; }
+
 private:
     // ============================================================
     // 内部类型
@@ -356,6 +365,9 @@ private:
     std::string m_cwd;                            ///< 工作目录（会话启动时捕获，注入到 ToolContext.cwd）
     skill::TouchCollector* m_touch_collector = nullptr;  ///< conditional skills touch 收集器（可选）
     std::function<void()> m_file_index_invalidator;     ///< 宿主文件索引失效回调（可选，注入到 ToolContext）
+    tool::PermissionMode m_permission_mode{tool::PermissionMode::Default};  ///< #28：会话级权限模式
+    tool::PermissionMode m_permission_mode_before_plan{tool::PermissionMode::Default};  ///< #28 评审 #1：进入计划模式前保存的原模式，退出时恢复
+    bool m_in_plan_mode{false};  ///< #28 评审 #1/#3：是否处于计划模式（幂等进入判定）
 };
 
 } // namespace agent

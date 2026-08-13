@@ -44,4 +44,9 @@ struct TaskCancelledEvent {
     float duration_ms;
 };
 
+struct TaskOutputEvent {
+    std::string task_name;
+    std::string line;
+};
+
 } // namespace agent

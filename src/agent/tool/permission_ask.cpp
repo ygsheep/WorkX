@@ -78,7 +78,9 @@ bool ask_user_confirm(
     });
 
     // 发布到总线；宿主（TUI）订阅 AskUserRequestEvent 后弹出确认面板
-    ctx.event_bus_ptr->publish_async(request);
+    // 注意：publish_async 模板以 T=AskUserRequestEvent 推导（typeid 匹配订阅），
+    //       必须传值/解引用，不能传 shared_ptr（typeid 会变成 shared_ptr 类型）
+    ctx.event_bus_ptr->publish_async(*request);
 
     auto future = wait_promise->get_future();
     if (future.wait_for(std::chrono::milliseconds(timeout_ms)) !=

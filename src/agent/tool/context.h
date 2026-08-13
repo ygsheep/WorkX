@@ -12,6 +12,7 @@
 #include <string>
 #include <atomic>
 #include <functional>
+#include <memory>
 #include <nlohmann/json.hpp>
 
 namespace agent {
@@ -25,7 +26,13 @@ class ITaskManager;
 // 前向声明：IEventBus（用于 AskUserTool 等需要发布事件的工具）
 class IEventBus;
 
+// 前向声明：ICompletionProvider（用于 AgentTool 等启动子 Agent 的工具）
+class ICompletionProvider;
+
 namespace tool {
+
+/// @brief 前向声明：ToolRegistry（AgentTool 为子 Agent 构造工具集）
+class ToolRegistry;
 
 /// @brief 工具进度回调类型
 /// @details 工具执行过程中上报进度文本（如 stdout 增量、心跳信息），
@@ -78,6 +85,46 @@ struct ToolContext {
     ///          工具 check_permissions 依据该模式决定放行/确认/拒绝。
     PermissionMode permission_mode{PermissionMode::Default};
 
+    /// @brief 权限模式变更回调类型（#28：EnterPlanMode/ExitPlanMode 注入路径）
+    /// @details 工具通过 set_permission_mode() 请求模式切换，由宿主（ReActLoop）
+    ///          接线更新会话级权限模式。非空时调用，空则忽略（工具仅提示）。
+    using PermissionModeChangedCallback = std::function<void(PermissionMode)>;
+
+    /// @brief 权限模式变更回调（可选）
+    /// @details 由调用方（ReActLoop）注入，EnterPlanModeTool/ExitPlanModeV2Tool
+    ///          调用 set_permission_mode() 时触发。生命周期由 ToolContext 所有者保证。
+    PermissionModeChangedCallback on_permission_mode_changed = nullptr;
+
+    /// @brief 请求切换权限模式（#28）
+    /// @details 仅当回调非空时生效（宿主接线后才能改变会话级模式）。
+    ///          const 语义：仅通过回调间接修改宿主状态，不改自身。
+    void set_permission_mode(PermissionMode mode) const {
+        if (on_permission_mode_changed) {
+            on_permission_mode_changed(mode);
+        }
+    }
+
+    /// @brief 进入计划模式回调类型（#28 评审 #1/#3）
+    /// @details 宿主（ReActLoop）接线并保留进入前的原模式，随后切换为 Plan。
+    ///          返回 false 表示拒绝进入：已在 Plan 模式（幂等）或处于
+    ///          BypassPermissions（禁止降级，防权限丢失）。工具据此决定是否发布事件。
+    using EnterPlanModeCallback = std::function<bool()>;
+
+    /// @brief 进入计划模式回调（可选）
+    /// @details nullptr 时 EnterPlanModeTool 回退到 set_permission_mode(Plan)。
+    ///          生命周期由 ToolContext 所有者保证。
+    EnterPlanModeCallback on_enter_plan_mode = nullptr;
+
+    /// @brief 退出计划模式回调类型（#28 评审 #1）
+    /// @details 宿主（ReActLoop）接线：批准退出时恢复进入计划前的原模式，
+    ///          而非硬编码回 Default，避免 Bypass/AcceptEdits 等原模式丢失。
+    using ExitPlanModeCallback = std::function<void()>;
+
+    /// @brief 退出计划模式回调（可选）
+    /// @details nullptr 时 ExitPlanModeV2Tool 回退到 set_permission_mode(Default)。
+    ///          生命周期由 ToolContext 所有者保证。
+    ExitPlanModeCallback on_exit_plan_mode = nullptr;
+
     /// @brief 外部取消信号指针（可选）
     /// @details 2.3 修复：由调用方（ReActLoop）传入 should_cancel 的地址，
     ///          使工具能即时感知外部取消请求。nullptr 时回退到内部 cancelled_。
@@ -103,6 +150,19 @@ struct ToolContext {
     ///          用于 AskUserTool 等需要发布事件的工具。
     ///          生命周期由调用方保证（通常为 ChatSession 持有的 EventBus 引用）。
     IEventBus* event_bus_ptr = nullptr;
+
+    /// @brief 推理提供者指针（可选，非拥有）
+    /// @details 由调用方（ReActLoop）显式注入（其持有的 ICompletionProvider）。
+    ///          AgentTool 等启动子 Agent 的工具依赖它构造子 ReActLoop。
+    ///          nullptr 时子 Agent 工具返回错误（无 LLM 可用）。
+    ///          生命周期由调用方保证。
+    ICompletionProvider* provider_ptr = nullptr;
+
+    /// @brief 工具注册表（可选，非拥有）
+    /// @details 由调用方（ReActLoop）显式注入其持有的注册表。
+    ///          AgentTool 为子 Agent 构造工具集（get_all_schemas）。
+    ///          nullptr 时子 Agent 无工具可用。
+    std::shared_ptr<ToolRegistry> tool_registry;
 
     /// @brief 进度回调（可选）
     /// @details 由调用方（ReActLoop）注入，工具在长任务执行过程中调用以上报进度。

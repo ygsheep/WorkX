@@ -210,6 +210,11 @@ ChatSession::~ChatSession() {
         task->cancel();
         m_task_manager.get().wait(task);
     }
+    // #26 评审 #2：cancel/join AgentTool 启动的子 Agent 任务，避免其后台线程
+    // 在 m_provider 等成员销毁后仍访问已释放指针（use-after-free）。
+    // 子 Agent 为协作式取消，cancelAll 后 waitForAll 会快速返回。
+    m_task_manager.get().cancelAll();
+    m_task_manager.get().waitForAll();
 }
 
 void ChatSession::set_system_prompt(const std::string& prompt) {
