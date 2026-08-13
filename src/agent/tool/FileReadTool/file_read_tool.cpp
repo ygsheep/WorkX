@@ -14,6 +14,9 @@
 #include "agent/tool/encoding.h"
 #include "agent/tool/FileReadState/file_read_state.h"
 #include "agent/tool/path_expand.h"
+#include "agent/tool/path_validator.h"
+#include "agent/tool/permission_ask.h"
+#include "agent/tool/secret_scanner.h"
 #include "core/config/config_manager.h"
 #include "agent/config/app_config.h"
 
@@ -212,6 +215,52 @@ ToolResult FileReadTool::read_directory(const fs::path& dir_path) {
 // 执行
 // ============================================================
 
+// ============================================================
+// 权限检查
+// ============================================================
+
+PermissionResult FileReadTool::check_permissions(
+    const nlohmann::json& input,
+    const ToolContext& ctx
+) const {
+    // #36：Bypass 模式完全放行
+    if (is_bypass_mode(ctx.permission_mode)) {
+        return PermissionResult::ok();
+    }
+    // #34：路径边界 + 敏感文件拦截（Plan 模式允许只读，仍受路径校验）
+    const std::string raw = input.value("file_path", input.value("path", ""));
+    if (raw.empty()) return PermissionResult::ok();  // 空路径由 validate_input 拦截
+    std::istringstream ss(raw);
+    std::string part;
+    while (std::getline(ss, part, '|')) {
+        try {
+            const std::string expanded = expand_path(part, ctx.cwd);
+            auto res = validate_path_access(expanded, ctx.cwd);
+            if (res.is_err()) {
+                // 评审 #2：绝对禁止（私钥/凭据）不可确认；越界/可确认敏感路径由用户确认放行
+                if (!is_absolutely_forbidden_path(expanded) &&
+                    ask_user_confirm(ctx, std::format(
+                        "Read access requires your approval:\n\n```\n{}\n```\n\n"
+                        "Allow reading this path?", part))) {
+                    continue;
+                }
+                return PermissionResult::err(
+                    Error::Code::PermissionDenied,
+                    res.error().message);
+            }
+        } catch (const std::exception& e) {
+            return PermissionResult::err(
+                Error::Code::PermissionDenied,
+                std::string("Read path error: ") + e.what());
+        }
+    }
+    return PermissionResult::ok();
+}
+
+// ============================================================
+// 执行
+// ============================================================
+
 ResultV2<ToolResult> FileReadTool::call(
     const nlohmann::json& input,
     const ToolContext& ctx
@@ -402,6 +451,9 @@ ResultV2<ToolResult> FileReadTool::call(
 
     // 9. 格式化输出（带行号，1-based）
     std::string formatted = format_with_line_numbers(target_lines, offset);
+
+    // #36：输出脱敏，密钥内容替换为 [REDACTED:label]
+    formatted = redact_secrets(formatted);
 
     // 10. 部分读取时附加元信息（明确已读行范围，供模型定位缺失区域）
     const int lines_read = static_cast<int>(target_lines.size());

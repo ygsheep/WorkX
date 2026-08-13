@@ -40,4 +40,11 @@ std::vector<SecretMatch> scan_for_secrets(const std::string& content);
 /// @return 无命中返回空字符串，否则返回错误信息
 std::string scan_for_secret_error(const std::string& content);
 
+/// @brief 脱敏文本中的密钥（#36）
+/// @details 将规则命中的密钥内容替换为 "[REDACTED:label]"，
+///          供命令输出/文件读取展示时遮蔽敏感内容。无命中则原样返回。
+/// @param content 待脱敏文本
+/// @return 脱敏后文本
+std::string redact_secrets(const std::string& content);
+
 } // namespace agent::tool

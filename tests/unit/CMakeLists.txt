@@ -42,6 +42,7 @@ set(UNIT_TEST_SOURCES
     agent/tool/test_bash_tool.cpp
     agent/tool/test_grep_tool.cpp
     agent/tool/test_skill_tool.cpp
+    agent/tool/test_permission_security.cpp
     core/config/test_config_manager.cpp
     core/events/test_event_bus.cpp
     core/process/test_subprocess.cpp

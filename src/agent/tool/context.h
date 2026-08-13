@@ -33,6 +33,19 @@ namespace tool {
 /// @param progress_text 进度文本
 using ProgressCallback = std::function<void(const std::string& progress_text)>;
 
+/// @brief 权限模式（#36 统一权限决策层）
+/// @details 工具 check_permissions 的决策依据，由宿主在构造 ToolContext 时注入：
+///          - Default：常规操作放行，危险操作（敏感路径/目录逃逸/敏感命令）AskUser 确认
+///          - AcceptEdits：接受编辑类自动放行（CC 兼容占位）
+///          - Plan：计划/只读模式，禁止写文件与执行命令
+///          - BypassPermissions：完全放行（用户显式授权后）
+enum class PermissionMode : uint8_t {
+    Default = 0,
+    AcceptEdits = 1,
+    Plan = 2,
+    BypassPermissions = 3,
+};
+
     /// @brief 工具 touch 回调类型
     /// @details 工具执行过程中上报访问过的文件路径（绝对路径），
     ///          由 ReActLoop 注入，用于 conditional skills 的路径匹配。
@@ -59,6 +72,11 @@ struct ToolContext {
     std::string request_id;                 ///< 请求 ID
     std::string model;                      ///< 当前模型名称
     nlohmann::json options;                 ///< 额外选项
+
+    /// @brief 权限模式（#36 权限决策层）
+    /// @details 默认 Default；宿主可在构造时注入（如 CLI 的 --bypass-permissions）。
+    ///          工具 check_permissions 依据该模式决定放行/确认/拒绝。
+    PermissionMode permission_mode{PermissionMode::Default};
 
     /// @brief 外部取消信号指针（可选）
     /// @details 2.3 修复：由调用方（ReActLoop）传入 should_cancel 的地址，

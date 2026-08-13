@@ -61,6 +61,15 @@ public:
         const ToolContext& ctx
     ) const override;
 
+    /// @brief 权限检查（#34/#36：路径边界 + 敏感文件拦截）
+    /// @param input 输入 JSON 对象
+    /// @param ctx 工具执行上下文（cwd 作为路径边界基准）
+    /// @return 允许返回 ok；越界/敏感路径返回 PermissionDenied
+    PermissionResult check_permissions(
+        const nlohmann::json& input,
+        const ToolContext& ctx
+    ) const override;
+
     /// @brief 执行文件读取
     /// @param input 输入 JSON 对象（符合 input_schema）
     /// @param ctx 工具执行上下文（用于获取 cwd 解析相对路径）

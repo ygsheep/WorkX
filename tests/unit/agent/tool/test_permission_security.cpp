@@ -1,0 +1,274 @@
+/**
+ * @file test_permission_security.cpp
+ * @brief #36 权限决策层单元测试
+ * @details 覆盖：
+ *          - PermissionMode 模式判定纯函数（is_plan_mode/is_bypass_mode/deny_*）
+ *          - 危险命令检测（is_dangerous_command）
+ *          - ask_user_confirm fail-closed（无 event_bus → 拒绝）
+ *          - FileWriteTool：Plan 拒写 / Bypass 放行 / 密钥内容拒绝 / 越界路径拒绝
+ *          - FileReadTool：越界路径拒绝 / 敏感路径拒绝 / 输出脱敏
+ *          - BashTool：Plan 拒执行 / 危险命令需确认（无宿主 → 拒绝） / 安全命令放行
+ */
+
+#include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <random>
+#include <string>
+
+#include "agent/tool/BashTool/bash_tool.h"
+#include "agent/tool/FileReadTool/file_read_tool.h"
+#include "agent/tool/FileWriteTool/file_write_tool.h"
+#include "agent/tool/context.h"
+#include "agent/tool/path_validator.h"
+#include "agent/tool/permission_ask.h"
+#include "agent/tool/secret_scanner.h"
+#include "core/config/config_manager.h"
+#include "core/utils/error.h"
+
+using namespace agent;
+using namespace agent::tool;
+namespace fs = std::filesystem;
+
+namespace {
+
+/// 最小可用 ToolContext（注入 ConfigManager 单例）
+void fill_ctx(ToolContext& ctx, const fs::path& cwd) {
+    ctx.cwd = cwd.string();
+    ctx.session_id = "test";
+    ctx.config_manager_ptr = &ConfigManager::instance();
+    ctx.event_bus_ptr = nullptr;  // 无宿主确认通道
+}
+
+/// 临时目录夹具：RAII 创建/清理
+struct TempDir {
+    fs::path path;
+    TempDir()
+        : path(fs::temp_directory_path()
+               / ("workx_perm_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())
+                  + "_" + std::to_string(std::random_device{}()))) {
+        fs::create_directories(path);
+    }
+    ~TempDir() { fs::remove_all(path); }
+};
+
+} // namespace
+
+// ============================================================
+// 模式判定纯函数
+// ============================================================
+
+TEST_CASE("PermissionMode helpers", "[tool][permission]") {
+    REQUIRE_FALSE(is_plan_mode(PermissionMode::Default));
+    REQUIRE(is_plan_mode(PermissionMode::Plan));
+    REQUIRE_FALSE(is_bypass_mode(PermissionMode::Plan));
+    REQUIRE(is_bypass_mode(PermissionMode::BypassPermissions));
+
+    REQUIRE_FALSE(deny_write_by_mode(PermissionMode::Default));
+    REQUIRE(deny_write_by_mode(PermissionMode::Plan));
+    REQUIRE_FALSE(deny_write_by_mode(PermissionMode::BypassPermissions));
+
+    REQUIRE_FALSE(deny_execute_by_mode(PermissionMode::Default));
+    REQUIRE(deny_execute_by_mode(PermissionMode::Plan));
+    REQUIRE_FALSE(deny_execute_by_mode(PermissionMode::BypassPermissions));
+}
+
+// ============================================================
+// 危险命令检测
+// ============================================================
+
+TEST_CASE("is_dangerous_command detects destructive patterns", "[tool][permission]") {
+    REQUIRE(is_dangerous_command("rm -rf /tmp/foo"));
+    REQUIRE(is_dangerous_command("sudo rm -r /"));
+    REQUIRE(is_dangerous_command("shutdown -r now"));
+    REQUIRE(is_dangerous_command("cat x | bash"));
+    REQUIRE(is_dangerous_command("echo hi | powershell -c x"));
+    REQUIRE(is_dangerous_command("mkfs.ext4 /dev/sda1"));
+}
+
+TEST_CASE("is_dangerous_command allows safe commands", "[tool][permission]") {
+    REQUIRE_FALSE(is_dangerous_command("echo hello"));
+    REQUIRE_FALSE(is_dangerous_command("git status"));
+    REQUIRE_FALSE(is_dangerous_command("ls -la"));
+    REQUIRE_FALSE(is_dangerous_command("rm file.txt"));  // 无 -rf/-r / 等破坏性组合
+}
+
+TEST_CASE("is_dangerous_command detects disk format only with drive/switch", "[tool][permission][review]") {
+    // 评审 #6：format 需为独立命令（盘符/参数），避免误伤 printf("format %d")
+    REQUIRE(is_dangerous_command("format C:"));
+    REQUIRE(is_dangerous_command("format /Q"));
+    REQUIRE_FALSE(is_dangerous_command("printf(\"format %d\", x)"));
+    REQUIRE_FALSE(is_dangerous_command("echo format text"));
+}
+
+// ============================================================
+// 评审 #2：绝对禁止 vs 可确认敏感路径
+// ============================================================
+
+TEST_CASE("is_absolutely_forbidden_path hard-rejects keys/credentials", "[tool][permission][review]") {
+    REQUIRE(is_absolutely_forbidden_path("/home/user/.ssh/id_rsa"));
+    REQUIRE(is_absolutely_forbidden_path("/home/user/.ssh/id_ed25519"));
+    REQUIRE(is_absolutely_forbidden_path("/home/user/credentials"));
+    REQUIRE(is_absolutely_forbidden_path("/home/user/.git-credentials"));
+    REQUIRE(is_absolutely_forbidden_path("C:\\Users\\x\\.ssh\\id_rsa"));
+    // 可确认敏感（.env、配置文件、普通 hooks）不算绝对禁止
+    REQUIRE_FALSE(is_absolutely_forbidden_path("/project/.env"));
+    REQUIRE_FALSE(is_absolutely_forbidden_path("/project/src/config/app.cpp"));
+    REQUIRE_FALSE(is_absolutely_forbidden_path("/project/.git/hooks/pre-commit"));
+}
+
+// ============================================================
+// ask_user_confirm fail-closed
+// ============================================================
+
+TEST_CASE("ask_user_confirm fails closed without event bus", "[tool][permission]") {
+    TempDir tmp;
+    ToolContext ctx;
+    fill_ctx(ctx, tmp.path);
+
+    REQUIRE_FALSE(ask_user_confirm(ctx, "Allow?"));
+}
+
+// ============================================================
+// FileWriteTool
+// ============================================================
+
+TEST_CASE("FileWriteTool plan mode denies write", "[tool][permission][write]") {
+    TempDir tmp;
+    ToolContext ctx;
+    fill_ctx(ctx, tmp.path);
+    ctx.permission_mode = PermissionMode::Plan;
+
+    FileWriteTool tool;
+    auto perm = tool.check_permissions(
+        R"({"file_path": "out.txt", "content": "x"})"_json, ctx);
+    REQUIRE(perm.is_err());
+    REQUIRE(perm.error().code == Error::Code::PermissionDenied);
+}
+
+TEST_CASE("FileWriteTool bypass mode allows write", "[tool][permission][write]") {
+    TempDir tmp;
+    ToolContext ctx;
+    fill_ctx(ctx, tmp.path);
+    ctx.permission_mode = PermissionMode::BypassPermissions;
+
+    FileWriteTool tool;
+    auto perm = tool.check_permissions(
+        R"({"file_path": "out.txt", "content": "x"})"_json, ctx);
+    REQUIRE(perm.is_ok());
+}
+
+TEST_CASE("FileWriteTool rejects path escaping cwd", "[tool][permission][write]") {
+    TempDir tmp;
+    ToolContext ctx;
+    fill_ctx(ctx, tmp.path);
+
+    FileWriteTool tool;
+    auto perm = tool.check_permissions(
+        R"({"file_path": ".."})"_json, ctx);
+    REQUIRE(perm.is_err());
+    REQUIRE(perm.error().code == Error::Code::PermissionDenied);
+}
+
+TEST_CASE("FileWriteTool validates secret content", "[tool][permission][write]") {
+    TempDir tmp;
+    ToolContext ctx;
+    fill_ctx(ctx, tmp.path);
+
+    FileWriteTool tool;
+    auto res = tool.validate_input(
+        R"({"file_path": "out.txt", "content": "token: ghp_0123456789abcdefghijklmnopqrstuvwxyzABCD"})"_json,
+        ctx);
+    REQUIRE(res.is_err());
+    REQUIRE(res.error().code == Error::Code::PermissionDenied);
+}
+
+// ============================================================
+// FileReadTool
+// ============================================================
+
+TEST_CASE("FileReadTool rejects path escaping cwd", "[tool][permission][read]") {
+    TempDir tmp;
+    ToolContext ctx;
+    fill_ctx(ctx, tmp.path);
+
+    FileReadTool tool;
+    auto perm = tool.check_permissions(R"({"file_path": "../secret.txt"})"_json, ctx);
+    REQUIRE(perm.is_err());
+    REQUIRE(perm.error().code == Error::Code::PermissionDenied);
+}
+
+TEST_CASE("FileReadTool rejects sensitive path", "[tool][permission][read]") {
+    TempDir tmp;
+    ToolContext ctx;
+    fill_ctx(ctx, tmp.path);
+
+    FileReadTool tool;
+    auto perm = tool.check_permissions(R"({"file_path": ".env"})"_json, ctx);
+    REQUIRE(perm.is_err());
+    REQUIRE(perm.error().code == Error::Code::PermissionDenied);
+}
+
+TEST_CASE("FileReadTool redacts secrets from output", "[tool][permission][read]") {
+    TempDir tmp;
+    ToolContext ctx;
+    fill_ctx(ctx, tmp.path);
+
+    // 在 cwd 内建一个含密钥的文件
+    fs::path target = tmp.path / "conf.txt";
+    {
+        std::ofstream ofs(target, std::ios::binary);
+        ofs << "api_key = sk-ant-api03-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN\n";
+        ofs << "safe = hello\n";
+    }
+    // 模拟 pre-read 状态（脱敏测试不依赖写入，但 Read 正常路径会记录状态）
+    (void)ctx;
+
+    FileReadTool tool;
+    auto res = tool.call(R"({"file_path": "conf.txt"})"_json, ctx);
+    REQUIRE(res.is_ok());
+    const std::string out = res.value().text;
+    REQUIRE(out.find("sk-ant-api03-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN") == std::string::npos);
+    REQUIRE(out.find("[REDACTED:Anthropic API Key]") != std::string::npos);
+}
+
+// ============================================================
+// BashTool
+// ============================================================
+
+TEST_CASE("BashTool plan mode denies execution", "[tool][permission][bash]") {
+    TempDir tmp;
+    ToolContext ctx;
+    fill_ctx(ctx, tmp.path);
+    ctx.permission_mode = PermissionMode::Plan;
+
+    BashTool tool;
+    auto perm = tool.check_permissions(R"({"command": "echo hi"})"_json, ctx);
+    REQUIRE(perm.is_err());
+    REQUIRE(perm.error().code == Error::Code::PermissionDenied);
+}
+
+TEST_CASE("BashTool dangerous command requires confirmation", "[tool][permission][bash]") {
+    TempDir tmp;
+    ToolContext ctx;
+    fill_ctx(ctx, tmp.path);
+    ctx.permission_mode = PermissionMode::Default;
+
+    BashTool tool;
+    // 无宿主确认通道（event_bus_ptr == nullptr）→ fail-closed 拒绝
+    auto perm = tool.check_permissions(R"({"command": "rm -rf /tmp/x"})"_json, ctx);
+    REQUIRE(perm.is_err());
+    REQUIRE(perm.error().code == Error::Code::PermissionDenied);
+}
+
+TEST_CASE("BashTool safe command allowed in default mode", "[tool][permission][bash]") {
+    TempDir tmp;
+    ToolContext ctx;
+    fill_ctx(ctx, tmp.path);
+    ctx.permission_mode = PermissionMode::Default;
+
+    BashTool tool;
+    auto perm = tool.check_permissions(R"({"command": "echo hello"})"_json, ctx);
+    REQUIRE(perm.is_ok());
+}

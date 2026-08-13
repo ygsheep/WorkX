@@ -20,6 +20,8 @@
 #include "agent/tool/FileWriteTool/diff.h"
 #include "agent/tool/FileReadState/file_read_state.h"
 #include "agent/tool/path_expand.h"
+#include "agent/tool/path_validator.h"
+#include "agent/tool/permission_ask.h"
 #include "agent/tool/types.h"
 #include "agent/tool/path_matcher.h"
 #include "agent/tool/secret_scanner.h"
@@ -214,6 +216,48 @@ nlohmann::json FileEditTool::input_schema() const {
         {"required", {"file_path", "old_string", "new_string"}},
         {"additionalProperties", false}
     };
+}
+
+// ============================================================
+// 输入验证
+// ============================================================
+
+// ============================================================
+// 权限检查
+// ============================================================
+
+PermissionResult FileEditTool::check_permissions(
+    const nlohmann::json& input,
+    const ToolContext& ctx
+) const {
+    // #36：Bypass 模式完全放行
+    if (is_bypass_mode(ctx.permission_mode)) {
+        return PermissionResult::ok();
+    }
+    // #36：Plan 模式禁止编辑文件
+    if (deny_write_by_mode(ctx.permission_mode)) {
+        return PermissionResult::err(
+            Error::Code::PermissionDenied,
+            "Edit operations are not allowed in plan mode. "
+            "Switch to default mode to edit files.");
+    }
+    // #34：路径边界 + 敏感路径拦截
+    const std::string path_str = input.value("file_path", "");
+    if (path_str.empty()) return PermissionResult::ok();  // 空路径由 validate_input 拦截
+    try {
+        const std::string expanded = expand_path(path_str, ctx.cwd);
+        auto res = validate_path_access(expanded, ctx.cwd);
+        if (res.is_err()) {
+            return PermissionResult::err(
+                Error::Code::PermissionDenied,
+                res.error().message);
+        }
+    } catch (const std::exception& e) {
+        return PermissionResult::err(
+            Error::Code::PermissionDenied,
+            std::string("Edit path error: ") + e.what());
+    }
+    return PermissionResult::ok();
 }
 
 // ============================================================

@@ -80,6 +80,8 @@ target_sources(workx_agent PRIVATE
     tool/encoding.cpp
     tool/path_expand.cpp
     tool/path_matcher.cpp
+    tool/path_validator.cpp
+    tool/permission_ask.cpp
     tool/secret_scanner.cpp
     tool/line_endings.cpp
     tool/quote_normalizer.cpp

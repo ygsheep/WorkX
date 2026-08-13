@@ -32,6 +32,12 @@ public:
     const std::string& prompt() const override;
     nlohmann::json input_schema() const override;
 
+    /// @brief 权限检查（#36：Bypass 放行 / Plan 拒绝执行 / 危险命令 AskUser 确认）
+    PermissionResult check_permissions(
+        const nlohmann::json& input,
+        const ToolContext& ctx
+    ) const override;
+
     ResultV2<ToolResult> call(
         const nlohmann::json& input,
         const ToolContext& ctx

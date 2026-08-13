@@ -168,6 +168,7 @@ set(WORKX_PUBLIC_HEADERS
     agent/tool/registry.h
     agent/tool/executor.h
     agent/tool/context.h
+    agent/tool/permission_ask.h
     agent/tool/types.h
     agent/tool/itool.h
     agent/tool/result.h
