@@ -44,4 +44,10 @@ struct TaskCancelledEvent {
     float duration_ms;
 };
 
+struct TaskOutputEvent {
+    std::shared_ptr<Task> task;
+    std::string task_name;
+    std::string line;
+};
+
 } // namespace agent

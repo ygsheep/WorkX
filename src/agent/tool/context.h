@@ -12,6 +12,7 @@
 #include <string>
 #include <atomic>
 #include <functional>
+#include <memory>
 #include <nlohmann/json.hpp>
 
 namespace agent {
@@ -25,7 +26,13 @@ class ITaskManager;
 // 前向声明：IEventBus（用于 AskUserTool 等需要发布事件的工具）
 class IEventBus;
 
+// 前向声明：ICompletionProvider（用于 AgentTool 等启动子 Agent 的工具）
+class ICompletionProvider;
+
 namespace tool {
+
+/// @brief 前向声明：ToolRegistry（AgentTool 为子 Agent 构造工具集）
+class ToolRegistry;
 
 /// @brief 工具进度回调类型
 /// @details 工具执行过程中上报进度文本（如 stdout 增量、心跳信息），
@@ -122,6 +129,19 @@ struct ToolContext {
     ///          用于 AskUserTool 等需要发布事件的工具。
     ///          生命周期由调用方保证（通常为 ChatSession 持有的 EventBus 引用）。
     IEventBus* event_bus_ptr = nullptr;
+
+    /// @brief 推理提供者指针（可选，非拥有）
+    /// @details 由调用方（ReActLoop）显式注入（其持有的 ICompletionProvider）。
+    ///          AgentTool 等启动子 Agent 的工具依赖它构造子 ReActLoop。
+    ///          nullptr 时子 Agent 工具返回错误（无 LLM 可用）。
+    ///          生命周期由调用方保证。
+    ICompletionProvider* provider_ptr = nullptr;
+
+    /// @brief 工具注册表（可选，非拥有）
+    /// @details 由调用方（ReActLoop）显式注入其持有的注册表。
+    ///          AgentTool 为子 Agent 构造工具集（get_all_schemas）。
+    ///          nullptr 时子 Agent 无工具可用。
+    std::shared_ptr<ToolRegistry> tool_registry;
 
     /// @brief 进度回调（可选）
     /// @details 由调用方（ReActLoop）注入，工具在长任务执行过程中调用以上报进度。

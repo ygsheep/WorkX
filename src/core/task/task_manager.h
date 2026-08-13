@@ -135,6 +135,14 @@ public:
         m_completed_callback = std::move(callback);
     }
 
+    /// @brief 追加输出行（线程安全）
+    /// @details 累加到内部缓冲并发布 TaskOutputEvent，供 TaskOutputTool / UI 读取。
+    ///          事件经 m_event_bus 异步发布（与 TaskStartedEvent 等生命周期事件一致）。
+    void append_output(const std::string& line);
+
+    /// @brief 读取累计输出（线程安全，返回拷贝）
+    [[nodiscard]] std::string output() const;
+
     /// @brief 执行任务（M-6：原 private + friend TaskManager，改为 public）
     /// @details TaskManager::start 通过此入口驱动任务执行；
     ///          测试可直接调用 execute() 驱动状态机，无需 friend。
@@ -175,6 +183,10 @@ private:
 
     // M-6：删除 friend class TaskManager —— execute() 已为 public，
     //      通信通过 m_on_finished 回调，无需 Task 直接访问 TaskManager 私有成员
+
+    // 输出缓冲（append_output/output，m_output_mutex 保护）
+    mutable std::mutex m_output_mutex;
+    std::string m_output;
 };
 
 // ============================================================
@@ -204,6 +216,11 @@ public:
     [[nodiscard]] virtual std::vector<std::shared_ptr<Task>> getTasks() const = 0;
     [[nodiscard]] virtual std::vector<std::shared_ptr<Task>> getRunningTasks() const = 0;
     [[nodiscard]] virtual size_t getRunningTaskCount() const = 0;
+
+    /// @brief 按名称查找任务（#26：TaskStop/TaskOutput 定位任务用）
+    /// @param name 任务名（AgentTool 生成的 task_id 即任务名）
+    /// @return 找到返回任务指针；不存在返回 nullptr
+    [[nodiscard]] virtual std::shared_ptr<Task> find_task(const std::string& name) const = 0;
 
     virtual void update() = 0;
     virtual void waitForAll() = 0;
@@ -255,6 +272,7 @@ public:
     [[nodiscard]] std::vector<std::shared_ptr<Task>> getTasks() const override;
     [[nodiscard]] std::vector<std::shared_ptr<Task>> getRunningTasks() const override;
     [[nodiscard]] size_t getRunningTaskCount() const override;
+    [[nodiscard]] std::shared_ptr<Task> find_task(const std::string& name) const override;
 
     void update() override;
     void waitForAll() override;

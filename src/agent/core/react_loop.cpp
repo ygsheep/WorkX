@@ -584,6 +584,9 @@ ReActResult ReActLoop::run(
         ctx.on_permission_mode_changed = [this](tool::PermissionMode mode) {
             m_permission_mode = mode;
         };
+        // #26：注入推理提供者 + 工具注册表（AgentTool 启动子 Agent 用）
+        ctx.provider_ptr = m_provider;
+        ctx.tool_registry = m_registry;
 
         // 1. 同步发布所有 Action 步骤（UI 即时反馈工具调用开始）
         for (const auto& tu : thought.tool_uses) {
