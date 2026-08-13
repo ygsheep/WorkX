@@ -2,8 +2,8 @@
  * @file exit_plan_mode_v2_tool.h
  * @brief ExitPlanModeV2Tool — 退出计划模式工具（#28）
  * @details AI 完成规划后调用：把方案呈现给用户确认（复用 AskUserRequestEvent
- *          确认通道），用户批准后会话权限模式切回 Default（若此前为 Plan），
- *          并发布 ExitPlanModeEvent 通知宿主。未批准则保持计划模式。
+ *          确认通道），用户批准后恢复进入计划前的原权限模式（评审 #1：非硬编码
+ *          回 Default），并发布 ExitPlanModeEvent 通知宿主。未批准则保持计划模式。
  * @version 1.0.0
  * @date 2026-08
  */
