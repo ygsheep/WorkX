@@ -74,9 +74,14 @@ ResultV2<ToolResult> ExitPlanModeV2Tool::call(
         "Plan:\n\n```\n{}\n```\n\nApprove this plan and exit plan mode?", plan);
     const bool approved = ask_user_confirm(ctx, question);
 
-    // 2. 批准 → 权限模式切回 Default（Bypass 不降级；非 Plan 无需切换）
+    // 2. 批准 → 恢复进入计划前的原模式（评审 #1：非硬编码回 Default）
+    //    Bypass 未进入 Plan，无需切换；拒绝则保持 Plan
     if (approved && is_plan_mode(ctx.permission_mode)) {
-        ctx.set_permission_mode(PermissionMode::Default);
+        if (ctx.on_exit_plan_mode) {
+            ctx.on_exit_plan_mode();
+        } else {
+            ctx.set_permission_mode(PermissionMode::Default);
+        }
     }
 
     // 3. 发布退出计划模式事件（publish_async 传值，typeid 匹配订阅）

@@ -587,6 +587,26 @@ ReActResult ReActLoop::run(
         // #26：注入推理提供者 + 工具注册表（AgentTool 启动子 Agent 用）
         ctx.provider_ptr = m_provider;
         ctx.tool_registry = m_registry;
+        // #28 评审 #1/#3：进入计划模式——保存原模式、切换 Plan；Bypass 禁止降级、已在 Plan 则幂等拒绝
+        ctx.on_enter_plan_mode = [this]() -> bool {
+            if (m_permission_mode == tool::PermissionMode::BypassPermissions) {
+                return false;  // Bypass 全权模式禁止降级到 Plan
+            }
+            if (m_in_plan_mode) {
+                return false;  // 已在 Plan，幂等
+            }
+            m_permission_mode_before_plan = m_permission_mode;
+            m_permission_mode = tool::PermissionMode::Plan;
+            m_in_plan_mode = true;
+            return true;
+        };
+        // #28 评审 #1：退出计划模式——恢复进入前的原模式，而非硬编码 Default
+        ctx.on_exit_plan_mode = [this]() {
+            if (m_in_plan_mode) {
+                m_permission_mode = m_permission_mode_before_plan;
+                m_in_plan_mode = false;
+            }
+        };
 
         // 1. 同步发布所有 Action 步骤（UI 即时反馈工具调用开始）
         for (const auto& tu : thought.tool_uses) {

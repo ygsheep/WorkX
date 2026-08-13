@@ -11,6 +11,7 @@
 
 #include "core/events/agent_events.h"
 #include "core/events/i_event_bus.h"
+#include "agent/tool/permission_ask.h"
 
 namespace agent::tool {
 
@@ -55,21 +56,35 @@ ResultV2<ToolResult> EnterPlanModeTool::call(
 ) const {
     const std::string reason = input.value("reason", "");
 
-    // 1. 通过回调切换会话权限模式为 Plan（无回调则仅提示）
-    ctx.set_permission_mode(PermissionMode::Plan);
+    // 1. 通过回调进入计划模式（宿主保存原模式并切换 Plan）
+    //    返回 false = 拒绝进入（Bypass 禁止降级 / 已在 Plan 幂等）
+    bool entered = false;
+    if (ctx.on_enter_plan_mode) {
+        entered = ctx.on_enter_plan_mode();
+    } else {
+        // 无宿主接线：回退直接切换（仅测试/兼容场景）
+        ctx.set_permission_mode(PermissionMode::Plan);
+        entered = true;
+    }
 
-    // 2. 发布进入计划模式事件（宿主展示状态）
-    // 注意：publish_async 按 T=EnterPlanModeEvent 推导（typeid 匹配订阅），传值而非 shared_ptr
-    if (ctx.event_bus_ptr) {
+    // 2. 仅当真正进入计划模式时发布事件（评审 #3 幂等：未进入不重复发布）
+    if (entered && ctx.event_bus_ptr) {
         ctx.event_bus_ptr->publish_async(EnterPlanModeEvent{
             .session_id = ctx.session_id,
             .reason = reason
         });
     }
 
-    std::string msg = "Entered plan mode. Write/edit and command execution are now blocked.";
-    if (!reason.empty()) {
-        msg += "\nReason: " + reason;
+    std::string msg;
+    if (entered) {
+        msg = "Entered plan mode. Write/edit and command execution are now blocked.";
+        if (!reason.empty()) {
+            msg += "\nReason: " + reason;
+        }
+    } else if (is_plan_mode(ctx.permission_mode)) {
+        msg = "Already in plan mode. Write/edit and command execution remain blocked.";
+    } else {
+        msg = "Plan mode not entered (bypass permissions mode is active; read/write remain permitted).";
     }
     return ResultV2<ToolResult>::ok(ToolResult::ok(std::move(msg)));
 }
