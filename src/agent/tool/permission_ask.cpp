@@ -30,6 +30,30 @@ bool is_yes(const std::string& value) {
     return v == "yes";
 }
 
+/// @brief 检测 Windows 磁盘格式化命令（`format C:` / `format /FS:...`）
+/// @details 评审 #6：移除了宽泛的 `"format "` 子串匹配（误伤 printf("format %d")
+///          等普通文本）。此处要求 `format` 为独立单词且后跟盘符（X:）或 `/` 参数。
+bool is_disk_format_command(const std::string& s) noexcept {
+    size_t pos = 0;
+    while ((pos = s.find("format", pos)) != std::string::npos) {
+        const bool left_ok = (pos == 0) ||
+                             !std::isalnum(static_cast<unsigned char>(s[pos - 1]));
+        const size_t after = pos + 6;
+        if (left_ok && after < s.size() && (s[after] == ' ' || s[after] == '\t')) {
+            const size_t p = s.find_first_not_of(" \t", after);
+            if (p != std::string::npos) {
+                if (s[p] == '/') return true;  // format /FS:... /Q
+                if (p + 1 < s.size() && s[p + 1] == ':' &&
+                    std::isalpha(static_cast<unsigned char>(s[p]))) {
+                    return true;  // format C:
+                }
+            }
+        }
+        pos = after;
+    }
+    return false;
+}
+
 } // namespace
 
 bool ask_user_confirm(
@@ -93,7 +117,7 @@ bool is_dangerous_command(const std::string& command) noexcept {
         "rmdir /s", "del /s", "del /f", "rd /s",
         "chmod 777", "chmod -r 777", "chown -r",
         // 磁盘/系统级
-        "mkfs", "fdisk", "dd if=", "format ",
+        "mkfs", "fdisk", "dd if=",
         "shutdown", "reboot", "halt", "poweroff",
         // 管道到 shell（远程执行模式）
         "| bash", "| sh ", "| zsh", "| powershell",
@@ -104,6 +128,7 @@ bool is_dangerous_command(const std::string& command) noexcept {
     for (const auto& pattern : kPatterns) {
         if (lower.find(pattern) != std::string::npos) return true;
     }
+    if (is_disk_format_command(lower)) return true;
     return false;
 }
 

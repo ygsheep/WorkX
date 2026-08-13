@@ -21,6 +21,7 @@
 #include "agent/tool/FileReadTool/file_read_tool.h"
 #include "agent/tool/FileWriteTool/file_write_tool.h"
 #include "agent/tool/context.h"
+#include "agent/tool/path_validator.h"
 #include "agent/tool/permission_ask.h"
 #include "agent/tool/secret_scanner.h"
 #include "core/config/config_manager.h"
@@ -91,6 +92,30 @@ TEST_CASE("is_dangerous_command allows safe commands", "[tool][permission]") {
     REQUIRE_FALSE(is_dangerous_command("git status"));
     REQUIRE_FALSE(is_dangerous_command("ls -la"));
     REQUIRE_FALSE(is_dangerous_command("rm file.txt"));  // 无 -rf/-r / 等破坏性组合
+}
+
+TEST_CASE("is_dangerous_command detects disk format only with drive/switch", "[tool][permission][review]") {
+    // 评审 #6：format 需为独立命令（盘符/参数），避免误伤 printf("format %d")
+    REQUIRE(is_dangerous_command("format C:"));
+    REQUIRE(is_dangerous_command("format /Q"));
+    REQUIRE_FALSE(is_dangerous_command("printf(\"format %d\", x)"));
+    REQUIRE_FALSE(is_dangerous_command("echo format text"));
+}
+
+// ============================================================
+// 评审 #2：绝对禁止 vs 可确认敏感路径
+// ============================================================
+
+TEST_CASE("is_absolutely_forbidden_path hard-rejects keys/credentials", "[tool][permission][review]") {
+    REQUIRE(is_absolutely_forbidden_path("/home/user/.ssh/id_rsa"));
+    REQUIRE(is_absolutely_forbidden_path("/home/user/.ssh/id_ed25519"));
+    REQUIRE(is_absolutely_forbidden_path("/home/user/credentials"));
+    REQUIRE(is_absolutely_forbidden_path("/home/user/.git-credentials"));
+    REQUIRE(is_absolutely_forbidden_path("C:\\Users\\x\\.ssh\\id_rsa"));
+    // 可确认敏感（.env、配置文件、普通 hooks）不算绝对禁止
+    REQUIRE_FALSE(is_absolutely_forbidden_path("/project/.env"));
+    REQUIRE_FALSE(is_absolutely_forbidden_path("/project/src/config/app.cpp"));
+    REQUIRE_FALSE(is_absolutely_forbidden_path("/project/.git/hooks/pre-commit"));
 }
 
 // ============================================================

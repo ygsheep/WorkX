@@ -40,6 +40,11 @@ bool has_suspicious_windows_pattern(std::string_view path);
 /// @brief 敏感路径/文件名拦截（.env、.ssh、credentials 等硬编码清单）
 bool matches_sensitive_path(std::string_view path);
 
+/// @brief 是否绝对禁止访问（私钥/凭据等），不可通过用户确认放行（评审 #2）
+/// @details 与 matches_sensitive_path 不同：绝对禁止类（如 .ssh 私钥、.git-credentials、
+///          passwd/shadow）不允许用户确认放行；.env、配置文件等仅"敏感"但可由用户确认。
+bool is_absolutely_forbidden_path(std::string_view path);
+
 /// @brief 路径是否位于 cwd 或 allowlist 边界内
 /// @param path 绝对路径（应已规范化）
 /// @details 前缀比较，path == root 或 path 以 root + 分隔符开头均算边界内。

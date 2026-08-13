@@ -231,6 +231,13 @@ PermissionResult FileWriteTool::check_permissions(
         const std::string expanded = expand_path(path_str, ctx.cwd);
         auto res = validate_path_access(expanded, ctx.cwd);
         if (res.is_err()) {
+            // 评审 #2：绝对禁止（私钥/凭据）不可确认；越界/可确认敏感路径由用户确认放行
+            if (!is_absolutely_forbidden_path(expanded) &&
+                ask_user_confirm(ctx, std::format(
+                    "Write access requires your approval:\n\n```\n{}\n```\n\n"
+                    "Allow writing to this path?", path_str))) {
+                return PermissionResult::ok();
+            }
             return PermissionResult::err(
                 Error::Code::PermissionDenied,
                 res.error().message);

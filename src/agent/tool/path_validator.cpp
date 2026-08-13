@@ -45,11 +45,12 @@ const std::unordered_set<std::string>& sensitive_files() {
 }
 
 /// @brief 敏感目录段（路径任一目录段命中即拦截）
+/// @note 评审 #3：不再整目录拦截 `config`/`hooks`（误伤正常项目 ht 目录）；
+///       `.git/hooks` 语境由 path_contains_sensitive 单独限定；`~/.config` 下
+///       的敏感子项（.ssh/.aws 等）已单列。
 const std::unordered_set<std::string>& sensitive_dirs() {
     static const std::unordered_set<std::string> k = {
         ".ssh", ".gnupg", ".aws", ".azure", ".gcloud", ".kube",
-        "hooks",  // .git/hooks（由 .git 段限定，此处宽松拦截 git/hooks 均拒）
-        "config",  // ~/.config 下敏感项（ssh 等已单列；.config 整体拦截偏差可后续收窄）
     };
     return k;
 }
@@ -75,12 +76,18 @@ std::string filename_segment(std::string_view path) {
 }
 
 /// @brief 检查路径中任一目录段命中敏感目录（最后一个段按文件名检查）
+/// @note 评审 #3：`hooks` 仅在 `.git/hooks` 语境下拦截，避免误伤普通 hooks 目录。
 bool path_contains_sensitive(std::string_view path) {
     std::string cur;
+    std::string prev;  // 上一个目录段（用于 .git/hooks 语境判定）
     for (char c : path) {
         if (c == '/' || c == '\\') {
-            if (!cur.empty() && sensitive_dirs().count(lower(cur)) > 0) return true;
-            cur.clear();
+            if (!cur.empty()) {
+                if (sensitive_dirs().count(lower(cur)) > 0) return true;
+                if (lower(prev) == ".git" && lower(cur) == "hooks") return true;
+                prev = cur;
+                cur.clear();
+            }
         } else {
             cur.push_back(c);
         }
@@ -89,6 +96,7 @@ bool path_contains_sensitive(std::string_view path) {
     if (!cur.empty()) {
         if (sensitive_dirs().count(lower(cur)) > 0) return true;
         if (is_sensitive_filename(cur)) return true;
+        if (lower(prev) == ".git" && lower(cur) == "hooks") return true;
     }
     // Windows 盘符 C: 单独出现时不是文件段
     return false;
@@ -144,23 +152,62 @@ bool matches_sensitive_path(std::string_view path) {
     return path_contains_sensitive(path);
 }
 
+bool is_absolutely_forbidden_path(std::string_view path) {
+    // 评审 #2：绝对禁止（私钥/凭据/系统账户文件）——不可用户确认放行
+    static const std::unordered_set<std::string> kForbiddenFiles = {
+        "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
+        "authorized_keys", "known_hosts", "credentials",
+        ".git-credentials", ".netrc",
+        "passwd", "shadow", "sam", "ntuser.dat",
+    };
+    // 存私钥/凭据的目录：绝对禁止
+    static const std::unordered_set<std::string> kForbiddenDirs = {
+        ".ssh", ".gnupg", ".aws", ".azure", ".gcloud", ".kube",
+    };
+    std::string cur;
+    for (char c : path) {
+        if (c == '/' || c == '\\') {
+            if (!cur.empty() && kForbiddenDirs.count(lower(cur)) > 0) return true;
+            cur.clear();
+        } else {
+            cur.push_back(c);
+        }
+    }
+    if (!cur.empty()) {
+        if (kForbiddenDirs.count(lower(cur)) > 0) return true;
+        if (kForbiddenFiles.count(lower(cur)) > 0) return true;
+    }
+    return false;
+}
+
 bool is_within_allowed_root(
     std::string_view path,
     std::string_view cwd,
     const std::vector<std::string>& allowlist
 ) {
-    auto under = [](std::string_view p, std::string_view root) {
-        if (root.empty()) return false;
-        if (p == root) return true;
-        if (p.size() > root.size() && p.compare(0, root.size(), root) == 0) {
-            const char next = p[root.size()];
+    // 评审 #4：Windows 文件系统大小写不敏感，前缀比较前统一小写，避免
+    // 合法路径（cwd 与解析结果大小写不一致）被误判为越界。
+    const auto norm = [](std::string_view s) -> std::string {
+#ifdef _WIN32
+        return lower(s);
+#else
+        return std::string(s);
+#endif
+    };
+    const std::string np = norm(path);
+    auto under = [&np, &norm](std::string_view root) {
+        const std::string nr = norm(root);
+        if (nr.empty()) return false;
+        if (np == nr) return true;
+        if (np.size() > nr.size() && np.compare(0, nr.size(), nr) == 0) {
+            const char next = np[nr.size()];
             return next == '/' || next == '\\';
         }
         return false;
     };
-    if (under(path, cwd)) return true;
+    if (under(cwd)) return true;
     for (const auto& root : allowlist) {
-        if (under(path, root)) return true;
+        if (under(root)) return true;
     }
     return false;
 }
@@ -202,12 +249,23 @@ ResultV2<void> validate_path_access(
     }
     ec.clear();
     const fs::path weakly = fs::weakly_canonical(p, ec);
-    if (!ec && !is_within_allowed_root(weakly.generic_string(), cwd, allowlist)) {
-        return ResultV2<void>::err(
-            Error::Code::PermissionDenied,
-            "Path escapes the allowed working directory");
+    if (!ec) {
+        if (!is_within_allowed_root(weakly.generic_string(), cwd, allowlist)) {
+            return ResultV2<void>::err(
+                Error::Code::PermissionDenied,
+                "Path escapes the allowed working directory");
+        }
+        return ResultV2<void>::ok();
     }
-    return ResultV2<void>::ok();
+    // 评审 #1（fail-closed）：canonical 与 weakly_canonical 均解析失败时，
+    // 保守拒绝而非放行，避免畸形/权限受限路径绕过边界与敏感拦截。
+    // 仅当 ec 明确为"路径不存在"这类无害情形时放行（写入新文件等场景）。
+    if (ec == std::errc::no_such_file_or_directory) {
+        return ResultV2<void>::ok();
+    }
+    return ResultV2<void>::err(
+        Error::Code::PermissionDenied,
+        "Unable to resolve path for boundary/environment check");
 }
 
 } // namespace agent::tool

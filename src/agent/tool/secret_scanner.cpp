@@ -28,45 +28,10 @@ struct SecretRule {
     std::regex re;
 };
 
-/// @brief kebab-case → Title Case
-/// @details 如 "github-pat" → "GitHub PAT"。
-///          特殊大小写：aws → AWS、pat → PAT、api → API、gcp → GCP、
-///          oauth → OAuth、vcs → VCS、tf → TF
+/// @brief kebab-case 规则 id → 人类可读标签
+/// @details 直接查硬编码映射表（10+ 条规则有限且稳定），未命中时回退返回原 id。
+///          评审意见：原逐字符拼接循环基本无效（死代码），已移除。
 std::string rule_id_to_label(const std::string& id) {
-    // 特殊映射表
-    static const std::unordered_map<std::string, std::string> special = {
-        {"aws", "AWS"},
-        {"gcp", "GCP"},
-        {"api", "API"},
-        {"pat", "PAT"},
-        {"oauth", "OAuth"},
-        {"vcs", "VCS"},
-        {"tf", "TF"},
-        {"ad", "AD"},
-        {"a", "A"},
-    };
-
-    std::string result;
-    result.reserve(id.size() * 2);
-    bool start_word = true;
-
-    for (char c : id) {
-        if (c == '-' || c == '_') {
-            start_word = true;
-            continue;
-        }
-        if (start_word) {
-            // 收集当前单词（小写形式）查特殊映射
-            // 简化：逐字符查特殊映射（覆盖单字符情况）
-            // 对多字符特殊词（aws/gcp/api 等）单独处理
-            start_word = false;
-        }
-        result.push_back(c);
-    }
-
-    // 后处理：对多字符特殊词替换
-    // 简化实现：仅处理单字符大写 + 几个固定替换
-    // 直接硬编码 10 条规则的标签，避免复杂字符串处理
     static const std::unordered_map<std::string, std::string> id_to_label = {
         {"aws-access-token",           "AWS Access Token"},
         {"gcp-api-key",                "GCP API Key"},
@@ -81,12 +46,8 @@ std::string rule_id_to_label(const std::string& id) {
         {"private-key",                "Private Key"},
         {"stripe-access-token",        "Stripe Access Token"},
     };
-
-    auto it = id_to_label.find(id);
-    if (it != id_to_label.end()) {
-        return it->second;
-    }
-    return result;
+    const auto it = id_to_label.find(id);
+    return it == id_to_label.end() ? id : it->second;
 }
 
 /// @brief 构造规则集（懒加载）
@@ -143,6 +104,9 @@ std::vector<SecretMatch> scan_for_secrets(const std::string& content) {
     std::vector<SecretMatch> matches;
     std::unordered_set<std::string> seen;
 
+    // 评审 #5（技术债）：对每次读写全量跑 13 条 std::regex（含 private-key 大模式），
+    // 大文件/高频读写开销明显。MVP 可接受；后续建议换 re2，或在扫描前加
+    // 长度/类型前置过滤（如仅对含 "token"/"key"/"-----BEGIN" 的片段扫描）。
     for (const auto& rule : rules()) {
         try {
             if (std::regex_search(content, rule.re)) {
