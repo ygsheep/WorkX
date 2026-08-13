@@ -34,10 +34,13 @@
 #include "agent/model/provider_preset.h"
 #include "agent/prompt/memory.h"  // 项目记忆加载（CLAUDE.md / AGENT.md）
 #include "agent/session/session_store.h"  // 项目会话恢复
+#include "agent/tool/AgentTool/agent_tool.h"
 #include "agent/tool/BashTool/bash_tool.h"
 #include "agent/tool/AskUser/AskUserTool.h"
 #include "agent/tool/PlanMode/enter_plan_mode_tool.h"
 #include "agent/tool/PlanMode/exit_plan_mode_v2_tool.h"
+#include "agent/tool/Task/task_output_tool.h"
+#include "agent/tool/Task/task_stop_tool.h"
 #include "agent/tool/FileEditTool/file_edit_tool.h"
 #include "agent/tool/FileReadTool/file_read_tool.h"
 #include "agent/tool/FileWriteTool/file_write_tool.h"
@@ -243,6 +246,10 @@ void register_builtin_tools(tool::ToolRegistry& registry) {
     // #28：计划模式工具（大型任务先规划后执行）
     registry.register_tool(std::make_shared<tool::EnterPlanModeTool>());
     registry.register_tool(std::make_shared<tool::ExitPlanModeV2Tool>());
+    // #26：子 Agent 调度 + 后台任务查询/停止
+    registry.register_tool(std::make_shared<tool::AgentTool>());
+    registry.register_tool(std::make_shared<tool::TaskOutputTool>());
+    registry.register_tool(std::make_shared<tool::TaskStopTool>());
 
     // Windows 平台额外注册 PowerShellTool（对齐 Claude Code 的条件注册策略）
     // BashTool（cmd.exe）和 PowerShellTool 并存，由模型根据任务特征自行选用

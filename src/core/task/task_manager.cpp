@@ -25,6 +25,25 @@ Task::Task(std::string name, TaskFunc func,
 
 Task::~Task() = default;
 
+void Task::append_output(const std::string& line) {
+    {
+        std::lock_guard<std::mutex> lock(m_output_mutex);
+        m_output += line;
+        m_output += '\n';
+    }
+    // #26 评审 #6：TaskOutputEvent 仅传 task_name + line，不持有 shared_ptr<Task>，
+    // 避免经 event_bus 异步发布时延长任务对象（及输出缓冲）生命周期
+    m_event_bus.publish_async(TaskOutputEvent{
+        .task_name = m_name,
+        .line = line
+    });
+}
+
+std::string Task::output() const {
+    std::lock_guard<std::mutex> lock(m_output_mutex);
+    return m_output;
+}
+
 void Task::execute() {
     // CAS：仅当处于 Pending 时才进入 Running，避免重复 execute
     TaskStatus expected = TaskStatus::Pending;
@@ -262,6 +281,13 @@ size_t TaskManager::getRunningTaskCount() const {
     std::lock_guard<std::mutex> lock(m_tasks_mutex);
     return std::count_if(m_entries.begin(), m_entries.end(),
         [](const std::shared_ptr<Task>& t) { return t->isRunning(); });
+}
+
+std::shared_ptr<Task> TaskManager::find_task(const std::string& name) const {
+    std::lock_guard<std::mutex> lock(m_tasks_mutex);
+    const auto it = std::find_if(m_entries.begin(), m_entries.end(),
+        [&name](const std::shared_ptr<Task>& t) { return t->getName() == name; });
+    return it == m_entries.end() ? nullptr : *it;
 }
 
 } // namespace agent

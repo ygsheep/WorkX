@@ -103,6 +103,8 @@ target_sources(workx_agent PRIVATE
     tool/AskUser/ask_user_config.cpp
     tool/PlanMode/enter_plan_mode_tool.cpp
     tool/PlanMode/exit_plan_mode_v2_tool.cpp
+    tool/Task/task_output_tool.cpp
+    tool/Task/task_stop_tool.cpp
     tool/MCPTool/mcp_tool.cpp
     tool/WebFetchTool/web_fetch_tool.cpp
     tool/SkillTool/skill_tool.cpp
