@@ -194,3 +194,77 @@ TEST_CASE("ExitPlanModeV2Tool does not downgrade bypass mode", "[tool][plan_mode
     REQUIRE(res.is_ok());
     REQUIRE_FALSE(callback_called);  // Bypass 不降级
 }
+
+// ============================================================
+// #28 评审 #1/#3：Bypass 禁止降级 + 幂等 + 恢复原模式
+// ============================================================
+
+TEST_CASE("EnterPlanModeTool rejects entry when host forbids (bypass)", "[tool][plan_mode][review]") {
+    MockEventBus bus;
+    ToolContext ctx; fill_ctx(ctx, bus);
+    ctx.permission_mode = PermissionMode::BypassPermissions;
+    bool host_called = false;
+    ctx.on_enter_plan_mode = [&]() -> bool {
+        host_called = true;
+        return false;  // 宿主判定 Bypass 禁止降级
+    };
+
+    EnterPlanModeTool tool;
+    auto res = tool.call(R"({"reason": "refactor"})"_json, ctx);
+    REQUIRE(res.is_ok());
+    REQUIRE(host_called);
+    bus.process_async_events();
+    REQUIRE(bus.published_count<EnterPlanModeEvent>() == 0);  // 未进入，不发布
+    REQUIRE(res.value().text.find("not entered") != std::string::npos);
+}
+
+TEST_CASE("EnterPlanModeTool is idempotent when already in plan mode", "[tool][plan_mode][review]") {
+    MockEventBus bus;
+    ToolContext ctx; fill_ctx(ctx, bus);
+    ctx.permission_mode = PermissionMode::Plan;
+    bool host_called = false;
+    ctx.on_enter_plan_mode = [&]() -> bool {
+        host_called = true;
+        return false;  // 宿主判定已在 Plan，幂等
+    };
+
+    EnterPlanModeTool tool;
+    auto res = tool.call(R"({"reason": "again"})"_json, ctx);
+    REQUIRE(res.is_ok());
+    REQUIRE(host_called);
+    bus.process_async_events();
+    REQUIRE(bus.published_count<EnterPlanModeEvent>() == 0);
+    REQUIRE(res.value().text.find("Already in plan mode") != std::string::npos);
+}
+
+TEST_CASE("EnterPlanModeTool enters via host callback and publishes event", "[tool][plan_mode][review]") {
+    MockEventBus bus;
+    ToolContext ctx; fill_ctx(ctx, bus);
+    bool host_called = false;
+    ctx.on_enter_plan_mode = [&]() -> bool {
+        host_called = true;
+        return true;  // 宿主允许进入
+    };
+
+    EnterPlanModeTool tool;
+    auto res = tool.call(R"({"reason": "refactor"})"_json, ctx);
+    REQUIRE(res.is_ok());
+    REQUIRE(host_called);
+    bus.process_async_events();
+    REQUIRE(bus.published_count<EnterPlanModeEvent>() == 1);
+    REQUIRE(res.value().text.find("Entered plan mode") != std::string::npos);
+}
+
+TEST_CASE("ExitPlanModeV2Tool approved restores pre-plan mode via host callback", "[tool][plan_mode][review]") {
+    MockEventBus bus;
+    auto_answer(bus, true);
+    ToolContext ctx; fill_ctx(ctx, bus);
+    ctx.permission_mode = PermissionMode::Plan;
+    bool host_called = false;
+    ctx.on_exit_plan_mode = [&]() { host_called = true; };  // 宿主恢复原模式（如 AcceptEdits）
+
+    ExitPlanModeV2Tool tool;
+    auto res = tool.call(R"({"plan": "plan-text"})"_json, ctx);
+    REQUIRE(res.is_ok());
+    REQUIRE(host_called);  // 走宿主恢复原模式，而非硬编码 Default
+}

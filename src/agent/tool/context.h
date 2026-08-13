@@ -97,6 +97,27 @@ struct ToolContext {
         }
     }
 
+    /// @brief 进入计划模式回调类型（#28 评审 #1/#3）
+    /// @details 宿主（ReActLoop）接线并保留进入前的原模式，随后切换为 Plan。
+    ///          返回 false 表示拒绝进入：已在 Plan 模式（幂等）或处于
+    ///          BypassPermissions（禁止降级，防权限丢失）。工具据此决定是否发布事件。
+    using EnterPlanModeCallback = std::function<bool()>;
+
+    /// @brief 进入计划模式回调（可选）
+    /// @details nullptr 时 EnterPlanModeTool 回退到 set_permission_mode(Plan)。
+    ///          生命周期由 ToolContext 所有者保证。
+    EnterPlanModeCallback on_enter_plan_mode = nullptr;
+
+    /// @brief 退出计划模式回调类型（#28 评审 #1）
+    /// @details 宿主（ReActLoop）接线：批准退出时恢复进入计划前的原模式，
+    ///          而非硬编码回 Default，避免 Bypass/AcceptEdits 等原模式丢失。
+    using ExitPlanModeCallback = std::function<void()>;
+
+    /// @brief 退出计划模式回调（可选）
+    /// @details nullptr 时 ExitPlanModeV2Tool 回退到 set_permission_mode(Default)。
+    ///          生命周期由 ToolContext 所有者保证。
+    ExitPlanModeCallback on_exit_plan_mode = nullptr;
+
     /// @brief 外部取消信号指针（可选）
     /// @details 2.3 修复：由调用方（ReActLoop）传入 should_cancel 的地址，
     ///          使工具能即时感知外部取消请求。nullptr 时回退到内部 cancelled_。
