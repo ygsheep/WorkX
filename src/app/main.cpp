@@ -118,6 +118,9 @@ static int run(int argc, char* argv[]) {
     // ---- 初始化日志系统（D-2：委托工厂）----
     init_logger(cfg, default_log_path());
 
+    // ---- 初始化审计日志系统（#37）----
+    init_audit_logger(cfg);
+
     // ---- Debug 启动信息 ----
     bool verbose = cfg.get_or<bool>(keys::VERBOSE, false);
     if (verbose) {

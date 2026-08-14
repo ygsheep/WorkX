@@ -47,6 +47,12 @@ struct SessionResult {
 /// @param default_log_path 默认日志文件路径（cfg 中 LOG_FILE 为空时使用）
 void init_logger(IConfigManager& cfg, const std::filesystem::path& default_log_path);
 
+/// @brief 初始化审计日志系统（#37）
+/// @details 独立于运行日志的结构化 JSONL 审计日志，记录工具调用和安全事件。
+///          默认路径为 ~/.workx/logs/audit/audit.jsonl。
+/// @param cfg 配置管理器
+void init_audit_logger(IConfigManager& cfg);
+
 /// @brief 从配置构建 TerminalConfig
 /// @param cfg 配置管理器
 /// @return 填充好的 TerminalConfig

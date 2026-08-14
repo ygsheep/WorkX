@@ -23,6 +23,7 @@
 
 #include <liblogger/logger.h>
 
+#include "agent/audit/audit_logger.h"
 #include "agent/config/app_config.h"
 #include "app/factory.h"
 #include "core/utils/file_index.h"
@@ -82,6 +83,32 @@ void init_logger(IConfigManager& cfg, const std::filesystem::path& default_log_p
         log_file = default_log_path.string();
     }
     logger.enable_file_output(log_file, true);
+}
+
+// ============================================================
+// init_audit_logger
+// ============================================================
+
+void init_audit_logger(IConfigManager& cfg) {
+    // 审计日志路径：默认 ~/.workx/logs/audit/audit.jsonl
+    auto config_dir = agent::default_config_path().parent_path();
+
+    // 配置键：audit.enabled / audit.file / audit.max_size_mb / audit.retention_days
+    bool enabled = cfg.get_or<bool>(agent::keys::AUDIT_ENABLED, true);
+    if (!enabled) {
+        audit::AuditLogger::instance().set_enabled(false);
+        return;
+    }
+
+    std::string audit_file = cfg.get_or<std::string>(agent::keys::AUDIT_FILE, "");
+    if (audit_file.empty()) {
+        audit_file = (config_dir / "logs" / "audit" / "audit.jsonl").string();
+    }
+
+    size_t max_size_mb = static_cast<size_t>(cfg.get_or<int>(agent::keys::AUDIT_MAX_SIZE_MB, 10));
+    size_t retention_days = static_cast<size_t>(cfg.get_or<int>(agent::keys::AUDIT_RETENTION_DAYS, 30));
+
+    audit::AuditLogger::instance().init(audit_file, max_size_mb, retention_days);
 }
 
 // ============================================================

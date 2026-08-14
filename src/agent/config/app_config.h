@@ -2,7 +2,7 @@
  * @file app_config.h
  * @brief 应用配置键定义与配置加载
  * @details 配置键常量、默认值注册、环境变量/配置文件加载
- * @version 1.0.0
+ * @version 1.0.1
  * @date 2026-07
  */
 
@@ -65,6 +65,12 @@ namespace keys {
     constexpr const char* ISLAND_ENABLED      = "island.enabled";
     /// 余额拉取汇率（CNY → USD 折算，DeepSeek 余额以 CNY 返回）
     constexpr const char* ISLAND_USD_CNY_RATE = "island.usd_cny_rate";
+
+    // Audit（#37 审计日志）
+    constexpr const char* AUDIT_ENABLED        = "audit.enabled";
+    constexpr const char* AUDIT_FILE           = "audit.file";
+    constexpr const char* AUDIT_MAX_SIZE_MB    = "audit.max_size_mb";
+    constexpr const char* AUDIT_RETENTION_DAYS = "audit.retention_days";
 }
 
 /// @brief 注册所有配置项的结构化 Schema（类型/默认值/范围/枚举/环境变量映射）

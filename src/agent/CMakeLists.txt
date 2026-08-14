@@ -86,6 +86,10 @@ target_sources(workx_agent PRIVATE
     tool/line_endings.cpp
     tool/quote_normalizer.cpp
     tool/file_history.cpp
+    tool/shell_guard.cpp
+
+    # audit: 审计日志系统（#37）
+    audit/audit_logger.cpp
 
     # tool: 各工具实现
     tool/FileReadTool/file_read_tool.cpp

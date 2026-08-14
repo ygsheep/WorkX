@@ -5,7 +5,7 @@
  *          V2-4：execute() 返回 ResultV2<ExecutionResult>，错误携带 Error
  *          M-3：execute() 拆分为 lookup_tool / run_with_safety / finalize_result
  *               三个职责单一的私有方法，便于独立测试与未来替换日志策略
- * @version 2.1.0
+ * @version 2.1.1
  * @date 2026-07
  */
 
@@ -26,6 +26,7 @@
 #include "registry.h"
 #include "result.h"
 #include "context.h"
+#include "agent/audit/audit_logger.h"
 
 namespace agent::tool {
 
@@ -125,10 +126,15 @@ public:
         LOG_DEBUG("[tool_executor] begin, tool={}, input_size={}",
                   tool_name, input.dump().size());
 
+        const auto t0 = std::chrono::steady_clock::now();
+
         // 1. 查找工具
         auto tool = lookup_tool(tool_name);
         if (!tool) {
             LOG_WARN("[tool_executor] tool not found: {}", tool_name);
+            audit::AuditLogger::instance().log_tool_invoke(
+                tool_name, input, ctx.session_id, ctx.request_id,
+                "deny", "tool not found", 0);
             return Error{Error::Code::ResourceNotFound,
                          "Tool not found: " + tool_name,
                          tool_name};
@@ -137,6 +143,9 @@ public:
         // 2. 检查取消信号
         if (ctx.is_cancelled()) {
             LOG_INFO("[tool_executor] tool={} cancelled before execution", tool_name);
+            audit::AuditLogger::instance().log_tool_invoke(
+                tool_name, input, ctx.session_id, ctx.request_id,
+                "deny", "cancelled before execution", 0);
             return Error{Error::Code::Cancelled,
                          "Tool execution cancelled",
                          tool_name};
@@ -147,6 +156,9 @@ public:
         if (perm.is_err()) {
             LOG_WARN("[tool_executor] tool={} permission denied: {}",
                      tool_name, perm.error().message);
+            audit::AuditLogger::instance().log_tool_invoke(
+                tool_name, input, ctx.session_id, ctx.request_id,
+                "deny", perm.error().message, 0);
             return perm.error();
         }
 
@@ -155,17 +167,25 @@ public:
         if (validation.is_err()) {
             LOG_WARN("[tool_executor] tool={} invalid input: {}",
                      tool_name, validation.error().message);
+            audit::AuditLogger::instance().log_tool_invoke(
+                tool_name, input, ctx.session_id, ctx.request_id,
+                "deny", "invalid input: " + validation.error().message, 0);
             return validation.error();
         }
 
         // 5. 执行工具（try-catch 包装），返回 ToolResult 或 Error
         auto call_result = run_with_safety(*tool, tool_name, input, ctx);
         if (call_result.is_err()) {
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count();
+            audit::AuditLogger::instance().log_tool_invoke(
+                tool_name, input, ctx.session_id, ctx.request_id,
+                "allow", "", ms, "", {});
             return call_result.error();
         }
 
         // 6. 组装结果 + 截断 + 日志
-        return finalize_result(tool_name, std::move(call_result).value());
+        return finalize_result(tool_name, std::move(call_result).value(), input, ctx, t0);
     }
 
 private:
@@ -236,10 +256,16 @@ private:
     /// @brief 组装 ExecutionResult 并执行截断
     /// @param tool_name 工具名称
     /// @param result 工具返回的 ToolResult
+    /// @param input 工具输入（用于审计日志）
+    /// @param ctx 工具上下文（用于审计日志）
+    /// @param t0 起始时间点（用于审计日志耗时计算）
     /// @return 最终的 ExecutionResult
     inline ResultV2<ExecutionResult> finalize_result(
         const std::string& tool_name,
-        ToolResult result
+        ToolResult result,
+        const nlohmann::json& input,
+        const ToolContext& ctx,
+        std::chrono::steady_clock::time_point t0
     ) const {
         ExecutionResult exec_result;
         exec_result.tool_name = tool_name;
@@ -254,6 +280,14 @@ private:
             LOG_INFO("[tool_executor] tool={} result truncated, new_len={}",
                      tool_name, exec_result.result.text.length());
         }
+
+        // 审计日志：记录工具调用结果
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - t0).count();
+        audit::AuditLogger::instance().log_tool_invoke(
+            tool_name, input, ctx.session_id, ctx.request_id,
+            "allow", "", ms, exec_result.result.text);
+
         return ResultV2<ExecutionResult>::ok(std::move(exec_result));
     }
 };
