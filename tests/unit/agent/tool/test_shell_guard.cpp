@@ -61,6 +61,8 @@ TEST_CASE("shell_guard detects SSRF to internal addresses", "[shell_guard][ssrf]
     REQUIRE(is_ssrf_target("iwr http://localhost/"));
     REQUIRE(is_ssrf_target("curl http://192.168.1.1/admin"));
     REQUIRE(is_ssrf_target("curl http://user@169.254.169.254/latest"));            // userinfo@ 剥离
+    REQUIRE(is_ssrf_target("curl http://[::ffff:169.254.169.254]/"));              // H-2R：IPv4-mapped IPv6
+    REQUIRE(is_ssrf_target("curl http://[::ffff:169.254.169.254]:8080/"));         // H-2R：mapped + 显式端口
     REQUIRE(is_ssrf_target("curl http://169.254.169.254"));                        // 无 scheme 前缀？裸 IP 不在此层
 }
 

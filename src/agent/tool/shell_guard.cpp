@@ -130,16 +130,18 @@ bool url_ssrf(std::string_view cmd) {
         }
         // 剥掉 userinfo@
         const size_t at = host.rfind('@');
-        const std::string_view real_host = (at == std::string_view::npos) ? host : host.substr(at + 1);
-        // 剥 IPv6 括号
-        std::string_view clean = real_host;
+        std::string_view clean = (at == std::string_view::npos) ? host : host.substr(at + 1);
+        // 剥显式端口（H-2R：须在括号处理之前，且仅当最后一段为纯数字，
+        // 避免误剥 [::ffff:169.254.169.254]:8080 的 IPv6 内部冒号）
+        const size_t colon = clean.rfind(':');
+        if (colon != std::string_view::npos &&
+            std::all_of(clean.begin() + colon + 1, clean.end(),
+                        [](unsigned char ch) { return std::isdigit(ch); })) {
+            clean = clean.substr(0, colon);
+        }
+        // 剥 IPv6 括号（is_private_ip_host 内部处理 ::ffff: 前缀）
         if (!clean.empty() && clean.front() == '[' && clean.back() == ']') {
             clean = clean.substr(1, clean.size() - 2);
-        }
-        // 剥显式端口（评审 H-2：http://169.254.169.254:8080/ 不得绕过）
-        const size_t colon = clean.find(':');
-        if (colon != std::string_view::npos) {
-            clean = clean.substr(0, colon);
         }
         if (is_private_ip_host(clean)) return true;
         pos = host_end;
