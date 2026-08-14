@@ -668,6 +668,11 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
                 // 注意：转义序列已被解码器转换为 KEY_*，能走到这里的一定是孤立 Esc。
                 m_platform->write_output("ESC\n");
                 return {std::string(), false, false, true, true};
+            } else if (input_char >= 0xE000 && input_char <= 0xF8FF) {
+                // H-2（PR #46）：未映射的 PUA 内部键码（如 win32 Ctrl+N=0xE011）
+                // 静默忽略，避免未知内部键码被当作字符插入（0xE00C 曾与 Backtab
+                // 冲突被误插；0xE011 无对应功能同样不应上屏）
+                continue;
             } else {
                 // 插入字符
                 std::string new_char_str;

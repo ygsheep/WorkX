@@ -42,7 +42,7 @@ static constexpr char32_t KEY_DELETE           = 0xE008;
 static constexpr char32_t KEY_CTRL_C           = 0xE009;
 static constexpr char32_t KEY_CTRL_O           = 0xE00A;
 static constexpr char32_t KEY_RESIZE           = 0xE00B;  // 终端尺寸变更
-static constexpr char32_t KEY_CTRL_N           = 0xE00C;
+static constexpr char32_t KEY_CTRL_N           = 0xE011;  // H-2（PR #46）：0xE00C 已让位给 VT Backtab（Shift+Tab），Ctrl+N 改用 0xE011（0xE010 为 KEY_WAKE）
 static constexpr char32_t KEY_CTRL_D           = 0xE00D;
 
 class Win32Platform : public IPlatform {

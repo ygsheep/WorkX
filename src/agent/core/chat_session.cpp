@@ -762,6 +762,20 @@ void ChatSession::run_completion(const std::string& user_text,
                     m_permission_mode == tool::PermissionMode::Plan);
             }
 
+            // H-1（PR #46 评审）：工具路径权限变更回写 ChatSession（受 m_state_mutex
+            // 保护），统一状态源 —— EnterPlanMode/ExitPlanModeV2/on_permission_mode_changed
+            // 修改 ReActLoop 投影后同步写回会话，确保下一轮 apply_permission_state 注入
+            // 最新三态（修复场景 A：Shift+Tab Plan + ExitPlanModeV2 批准后下一轮打回 Plan
+            // 的"粘死"；场景 B：EnterPlanMode 工具进入 Plan 后下一轮丢失的缺陷）
+            loop.set_permission_state_changed_callback(
+                [this](tool::PermissionMode mode,
+                       tool::PermissionMode before_plan,
+                       bool /*in_plan*/) {
+                    std::lock_guard<std::mutex> lock(m_state_mutex);
+                    m_permission_mode = mode;
+                    m_permission_mode_before_plan = before_plan;
+                });
+
             // 3.2：使用 IReActObserver 接口替代 lambda 回调
             // ReActEventPublisher 内部完成 ReActStep → IEventBus 事件转换
             ReActEventPublisher publisher(m_event_bus, m_session_id);

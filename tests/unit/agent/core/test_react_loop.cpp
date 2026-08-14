@@ -24,8 +24,12 @@
 #include "agent/tool/itool.h"
 #include "agent/tool/context.h"
 #include "agent/tool/result.h"
+#include "agent/tool/PlanMode/enter_plan_mode_tool.h"
+#include "agent/tool/PlanMode/exit_plan_mode_v2_tool.h"
 #include "core/config/config_manager.h"
+#include "core/events/agent_events.h"  // AskUserRequestEvent（ExitPlanModeV2 批准确认流）
 #include "helpers/mock_provider.h"
+#include "helpers/mock_event_bus.h"    // H-1：ExitPlanModeV2 批准确认通道
 
 using namespace agent;
 using namespace agent::tool;
@@ -548,4 +552,116 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop works without registry (no tools)"
 
     REQUIRE(result.final_answer == "plain answer");
     REQUIRE(result.total_tool_calls == 0);
+}
+
+// ============================================================================
+// H-1（PR #46 评审）：工具路径权限变更 → 回写宿主通知（统一状态源）
+// 覆盖"每轮注入恢复 + 工具回调路径"的集成：真实 EnterPlanMode/ExitPlanModeV2
+// 工具经 ReActLoop 执行后，set_permission_state_changed_callback 应收到最新三态，
+// 宿主（ChatSession）据此持久化，下一轮 apply_permission_state 注入恢复。
+// ============================================================================
+
+namespace {
+
+/// @brief 模拟 ChatSession 的宿主持久化 + 下一轮注入
+struct PermissionHost {
+    tool::PermissionMode mode{tool::PermissionMode::Default};
+    tool::PermissionMode before_plan{tool::PermissionMode::Default};
+    bool in_plan{false};
+    int notify_count = 0;
+
+    void notify(tool::PermissionMode m, tool::PermissionMode b, bool p) {
+        mode = m;
+        before_plan = b;
+        in_plan = p;
+        ++notify_count;
+    }
+
+    void inject(ReActLoop& loop) const {
+        loop.apply_permission_state(mode, before_plan, mode == tool::PermissionMode::Plan);
+    }
+};
+
+} // namespace
+
+TEST_CASE_METHOD(ReActLoopFixture,
+    "H-1 EnterPlanMode tool writeback lets Plan persist across turns (scenario B)",
+    "[react_loop][permission][45][h1]") {
+    registry->register_tool(std::make_shared<EnterPlanModeTool>());
+
+    PermissionHost host;
+    auto loop = make_loop();
+    loop->set_permission_state_changed_callback(
+        [&host](tool::PermissionMode m, tool::PermissionMode b, bool p) {
+            host.notify(m, b, p);
+        });
+
+    // 第一轮：模型调用 EnterPlanMode → 工具经 on_enter_plan_mode 切 Plan 并回写宿主
+    make_tool_call_reader("call_1", "EnterPlanMode", R"({"reason":"research"})");
+    // 第二轮：纯文本终止
+    make_text_reader("planning done");
+
+    std::vector<ChatMessage> messages = {ChatMessage::user("plan it")};
+    auto result = loop->run(messages, "", registry->get_all_schemas(), should_cancel);
+
+    REQUIRE_FALSE(result.was_error);
+    REQUIRE(host.notify_count >= 1);
+    REQUIRE(host.mode == tool::PermissionMode::Plan);
+    REQUIRE(host.before_plan == tool::PermissionMode::Default);
+    REQUIRE(host.in_plan == true);
+
+    // 宿主持久化后下一轮注入：Plan 状态跨 turn 保持（修复 EnterPlanMode 后 Plan 丢失）
+    auto loop2 = make_loop();
+    host.inject(*loop2);
+    REQUIRE(loop2->permission_mode() == tool::PermissionMode::Plan);
+}
+
+TEST_CASE_METHOD(ReActLoopFixture,
+    "H-1 ExitPlanModeV2 approved writeback restores mode (scenario A)",
+    "[react_loop][permission][45][h1]") {
+    registry->register_tool(std::make_shared<ExitPlanModeV2Tool>());
+
+    // MockEventBus：自动批准 ExitPlanModeV2 的 AskUser 确认
+    agent::test::MockEventBus bus;
+    bus.set_dispatch_enabled(true);
+    bus.set_async_auto_flush(true);
+    bus.subscribe<AskUserRequestEvent>(
+        [](const AskUserRequestEvent& e) {
+            AskUserResult result;
+            result.submitted = true;
+            result.answers.emplace_back("permission", "Yes");
+            e.result_promise->set_value(result);
+        });
+
+    PermissionHost host;
+    // 模拟 Shift+Tab 已切 Plan（ChatSession=Plan）+ 本轮注入
+    auto loop = std::make_unique<ReActLoop>(
+        provider.get(), registry, ReActLoop::Config{}, &ConfigManager::instance(),
+        /*task_manager=*/nullptr, /*cwd=*/"", /*external_compactor=*/nullptr,
+        /*event_bus=*/&bus);
+    loop->apply_permission_state(tool::PermissionMode::Plan,
+                                 tool::PermissionMode::Default, true);
+    loop->set_permission_state_changed_callback(
+        [&host](tool::PermissionMode m, tool::PermissionMode b, bool p) {
+            host.notify(m, b, p);
+        });
+
+    // 第一轮：模型调用 ExitPlanModeV2（自动批准）→ on_exit_plan_mode 恢复原模式并回写宿主
+    make_tool_call_reader("call_1", "ExitPlanModeV2", R"({"plan":"refactor x.cpp"})");
+    // 第二轮：纯文本终止
+    make_text_reader("approved, proceeding");
+
+    std::vector<ChatMessage> messages = {ChatMessage::user("approve plan")};
+    auto result = loop->run(messages, "", registry->get_all_schemas(), should_cancel);
+
+    REQUIRE_FALSE(result.was_error);
+    REQUIRE(host.notify_count >= 1);
+    // 批准退出 → 恢复进入 Plan 前的原模式（Default），而非硬编码/残留 Plan
+    REQUIRE(host.mode == tool::PermissionMode::Default);
+    REQUIRE(host.in_plan == false);
+
+    // 宿主按回写结果注入下一轮 → 不再打回 Plan（修复 ExitPlanModeV2 批准后 Plan"粘死"）
+    auto loop2 = make_loop();
+    host.inject(*loop2);
+    REQUIRE(loop2->permission_mode() == tool::PermissionMode::Default);
 }

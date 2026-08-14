@@ -302,6 +302,22 @@ public:
         m_in_plan_mode = in_plan;
     }
 
+    /// @brief H-1（PR #46 评审）：权限状态变更通知回调（宿主 ChatSession 注入）
+    /// @details 工具路径回调（on_permission_mode_changed / on_enter_plan_mode /
+    ///          on_exit_plan_mode）修改 ReActLoop 投影状态后调用，宿主据此回写
+    ///          持久状态（受宿主 m_state_mutex 保护），恢复单一状态源
+    ///          （ChatSession），修复"Plan 粘死/丢失"双状态源分裂。
+    /// @param mode 当前权限模式
+    /// @param before_plan 进入 Plan 前的原模式（Plan 退出恢复用）
+    /// @param in_plan 是否处于 Plan 模式
+    using PermissionStateChangedCallback = std::function<void(
+        tool::PermissionMode mode,
+        tool::PermissionMode before_plan,
+        bool in_plan)>;
+    void set_permission_state_changed_callback(PermissionStateChangedCallback cb) {
+        m_perm_state_changed_cb = std::move(cb);
+    }
+
 private:
     // ============================================================
     // 内部类型
@@ -365,6 +381,18 @@ private:
     static void parse_embedded_tool_calls(const std::string& content,
                                           std::vector<ToolUse>& out_tools);
 
+    /// @brief H-1（PR #46 评审）：权限状态变更通知宿主（ChatSession 回写持久状态）
+    /// @details 工具路径回调（on_permission_mode_changed / on_enter_plan_mode /
+    ///          on_exit_plan_mode）修改投影状态后调用。宿主回调受宿主锁保护，
+    ///          此处不持锁调用，避免与宿主持锁上下文嵌套死锁。
+    void notify_permission_state() const {
+        if (m_perm_state_changed_cb) {
+            m_perm_state_changed_cb(m_permission_mode,
+                                    m_permission_mode_before_plan,
+                                    m_in_plan_mode);
+        }
+    }
+
     // ============================================================
     // 成员
     // ============================================================
@@ -384,6 +412,8 @@ private:
     tool::PermissionMode m_permission_mode{tool::PermissionMode::Default};  ///< #28：会话级权限模式
     tool::PermissionMode m_permission_mode_before_plan{tool::PermissionMode::Default};  ///< #28 评审 #1：进入计划模式前保存的原模式，退出时恢复
     bool m_in_plan_mode{false};  ///< #28 评审 #1/#3：是否处于计划模式（幂等进入判定）
+    /// @brief H-1（PR #46 评审）：权限状态变更通知回调（宿主 ChatSession 注入，回写持久状态）
+    PermissionStateChangedCallback m_perm_state_changed_cb;
 };
 
 } // namespace agent

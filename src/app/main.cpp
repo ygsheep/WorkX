@@ -51,6 +51,7 @@
 #include "core/utils/file_index.h"
 #include "app/ui/provider_form.h"
 #include "core/config/config_manager.h"
+#include "core/events/agent_events.h"  // M-1（PR #46）：EnterPlanModeEvent/ExitPlanModeEvent 订阅
 #include "core/events/event_bus.h"
 #include "core/task/task_manager.h"
 #include "island/balance_fetcher.h"
@@ -652,6 +653,26 @@ static int run(int argc, char* argv[]) {
         }
     });
 
+    // M-1（PR #46 评审）：工具路径进入/退出 Plan 时刷新 StatusBar 权限标签
+    // EnterPlanMode/ExitPlanModeV2 工具切换模式后（H-1 已回写 ChatSession）发布事件，
+    // 事件处理器从会话读取最新模式并刷新标签（工具进入的 Plan 也显示 [plan]）
+    auto enter_plan_token = EventBus::instance().subscribe<EnterPlanModeEvent>(
+        [&session, &renderer](const EnterPlanModeEvent& /*e*/) {
+            if (!session) return;
+            if (auto* sb = renderer.status_bar()) {
+                sb->set_permission_mode(session->permission_mode());
+                sb->render();
+            }
+        });
+    auto exit_plan_token = EventBus::instance().subscribe<ExitPlanModeEvent>(
+        [&session, &renderer](const ExitPlanModeEvent& /*e*/) {
+            if (!session) return;
+            if (auto* sb = renderer.status_bar()) {
+                sb->set_permission_mode(session->permission_mode());
+                sb->render();
+            }
+        });
+
     // ---- 事件订阅：统一用户输入管道 ----
     // UserInputEvent 经过 InputParser(解析层) → InputProcessor(处理层)
     // → 根据 ProcessResult 调用执行层组件
@@ -830,6 +851,9 @@ static int run(int argc, char* argv[]) {
     // 先取消订阅，避免 cancelAll 触发的事件进入已失效的回调
     EventBus::instance().unsubscribe<UserInputEvent>(input_token);
     EventBus::instance().unsubscribe<ShutdownEvent>(shutdown_token);
+    // M-1（PR #46）：退订 Plan 模式事件，避免 renderer 析构后回调访问失效引用
+    EventBus::instance().unsubscribe<EnterPlanModeEvent>(enter_plan_token);
+    EventBus::instance().unsubscribe<ExitPlanModeEvent>(exit_plan_token);
 
     // Island 清理：先停 fetcher（可能还有 HTTP 在途）→ 桥退订 → server stop（移除 registry）
     // 必须在 EventBus clear 之前完成（桥/累积器仍持有订阅）

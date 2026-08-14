@@ -583,6 +583,7 @@ ReActResult ReActLoop::run(
         ctx.permission_mode = m_permission_mode;
         ctx.on_permission_mode_changed = [this](tool::PermissionMode mode) {
             m_permission_mode = mode;
+            notify_permission_state();  // H-1：回写宿主，统一状态源
         };
         // #26：注入推理提供者 + 工具注册表（AgentTool 启动子 Agent 用）
         ctx.provider_ptr = m_provider;
@@ -598,6 +599,7 @@ ReActResult ReActLoop::run(
             m_permission_mode_before_plan = m_permission_mode;
             m_permission_mode = tool::PermissionMode::Plan;
             m_in_plan_mode = true;
+            notify_permission_state();  // H-1：回写宿主，统一状态源
             return true;
         };
         // #28 评审 #1：退出计划模式——恢复进入前的原模式，而非硬编码 Default
@@ -605,6 +607,7 @@ ReActResult ReActLoop::run(
             if (m_in_plan_mode) {
                 m_permission_mode = m_permission_mode_before_plan;
                 m_in_plan_mode = false;
+                notify_permission_state();  // H-1：回写宿主，统一状态源
             }
         };
 
