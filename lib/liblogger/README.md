@@ -1,8 +1,8 @@
-# DearTs Logger - 现代化 C++20 轻量级日志库
+# liblogger - 现代化 C++20 轻量级日志库
 
 ## 概述
 
-DearTs Logger 是一个简洁、高效的 C++20 日志库，专注于性能和易用性。
+liblogger 是一个简洁、高效的 C++20 日志库（`agent::log` 命名空间），专注于性能和易用性。
 
 ### 核心特性
 
@@ -22,11 +22,12 @@ DearTs Logger 是一个简洁、高效的 C++20 日志库，专注于性能和�
 
 ```cpp
 #include "liblogger/logger.h"
-???
+
 int main() {
     // 配置日志
-    DearTs::getLogger().setLevel(DearTs::LogLevel::DEBUG);
-    DearTs::getLogger().enableFileOutput("logs/app.log", true);
+    auto& logger = agent::log::Logger::get_instance();
+    logger.set_level(agent::log::LogLevel::LOG_DEBUG);
+    logger.enable_file_output("logs/app.log", true);
 
     // 使用格式化宏 (推荐)
     LOG_INFO("Application started");
@@ -35,7 +36,7 @@ int main() {
     LOG_ERROR("Failed to open file: {}", "config.txt");
 
     // 使用便捷函数
-    DearTs::getLogger().info("Simple message");
+    agent::log::Logger::get_instance().info("Simple message");
 
     return 0;
 }
@@ -57,12 +58,12 @@ int main() {
 
 ```cpp
 enum class LogLevel : int {
-    TRACE = 0,    // 详细跟踪
-    DEBUG = 1,    // 调试信息
-    INFO = 2,     // 一般信息
-    WARN = 3,     // 警告
-    ERROR = 4,    // 错误
-    FATAL = 5     // 致命错误
+    LOG_TRACE = 0,    // 详细跟踪
+    LOG_DEBUG = 1,    // 调试信息
+    LOG_INFO = 2,     // 一般信息
+    LOG_WARN = 3,     // 警告
+    LOG_ERROR = 4,    // 错误
+    LOG_FATAL = 5     // 致命错误
 };
 ```
 
@@ -81,41 +82,41 @@ LOG_FATAL(fmt, ...)    // 致命级别
 ### Logger 配置接口
 
 ```cpp
-auto& logger = DearTs::getLogger();
+auto& logger = agent::log::Logger::get_instance();
 
 // 设置日志级别
-logger.setLevel(DearTs::LogLevel::INFO);
+logger.set_level(agent::log::LogLevel::LOG_INFO);
 
 // 启用/禁用文件输出
-logger.enableFileOutput("logs/app.log", true);
-logger.enableFileOutput("", false);  // 禁用
+logger.enable_file_output("logs/app.log", true);
+logger.enable_file_output("", false);  // 禁用
 
 // 设置缓冲区大小 (字节)
-logger.setBufferSize(8192);  // 默认 4096
+logger.set_buffer_size(8192);  // 默认 4096
 
 // 查询状态
-DearTs::LogLevel level = logger.getLevel();
-bool enabled = logger.isFileOutputEnabled();
+agent::log::LogLevel level = logger.get_level();
+bool enabled = logger.is_file_output_enabled();
 ```
 
 ### 便捷函数接口
 
 ```cpp
 // 直接调用 (使用默认源码位置)
-DearTs::getLogger().trace("message");
-DearTs::getLogger().debug("message");
-DearTs::getLogger().info("message");
-DearTs::getLogger().warn("message");
-DearTs::getLogger().error("message");
-DearTs::getLogger().fatal("message");
+agent::log::Logger::get_instance().trace("message");
+agent::log::Logger::get_instance().debug("message");
+agent::log::Logger::get_instance().info("message");
+agent::log::Logger::get_instance().warn("message");
+agent::log::Logger::get_instance().error("message");
+agent::log::Logger::get_instance().fatal("message");
 ```
 
 ### 向后兼容宏
 
 ```cpp
 // 简单字符串日志 (无格式化)
-DEARTS_LOG_INFO("Simple message");
-DEARTS_LOG_ERROR("Error: " + std::string("details"));
+LOG_INFO_STR("Simple message");
+LOG_ERROR_STR("Error: " + std::string("details"));
 ```
 
 ---
@@ -126,11 +127,11 @@ DEARTS_LOG_ERROR("Error: " + std::string("details"));
 
 ```cpp
 int main() {
-    auto& logger = DearTs::getLogger();
+    auto& logger = agent::log::Logger::get_instance();
 
     // 配置
-    logger.setLevel(DearTs::LogLevel::INFO);
-    logger.enableFileOutput("logs/myapp.log", true);
+    logger.set_level(agent::log::LogLevel::LOG_INFO);
+    logger.enable_file_output("logs/myapp.log", true);
 
     // 启动日志
     LOG_INFO("=== Application Starting ===");
@@ -238,7 +239,7 @@ target_include_directories(your_target PRIVATE
 
 # 方式 2: 添加子目录
 add_subdirectory(lib/liblogger)
-target_link_libraries(your_target deartsdl_logger)
+target_link_libraries(your_target logger)
 ```
 
 ### 编译要求
@@ -291,7 +292,7 @@ for (int i = 0; i < 100; ++i) {
 
 | 旧功能 | 状态 | 替代方案 |
 |--------|------|----------|
-| `LogManager` 类 | ❌ 删除 | 直接使用 `Logger::getInstance()` |
+| `LogManager` 类 | ❌ 删除 | 直接使用 `Logger::get_instance()` |
 | `DearTs::Log` 命名空间 | ❌ 删除 | 使用 `LOG_*` 宏 |
 | `_fmt` 函数 | ❌ 删除 | `LOG_*` 宏内置格式化 |
 | `LogConfig` 类 | ❌ 删除 | 直接调用 `Logger` 方法 |
@@ -367,4 +368,4 @@ MIT License
 
 ---
 
-*DearTs Logger - 简洁、高效、现代* 🚀
+*liblogger - 简洁、高效、现代* 🚀
