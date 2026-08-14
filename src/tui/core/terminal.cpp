@@ -653,6 +653,18 @@ void Terminal::set_command_nav_callback(CommandNavCallback cb) {
     }
 }
 
+void Terminal::set_perm_toggle_callback(PermToggleCallback cb) {
+    if (m_editor) {
+        m_editor->set_perm_toggle_callback(std::move(cb));
+    }
+}
+
+void Terminal::set_tab_completed_callback(TabCompletedCallback cb) {
+    if (m_editor) {
+        m_editor->set_tab_completed_callback(std::move(cb));
+    }
+}
+
 void Terminal::set_command_tab_callback(CommandTabCallback cb) {
     if (m_editor) {
         m_editor->set_command_tab_callback(std::move(cb));

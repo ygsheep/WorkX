@@ -16,6 +16,7 @@
 #include <atomic>
 
 #include "tui/core/tui_state.h"
+#include "agent/tool/context.h"  // #45：PermissionMode（状态栏显示当前权限模式）
 
 namespace tui {
 
@@ -35,6 +36,8 @@ public:
     void set_state(TuiState state);
     void set_model_name(const std::string& name);
     void set_project_name(const std::string& name);
+    /// @brief #45：设置当前权限模式（Default/Plan/Bypass），IDLE 状态栏显示标签
+    void set_permission_mode(agent::tool::PermissionMode mode);
     void set_token_count(int32_t count);
     void set_context_limit(int32_t limit);  // 模型上下文窗口（token），用于进度条分母
     void set_cache_read_tokens(int32_t count);  // Anthropic prompt cache 命中 token 数（0 表示无命中）
@@ -69,6 +72,8 @@ private:
     TuiState m_state = TuiState::IDLE;
     std::string m_model_name = "unknown";
     std::string m_project_name = "workx";
+    // #45：当前权限模式（Default 不显示标签，Plan/Bypass 显示）
+    agent::tool::PermissionMode m_permission_mode{agent::tool::PermissionMode::Default};
     int32_t m_token_count = 0;
     int32_t m_context_limit = 0;  // 0 表示未知，进度条按 8192 兜底
     int32_t m_cache_read_tokens = 0;  // Anthropic prompt cache 命中 token 数（0 表示无命中）

@@ -28,6 +28,7 @@ static constexpr char32_t KEY_DELETE           = 0xE008;
 static constexpr char32_t KEY_CTRL_C           = 0xE009;
 static constexpr char32_t KEY_CTRL_O           = 0xE00A;
 static constexpr char32_t KEY_RESIZE           = 0xE00B;  // 终端尺寸变更
+static constexpr char32_t KEY_BACKTAB          = 0xE00C;  // Shift+Tab = ESC [ Z（与 vt_input_decoder 对齐）
 // KEY_WAKE 由 i_platform.h 统一导出（跨线程唤醒，AskUser 等）
 
 LineEditor::LineEditor(IPlatform* platform)
@@ -41,6 +42,14 @@ void LineEditor::set_completion_callback(CompletionCallback cb) {
 
 void LineEditor::set_command_nav_callback(CommandNavCallback cb) {
     m_command_nav_cb = std::move(cb);
+}
+
+void LineEditor::set_perm_toggle_callback(PermToggleCallback cb) {
+    m_perm_toggle_cb = std::move(cb);
+}
+
+void LineEditor::set_tab_completed_callback(TabCompletedCallback cb) {
+    m_tab_completed_cb = std::move(cb);
 }
 
 void LineEditor::set_command_tab_callback(CommandTabCallback cb) {
@@ -502,6 +511,7 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
                     if (!completion.empty() && completion != m_line) {
                         set_line_contents(completion, static_cast<int>(completion.size()));
                         if (m_input_changed_cb) m_input_changed_cb(m_line);
+                        if (m_tab_completed_cb) m_tab_completed_cb();  // 收起命令面板
                         continue;
                     }
                 }
@@ -511,6 +521,7 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
                     if (!completion.empty() && completion != m_line) {
                         set_line_contents(completion, static_cast<int>(completion.size()));
                         if (m_input_changed_cb) m_input_changed_cb(m_line);
+                        if (m_tab_completed_cb) m_tab_completed_cb();  // 收起文件搜索面板
                         continue;
                     }
                 }
@@ -545,6 +556,14 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
             // Ctrl+O 切换思考视图
             if (input_char == KEY_CTRL_O) {
                 return {std::string(), false, false, false, false, true};
+            }
+
+            // #45：Shift+Tab 切换权限模式（Default/Plan/Bypass 三态，由外部回调处理）
+            if (input_char == KEY_BACKTAB) {
+                if (m_perm_toggle_cb) {
+                    m_perm_toggle_cb();
+                }
+                continue;
             }
 
             // 跨线程唤醒（AskUser 等）：立即返回空结果，主循环检查 pending 事件
@@ -649,6 +668,11 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
                 // 注意：转义序列已被解码器转换为 KEY_*，能走到这里的一定是孤立 Esc。
                 m_platform->write_output("ESC\n");
                 return {std::string(), false, false, true, true};
+            } else if (input_char >= 0xE000 && input_char <= 0xF8FF) {
+                // H-2（PR #46）：未映射的 PUA 内部键码（如 win32 Ctrl+N=0xE011）
+                // 静默忽略，避免未知内部键码被当作字符插入（0xE00C 曾与 Backtab
+                // 冲突被误插；0xE011 无对应功能同样不应上屏）
+                continue;
             } else {
                 // 插入字符
                 std::string new_char_str;

@@ -22,6 +22,8 @@ namespace keys {
     constexpr const char* NO_COLOR     = "terminal.no_color";
     constexpr const char* VERBOSE      = "terminal.verbose";
     constexpr const char* PROMPT       = "terminal.prompt";
+    // #45：--bypass-permissions 启动即全权模式（BypassPermissions，跳过文件/命令确认）
+    constexpr const char* BYPASS_PERMISSIONS = "terminal.bypass_permissions";
 
     // Backend
     constexpr const char* REMOTE_URL   = "backend.remote_url";

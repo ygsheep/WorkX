@@ -44,6 +44,15 @@ public:
     /// @brief 输入变化通知回调（用于更新命令面板过滤）
     using InputChangedCallback = std::function<void(const std::string& line)>;
 
+    /// @brief #45：权限模式切换回调（Shift+Tab 键拦截）
+    /// @details Shift+Tab（Backtab）按下时调用，宿主据此切换会话权限模式。
+    using PermToggleCallback = std::function<void()>;
+
+    /// @brief Tab 补全完成回调（命令/文件搜索面板补全填充成功后调用）
+    /// @details 宿主据此收起面板（如 CommandPanel 切回 StatusBar），
+    ///          避免补全后面板仍显示。
+    using TabCompletedCallback = std::function<void()>;
+
     /// @brief 光标离开输出区通知（定位到输入行时调用）
     using CursorLeftOutputCallback = std::function<void()>;
 
@@ -67,6 +76,12 @@ public:
 
     /// @brief 设置命令面板导航回调（↑↓ 键拦截）
     void set_command_nav_callback(CommandNavCallback cb);
+
+    /// @brief #45：设置权限模式切换回调（Shift+Tab 键拦截）
+    void set_perm_toggle_callback(PermToggleCallback cb);
+
+    /// @brief 设置 Tab 补全完成回调（面板收起用）
+    void set_tab_completed_callback(TabCompletedCallback cb);
 
     /// @brief 设置命令面板 Tab 补全回调
     void set_command_tab_callback(CommandTabCallback cb);
@@ -162,6 +177,8 @@ private:
     CommandNavCallback m_command_nav_cb;
     CommandTabCallback m_command_tab_cb;
     InputChangedCallback m_input_changed_cb;
+    PermToggleCallback m_perm_toggle_cb;  ///< #45：Shift+Tab 权限模式切换回调
+    TabCompletedCallback m_tab_completed_cb;  ///< Tab 补全完成回调（面板收起）
     CursorLeftOutputCallback m_cursor_left_output_cb;
     EditingChangedCallback m_editing_changed_cb;
     ResizeCallback m_resize_cb;

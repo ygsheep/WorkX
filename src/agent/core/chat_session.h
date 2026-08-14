@@ -28,6 +28,7 @@
 #include "agent/message/types.h"
 #include "agent/tool/registry.h"
 #include "agent/tool/executor.h"
+#include "agent/tool/context.h"  // #45：PermissionMode（会话级三态权限模式）
 #include "agent/compact/prefix_shape.h"  // DS_CACHE: 前缀形状追踪
 #include "agent/compact/cache_aware_compactor.h"  // DS_CACHE H-3: 跨 turn 持久化的压缩器
 #include "agent/session/session_store.h"  // 项目会话恢复：JSONL 持久化
@@ -208,6 +209,19 @@ public:
     ///          返回的指针生命周期由 ChatSession 管理，session 析构后禁止使用。
     ICompletionProvider* completion_provider() const { return m_provider.get(); }
 
+    /// @brief #45：设置会话级权限模式（CLI --bypass-permissions 注入）
+    /// @details 仅接受 Default/BypassPermissions（Plan 由 toggle_permission_mode 管理）。
+    ///          线程安全（受 m_state_mutex 保护）。跨 turn 生效（下一轮 ReActLoop 注入）。
+    void set_permission_mode(tool::PermissionMode mode);
+
+    /// @brief #45：获取当前权限模式（线程安全）
+    tool::PermissionMode permission_mode() const;
+
+    /// @brief #45：三态切换权限模式（Default → Plan → Bypass → Default）
+    /// @details Shift+Tab 触发。进入 Plan 时记录 before_plan（ExitPlanMode 工具
+    ///          退出恢复用）。线程安全（受 m_state_mutex 保护）。
+    void toggle_permission_mode();
+
     /// @brief 是否正在生成
     bool is_generating() const { return m_generating.load(); }
 
@@ -305,6 +319,11 @@ private:
     std::string m_system_prompt;
     std::string m_session_id;           ///< 会话标识（switch_session 可变更，由 m_state_mutex 保护）
     std::string m_cwd;                  ///< 会话启动时的工作目录（构造时捕获，注入到 ReActLoop）
+
+    // #45：会话级权限模式（三态：Default/Plan/Bypass），由 m_state_mutex 保护
+    tool::PermissionMode m_permission_mode{tool::PermissionMode::Default};
+    ///< 进入 Plan 前的原模式（Plan 退出恢复用，由 m_state_mutex 保护）
+    tool::PermissionMode m_permission_mode_before_plan{tool::PermissionMode::Default};
     std::atomic<bool> m_generating{false};
 
     // DS_CACHE M-3：移除 m_cache_hit_total/m_cache_miss_total 死代码

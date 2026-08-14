@@ -48,6 +48,11 @@ void StatusBar::set_project_name(const std::string& name) {
     m_project_name = name;
 }
 
+void StatusBar::set_permission_mode(agent::tool::PermissionMode mode) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_permission_mode = mode;
+}
+
 void StatusBar::set_token_count(int32_t count) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_token_count = count;
@@ -297,8 +302,18 @@ std::string StatusBar::format_bar() const {
         cache_str += " \xc2\xb7 ds " + std::to_string(m_ds_cache_hit_rate) + "%";
     }
 
+    // #45：权限模式标签（Default 常态不显示，Plan 青色 / Bypass 黄色警示）
+    //   仅 IDLE 状态显示（Thinking 动态栏保持简洁）
+    std::string perm_tag;
+    if (m_permission_mode == agent::tool::PermissionMode::Plan) {
+        perm_tag = " \x1b[36m[plan]\x1b[0m";        // 青色：只读计划模式
+    } else if (m_permission_mode == agent::tool::PermissionMode::BypassPermissions) {
+        perm_tag = " \x1b[33m[bypass]\x1b[0m";      // 黄色：权限提升警示
+    }
+
     std::string bar = " "
         + green + "[" + m_model_name + "]" + reset
+        + perm_tag
         + " \xe2\x94\x82 " + m_project_name
         + " | Context " + bar_str;
     if (has_limit) {

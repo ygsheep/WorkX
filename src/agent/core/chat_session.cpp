@@ -619,6 +619,38 @@ void ChatSession::send_message(const std::string& text,
     run_completion(text, images);
 }
 
+// #45：会话级权限模式（三态切换 Default → Plan → Bypass → Default）
+void ChatSession::set_permission_mode(tool::PermissionMode mode) {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    m_permission_mode = mode;
+}
+
+tool::PermissionMode ChatSession::permission_mode() const {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    return m_permission_mode;
+}
+
+void ChatSession::toggle_permission_mode() {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    switch (m_permission_mode) {
+        case tool::PermissionMode::Default:
+            // 进入 Plan：记录 before_plan（ExitPlanMode 退出恢复用）
+            m_permission_mode_before_plan = tool::PermissionMode::Default;
+            m_permission_mode = tool::PermissionMode::Plan;
+            break;
+        case tool::PermissionMode::Plan:
+            // 退出 Plan，进入 Bypass（完全放行）
+            m_permission_mode = tool::PermissionMode::BypassPermissions;
+            break;
+        case tool::PermissionMode::BypassPermissions:
+            // 回归常规（不经过 Plan，避开"Bypass 禁止降级到 Plan"约束）
+            m_permission_mode = tool::PermissionMode::Default;
+            break;
+        case tool::PermissionMode::AcceptEdits:
+            break;  // 占位模式，不参与三态循环
+    }
+}
+
 std::vector<ChatMessage> ChatSession::get_messages() const {
     std::lock_guard<std::mutex> lock(m_state_mutex);
     return m_messages;
@@ -720,6 +752,29 @@ void ChatSession::run_completion(const std::string& user_text,
                            &m_config_manager.get(), &m_task_manager.get(), m_cwd,
                            &m_compactor, &m_event_bus.get(), &m_touch_collector,
                            m_file_index_invalidator);
+
+            // #45：注入会话级权限状态（ReActLoop 每轮重建，跨 turn 恢复
+            //      Default/Plan/Bypass 三态与 Plan 退出恢复逻辑）
+            {
+                std::lock_guard<std::mutex> lock(m_state_mutex);
+                loop.apply_permission_state(
+                    m_permission_mode, m_permission_mode_before_plan,
+                    m_permission_mode == tool::PermissionMode::Plan);
+            }
+
+            // H-1（PR #46 评审）：工具路径权限变更回写 ChatSession（受 m_state_mutex
+            // 保护），统一状态源 —— EnterPlanMode/ExitPlanModeV2/on_permission_mode_changed
+            // 修改 ReActLoop 投影后同步写回会话，确保下一轮 apply_permission_state 注入
+            // 最新三态（修复场景 A：Shift+Tab Plan + ExitPlanModeV2 批准后下一轮打回 Plan
+            // 的"粘死"；场景 B：EnterPlanMode 工具进入 Plan 后下一轮丢失的缺陷）
+            loop.set_permission_state_changed_callback(
+                [this](tool::PermissionMode mode,
+                       tool::PermissionMode before_plan,
+                       bool /*in_plan*/) {
+                    std::lock_guard<std::mutex> lock(m_state_mutex);
+                    m_permission_mode = mode;
+                    m_permission_mode_before_plan = before_plan;
+                });
 
             // 3.2：使用 IReActObserver 接口替代 lambda 回调
             // ReActEventPublisher 内部完成 ReActStep → IEventBus 事件转换

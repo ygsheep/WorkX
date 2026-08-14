@@ -190,6 +190,11 @@ SessionResult create_session(IConfigManager& cfg,
         cfg,
         default_retry_delay, session_id);
 
+    // #45：CLI --bypass-permissions 启动即全权模式（跳过文件/命令确认）
+    if (cfg.get_or<bool>(keys::BYPASS_PERMISSIONS, false)) {
+        result.session->set_permission_mode(tool::PermissionMode::BypassPermissions);
+    }
+
     // C-2：session 构造成功后，backend 已由 session 持有。
     // 通过 ChatSession 暴露的 completion_provider() 获取 ICompletionProvider*，
     // 再 dynamic_cast 到 IBackendAdmin*（IBackend 同时继承两者）。
