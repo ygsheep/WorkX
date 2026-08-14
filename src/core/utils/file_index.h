@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <mutex>
 #include <atomic>
+#include <thread>
 #include <chrono>
 
 namespace agent {
@@ -26,6 +27,13 @@ namespace agent {
 /// - 自动跳过 .git/build/node_modules 等目录
 class FileIndex {
 public:
+    /// @brief 确保后台构建线程 join，避免 std::thread 析构 terminate
+    ~FileIndex() {
+        if (m_build_thread.joinable()) {
+            m_build_thread.join();
+        }
+    }
+
     /// @brief 索引条目
     struct Entry {
         std::string name;                   ///< 文件名（如 "main.cpp"）
@@ -44,6 +52,26 @@ public:
     /// @param cwd 工作目录
     /// @param max_files 最大索引文件数（默认 10000）
     void build(const std::string& cwd, size_t max_files = 10000);
+
+    /// @brief 异步构建文件索引（后台线程执行，不阻塞调用方）
+    /// @param cwd 工作目录
+    /// @param max_files 最大索引文件数
+    /// @details 已在构建或已就绪时直接返回。TUI 启动时用此接口替代同步 build，
+    ///          避免扫描大目录阻塞界面出现；@ 补全面板在未就绪时返回空（见
+    ///          search_files），可通过 wait_ready 等待后台完成。
+    void build_async(const std::string& cwd, size_t max_files = 10000);
+
+    /// @brief 等待索引构建完成
+    /// @param timeout_ms 最大等待毫秒；<=0 表示无限等待
+    /// @return 就绪返回 true，超时返回 false
+    /// @details 轮询 m_ready_flag（10ms 间隔），构建通常远小于 1s，开销可忽略。
+    ///          注意：仅保证"已有一次构建完成"，不感知 refresh 触发的后台重建是否
+    ///          结束（重建期间 search 读到旧索引，完成后自动更新）。
+    bool wait_ready(int timeout_ms = 0) const;
+
+    /// @brief 优雅关闭后台构建线程（程序退出前调用）
+    /// @details join 等待后台 build 结束，避免线程访问已析构单例。
+    void shutdown();
 
     /// @brief 搜索文件
     /// @param query 搜索查询（空字符串 → 返回最近修改的文件）
@@ -91,6 +119,11 @@ private:
     std::atomic<bool> m_dirty{true};                              ///< 脏标记：工具写入后置 true，build 后清 false
     std::chrono::steady_clock::time_point m_last_build_ts;        ///< 上次构建时间（用于防抖）
     std::string m_cwd_;                                           ///< 上次构建的工作目录（refresh 复用）
+
+    // ---- 异步构建状态（build_async / wait_ready / shutdown）----
+    std::thread m_build_thread;                                   ///< 后台构建线程（shutdown 时 join）
+    std::atomic<bool> m_build_in_progress{false};                 ///< 是否已有后台构建在进行/已请求
+    std::atomic<bool> m_ready_flag{false};                        ///< 索引就绪标志（is_ready/wait_ready 读取，不碰 mutex_ 避免阻塞）
 
     /// @brief 判断目录是否应跳过
     /// @param dir_name 目录名

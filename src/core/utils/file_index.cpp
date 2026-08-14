@@ -52,24 +52,26 @@ static std::string to_lower(std::string s) {
 // ============================================================
 
 void FileIndex::build(const std::string& cwd, size_t max_files) {
-    std::lock_guard<std::mutex> lock(mutex_);
-
-    entries_.clear();
-    entries_.reserve(std::min(max_files, static_cast<size_t>(1000)));
-
     fs::path root(cwd);
     std::error_code ec;
 
     if (!fs::is_directory(root, ec)) {
+        // 无效目录也要标记"完成"，避免 wait_ready 无限等待
+        std::lock_guard<std::mutex> lock(mutex_);
         ready_ = false;
+        m_ready_flag.store(true, std::memory_order_release);
         return;
     }
+
+    // 在局部容器构建，全程不持锁；完成后一次性 swap，避免 search 长时间等锁
+    std::vector<Entry> new_entries;
+    new_entries.reserve(std::min(max_files, static_cast<size_t>(1000)));
 
     // BFS 遍历
     std::queue<fs::path> dir_queue;
     dir_queue.push(root);
 
-    while (!dir_queue.empty() && entries_.size() < max_files) {
+    while (!dir_queue.empty() && new_entries.size() < max_files) {
         fs::path current_dir = dir_queue.front();
         dir_queue.pop();
 
@@ -85,7 +87,7 @@ void FileIndex::build(const std::string& cwd, size_t max_files) {
                 continue;
             }
 
-            if (entries_.size() >= max_files) {
+            if (new_entries.size() >= max_files) {
                 break;
             }
 
@@ -112,7 +114,7 @@ void FileIndex::build(const std::string& cwd, size_t max_files) {
                         e.modified = fs::file_time_type{};
                     }
                     e.is_directory = true;
-                    entries_.push_back(std::move(e));
+                    new_entries.push_back(std::move(e));
                 }
             } else if (entry.is_regular_file(ec)) {
                 Entry e;
@@ -132,23 +134,29 @@ void FileIndex::build(const std::string& cwd, size_t max_files) {
                     e.modified = fs::file_time_type{};
                 }
 
-                entries_.push_back(std::move(e));
+                new_entries.push_back(std::move(e));
             }
         }
     }
 
     // 按修改时间倒序排列（最新在前）
-    std::sort(entries_.begin(), entries_.end(),
+    std::sort(new_entries.begin(), new_entries.end(),
         [](const Entry& a, const Entry& b) {
             return a.modified > b.modified;
         });
 
-    // 记录构建元信息（供 refresh_if_needed 判断防抖与复用 cwd）
-    m_cwd_ = cwd;
-    m_last_build_ts = std::chrono::steady_clock::now();
-    m_dirty.store(false, std::memory_order_release);
+    // 短锁：一次性 swap 到 entries_，并更新元信息
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        entries_ = std::move(new_entries);
+        m_cwd_ = cwd;
+        m_last_build_ts = std::chrono::steady_clock::now();
+        m_dirty.store(false, std::memory_order_release);
 
-    ready_ = true;
+        ready_ = true;
+        // 就绪标志（is_ready / wait_ready 读取，不阻塞）
+        m_ready_flag.store(true, std::memory_order_release);
+    }
 }
 
 // ============================================================
@@ -207,8 +215,47 @@ std::vector<std::string> FileIndex::search_paths(
 }
 
 bool FileIndex::is_ready() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return ready_;
+    // 读原子就绪标志，不碰 mutex_：后台 build 持锁期间调用不会阻塞 UI 线程
+    return m_ready_flag.load(std::memory_order_acquire);
+}
+
+// ============================================================
+// 异步构建（build_async / wait_ready / shutdown）
+// ============================================================
+
+void FileIndex::build_async(const std::string& cwd, size_t max_files) {
+    // 已有后台构建在进行/已请求 → 跳过（重建防抖由 refresh_if_needed 负责）
+    if (m_build_in_progress.exchange(true)) {
+        return;
+    }
+    // 回收已完成的历史线程（exchange 成功说明旧线程已结束，join 立即返回）
+    if (m_build_thread.joinable()) {
+        m_build_thread.join();
+    }
+    m_build_thread = std::thread([this, cwd, max_files]() {
+        build(cwd, max_files);  // 内部短暂持锁，完成后置 m_ready_flag
+        m_build_in_progress.store(false, std::memory_order_release);
+    });
+}
+
+bool FileIndex::wait_ready(int timeout_ms) const {
+    const auto deadline = std::chrono::steady_clock::now()
+                        + std::chrono::milliseconds(timeout_ms);
+    for (;;) {
+        if (m_ready_flag.load(std::memory_order_acquire)) {
+            return true;
+        }
+        if (timeout_ms > 0 && std::chrono::steady_clock::now() >= deadline) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+
+void FileIndex::shutdown() {
+    if (m_build_thread.joinable()) {
+        m_build_thread.join();
+    }
 }
 
 size_t FileIndex::size() const {
@@ -244,7 +291,8 @@ bool FileIndex::refresh_if_needed(int64_t min_interval_ms) {
     }
 
     if (need_refresh && !cwd.empty()) {
-        build(cwd);  // build 内部会清 m_dirty 并更新 m_last_build_ts
+        // 后台线程重建，不阻塞 UI 线程（此前为同步 build，持锁 BFS 数百 ms 会卡界面）
+        build_async(cwd);
         return true;
     }
     return false;

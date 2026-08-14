@@ -148,6 +148,8 @@ static int run(int argc, char* argv[]) {
 
     // ---- 文件索引构建（TUI 启动时扫描工作目录）----
     // issue #15-D: 从用户主目录启动时跳过 FileIndex 扫描，避免扫描海量文件导致卡顿
+    // 启动优化：改为后台线程异步构建（build_async），不再阻塞 TUI 出现；
+    // 大目录扫描（数百 ms ~ 数秒）转入后台，@补全面板在索引未就绪时返回空。
     {
         namespace fs = std::filesystem;
         std::string cwd = fs::current_path().string();
@@ -176,10 +178,7 @@ static int run(int argc, char* argv[]) {
             std::cerr << "[warn] Running from home directory; skipping file index. "
                          "Use a project directory for full indexing.\n";
         } else {
-            index.build(cwd);
-            if (verbose) {
-                std::cerr << "[debug] File index built: " << index.size() << " files\n";
-            }
+            index.build_async(cwd);  // 后台线程构建，不阻塞启动
         }
     }
 
@@ -865,6 +864,9 @@ static int run(int argc, char* argv[]) {
     // 这样任务完成时发的 UI 事件还能正常处理
     TaskManager::instance().cancelAll();
     TaskManager::instance().waitForAll();
+
+    // 优雅关闭 FileIndex 后台构建线程（join 避免线程访问已析构单例）
+    global_file_index().shutdown();
 
     // 显式停止 ChatRenderer，确保 StreamingBuffer/Spinner 线程在 EventBus
     // 和 Terminal 仍可用时完成 join + flush，避免栈析构时触发 CRT 断点
