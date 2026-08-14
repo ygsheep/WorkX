@@ -5,7 +5,7 @@
  *          V2-4：execute() 返回 ResultV2<ExecutionResult>，错误携带 Error
  *          M-3：execute() 拆分为 lookup_tool / run_with_safety / finalize_result
  *               三个职责单一的私有方法，便于独立测试与未来替换日志策略
- * @version 2.1.0
+ * @version 2.1.1
  * @date 2026-07
  */
 
