@@ -70,12 +70,12 @@ void init_logger(IConfigManager& cfg, const std::filesystem::path& default_log_p
     // 日志级别
     std::string level_str = cfg.get_or<std::string>(keys::LOG_LEVEL, "info");
     std::transform(level_str.begin(), level_str.end(), level_str.begin(), ::tolower);
-    if (level_str == "trace")       logger.set_level(agent::log::LogLevel::TRACE);
-    else if (level_str == "debug")  logger.set_level(agent::log::LogLevel::DEBUG);
-    else if (level_str == "warn")   logger.set_level(agent::log::LogLevel::WARN);
-    else if (level_str == "error")  logger.set_level(agent::log::LogLevel::ERROR);
-    else if (level_str == "fatal")  logger.set_level(agent::log::LogLevel::FATAL);
-    else                            logger.set_level(agent::log::LogLevel::INFO);
+    if (level_str == "trace")       logger.set_level(agent::log::LogLevel::LOG_TRACE);
+    else if (level_str == "debug")  logger.set_level(agent::log::LogLevel::LOG_DEBUG);
+    else if (level_str == "warn")   logger.set_level(agent::log::LogLevel::LOG_WARN);
+    else if (level_str == "error")  logger.set_level(agent::log::LogLevel::LOG_ERROR);
+    else if (level_str == "fatal")  logger.set_level(agent::log::LogLevel::LOG_FATAL);
+    else                            logger.set_level(agent::log::LogLevel::LOG_INFO);
 
     // 日志文件
     std::string log_file = cfg.get_or<std::string>(keys::LOG_FILE, "");
