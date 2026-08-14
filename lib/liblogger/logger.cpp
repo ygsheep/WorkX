@@ -76,7 +76,7 @@ void Logger::log(LogLevel level, const std::string& message,
     // 输出到控制台
     // {
     //     std::lock_guard<std::mutex> lock(m_output_mutex);
-    //     auto& stream = (level >= LogLevel::ERROR) ? std::cerr : std::cout;
+    //     auto& stream = (level >= LogLevel::LOG_ERROR) ? std::cerr : std::cout;
     //     stream << formatted << std::endl;
     // }
 

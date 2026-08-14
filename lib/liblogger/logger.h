@@ -46,25 +46,21 @@
 // G-3：命名空间统一为 agent::log（小写），保留 Agent 作为向后兼容 alias
 namespace agent::log {
 
-// 取消 Windows 头文件定义的宏，避免与 LogLevel 枚举冲突
-#ifdef ERROR
-#undef ERROR
-#endif
-
 // ============================================================================
 // 日志级别
 // ============================================================================
 
 /**
  * @brief 日志级别枚举
+ * @note 枚举值带 LOG_ 前缀，避免与 Windows 头文件的 ERROR 宏冲突
  */
 enum class LogLevel : int {
-    TRACE = 0,    ///< 详细跟踪信息
-    DEBUG = 1,    ///< 调试信息
-    INFO = 2,     ///< 一般信息
-    WARN = 3,     ///< 警告信息
-    ERROR = 4,    ///< 错误信息
-    FATAL = 5     ///< 致命错误信息
+    LOG_TRACE = 0,    ///< 详细跟踪信息
+    LOG_DEBUG = 1,    ///< 调试信息
+    LOG_INFO = 2,     ///< 一般信息
+    LOG_WARN = 3,     ///< 警告信息
+    LOG_ERROR = 4,    ///< 错误信息
+    LOG_FATAL = 5     ///< 致命错误信息
 };
 
 namespace Detail {
@@ -76,12 +72,12 @@ namespace Detail {
  */
 constexpr const char* to_string(LogLevel level) noexcept {
     switch (level) {
-        case LogLevel::TRACE: return "TRACE";
-        case LogLevel::DEBUG: return "DEBUG";
-        case LogLevel::INFO:  return "INFO";
-        case LogLevel::WARN:  return "WARN";
-        case LogLevel::ERROR: return "ERROR";
-        case LogLevel::FATAL: return "FATAL";
+        case LogLevel::LOG_TRACE: return "TRACE";
+        case LogLevel::LOG_DEBUG: return "DEBUG";
+        case LogLevel::LOG_INFO:  return "INFO";
+        case LogLevel::LOG_WARN:  return "WARN";
+        case LogLevel::LOG_ERROR: return "ERROR";
+        case LogLevel::LOG_FATAL: return "FATAL";
         default: return "UNKNOWN";
     }
 }
@@ -115,7 +111,7 @@ inline std::string extract_filename(const char* path) noexcept {
  * 使用示例：
  * @code
  * auto& logger = DearTs::Logger::get_instance();
- * logger.set_level(DearTs::LogLevel::DEBUG);
+ * logger.set_level(DearTs::LogLevel::LOG_DEBUG);
  * logger.enable_file_output("logs/app.log", true);
  * logger.info("Application started");
  * @endcode
@@ -125,7 +121,7 @@ class Logger final {  // 单例类，禁止继承
     struct Token { explicit Token() = default; }; // 定义在私有区
 public:
     explicit Logger(Token /*unused*/)
-    : m_level(static_cast<int>(LogLevel::INFO)),
+    : m_level(static_cast<int>(LogLevel::LOG_INFO)),
       m_file_enabled(false),
       m_writer_running(false),
       m_buffer_size(4096),
@@ -225,7 +221,7 @@ public:
      * @param msg 日志消息
      */
     void trace(const std::string& msg, const char* file = __builtin_FILE(), int line = __builtin_LINE()) {
-        log(LogLevel::TRACE, msg, file, line);
+        log(LogLevel::LOG_TRACE, msg, file, line);
     }
 
     /**
@@ -233,7 +229,7 @@ public:
      * @param msg 日志消息
      */
     void debug(const std::string& msg, const char* file = __builtin_FILE(), int line = __builtin_LINE()) {
-        log(LogLevel::DEBUG, msg, file, line);
+        log(LogLevel::LOG_DEBUG, msg, file, line);
     }
 
     /**
@@ -241,7 +237,7 @@ public:
      * @param msg 日志消息
      */
     void info(const std::string& msg, const char* file = __builtin_FILE(), int line = __builtin_LINE()) {
-        log(LogLevel::INFO, msg, file, line);
+        log(LogLevel::LOG_INFO, msg, file, line);
     }
 
     /**
@@ -249,7 +245,7 @@ public:
      * @param msg 日志消息
      */
     void warn(const std::string& msg, const char* file = __builtin_FILE(), int line = __builtin_LINE()) {
-        log(LogLevel::WARN, msg, file, line);
+        log(LogLevel::LOG_WARN, msg, file, line);
     }
 
     /**
@@ -257,7 +253,7 @@ public:
      * @param msg 日志消息
      */
     void error(const std::string& msg, const char* file = __builtin_FILE(), int line = __builtin_LINE()) {
-        log(LogLevel::ERROR, msg, file, line);
+        log(LogLevel::LOG_ERROR, msg, file, line);
     }
 
     /**
@@ -265,7 +261,7 @@ public:
      * @param msg 日志消息
      */
     void fatal(const std::string& msg, const char* file = __builtin_FILE(), int line = __builtin_LINE()) {
-        log(LogLevel::FATAL, msg, file, line);
+        log(LogLevel::LOG_FATAL, msg, file, line);
     }
 
 
@@ -313,7 +309,7 @@ private:
     // 改为 get_instance() 内 static 局部变量（Meyers Singleton）
 
     // 日志级别
-    std::atomic<int> m_level{static_cast<int>(LogLevel::INFO)};
+    std::atomic<int> m_level{static_cast<int>(LogLevel::LOG_INFO)};
     mutable std::mutex m_output_mutex;
 
     // 文件输出
