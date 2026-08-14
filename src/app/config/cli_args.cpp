@@ -27,6 +27,9 @@ void parse_cli_args(IConfigManager& cfg, int argc, char* argv[]) {
             cfg.set(keys::NO_COLOR, true);
         } else if (arg == "--verbose") {
             cfg.set(keys::VERBOSE, true);
+        } else if (arg == "--bypass-permissions") {
+            // #45：启动即全权模式（BypassPermissions），跳过文件/命令确认
+            cfg.set(keys::BYPASS_PERMISSIONS, true);
         } else if (arg == "--prompt" && i + 1 < argc) {
             cfg.set(keys::PROMPT, std::string(argv[++i]));
         } else if (arg == "--provider" && i + 1 < argc) {
@@ -71,6 +74,7 @@ void parse_cli_args(IConfigManager& cfg, int argc, char* argv[]) {
                       << "  --simple-io             Use simple I/O mode (getline)\n"
                       << "  --no-color              Disable colored output\n"
                       << "  --verbose               Show verbose startup debug info\n"
+                      << "  --bypass-permissions    Start in bypass mode (skip file/command confirms)\n"
                       << "  --prompt <str>          Set prompt string (default: \"> \")\n"
                       << "  --help, -h              Show this help\n"
                       << "\nWhen --provider is specified, --remote and --model default to\n"

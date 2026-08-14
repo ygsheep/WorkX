@@ -28,6 +28,7 @@ static constexpr char32_t KEY_DELETE           = 0xE008;
 static constexpr char32_t KEY_CTRL_C           = 0xE009;
 static constexpr char32_t KEY_CTRL_O           = 0xE00A;
 static constexpr char32_t KEY_RESIZE           = 0xE00B;  // 终端尺寸变更
+static constexpr char32_t KEY_BACKTAB          = 0xE00C;  // Shift+Tab = ESC [ Z（与 vt_input_decoder 对齐）
 // KEY_WAKE 由 i_platform.h 统一导出（跨线程唤醒，AskUser 等）
 
 LineEditor::LineEditor(IPlatform* platform)
@@ -41,6 +42,10 @@ void LineEditor::set_completion_callback(CompletionCallback cb) {
 
 void LineEditor::set_command_nav_callback(CommandNavCallback cb) {
     m_command_nav_cb = std::move(cb);
+}
+
+void LineEditor::set_perm_toggle_callback(PermToggleCallback cb) {
+    m_perm_toggle_cb = std::move(cb);
 }
 
 void LineEditor::set_command_tab_callback(CommandTabCallback cb) {
@@ -545,6 +550,14 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
             // Ctrl+O 切换思考视图
             if (input_char == KEY_CTRL_O) {
                 return {std::string(), false, false, false, false, true};
+            }
+
+            // #45：Shift+Tab 切换权限模式（Default/Plan/Bypass 三态，由外部回调处理）
+            if (input_char == KEY_BACKTAB) {
+                if (m_perm_toggle_cb) {
+                    m_perm_toggle_cb();
+                }
+                continue;
             }
 
             // 跨线程唤醒（AskUser 等）：立即返回空结果，主循环检查 pending 事件

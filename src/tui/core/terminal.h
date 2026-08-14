@@ -188,6 +188,10 @@ public:
     using CommandNavCallback = std::function<bool(char32_t key)>;
     void set_command_nav_callback(CommandNavCallback cb);
 
+    /// @brief #45：设置权限模式切换回调（Shift+Tab 键拦截）
+    using PermToggleCallback = std::function<void()>;
+    void set_perm_toggle_callback(PermToggleCallback cb);
+
     /// @brief 设置命令面板 Tab 补全回调
     using CommandTabCallback = std::function<std::string()>;
     void set_command_tab_callback(CommandTabCallback cb);

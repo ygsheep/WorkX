@@ -537,3 +537,50 @@ TEST_CASE("ChatSession import_messages keeps conversation across provider switch
     new_session->import_messages({});
     REQUIRE(new_session->get_messages().empty());
 }
+
+// ============================================================
+// #45：会话级权限模式三态切换（Shift+Tab：Default → Plan → Bypass → Default）
+// ============================================================
+
+TEST_CASE("ChatSession permission mode tri-state toggle", "[session][permission][45]") {
+    MockConfigManager cfg;
+    auto session = make_test_session(cfg);
+
+    // 初始态：Default
+    REQUIRE(session->permission_mode() == tool::PermissionMode::Default);
+
+    // Default → Plan
+    session->toggle_permission_mode();
+    REQUIRE(session->permission_mode() == tool::PermissionMode::Plan);
+
+    // Plan → Bypass
+    session->toggle_permission_mode();
+    REQUIRE(session->permission_mode() == tool::PermissionMode::BypassPermissions);
+
+    // Bypass → Default（不经过 Plan，避开"Bypass 禁止降级到 Plan"约束）
+    session->toggle_permission_mode();
+    REQUIRE(session->permission_mode() == tool::PermissionMode::Default);
+
+    // 循环稳定：连续一轮回到 Plan
+    session->toggle_permission_mode();
+    REQUIRE(session->permission_mode() == tool::PermissionMode::Plan);
+    session->toggle_permission_mode();
+    REQUIRE(session->permission_mode() == tool::PermissionMode::BypassPermissions);
+    session->toggle_permission_mode();
+    REQUIRE(session->permission_mode() == tool::PermissionMode::Default);
+}
+
+TEST_CASE("ChatSession set_permission_mode injects bypass", "[session][permission][45]") {
+    MockConfigManager cfg;
+    auto session = make_test_session(cfg);
+
+    // CLI --bypass-permissions 注入
+    session->set_permission_mode(tool::PermissionMode::BypassPermissions);
+    REQUIRE(session->permission_mode() == tool::PermissionMode::BypassPermissions);
+
+    // 注入后仍可三态循环（Bypass → Default → Plan）
+    session->toggle_permission_mode();
+    REQUIRE(session->permission_mode() == tool::PermissionMode::Default);
+    session->toggle_permission_mode();
+    REQUIRE(session->permission_mode() == tool::PermissionMode::Plan);
+}

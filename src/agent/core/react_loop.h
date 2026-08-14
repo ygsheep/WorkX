@@ -286,6 +286,22 @@ public:
     void set_permission_mode(tool::PermissionMode mode) { m_permission_mode = mode; }
     tool::PermissionMode permission_mode() const { return m_permission_mode; }
 
+    /// @brief #45：注入初始权限状态（跨 turn 恢复会话级三态模式）
+    /// @details ChatSession 每次新建 ReActLoop 时调用（ReActLoop 为 run_completion
+    ///          局部变量，每轮重建），同步恢复 m_permission_mode、
+    ///          m_permission_mode_before_plan 与 m_in_plan_mode，使
+    ///          Default/Plan/Bypass 三态与 Plan 退出恢复逻辑跨 turn 保持。
+    /// @param mode 当前权限模式（Default/Plan/BypassPermissions）
+    /// @param before_plan 进入 Plan 前的原模式（Plan 退出恢复用）
+    /// @param in_plan 是否处于 Plan 模式（mode==Plan 时恒为 true）
+    void apply_permission_state(tool::PermissionMode mode,
+                                tool::PermissionMode before_plan,
+                                bool in_plan) {
+        m_permission_mode = mode;
+        m_permission_mode_before_plan = before_plan;
+        m_in_plan_mode = in_plan;
+    }
+
 private:
     // ============================================================
     // 内部类型

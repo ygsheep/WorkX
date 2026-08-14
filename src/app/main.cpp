@@ -379,6 +379,10 @@ static int run(int argc, char* argv[]) {
     if (auto* sb = renderer.status_bar()) {
         bottom_bar.set_status_bar(sb);
         sb->set_model_name(model_name.empty() ? "unknown" : model_name);
+        // #45：状态栏显示当前权限模式（CLI --bypass-permissions 启动即 [bypass]）
+        sb->set_permission_mode(session
+            ? session->permission_mode()
+            : agent::tool::PermissionMode::Default);
         // issue #15-D: cwd 为用户主目录时显示 "（无项目）" 而非目录名（如 "young"）
         namespace fs = std::filesystem;
         std::string cwd = fs::current_path().string();
@@ -506,6 +510,9 @@ static int run(int argc, char* argv[]) {
         new_result.session->import_messages(std::move(messages));
         if (store) new_result.session->set_session_store(store);
 
+        // #45：热切换后延续当前权限模式（CLI/Shift+Tab 设定不因重建 session 丢失）
+        new_result.session->set_permission_mode(session->permission_mode());
+
         // 4. 替换全局引用
         session = std::move(new_result.session);
         backend_admin = new_result.backend_admin;
@@ -629,6 +636,16 @@ static int run(int argc, char* argv[]) {
     });
     terminal.set_input_changed_callback([&bottom_bar](const std::string& line) {
         bottom_bar.on_input_changed(line);
+    });
+    // #45：Shift+Tab 切换权限模式（Default → Plan → Bypass → Default）
+    // 切换即写入 ChatSession（下一 turn 注入 ReActLoop 生效），并立即刷新 StatusBar
+    terminal.set_perm_toggle_callback([&session, &renderer]() {
+        if (!session) return;
+        session->toggle_permission_mode();
+        if (auto* sb = renderer.status_bar()) {
+            sb->set_permission_mode(session->permission_mode());
+            sb->render();
+        }
     });
 
     // ---- 事件订阅：统一用户输入管道 ----

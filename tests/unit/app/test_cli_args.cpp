@@ -53,6 +53,34 @@ TEST_CASE("parse_cli_args --timeout parses integer (M-2)", "[cli_args][m2][h-b]"
     REQUIRE(cfg.get_or<int>(keys::TIMEOUT_MS, 0) == 60000);
 }
 
+// #45：--bypass-permissions 设置 BypassPermissions 开关
+TEST_CASE("parse_cli_args --bypass-permissions sets flag (#45)", "[cli_args][45]") {
+    test::MockConfigManager cfg;
+
+    char arg0[] = "workx";
+    char arg1[] = "--bypass-permissions";
+    char* argv[] = {arg0, arg1};
+    int argc = 2;
+
+    parse_cli_args(cfg, argc, argv);
+
+    REQUIRE(cfg.get_or<bool>(keys::BYPASS_PERMISSIONS, false));
+}
+
+// #45：不传 --bypass-permissions 时默认 false（回归：行为与现状一致）
+TEST_CASE("parse_cli_args defaults bypass_permissions false (#45)", "[cli_args][45]") {
+    test::MockConfigManager cfg;
+
+    char arg0[] = "workx";
+    char arg1[] = "--verbose";
+    char* argv[] = {arg0, arg1};
+    int argc = 2;
+
+    parse_cli_args(cfg, argc, argv);
+
+    REQUIRE_FALSE(cfg.get_or<bool>(keys::BYPASS_PERMISSIONS, false));
+}
+
 // H-B 新增：验证 parse_cli_args 不修改未传入的键（Mock 隔离无副作用）
 TEST_CASE("parse_cli_args does not touch unrelated keys (H-B)", "[cli_args][m2][h-b]") {
     test::MockConfigManager cfg;
