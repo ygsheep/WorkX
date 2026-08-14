@@ -192,6 +192,10 @@ public:
     using PermToggleCallback = std::function<void()>;
     void set_perm_toggle_callback(PermToggleCallback cb);
 
+    /// @brief 设置 Tab 补全完成回调（命令/文件搜索面板收起用）
+    using TabCompletedCallback = std::function<void()>;
+    void set_tab_completed_callback(TabCompletedCallback cb);
+
     /// @brief 设置命令面板 Tab 补全回调
     using CommandTabCallback = std::function<std::string()>;
     void set_command_tab_callback(CommandTabCallback cb);

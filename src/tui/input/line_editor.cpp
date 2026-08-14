@@ -48,6 +48,10 @@ void LineEditor::set_perm_toggle_callback(PermToggleCallback cb) {
     m_perm_toggle_cb = std::move(cb);
 }
 
+void LineEditor::set_tab_completed_callback(TabCompletedCallback cb) {
+    m_tab_completed_cb = std::move(cb);
+}
+
 void LineEditor::set_command_tab_callback(CommandTabCallback cb) {
     m_command_tab_cb = std::move(cb);
 }
@@ -507,6 +511,7 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
                     if (!completion.empty() && completion != m_line) {
                         set_line_contents(completion, static_cast<int>(completion.size()));
                         if (m_input_changed_cb) m_input_changed_cb(m_line);
+                        if (m_tab_completed_cb) m_tab_completed_cb();  // 收起命令面板
                         continue;
                     }
                 }
@@ -516,6 +521,7 @@ LineEditor::ReadResult LineEditor::read_line(const std::string& prompt) {
                     if (!completion.empty() && completion != m_line) {
                         set_line_contents(completion, static_cast<int>(completion.size()));
                         if (m_input_changed_cb) m_input_changed_cb(m_line);
+                        if (m_tab_completed_cb) m_tab_completed_cb();  // 收起文件搜索面板
                         continue;
                     }
                 }

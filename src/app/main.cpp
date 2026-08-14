@@ -634,6 +634,10 @@ static int run(int argc, char* argv[]) {
     terminal.set_command_tab_callback([&bottom_bar]() -> std::string {
         return bottom_bar.handle_tab();
     });
+    // Tab 补全填充成功后收起面板（命令/文件搜索面板切回 StatusBar）
+    terminal.set_tab_completed_callback([&bottom_bar]() {
+        bottom_bar.set_mode(tui::BottomBarMode::STATUS_BAR);
+    });
     terminal.set_input_changed_callback([&bottom_bar](const std::string& line) {
         bottom_bar.on_input_changed(line);
     });
