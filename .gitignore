@@ -64,3 +64,13 @@ vendor/ripgrep/
 # 源图 src/icon.png 入库，产物 ico/icns 由 CMake 配置阶段生成
 src/icon.ico
 src/icon.icns
+
+# Transient artifacts (script/tooling leftovers)
+# fetch_ts_grammars.py 抓取 wiki 的临时缓存
+/_wiki_parsers.md
+# Python 脚本缓存（gen/fetch_ts_grammars.py 等）
+__pycache__/
+# worktree/脚本验证残留目录
+/.claude/tmp/
+# 误拉取的 grammar submodule 残留（项目示例目录是单数 example/，此处为复数根目录残留）
+/examples/
