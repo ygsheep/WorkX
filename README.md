@@ -30,7 +30,7 @@
 - **上下文管理**: 自动 Token 压缩与记忆管理，长任务也能保持连贯上下文
 - **MCP 协议集成**: 通过 Model Context Protocol 接入外部数据源与工具
 - **SSE 流式响应**: 实时显示 Agent 推理与工具调用过程
-- **Markdown 渲染**: 支持表格、标题、列表、代码块（Tree-sitter 语法高亮）、强调等完整 Markdown 语法
+- **Markdown 渲染**: 支持表格、标题、列表、代码块（Tree-sitter 语法高亮，支持 30 种语言）、强调等完整 Markdown 语法
 - **Diff 可视化**: 文件编辑以带背景色的 Diff 形式呈现，清晰展示增删改动
 - **命令系统**: `/help`、`/exit`、`/clear`、`/regen`、`/model` 等内置命令
 - **自定义模型**: 支持添加自定义模型和 API 端点
@@ -194,6 +194,36 @@ cmake .. -DCMAKE_TOOLCHAIN_FILE=[vcpkg_root]/scripts/buildsystems/vcpkg.cmake
 cmake --build . --config Release
 ```
 
+## 语法高亮（Tree-sitter）
+
+代码块语法高亮基于 **Tree-sitter**（runtime 由 vcpkg 提供，grammar 仓库通过 CMake FetchContent 在 configure 期从 GitHub 拉取），支持 **30 种主流语言**（c/cpp/c#/python/js/ts/go/rust/java/kotlin/swift/ruby/php/bash/json/yaml/toml/markdown/html/css/lua/dockerfile/cmake/make/ini/dart/scala/haskell/perl）。语法高亮开关：`WORKX_WITH_TREE_SITTER`（默认 ON）；Nix 无网络环境设 `WORKX_FETCH_GRAMMARS=OFF` 降级为 no-op。
+
+> **体积说明**：tree-sitter grammar 以**静态库全量链接**进 workx.exe，体积主要来自各 grammar 的解析状态表（`.rdata` 只读数据段），与语法复杂度成正比。当前裁剪到 30 个主流语言后，workx.exe 约 **44MB**（此前支持 69 种时约 97MB）。如需更多语言，可在 `GRAMMARS` 清单加回（体积会相应增大）；也可评估 DLL 动态加载方案（改动较大）。
+
+**语言清单与自动生成**：
+
+- 语言清单集中维护在 [`scripts/gen_ts_grammars.py`](scripts/gen_ts_grammars.py) 的 `GRAMMARS` 列表，运行该脚本自动生成 3 处注册代码：`cmake/ts_grammars.cmake`（fetch 调用）、`src/tui/render/ts_langs_decl.inc`（extern "C" 声明）、`src/tui/render/ts_langs_reg.inc`（注册块）。
+- [`scripts/fetch_ts_grammars.py`](scripts/fetch_ts_grammars.py) 可从 tree-sitter 官方 wiki 自动抓取可用 grammar（过滤 github 仓库 + ABI≥14 + 已预生成 parser.c），并用 `git ls-remote` 解析默认分支 HEAD commit，`--update` 直接更新 `GRAMMARS`。
+
+**新增一种语言**（以 foo 为例）：
+```bash
+# 方式一：从 wiki 自动获取（推荐）
+python scripts/fetch_ts_grammars.py --list          # 查看候选
+python scripts/fetch_ts_grammars.py --update        # 更新 GRAMMARS（需先在 COMMON_LANGS 加 foo）
+
+# 方式二：手工在 gen_ts_grammars.py 的 GRAMMARS 加一行
+python scripts/gen_ts_grammars.py                   # 重新生成注册代码
+
+cmake --preset default                              # 重新 configure（拉取新 grammar 仓库）
+cmake --build build --config Release -j 8           # 构建
+```
+
+**构建注意事项**：
+- configure 期会拉取全部 grammar 仓库（需要网络）。多数 grammar 以 commit hash 固定版本，**禁用 shallow clone 走全量克隆**，首次 configure 可能耗时数十分钟；仓库已缓存后再次 configure 约 2 分钟。
+- 部分 grammar 仓库自带测试用 submodule（如 ocaml 的 examples/*、tlaplus 的 test/*），CMake 已设 `CMP0097=NEW` + `GIT_SUBMODULES ""` 禁用其初始化，避免拉取海量无用代码。
+- 个别第三方 grammar 的 scanner 定义了非 static 的通用函数（serialize/deserialize/scan），CMake 构建期自动检测并用宏重命名为 `<grammar>_<func>`，避免链接符号冲突。
+- 曾因 MSVC 兼容性/仓库结构复杂排除 crystal、typst、ocaml；本次体积裁剪又移除了 verilog/fortran/nim/tlaplus/zig 等冷门大体积语言。如需加回，直接在 `GRAMMARS` 加一行即可。
+
 ## Nix / NixOS 安装
 
 > 不依赖 vcpkg/FetchContent：`nix/` 目录下的 `workx.nix` + `workx.patch` 将依赖全部换成 nixpkgs 提供。
@@ -291,15 +321,45 @@ build\bin\workx.exe
 
 ## 测试
 
-```bash
-# 运行单元测试 (默认构建)
-build/bin/workx_unit_tests.exe
+单元测试已**按模块拆分为 5 个独立目标**，与 `src/` 分层对齐，解决编译慢与运行慢的问题（改某模块只重编/重链该模块，各模块可并行编译与运行）：
 
+| 目标 | 覆盖目录 | 链接库 |
+|---|---|---|
+| `core_unit_tests` | `tests/unit/core/**` | `workx_core` |
+| `agent_unit_tests` | `tests/unit/agent/**`（含 `helpers` 自测） | `workx_agent` |
+| `tui_unit_tests` | `tests/unit/tui/**` | `workx_tui` |
+| `island_unit_tests` | `tests/unit/island/**` | `workx_island` |
+| `app_unit_tests` | `tests/unit/app/**` | `workx_app` |
+
+```bash
+# 构建某个模块测试（<模块> 为 core/agent/tui/island/app）
+cmake --build build --config Release --target <模块>_unit_tests -j 8
+
+# 并行运行全部测试
+ctest --test-dir build -C Release -j 8 --output-on-failure
+
+# 快速回归：跳过 [slow] 慢测试（验证超时/并发类逻辑被打上 [slow] 标签）
+ctest --test-dir build -C Release -LE slow -j 8
+
+# 只跑慢测试
+ctest --test-dir build -C Release -L slow -j 8
+
+# 按功能标签或名称过滤
+ctest --test-dir build -C Release -L <tag> -j 8
+ctest --test-dir build -C Release -R <name> -j 8
+
+# 单测可执行文件按 Catch2 标签过滤
+build/bin/Release/core_unit_tests.exe "[skill]"
+```
+
+> 源码自动收集：模块测试源文件经 `file(GLOB_RECURSE ... CONFIGURE_DEPENDS)` 收集，新增测试文件无需手改 CMake 列表；`catch_discover_tests(ADD_TAGS_AS_LABELS ON)` 将 Catch2 标签（含 `[slow]`）映射为 ctest 标签，从而支持 `-L / -LE` 过滤。
+
+```bash
 # 运行集成测试 (需启用 -DWORKX_BUILD_INTEGRATION_TESTS=ON, 且需 LM Studio)
 build/bin/workx_integration_tests.exe
 ```
 
-项目包含 100+ 个测试用例，覆盖核心功能模块。
+项目包含 900+ 个测试用例，覆盖核心功能模块。
 
 ## 许可证
 

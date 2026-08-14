@@ -8,16 +8,26 @@ when_to_use: 修改了 C++ 源码后需要验证编译通过或运行测试时
 
 # Workx Build & Test
 
-在 workx 仓库中构建 Debug 配置并运行单元测试：
+在 workx 仓库中构建单元测试并运行（单元测试已**按模块拆分为 5 个独立目标**，见 refs/commands.md）：
 
 1. `cmake --preset default`
-2. `cmake --build build --config Debug --target workx_unit_tests`
-3. `ctest --test-dir build -C Debug --output-on-failure`
+2. 构建某个模块测试：`cmake --build build --config Release --target core_unit_tests -j 8`（可用 `tui_unit_tests` / `agent_unit_tests` / `island_unit_tests` / `app_unit_tests` 替换）
+3. 运行测试：`ctest --test-dir build -C Release -j 8 --output-on-failure`
 
-常用过滤器（ctest 或 workx_unit_tests.exe）：
+## 语法高亮（Tree-sitter）
 
-- 只跑 skill 相关：`--test-dir build -C Debug -R skill`
-- 单测筛选标签：`build/bin/Debug/workx_unit_tests.exe "[skill]"`
+代码块语法高亮基于 Tree-sitter，支持 **30 种主流语言**（为控制体积裁剪；grammar 静态链接进 exe，体积主要来自解析状态表）。语言清单维护在 `scripts/gen_ts_grammars.py` 的 `GRAMMARS`，注册代码（`cmake/ts_grammars.cmake` + `src/tui/render/*.inc`）由 `scripts/gen_ts_grammars.py` 自动生成；`scripts/fetch_ts_grammars.py` 可从官方 wiki 自动抓取新语言。详细命令见 refs/commands.md。
+
+> **configure 提示**：configure 期会从 GitHub 拉取全部 grammar 仓库（需网络）。首次 configure 因 commit hash 走全量克隆可能耗时数十分钟，仓库缓存后再次 configure 约 2 分钟。若 `workx` 目标链接报 scanner 符号冲突或某 grammar 无法编译，先确认 `gen_ts_grammars.py` 已重新生成注册代码。
+
+常用过滤器（ctest）：
+
+- 并行跑全部测试：`ctest --test-dir build -C Release -j 8`
+- 快速回归（跳过 [slow] 慢测试）：`ctest --test-dir build -C Release -LE slow -j 8`
+- 只跑慢测试（验证超时/并发类逻辑）：`ctest --test-dir build -C Release -L slow -j 8`
+- 按功能标签过滤：`ctest --test-dir build -C Release -L skill -j 8`
+- 按名称筛选：`ctest --test-dir build -C Release -R skill -j 8`
+- 单测可执行文件筛选：`build/bin/Release/core_unit_tests.exe "[skill]"`
 
 ## 版本管理
 

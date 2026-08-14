@@ -118,25 +118,42 @@ workx_fetch_ts_runtime()
 # 通过 FetchContent 拉取 grammar 仓库 (各仓库已 commit 预生成的 src/parser.c, 无需 tree-sitter-cli)
 # 每个 grammar 编译为独立静态库; 收集到 WORKX_TS_GRAMMAR_LIBS/DEFS, 由 workx_tui 统一链接
 function(workx_fetch_ts_grammar name git_repo git_tag)
+    # 第 4 参数：grammar 源码子目录（默认 "src"；tree-sitter-typescript 双子目录用 "typescript/src"/"tsx/src"）
+    if(ARGC GREATER 3)
+        set(_grammar_subdir "${ARGV3}")
+    else()
+        set(_grammar_subdir "src")
+    endif()
     if(NOT WORKX_HAS_TREE_SITTER)
         return()
     endif()
     if(NOT WORKX_FETCH_GRAMMARS)
         return()
     endif()
-    string(TOUPPER "${name}" _upper)
+    # 宏名容错: c-sharp -> C_SHARP (target 名保留连字符, 仅宏名替换)
+    string(REPLACE "-" "_" _upper "${name}")
+    string(TOUPPER "${_upper}" _upper)
 
     include(FetchContent)
+    # GIT_TAG 为 40 位 commit hash 时禁用 shallow clone:
+    # 若该 commit 不是分支 tip 可达, git shallow clone 会长时间卡住/失败。
+    # 具名 tag (如 v0.24.2) 保持 shallow, 加速 fetch。
+    if(git_tag MATCHES "^[0-9a-f]{40}$")
+        set(_ts_shallow FALSE)
+    else()
+        set(_ts_shallow TRUE)
+    endif()
     FetchContent_Declare("ts_${name}"
         GIT_REPOSITORY "${git_repo}"
         GIT_TAG "${git_tag}"
-        GIT_SHALLOW TRUE
+        GIT_SHALLOW ${_ts_shallow}
+        GIT_SUBMODULES ""  # CMP0097=NEW 时, 空串表示不初始化任何 submodule
         SOURCE_SUBDIR "cmake_subdir_disabled"  # 跳过 grammar 自带 CMakeLists (会要 tree-sitter-cli)
     )
     FetchContent_MakeAvailable("ts_${name}")
     FetchContent_GetProperties("ts_${name}" SOURCE_DIR _grammar_src_dir)
 
-    set(_src_dir "${_grammar_src_dir}/src")
+    set(_src_dir "${_grammar_src_dir}/${_grammar_subdir}")
     set(_srcs)
     if(EXISTS "${_src_dir}/parser.c")
         list(APPEND _srcs "${_src_dir}/parser.c")
@@ -161,6 +178,32 @@ function(workx_fetch_ts_grammar name git_repo git_tag)
         target_compile_options("ts_${name}" PRIVATE /utf-8)
     endif()
 
+    # 部分第三方 grammar 的 scanner.c 定义了非 static 的通用函数
+    # serialize/deserialize/scan (未加 static), 链接时会与其它 grammar 冲突。
+    # 用宏把它们重命名为 <grammar>_<func>, 保证符号唯一。
+    # 已知受影响的 grammar 列在 _SCANNER_GENERIC_FUNCS 中 (org/svelte 等)。
+    set(_SCANNER_GENERIC_FUNCS serialize deserialize scan)
+    set(_scanner_has_generic FALSE)
+    if(EXISTS "${_src_dir}/scanner.c")
+        file(READ "${_src_dir}/scanner.c" _scanner_src)
+        foreach(_fn ${_SCANNER_GENERIC_FUNCS})
+            # 非 static 定义: 行首(可选空白)直接是返回类型 + 函数名, 无 "static " 前缀
+            if(_scanner_src MATCHES "(^|[;\n][ \t]*)${_fn}[ \t]*\\("
+               AND NOT _scanner_src MATCHES "(^|[;\n][ \t]*)static[ \t]+[^;]*${_fn}[ \t]*\\(")
+                set(_scanner_has_generic TRUE)
+            endif()
+        endforeach()
+        if(_scanner_has_generic)
+            string(REPLACE "-" "_" _name_underscore "${name}")
+            target_compile_definitions("ts_${name}" PRIVATE
+                serialize=${_name_underscore}_serialize
+                deserialize=${_name_underscore}_deserialize
+                scan=${_name_underscore}_scan
+            )
+            message(STATUS "  * tree-sitter-${name}: scanner generic funcs renamed (${_name_underscore}_*)")
+        endif()
+    endif()
+
     # 累积到 parent scope, 等 workx_tui 创建后再 target_link_libraries
     list(APPEND WORKX_TS_GRAMMAR_LIBS "ts_${name}")
     list(APPEND WORKX_TS_GRAMMAR_DEFS "WORKX_TS_${_upper}")
@@ -169,19 +212,9 @@ function(workx_fetch_ts_grammar name git_repo git_tag)
     message(STATUS "  + tree-sitter-${name}: ${git_tag}")
 endfunction()
 
-if(WORKX_HAS_TREE_SITTER AND WORKX_FETCH_GRAMMARS)
-    message(STATUS "Fetching tree-sitter grammars:")
-    # 标签可按需调整; grammar ABI 向后兼容 tree-sitter runtime 0.25+/0.26+
-    workx_fetch_ts_grammar(c            "https://github.com/tree-sitter/tree-sitter-c.git"           "v0.24.2")
-    workx_fetch_ts_grammar(cpp          "https://github.com/tree-sitter/tree-sitter-cpp.git"         "v0.23.4")
-    workx_fetch_ts_grammar(cmake        "https://github.com/uyha/tree-sitter-cmake.git"              "v0.5.0")
-    workx_fetch_ts_grammar(python       "https://github.com/tree-sitter/tree-sitter-python.git"      "v0.23.6")
-    workx_fetch_ts_grammar(bash         "https://github.com/tree-sitter/tree-sitter-bash.git"        "v0.23.3")
-    workx_fetch_ts_grammar(json         "https://github.com/tree-sitter/tree-sitter-json.git"        "v0.24.8")
-    workx_fetch_ts_grammar(javascript   "https://github.com/tree-sitter/tree-sitter-javascript.git"  "v0.23.1")
-    workx_fetch_ts_grammar(rust         "https://github.com/tree-sitter/tree-sitter-rust.git"        "v0.23.1")
-    workx_fetch_ts_grammar(go           "https://github.com/tree-sitter/tree-sitter-go.git"          "v0.23.4")
-endif()
+# grammar 清单由 scripts/gen_ts_grammars.py 生成 (cmake/ts_grammars.cmake)
+# 新增语言: 在 scripts/gen_ts_grammars.py 的 GRAMMARS 列表加一行后重跑该脚本即可
+include(cmake/ts_grammars.cmake)
 
 # ---- liblogger (lib/liblogger/CMakeLists.txt 提供 logger target) ----
 add_subdirectory(lib/liblogger)

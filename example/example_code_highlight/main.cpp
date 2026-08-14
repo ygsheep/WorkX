@@ -249,6 +249,124 @@ const bus = new EventBus();
 bus.on('token', (text) => console.log(text));
 )JS";
 
+static const char* TS_CODE = R"TS(
+interface Config {
+    name: string;
+    timeout?: number;
+}
+
+async function loadConfig(path: string): Promise<Config> {
+    const raw = await fetch(path);
+    if (!raw.ok) throw new Error(`HTTP ${raw.status}`);
+    const cfg: Config = await raw.json();
+    return cfg.timeout ? cfg : { ...cfg, timeout: 3000 };
+}
+
+const config = await loadConfig("./config.json");
+console.log(config.name);
+)TS";
+
+static const char* TSX_CODE = R"TSX(
+import React, { useState } from "react";
+
+export function Counter({ initial = 0 }: { initial?: number }) {
+    const [count, setCount] = useState(initial);
+    return (
+        <button onClick={() => setCount(count + 1)}>
+            Count: {count}
+        </button>
+    );
+}
+)TSX";
+
+static const char* NIX_CODE = R"NIX(
+{ pkgs, lib, ... }:
+
+let
+  name = "workx";
+in
+pkgs.stdenv.mkDerivation {
+  inherit name;
+  src = ./.;
+  nativeBuildInputs = with pkgs; [ cmake ninja ];
+  buildPhase = ''
+    cmake -B build -DCMAKE_BUILD_TYPE=Release
+    cmake --build build
+  '';
+}
+)NIX";
+
+static const char* HTML_CODE = R"HTML(
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="utf-8">
+    <title>workx</title>
+    <style>
+        body { margin: 0; background: #1e1e2e; }
+        .main { display: flex; }
+    </style>
+</head>
+<body>
+    <div class="main">
+        <h1>Hello, workx!</h1>
+        <script>
+            const el = document.querySelector("h1");
+            el.textContent = "你好";
+        </script>
+    </div>
+</body>
+</html>
+)HTML";
+
+static const char* YAML_CODE = R"YAML(
+version: "3.9"
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - WORKX_LOG_LEVEL=info
+    volumes:
+      - ./data:/var/lib/workx
+)YAML";
+
+static const char* TOML_CODE = R"TOML(
+[build]
+cmake_preset = "default"
+tests = true
+
+[tool.workx]
+log_level = "info"
+audit = { enabled = true, retention_days = 30 }
+)TOML";
+
+static const char* JAVA_CODE = R"JAVA(
+import java.util.List;
+
+public class Main {
+    public static void main(String[] args) {
+        List<String> names = List.of("workx", "tui");
+        names.stream()
+             .filter(n -> n.length() > 3)
+             .forEach(System.out::println);
+    }
+}
+)JAVA";
+
+static const char* LUA_CODE = R"LUA(
+local M = {}
+
+function M.greet(name)
+    local msg = "hello, " .. name
+    print(msg)
+    return #msg
+end
+
+return M
+)LUA";
+
 static const char* DIFF_CODE = R"DIFF(--- a/src/main.cpp
 +++ b/src/main.cpp
 @@ -5,7 +5,9 @@
@@ -319,6 +437,30 @@ int main() {
 
     print_section("7. JavaScript 代码");
     render_code("javascript", JS_CODE);
+
+    print_section("7b. TypeScript 代码");
+    render_code("typescript", TS_CODE);
+
+    print_section("7c. TSX (React) 代码");
+    render_code("tsx", TSX_CODE);
+
+    print_section("7d. Nix 代码");
+    render_code("nix", NIX_CODE);
+
+    print_section("7e. HTML 代码");
+    render_code("html", HTML_CODE);
+
+    print_section("7f. YAML 数据");
+    render_code("yaml", YAML_CODE);
+
+    print_section("7g. TOML 配置");
+    render_code("toml", TOML_CODE);
+
+    print_section("7h. Java 代码");
+    render_code("java", JAVA_CODE);
+
+    print_section("7i. Lua 代码");
+    render_code("lua", LUA_CODE);
 
     // ====== 2. diff 渲染 ======
     print_section("8. Diff (Write/Edit 工具返回, +/- 前缀不高亮, 内容整行高亮)");

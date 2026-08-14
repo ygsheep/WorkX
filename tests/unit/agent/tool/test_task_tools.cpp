@@ -188,7 +188,7 @@ TEST_CASE_METHOD(TaskToolsFixture, "AgentTool inherits parent permission mode (P
 // TaskStopTool
 // ============================================================
 
-TEST_CASE_METHOD(TaskToolsFixture, "TaskStopTool stops a running task", "[task_stop]") {
+TEST_CASE_METHOD(TaskToolsFixture, "TaskStopTool stops a running task", "[task_stop][slow]") {
     MockEventBus bus;
     auto& tm = TaskManager::instance();
     MockConfigManager cfg;
@@ -290,7 +290,7 @@ TEST_CASE_METHOD(TaskToolsFixture, "TaskOutputTool waits for running task", "[ta
     REQUIRE(r.value().text.find("\"status\":\"completed\"") != std::string::npos);
 }
 
-TEST_CASE_METHOD(TaskToolsFixture, "TaskOutputTool times out on long task", "[task_output]") {
+TEST_CASE_METHOD(TaskToolsFixture, "TaskOutputTool times out on long task", "[task_output][slow]") {
     MockEventBus bus;
     auto& tm = TaskManager::instance();
     MockConfigManager cfg;

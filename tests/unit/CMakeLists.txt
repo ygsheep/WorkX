@@ -1,94 +1,64 @@
 # 单元测试构建
-# @details 与 src/ 模块对齐分层 (agent/core/tui), 仅依赖 libworkx, 无外部服务
-
-set(UNIT_TEST_SOURCES
-    ../test_main.cpp
-    helpers/test_mock_helpers.cpp
-    app/test_factory.cpp
-    app/test_cli_args.cpp
-    app/test_provider_selector.cpp
-    app/test_skill_commands.cpp
-    agent/api/test_anthropic_adapter.cpp
-    agent/api/test_openai_adapter.cpp
-    agent/api/test_http_response.cpp
-    agent/api/test_remote_backend.cpp
-    agent/api/test_retry_policy.cpp
-    agent/api/test_sse_parser.cpp
-    agent/api/test_client.cpp
-    agent/core/test_chat_session.cpp
-    agent/core/test_react_loop.cpp
-    agent/test_layer_boundary.cpp
-    agent/command/test_command_system.cpp
-    agent/skill/test_skill_frontmatter.cpp
-    agent/skill/test_skill_loader.cpp
-    agent/skill/test_skill_prompt.cpp
-    agent/skill/test_conditional.cpp
-    agent/skill/test_hooks.cpp
-    agent/model/test_provider_preset.cpp
-    agent/model/test_model_config.cpp
-    agent/model/test_model_catalog.cpp
-    agent/model/test_context_resolver.cpp
-    agent/compact/test_token_count.cpp
-    agent/compact/test_prefix_shape.cpp
-    agent/compact/test_tool_result_maintainer.cpp
-    agent/compact/test_cache_aware_compactor.cpp
-    agent/compact/test_sha256.cpp
-    agent/session/test_session_store.cpp
-    agent/input/test_input_processor.cpp
-    agent/tool/test_file_edit_tool.cpp
-    agent/tool/test_tool_context.cpp
-    agent/tool/test_tool_executor.cpp
-    agent/tool/test_tool_registry.cpp
-    agent/tool/test_bash_tool.cpp
-    agent/tool/test_grep_tool.cpp
-    agent/tool/test_skill_tool.cpp
-    agent/tool/test_shell_guard.cpp
-    agent/audit/test_audit_logger.cpp
-    agent/tool/test_permission_security.cpp
-    agent/tool/test_plan_mode_tools.cpp
-    agent/tool/test_task_tools.cpp
-    core/config/test_config_manager.cpp
-    core/events/test_event_bus.cpp
-    core/process/test_subprocess.cpp
-    core/process/test_tool_registry.cpp
-    core/process/test_sandbox.cpp
-    core/task/test_task_manager.cpp
-    core/task/test_thread_pool.cpp
-    core/test_tool_kind.cpp
-    core/utils/test_error.cpp
-    core/utils/test_result_v2.cpp
-    core/utils/test_uuid.cpp
-    core/utils/test_path_encoder.cpp
-    tui/core/test_display_buffer.cpp
-    tui/core/test_terminal_overlay.cpp
-    tui/core/test_tui_state.cpp
-    tui/core/test_vt_input_decoder.cpp
-    tui/model/test_token_stats_model.cpp
-    tui/model/test_tool_call_tracker.cpp
-    tui/render/test_markdown_renderer.cpp
-    tui/render/test_spinner.cpp
-    tui/render/test_streaming_buffer.cpp
-    tui/utils/test_utf8_utils.cpp
-    tui/widgets/test_status_bar.cpp
-    tui/widgets/test_choice_panel.cpp
-    tui/widgets/test_command_panel.cpp
-    island/test_jsonl_protocol.cpp
-    island/test_pricing_table.cpp
-    island/test_cost_accumulator.cpp
-    island/test_registry_writer.cpp
-    island/test_ipc_transport.cpp
-    island/test_island_server.cpp
-    island/test_island_event_bridge.cpp
-    island/test_balance_fetcher.cpp
-    island/test_layer_boundary.cpp
-)
-
-add_executable(workx_unit_tests ${UNIT_TEST_SOURCES})
-target_include_directories(workx_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(workx_unit_tests PRIVATE SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-target_link_libraries(workx_unit_tests PRIVATE workx_app workx_island Catch2::Catch2WithMain)
+# @details 按模块拆分为多个独立测试可执行文件，解决两大痛点：
+#   1. 编译慢：单一二进制需全量重编译+重链接；拆分后改动某模块只重编/重链该模块目标，
+#      且多个测试目标可并行编译（cmake --build -j N）。
+#   2. 运行慢：单一进程串行跑 919 个用例；拆分后各模块可经 ctest -j N 并行运行。
+#
+# 模块划分（与 src/ 分层对齐，每个目标只链接其依赖的最少库）：
+#   - core_unit_tests    : tests/unit/core/**    -> workx_core
+#   - agent_unit_tests   : tests/unit/agent/**   -> workx_agent (含 helpers 自测)
+#   - tui_unit_tests     : tests/unit/tui/**     -> workx_tui
+#   - island_unit_tests  : tests/unit/island/**  -> workx_island
+#   - app_unit_tests     : tests/unit/app/**     -> workx_app
+#
+# 常用命令：
+#   - 只构建某模块测试：  cmake --build build --target <模块>_unit_tests -j <N>
+#   - 只运行某模块测试：  ./build/bin/Release/<模块>_unit_tests.exe
+#   - 并行运行所有测试：  ctest --test-dir build -C Release -j <N>
+#   - 快速回归（跳过 [slow] 慢测试）：  ctest --test-dir build -C Release -LE slow -j <N>
+#   - 只跑慢测试（验证超时/并发类逻辑）： ctest --test-dir build -C Release -L slow -j <N>
+#   - 按功能标签过滤：        ctest --test-dir build -C Release -L <tag> -j <N>
 
 include(Catch)
-catch_discover_tests(workx_unit_tests
-    DL_PATHS "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>"
-)
+
+# Catch2 提供 main()；每个目标都需这一个编译占位
+set(UNIT_TEST_COMMON ../test_main.cpp)
+
+# 按模块用 glob 收集测试源文件（CONFIGURE_DEPENDS：新增测试文件自动纳入，无需手改列表）
+file(GLOB_RECURSE CORE_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/core/*.cpp)
+file(GLOB_RECURSE AGENT_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/agent/*.cpp)
+file(GLOB_RECURSE TUI_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tui/*.cpp)
+file(GLOB_RECURSE ISLAND_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/island/*.cpp)
+file(GLOB_RECURSE APP_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/app/*.cpp)
+# helpers 自测（Mock 接口实现，依赖 agent 接口），归入 agent 目标
+file(GLOB HELPER_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/helpers/*.cpp)
+
+# test_command_system 物理位于 agent/command/，但依赖 app 层 register_system_commands
+# （builtin_commands.cpp），须归入 app 目标才能链接该符号
+list(REMOVE_ITEM AGENT_TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/agent/command/test_command_system.cpp)
+list(APPEND APP_TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/agent/command/test_command_system.cpp)
+
+# 为某模块创建独立测试可执行文件并注册到 ctest
+# 用法: workx_add_unit_target(<target> <链接库...> <源文件...>)
+function(workx_add_unit_target target)
+    list(GET ARGN 0 _lib)
+    list(REMOVE_AT ARGN 0)
+
+    add_executable(${target} ${UNIT_TEST_COMMON} ${ARGN})
+    target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(${target} PRIVATE SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    target_link_libraries(${target} PRIVATE ${_lib} Catch2::Catch2WithMain)
+
+    # ADD_TAGS_AS_LABELS：把每个测试的 Catch2 标签（含 [slow]）映射为 ctest 标签，
+    # 从而支持 ctest -L/-LE 按标签过滤（如 ctest -LE slow 跑快速子集）
+    catch_discover_tests(${target}
+        ADD_TAGS_AS_LABELS ON
+        DL_PATHS "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>"
+    )
+endfunction()
+
+workx_add_unit_target(core_unit_tests   workx_core   ${CORE_TEST_SOURCES})
+workx_add_unit_target(agent_unit_tests  workx_agent  ${AGENT_TEST_SOURCES} ${HELPER_TEST_SOURCES})
+workx_add_unit_target(tui_unit_tests    workx_tui    ${TUI_TEST_SOURCES})
+workx_add_unit_target(island_unit_tests workx_island ${ISLAND_TEST_SOURCES})
+workx_add_unit_target(app_unit_tests    workx_app    ${APP_TEST_SOURCES})

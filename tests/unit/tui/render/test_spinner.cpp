@@ -107,7 +107,7 @@ TEST_CASE("Spinner elapsed_seconds is 0 when not running", "[spinner][elapsed]")
     REQUIRE(spinner.elapsed_seconds() == 0);
 }
 
-TEST_CASE("Spinner elapsed_seconds increases over time", "[spinner][elapsed]") {
+TEST_CASE("Spinner elapsed_seconds increases over time", "[spinner][elapsed][slow]") {
     Spinner spinner(&null_terminal);
     spinner.start("thinking");
     REQUIRE(spinner.elapsed_seconds() >= 0);
@@ -156,7 +156,7 @@ TEST_CASE("Spinner update callback not invoked after stop", "[spinner][callback]
     REQUIRE(call_count.load() == count_after_stop);
 }
 
-TEST_CASE("Spinner callback observes increasing elapsed", "[spinner][callback]") {
+TEST_CASE("Spinner callback observes increasing elapsed", "[spinner][callback][slow]") {
     Spinner spinner(&null_terminal);
 
     std::atomic<int32_t> max_elapsed{0};

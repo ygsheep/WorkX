@@ -29,36 +29,10 @@
 #ifdef WORKX_HAS_TREE_SITTER
 #include <tree_sitter/api.h>
 
-// 各 grammar 的入口函数 - 仅在对应 WORKX_TS_<NAME> 定义时声明
-// 避免 linker 在该 grammar 未安装时报 unresolved symbol
+// 各 grammar 的入口函数声明由 scripts/gen_ts_grammars.py 生成
+// (src/tui/render/ts_langs_decl.inc), 无需手改
 extern "C" {
-#ifdef WORKX_TS_C
-    const TSLanguage* tree_sitter_c(void);
-#endif
-#ifdef WORKX_TS_CPP
-    const TSLanguage* tree_sitter_cpp(void);
-#endif
-#ifdef WORKX_TS_CMAKE
-    const TSLanguage* tree_sitter_cmake(void);
-#endif
-#ifdef WORKX_TS_PYTHON
-    const TSLanguage* tree_sitter_python(void);
-#endif
-#ifdef WORKX_TS_BASH
-    const TSLanguage* tree_sitter_bash(void);
-#endif
-#ifdef WORKX_TS_JSON
-    const TSLanguage* tree_sitter_json(void);
-#endif
-#ifdef WORKX_TS_JAVASCRIPT
-    const TSLanguage* tree_sitter_javascript(void);
-#endif
-#ifdef WORKX_TS_RUST
-    const TSLanguage* tree_sitter_rust(void);
-#endif
-#ifdef WORKX_TS_GO
-    const TSLanguage* tree_sitter_go(void);
-#endif
+#include "tui/render/ts_langs_decl.inc"
 }
 #endif // WORKX_HAS_TREE_SITTER
 
@@ -131,11 +105,35 @@ std::string normalize_lang(std::string_view lang) {
     // 别名归一
     if (s == "cc" || s == "cxx" || s == "hpp" || s == "h" || s == "h++") s = "cpp";
     if (s == "js" || s == "jsx") s = "javascript";
-    if (s == "ts" || s == "tsx") s = "typescript";
+    if (s == "ts") s = "typescript";
+    if (s == "tsx") s = "tsx";
     if (s == "py" || s == "python3") s = "python";
     if (s == "sh" || s == "shell" || s == "zsh") s = "bash";
     if (s == "gyp") s = "python";
     if (s == "patch" || s == "udiff") s = "diff";
+    if (s == "md" || s == "mdown") s = "markdown";
+    if (s == "yml") s = "yaml";
+    if (s == "c#" || s == "cs") s = "c-sharp";
+    if (s == "docker") s = "dockerfile";
+    if (s == "kt" || s == "kotlin") s = "kotlin";
+    if (s == "swift") s = "swift";
+    // 2026-08 自动扩展 (gen_ts_grammars.py)
+    if (s == "clj" || s == "cljs" || s == "cljc") s = "clojure";
+    if (s == "csharp") s = "c-sharp";
+    if (s == "ex" || s == "exs") s = "elixir";
+    if (s == "erl" || s == "hrl") s = "erlang";
+    if (s == "fs" || s == "fsi" || s == "fsx") s = "fsharp";
+    if (s == "gql") s = "graphql";
+    if (s == "hs") s = "haskell";
+    if (s == "tf" || s == "hcl") s = "hcl";
+    if (s == "jl") s = "julia";
+    if (s == "ml" || s == "mli") s = "ocaml";
+    if (s == "pl" || s == "pm") s = "perl";
+    if (s == "res") s = "rescript";
+    if (s == "sol") s = "solidity";
+    if (s == "v") s = "verilog";
+    if (s == "gitconfig" || s == "git-config") s = "git_config";
+    if (s == "sshconfig" || s == "ssh-config" || s == "ssh_config") s = "ssh_config";
     return s;
 }
 
@@ -144,34 +142,9 @@ struct GrammarRegistry {
     std::mutex mtx;
 
     GrammarRegistry() {
-        #ifdef WORKX_TS_C
-            langs["c"] = tree_sitter_c();
-        #endif
-        #ifdef WORKX_TS_CPP
-            langs["cpp"] = tree_sitter_cpp();
-            langs["c++"] = tree_sitter_cpp();
-        #endif
-        #ifdef WORKX_TS_CMAKE
-            langs["cmake"] = tree_sitter_cmake();
-        #endif
-        #ifdef WORKX_TS_PYTHON
-            langs["python"] = tree_sitter_python();
-        #endif
-        #ifdef WORKX_TS_BASH
-            langs["bash"] = tree_sitter_bash();
-        #endif
-        #ifdef WORKX_TS_JSON
-            langs["json"] = tree_sitter_json();
-        #endif
-        #ifdef WORKX_TS_JAVASCRIPT
-            langs["javascript"] = tree_sitter_javascript();
-        #endif
-        #ifdef WORKX_TS_RUST
-            langs["rust"] = tree_sitter_rust();
-        #endif
-        #ifdef WORKX_TS_GO
-            langs["go"] = tree_sitter_go();
-        #endif
+        // 各 grammar 注册由 scripts/gen_ts_grammars.py 生成
+        // (src/tui/render/ts_langs_reg.inc), 无需手改
+        #include "tui/render/ts_langs_reg.inc"
     }
 };
 
@@ -274,6 +247,12 @@ const std::unordered_map<std::string, SyntaxColor>& keyword_set() {
         {"then", SyntaxColor::Keyword}, {"fi", SyntaxColor::Keyword},
         {"esac", SyntaxColor::Keyword}, {"done", SyntaxColor::Keyword},
         {"local", SyntaxColor::Keyword}, {"declare", SyntaxColor::Keyword},
+        // Nix
+        {"with", SyntaxColor::Keyword}, {"inherit", SyntaxColor::Keyword},
+        {"rec", SyntaxColor::Keyword}, {"assert", SyntaxColor::Keyword},
+        {"else", SyntaxColor::Keyword}, {"if", SyntaxColor::Keyword},
+        {"in", SyntaxColor::Keyword}, {"let", SyntaxColor::Keyword},
+        {"then", SyntaxColor::Keyword}, {"or", SyntaxColor::Keyword},
     };
     return kw;
 }
@@ -295,13 +274,19 @@ SyntaxColor classify_by_type(std::string_view type) {
     };
     static const std::unordered_set<std::string_view> string_types = {
         "string", "string_literal", "char_literal", "raw_string",
-        "raw_string_literal", "string_content", "string_array"
+        "raw_string_literal", "string_content", "string_array",
+        // Nix
+        "string_expression", "indented_string_expression", "string_fragment",
+        "path_expression", "path_fragment", "hpath_expression",
+        "spath_expression", "uri_expression"
     };
     static const std::unordered_set<std::string_view> number_types = {
         "number", "number_literal", "integer", "float",
         "integer_literal", "float_literal",
         "decimal_floating_literal", "hex_literal",
-        "octal_literal", "binary_literal"
+        "octal_literal", "binary_literal",
+        // Nix
+        "integer_expression", "float_expression"
     };
     static const std::unordered_set<std::string_view> type_types = {
         "primitive_type", "type_identifier", "type_specifier",

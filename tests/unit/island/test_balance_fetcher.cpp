@@ -142,7 +142,7 @@ TEST_CASE("balance: 401 marks auth failure", "[island][balance]") {
     REQUIRE(r.error.find("401") != std::string::npos);
 }
 
-TEST_CASE("balance: 401 freezes periodic fetch", "[island][balance]") {
+TEST_CASE("balance: 401 freezes periodic fetch", "[island][balance][slow]") {
     FakeGetter fake;
     fake.status = 401;
     fake.body = "{}";
@@ -185,7 +185,7 @@ TEST_CASE("balance: network error surfaces message", "[island][balance]") {
 }
 
 TEST_CASE("balance: refresh_and_wait with 3s timeout returns cached on slow getter",
-          "[island][balance]") {
+          "[island][balance][slow]") {
     FakeGetter fake_slow;
     std::atomic<int> slow_calls{0};
     BalanceFetcher::HttpGetFn slow_fn = [&](const std::string&,

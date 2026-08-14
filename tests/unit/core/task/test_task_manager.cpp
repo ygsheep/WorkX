@@ -419,7 +419,7 @@ TEST_CASE_METHOD(TaskManagerFixture, "TaskManager getRunningTaskCount returns co
 // onCompleted callback
 // ============================================================================
 
-TEST_CASE_METHOD(TaskManagerFixture, "Task onCompleted callback fires on completion", "[task_manager][callback]") {
+TEST_CASE_METHOD(TaskManagerFixture, "Task onCompleted callback fires on completion", "[task_manager][callback][slow]") {
     std::atomic<bool> callback_fired{false};
 
     auto task = std::make_shared<Task>(
@@ -445,7 +445,7 @@ TEST_CASE_METHOD(TaskManagerFixture, "Task onCompleted callback fires on complet
 // ============================================================================
 
 TEST_CASE_METHOD(TaskManagerFixture, "TaskManager stress test: 50 concurrent tasks limited by thread pool",
-                 "[task_manager][stress]") {
+                 "[task_manager][stress][slow]") {
     // TaskManager 单例的线程池大小 = hardware_concurrency（测试环境通常 4-16）
     const size_t pool_workers = TaskManager::instance().worker_count();
     REQUIRE(pool_workers >= 1);

@@ -57,12 +57,47 @@ std::string lang_from_path(const std::string& path) {
         {"cc", "cpp"}, {"cxx", "cpp"}, {"cpp", "cpp"}, {"hpp", "cpp"}, {"hxx", "cpp"}, {"ino", "cpp"},
         {"py", "python"}, {"pyw", "python"}, {"pyi", "python"},
         {"js", "javascript"}, {"jsx", "javascript"}, {"mjs", "javascript"}, {"cjs", "javascript"},
-        {"ts", "typescript"}, {"tsx", "typescript"},
+        {"ts", "typescript"}, {"tsx", "tsx"},
         {"rs", "rust"},
         {"go", "go"},
+        {"nix", "nix"},
         {"sh", "bash"}, {"bash", "bash"}, {"zsh", "bash"}, {"ksh", "bash"},
         {"json", "json"},
         {"cmake", "cmake"}, {"txt", "cmake"},  // CMakeLists.txt 没扩展名, 走兜底
+        {"html", "html"}, {"htm", "html"},
+        {"css", "css"}, {"scss", "css"}, {"less", "css"},
+        {"md", "markdown"}, {"markdown", "markdown"},
+        {"java", "java"},
+        {"cs", "c-sharp"}, {"csharp", "c-sharp"},
+        {"yaml", "yaml"}, {"yml", "yaml"},
+        {"toml", "toml"},
+        {"dockerfile", "dockerfile"},
+        {"lua", "lua"},
+        {"rb", "ruby"}, {"ruby", "ruby"},
+        {"php", "php"},
+        {"kt", "kotlin"}, {"kts", "kotlin"},
+        {"swift", "swift"},
+        // 2026-08 自动扩展 (gen_ts_grammars.py)
+        {"astro", "astro"}, {"scala", "scala"},
+        {"clj", "clojure"}, {"cljs", "clojure"}, {"cljc", "clojure"},
+        {"cr", "crystal"}, {"dart", "dart"},
+        {"ex", "elixir"}, {"exs", "elixir"},
+        {"erl", "erlang"}, {"hrl", "erlang"},
+        {"f95", "fortran"}, {"f90", "fortran"}, {"f", "fortran"},
+        {"fs", "fsharp"}, {"fsi", "fsharp"}, {"fsx", "fsharp"},
+        {"gleam", "gleam"}, {"graphql", "graphql"}, {"gql", "graphql"},
+        {"hs", "haskell"},
+        {"tf", "hcl"}, {"hcl", "hcl"},
+        {"ini", "ini"}, {"cfg", "ini"},
+        {"jl", "julia"}, {"makefile", "make"}, {"mk", "make"},
+        {"nim", "nim"}, {"m", "objc"}, {"mm", "objc"},
+        {"ml", "ocaml"}, {"mli", "ocaml"},
+        {"pas", "pascal"}, {"pl", "perl"}, {"pm", "perl"},
+        {"prisma", "prisma"}, {"proto", "proto"},
+        {"r", "r"}, {"res", "rescript"},
+        {"robot", "robot"}, {"rst", "rst"}, {"sol", "solidity"},
+        {"svelte", "svelte"}, {"tla", "tlaplus"},
+        {"typ", "typst"}, {"v", "verilog"}, {"zig", "zig"},
     };
     auto it = mapping.find(ext);
     if (it != mapping.end()) return it->second;
@@ -71,6 +106,7 @@ std::string lang_from_path(const std::string& path) {
     std::transform(name.begin(), name.end(), name.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     if (name == "cmakelists.txt") return "cmake";
+    if (name == "dockerfile") return "dockerfile";
     return {};
 }
 
