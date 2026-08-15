@@ -74,3 +74,6 @@ __pycache__/
 /.claude/tmp/
 # 误拉取的 grammar submodule 残留（项目示例目录是单数 example/，此处为复数根目录残留）
 /examples/
+
+# 发布打包产物（scripts/package_release.py 输出）
+/dist/
