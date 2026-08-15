@@ -83,7 +83,6 @@ imgui.ini
 
 # 开发/规划辅助文件（不进入发布源码包；本地仍保留）
 /.claude/
-/docs/
 /plan/
 /CLAUDE.md
 /AGENT.md
