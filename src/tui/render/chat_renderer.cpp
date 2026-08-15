@@ -759,10 +759,13 @@ void ChatRenderer::start() {
     // 不触发会话级动作（token 统计、状态转 IDLE、光标复位）
     m_token_step_done = std::make_unique<EventToken>(
         bus.subscribe<StepDoneEvent>([this](const StepDoneEvent& /*e*/) {
-            if (m_spinner_active.load()) {
-                m_terminal->spinner_stop();
-                m_spinner_active.store(false);
-            }
+            // 注意：此处不再 spinner_stop。
+            // Spinner 线程是 StatusBar 动画的唯一持续驱动（update 回调调
+            // advance_frame + render）。StepDoneEvent 在每个 ReAct 步骤结束
+            // （模型调用工具前）触发，若在此停止 spinner，则工具执行期间
+            // 动画冻结，且后续步骤的 reasoning 也不会重启 spinner（只在每条
+            // 用户消息的 Connecting 时启动）。spinner 贯穿整个 ReAct 循环，
+            // 仅在真正结束时（StreamDone/StreamError/stop）停止。
 
             // 刷新 StreamingBuffer 和 OutputFormatter
             m_formatter->flush();
