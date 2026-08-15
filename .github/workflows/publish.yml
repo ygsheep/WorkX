@@ -1,0 +1,71 @@
+name: Release
+
+# 注意: 不能给 on 加引号（GitHub 不接受 'on' 形式），此处用原生 on
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+            shell: pwsh
+            bootstrap: .\vcpkg\bootstrap-vcpkg.bat
+            install: .\vcpkg\vcpkg.exe install --triplet x64-windows
+            build_dir: build/Release/bin
+          - os: ubuntu-latest
+            platform: linux
+            shell: bash
+            bootstrap: ./vcpkg/bootstrap-vcpkg.sh
+            install: ./vcpkg/vcpkg install --triplet x64-linux
+            build_dir: build/bin
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Clone & bootstrap vcpkg
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git vcpkg
+          ${{ matrix.bootstrap }}
+
+      - name: Install vcpkg deps
+        run: ${{ matrix.install }}
+
+      - name: Fetch ripgrep (vendor)
+        run: python scripts/fetch-ripgrep.py
+
+      - name: Configure & build
+        run: |
+          cmake -B build -S ${{ github.workspace }} \
+            -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DWORKX_BUILD_TESTS=OFF
+          cmake --build build --config Release --target workx -j 2
+
+      - name: Package release archive
+        run: python scripts/package_release.py --platform ${{ matrix.platform }} --arch amd64 --build-dir "${{ github.workspace }}/${{ matrix.build_dir }}"
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
