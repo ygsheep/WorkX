@@ -55,10 +55,7 @@ jobs:
 
       - name: Configure & build
         run: |
-          cmake -B build -S ${{ github.workspace }} \
-            -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DWORKX_BUILD_TESTS=OFF
+          cmake -B build -S ${{ github.workspace }} -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake -DCMAKE_BUILD_TYPE=Release -DWORKX_BUILD_TESTS=OFF
           cmake --build build --config Release --target workx -j 2
 
       - name: Package release archive
