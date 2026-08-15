@@ -25,58 +25,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # 需要 git describe 派生构建版本号
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Bootstrap vcpkg (cache)
-        uses: actions/cache@v4
-        id: vcpkg-cache
-        with:
-          path: vcpkg
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
-
-      - name: Clone & bootstrap vcpkg
-        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+      - name: Probe
         run: |
-          git clone https://github.com/microsoft/vcpkg.git vcpkg
-          ${{ matrix.platform == 'windows' && '.\vcpkg\bootstrap-vcpkg.bat' || './vcpkg/bootstrap-vcpkg.sh' }}
+          echo "platform=${{ matrix.platform }}"
+          echo "${{ matrix.platform == 'windows' && 'windows-ok' || 'linux-ok' }}"
         shell: ${{ matrix.platform == 'windows' && 'powershell' || 'bash' }}
-
-      - name: Install vcpkg deps
-        run: |
-          ${{ matrix.platform == 'windows' && '.\vcpkg\vcpkg.exe install --triplet x64-windows' || './vcpkg/vcpkg install --triplet x64-linux' }}
-        shell: ${{ matrix.platform == 'windows' && 'powershell' || 'bash' }}
-
-      - name: Fetch ripgrep (vendor)
-        run: python scripts/fetch-ripgrep.py
-
-      - name: Configure CMake
-        run: |
-          cmake -B build -S ${{ github.workspace }} \
-            -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DWORKX_BUILD_TESTS=OFF
-        shell: ${{ matrix.platform == 'windows' && 'powershell' || 'bash' }}
-
-      - name: Build
-        run: cmake --build build --config Release --target workx -j 2
-        shell: ${{ matrix.platform == 'windows' && 'powershell' || 'bash' }}
-
-      - name: Package release archive
-        run: python scripts/package_release.py --platform ${{ matrix.platform }} --arch amd64 --build-dir "${{ github.workspace }}/build/${{ matrix.platform == 'windows' && 'Release/bin' || 'bin' }}"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: dist/*
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          files: 'dist/probe-*.txt'
           generate_release_notes: true
