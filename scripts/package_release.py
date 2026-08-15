@@ -30,6 +30,14 @@ import tarfile
 import zipfile
 from pathlib import Path
 
+# Windows Console 默认编码（cp1252/charmap）无法编码中文输出，
+# 强制以 UTF-8 输出，避免 CI 中 zh_CN 打印触发 UnicodeEncodeError。
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 ROOT = Path(__file__).resolve().parent.parent
 VERSION_CMAKE = ROOT / "cmake" / "version.cmake"
 
