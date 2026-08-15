@@ -22,7 +22,7 @@ jobs:
             shell: pwsh
             bootstrap: .\vcpkg\bootstrap-vcpkg.bat
             install: .\vcpkg\vcpkg.exe install --triplet x64-windows
-            build_dir: build/Release/bin
+            build_dir: build/bin/Release
           - os: ubuntu-latest
             platform: linux
             shell: bash
