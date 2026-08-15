@@ -77,3 +77,13 @@ __pycache__/
 
 # 发布打包产物（scripts/package_release.py 输出）
 /dist/
+
+# 运行时生成的窗口布局文件（不提交，避免每次运行产生差异）
+imgui.ini
+
+# 开发/规划辅助文件（不进入发布源码包；本地仍保留）
+/.claude/
+/docs/
+/plan/
+/CLAUDE.md
+/AGENT.md

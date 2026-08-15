@@ -1,3 +1,2 @@
-[submodule ".skills/qa-skills"]
-	path = .skills/qa-skills
-	url = https://github.com/petrkindlmann/qa-skills.git
+# 说明：原 .skills/qa-skills 子模块未初始化且未跟踪，已移除声明。
+# 如需使用 QA skills，请重新添加子模块。
