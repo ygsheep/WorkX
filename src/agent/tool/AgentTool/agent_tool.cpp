@@ -2,7 +2,7 @@
  * @file agent_tool.cpp
  * @brief AgentTool 实现
  * @details 子 Agent 调度工具的具体实现
- * @version 1.3.0
+ * @version 1.3.1
  * @date 2026-07
  */
 
@@ -93,6 +93,7 @@ struct SubAgentLaunchOptions {
     ITaskManager* task_manager = nullptr;
     IEventBus* event_bus = nullptr;
     std::string cwd;
+    std::string session_id;  ///< #30：父会话 ID（注入子 Agent ToolContext.session_id，审计关联）
     tool::PermissionMode permission_mode = tool::PermissionMode::Default;
 };
 
@@ -136,8 +137,10 @@ std::shared_ptr<agent::Task> launch_sub_agent(const SubAgentLaunchOptions& optio
             }
 
             // 子会话：全新消息历史，system_prompt = 任务 prompt
+            // #30：注入父会话 ID，使子 Agent 工具调用的审计日志可关联到同一会话
             ReActLoop loop(options.provider, sub_agent_registry, options.config_manager,
-                           options.task_manager, options.cwd, options.event_bus);
+                           options.task_manager, options.cwd, options.event_bus,
+                           options.session_id);
             // 评审 #1：子 Agent 继承父会话权限模式，避免 Plan 只读边界被绕过
             loop.set_permission_mode(options.permission_mode);
             std::vector<ChatMessage> messages;
@@ -336,6 +339,7 @@ ResultV2<ToolResult> AgentTool::call(
             .task_manager = task_manager,
             .event_bus = event_bus,
             .cwd = cwd,
+            .session_id = ctx.session_id,  // #30：父会话 ID 传递给子 Agent
             .permission_mode = permission_mode
         }));
     }

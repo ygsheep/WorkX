@@ -2,7 +2,7 @@
  * @file chat_session.cpp
  * @brief 对话状态机实现
  * @details 编排用户输入、ReAct 循环、流式事件发布、自动重试、会话持久化
- * @version 3.1.0
+ * @version 3.1.1
  * @date 2026-07
  */
 
@@ -751,7 +751,7 @@ void ChatSession::run_completion(const std::string& user_text,
             ReActLoop loop(m_provider.get(), m_tool_registry, ReActLoop::Config{},
                            &m_config_manager.get(), &m_task_manager.get(), m_cwd,
                            &m_compactor, &m_event_bus.get(), &m_touch_collector,
-                           m_file_index_invalidator);
+                           m_file_index_invalidator, m_session_id);
 
             // #45：注入会话级权限状态（ReActLoop 每轮重建，跨 turn 恢复
             //      Default/Plan/Bypass 三态与 Plan 退出恢复逻辑）

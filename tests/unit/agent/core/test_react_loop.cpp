@@ -131,6 +131,54 @@ public:
 };
 
 // ============================================================
+// ContextCapture — 录制工具执行时的 ToolContext（#30 环境感知验证）
+// ============================================================
+
+/// @brief 记录工具执行时收到的 ToolContext 字段（#30 环境感知验证）
+/// @details 不整结构拷贝（ToolContext 含 std::atomic，不可拷贝/赋值），只录制需求字段。
+struct CapturedContext {
+    std::string session_id;
+    std::string request_id;
+    std::string model;
+    std::string history_summary;
+    bool captured = false;
+};
+
+/// @brief 接收工具的 ToolContext 并写入外部共享结构
+class ContextCaptureTool : public ITool {
+public:
+    explicit ContextCaptureTool(std::shared_ptr<CapturedContext> out)
+        : m_out(std::move(out)) {}
+
+    const std::string& name() const override {
+        static const std::string n = "Capture";
+        return n;
+    }
+    const std::string& description() const override {
+        static const std::string d = "Captures the ToolContext for env-field verification";
+        return d;
+    }
+    const std::string& prompt() const override {
+        static const std::string p = "Capture tool for #30 env field verification";
+        return p;
+    }
+    nlohmann::json input_schema() const override {
+        return {{"type", "object"}, {"properties", {}}};
+    }
+    ResultV2<ToolResult> call(const nlohmann::json&, const ToolContext& ctx) const override {
+        m_out->session_id = ctx.session_id;
+        m_out->request_id = ctx.request_id;
+        m_out->model = ctx.model;
+        m_out->history_summary = ctx.history_summary;
+        m_out->captured = true;
+        return ResultV2<ToolResult>::ok(ToolResult::ok(std::string("captured")));
+    }
+
+private:
+    std::shared_ptr<CapturedContext> m_out;
+};
+
+// ============================================================
 // CooperativeSlowTool — 协作式慢工具（响应 is_cancelled 即可退出）
 // ============================================================
 
@@ -437,6 +485,36 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop cooperative cancel during tool exe
     REQUIRE(messages.size() >= 3);
     REQUIRE(messages[2].role == ChatMessage::Role::Tool);
     REQUIRE(messages[2].content.find("cancelled") != std::string::npos);
+}
+
+// ============================================================================
+// #30 环境感知注入
+// ============================================================================
+
+TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop injects environment fields into ToolContext (#30)", "[react_loop][env]") {
+    // #30：工具执行时应能读到 request_id / session_id / history_summary / git 环境。
+    //      git 字段依赖 cwd 是否在 git 仓库，本测试不担保其值，仅校验注入通道存在
+    //      （能读到 request_id、历史摘要、模型名即可）。
+    auto cap = std::make_shared<CapturedContext>();
+    registry->register_tool(std::make_shared<ContextCaptureTool>(cap));
+
+    make_tool_call_reader("tu_01", "Capture", R"({})");
+    make_text_reader("done");  // 第二轮无工具调用 → FinalAnswer 结束
+
+    std::vector<ChatMessage> messages = {ChatMessage::user("记住：本项目用 nlohmann/json，不要用 rapidjson")};
+    auto loop = make_loop();
+    auto result = loop->run(messages, "", registry->get_all_schemas(), should_cancel);
+
+    REQUIRE(result.total_tool_calls == 1);
+    REQUIRE(cap->captured);
+    // request_id：每次 turn 生成，非空
+    REQUIRE_FALSE(cap->request_id.empty());
+    // 历史摘要：应包含用户早先约束（只读文本，无修改通道）
+    REQUIRE(cap->history_summary.find("nlohmann/json") != std::string::npos);
+    // session_id：ReActLoop 无注入时回退 "default"
+    REQUIRE(cap->session_id == "default");
+    // model：来自 backend.model_name（未配置时为空，不会崩溃）
+    (void)cap->model;
 }
 
 // ============================================================================
