@@ -232,7 +232,7 @@ TEST_CASE_METHOD(TaskToolsFixture, "AgentTool synchronous mode returns completed
     AgentTool tool;
     auto r = tool.call(nlohmann::json{{"prompt", "quick task"}, {"run_in_background", false}}, ctx);
     REQUIRE(r.is_ok());
-    REQUIRE(r.value().text.find("Sub-agent completed") != std::string::npos);
+    REQUIRE(r.value().text.find("Sub-agents completed (1 tasks)") != std::string::npos);
     REQUIRE(r.value().text.find("sync answer") != std::string::npos);
 }
 
@@ -370,6 +370,50 @@ TEST_CASE_METHOD(TaskToolsFixture, "AgentTool excludes Agent tool to prevent rec
     for (const auto& s : provider->last_tools) {
         REQUIRE(s["name"].get<std::string>() != "Agent");
     }
+}
+
+TEST_CASE_METHOD(TaskToolsFixture, "AgentTool launches batch of sub-agents in parallel", "[agent_tool][review]") {
+    MockEventBus bus;
+    auto& tm = TaskManager::instance();
+    MockConfigManager cfg;
+    ToolContext ctx;
+
+    auto provider = std::make_shared<MockCompletionProvider>();
+    auto r1 = std::make_shared<MockStreamReader>();
+    r1->add_content_chunk("result A");
+    auto r2 = std::make_shared<MockStreamReader>();
+    r2->add_content_chunk("result B");
+    provider->set_next_reader(r1);
+    provider->set_next_reader(r2);
+    fill_ctx(ctx, bus, tm, cfg, provider.get());
+
+    AgentTool tool;
+    auto r = tool.call(nlohmann::json{
+        {"tasks", nlohmann::json::array({
+            {{"prompt", "task A"}},
+            {{"prompt", "task B"}},
+        })}
+    }, ctx);
+    REQUIRE(r.is_ok());
+
+    // 后台模式：返回消息包含数量与全部 task_id
+    REQUIRE(r.value().text.find("Sub-agents launched (2 tasks)") != std::string::npos);
+
+    auto tasks = tm.getTasks();
+    REQUIRE(tasks.size() == 2);
+    // 每个子 Agent 独立 task_id
+    REQUIRE(tasks[0]->getName() != tasks[1]->getName());
+
+    // 等待全部完成
+    tm.wait(tasks[0]);
+    tm.wait(tasks[1]);
+    REQUIRE(tasks[0]->isFinished());
+    REQUIRE(tasks[1]->isFinished());
+
+    // 各自输出独立（并行调度下 reader 分配顺序不确定，故聚合断言两结果均出现）
+    const std::string all = tasks[0]->output() + tasks[1]->output();
+    REQUIRE(all.find("result A") != std::string::npos);
+    REQUIRE(all.find("result B") != std::string::npos);
 }
 
 TEST_CASE_METHOD(TaskToolsFixture, "TaskStopTool stops a running task", "[task_stop][slow]") {

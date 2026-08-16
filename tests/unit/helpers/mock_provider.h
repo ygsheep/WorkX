@@ -24,6 +24,7 @@
 #include <optional>
 #include <functional>
 #include <string>
+#include <mutex>
 
 #include "agent/api/i_completion_provider.h"
 #include "agent/api/i_stream_reader.h"
@@ -148,6 +149,7 @@ class MockCompletionProvider : public ICompletionProvider {
 public:
     /// @brief 排队下一次 submit_completion 返回的 reader
     void set_next_reader(std::shared_ptr<MockStreamReader> reader) {
+        std::lock_guard<std::mutex> lock(mutex_);
         readers_.push_back(std::move(reader));
     }
 
@@ -158,6 +160,7 @@ public:
     nlohmann::json last_tools;
 
     std::shared_ptr<IStreamReader> submit_completion(const CompletionRequest& request) override {
+        std::lock_guard<std::mutex> lock(mutex_);
         submit_count++;
         last_tools = request.tools;
         if (readers_.empty()) return nullptr;
@@ -168,9 +171,13 @@ public:
 
     void interrupt() override { interrupt_count++; }
 
-    bool is_generating() const override { return !readers_.empty(); }
+    bool is_generating() const override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return !readers_.empty();
+    }
 
 private:
+    mutable std::mutex mutex_;
     std::deque<std::shared_ptr<MockStreamReader>> readers_;
 };
 
