@@ -76,9 +76,21 @@ enum class PermissionMode : uint8_t {
 struct ToolContext {
     std::string cwd;                        ///< 工作目录
     std::string session_id;                 ///< 会话 ID
-    std::string request_id;                 ///< 请求 ID
-    std::string model;                      ///< 当前模型名称
+    std::string request_id;                 ///< 请求 ID（每次 turn 生成，审计/缓存链路关联）
+    std::string model;                      ///< 当前模型名称（来自 provider 配置）
     nlohmann::json options;                 ///< 额外选项
+
+    /// @brief #30：git 环境字段（运行时注入，非会话持久化元数据）
+    /// @details 由 ReActLoop 在 turn 开始时通过 git 命令探测，供工具做改前
+    ///          分支/未提交改动风险提示。全部为空/默认值表示当前不在 git 仓库内。
+    std::string git_branch;               ///< 当前分支（非仓库则为空）
+    bool git_has_uncommitted = false;     ///< 是否有未提交改动
+    std::string git_repo_root;            ///< 仓库根目录（非仓库则为空）
+
+    /// @brief #30：只读历史摘要（当前 turn 前用户指令/约束的文本摘要）
+    /// @details 由 ReActLoop 在 turn 开始时从对话历史构建（最近若干条 user 消息，
+    ///          截断总量），工具只读以感知用户早先约束；不留修改历史的通道。
+    std::string history_summary;
 
     /// @brief 权限模式（#36 权限决策层）
     /// @details 默认 Default；宿主可在构造时注入（如 CLI 的 --bypass-permissions）。

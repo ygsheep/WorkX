@@ -11,6 +11,9 @@
 #include "agent/api/i_stream_reader.h"
 #include "agent/compact/prefix_shape.h"  // DS_CACHE M-2: normalize_tools_schema
 #include "agent/skill/inclaude/conditional.h"
+#include "core/process/subprocess.h"  // #30：git 环境探测
+#include "core/utils/uuid.h"          // #30：每次 turn 生成 request_id
+#include "core/config/i_config_manager.h"  // #30：读取 backend.model_name
 #include "liblogger/logger.h"
 
 #include <cctype>
@@ -21,8 +24,88 @@
 #include <future>
 #include <thread>
 #include <utility>
+#include <algorithm>  // #30：std::reverse（历史摘要）
+#include <vector>
 
 namespace agent {
+
+// ============================================================
+// #30：环境感知辅助（git 探测 + 历史摘要）
+// ============================================================
+
+namespace {
+
+/// @brief 执行 git 命令，返回去尾空白的 stdout；失败/非零退出码返回空串
+/// @details 限时但不设取消回调（turnt 级探测，1500ms 内完成；git 命令通常 <100ms）
+std::string git_stdout(const std::string& cwd, const std::vector<std::string>& args) {
+    try {
+        auto res = process::exec("git", process::ExecOptions{
+            .cwd = cwd,
+            .args = args,
+            .timeout = std::chrono::milliseconds(1500),
+        });
+        if (res.is_ok() && res.value().exit_code == 0) {
+            std::string out = res.value().stdout_text;
+            while (!out.empty() && (out.back() == '\n' || out.back() == '\r' || out.back() == ' ')) {
+                out.pop_back();
+            }
+            return out;
+        }
+    } catch (...) {
+        // git 缺失/异常时不阻断 Agent，字段保持默认值
+    }
+    return {};
+}
+
+/// @brief #30：探测 git 环境并填充到 ToolContext
+/// @details 非仓库时保持不变（git_branch/git_repo_root 空、git_has_uncommitted=false）
+void detect_git_env(const std::string& cwd, tool::ToolContext& ctx) {
+    if (git_stdout(cwd, {"rev-parse", "--is-inside-work-tree"}) != "true") {
+        return;
+    }
+    ctx.git_branch = git_stdout(cwd, {"rev-parse", "--abbrev-ref", "HEAD"});
+    ctx.git_repo_root = git_stdout(cwd, {"rev-parse", "--show-toplevel"});
+    ctx.git_has_uncommitted = !git_stdout(cwd, {"status", "--porcelain"}).empty();
+}
+
+/// @brief #30：从对话历史构建只读历史摘要
+/// @details 收集最近若干条非空 user 消息（时间正序），单条与总量均截断，避免冲刷上下文。
+/// @param messages 对话历史
+/// @return 历史摘要文本（无 user 消息时为空串）
+std::string build_history_summary(const std::vector<ChatMessage>& messages) {
+    constexpr size_t kMaxUserMsgs = 10;   ///< 最多纳入的 user 消息条数
+    constexpr size_t kMaxLineChars = 200; ///< 单条消息截断长度
+    constexpr size_t kMaxTotalChars = 2000; ///< 摘要总长度上限
+
+    std::vector<std::string> lines;
+    for (auto it = messages.rbegin(); it != messages.rend() && lines.size() < kMaxUserMsgs; ++it) {
+        if (it->role != ChatMessage::Role::User || it->content.empty()) {
+            continue;
+        }
+        std::string line = it->content;
+        if (line.size() > kMaxLineChars) {
+            line.resize(kMaxLineChars);
+            line += "...";
+        }
+        lines.push_back(std::move(line));
+    }
+    std::reverse(lines.begin(), lines.end());  // 恢复时间正序
+
+    std::string out;
+    size_t total = 0;
+    for (auto& line : lines) {
+        if (!out.empty()) out += "\n";
+        out += line;
+        total += line.size();
+        if (total >= kMaxTotalChars) {
+            if (out.size() > kMaxTotalChars) out.resize(kMaxTotalChars);
+            break;
+        }
+    }
+    return out;
+}
+
+} // anonymous namespace
 
 // ============================================================
 // 构造
@@ -37,7 +120,8 @@ ReActLoop::ReActLoop(ICompletionProvider* provider,
                      CacheAwareCompactor* external_compactor,
                      IEventBus* event_bus,
                      skill::TouchCollector* touch_collector,
-                     std::function<void()> file_index_invalidator)
+                     std::function<void()> file_index_invalidator,
+                     std::string session_id)
     : m_provider(provider)
     , m_registry(std::move(registry))
     , m_config(config)
@@ -48,6 +132,7 @@ ReActLoop::ReActLoop(ICompletionProvider* provider,
     , m_task_manager(task_manager)
     , m_event_bus(event_bus)
     , m_cwd(std::move(cwd))
+    , m_session_id(std::move(session_id))
     , m_touch_collector(touch_collector)
     , m_file_index_invalidator(std::move(file_index_invalidator))
 {
@@ -382,6 +467,17 @@ ReActResult ReActLoop::run(
     auto loop_start = std::chrono::steady_clock::now();
     int step_counter = 0;
 
+    // #30：turn 级轻量环境感知——request_id / model / 历史摘要，turn 内复用（无子进程 I/O）。
+    //      git 环境探测较重（需 fork 子进程），推迟到首个工具执行前的 Action 阶段懒加载，
+    //      避免在无工具调用的 turn 或取消时序敏感场景下阻塞 run() 启动。
+    const std::string turn_request_id = core::util::generate_uuid();
+    const std::string turn_model =
+        m_config_manager->get_or<std::string>("backend.model_name", "");
+    const std::string turn_history_summary = build_history_summary(messages);
+    // git 探测结果（首次用到工具时懒加载；非仓库时保持默认值）
+    tool::ToolContext turn_env_probe;
+    bool turn_git_probed = false;
+
     for (int iteration = 1; iteration <= m_config.max_iterations; ++iteration) {
         result.total_iterations = iteration;
 
@@ -562,7 +658,23 @@ ReActResult ReActLoop::run(
 
         tool::ToolContext ctx;
         ctx.cwd = m_cwd;  // 使用会话启动时捕获的 cwd，避免运行中 cwd 漂移
-        ctx.session_id = "default";
+        // #30：首次执行工具时懒加载 git 环境探测（turn 内仅一次），避免阻塞 run() 启动
+        if (!turn_git_probed) {
+            detect_git_env(m_cwd, turn_env_probe);
+            turn_git_probed = true;
+        }
+        // #30：注入真实会话 ID（否则回退 "default"），供审计日志按会话关联
+        ctx.session_id = m_session_id.empty() ? std::string("default") : m_session_id;
+        // #30：注入 turn 级 request_id（每次 turn 生成一次，审计/缓存链路关联）
+        ctx.request_id = turn_request_id;
+        // #30：注入当前模型名（来自 provider 配置），工具可按模型能力调整策略
+        ctx.model = turn_model;
+        // #30：注入 git 环境字段，工具改前可做分支/未提交风险提示
+        ctx.git_branch = turn_env_probe.git_branch;
+        ctx.git_has_uncommitted = turn_env_probe.git_has_uncommitted;
+        ctx.git_repo_root = turn_env_probe.git_repo_root;
+        // #30：注入只读历史摘要，工具可见用户早先约束（无修改历史的通道）
+        ctx.history_summary = turn_history_summary;
         // 2.3 修复：将外部取消信号绑定到 ToolContext，工具可即时感知中断
         ctx.cancel_flag = &should_cancel;
         // H-5：注入配置管理器（非空），工具通过 ctx.config_manager() 访问

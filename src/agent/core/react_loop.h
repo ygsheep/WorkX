@@ -210,19 +210,23 @@ public:
               CacheAwareCompactor* external_compactor = nullptr,
               IEventBus* event_bus = nullptr,
               skill::TouchCollector* touch_collector = nullptr,
-              std::function<void()> file_index_invalidator = nullptr);
+              std::function<void()> file_index_invalidator = nullptr,
+              std::string session_id = "");
 
     /// @brief 构造（使用默认配置）
     /// @param config_manager 配置管理器（H-5：必须非空，注入到 ToolContext）
     /// @param cwd 工作目录（注入到 ToolContext.cwd，空则用进程当前目录）
     /// @param event_bus 事件总线（可选，用于 AskUserTool 等需要发布事件的工具）
+    /// @param session_id 会话 ID（#30：注入到 ToolContext.session_id，供审计日志关联，
+    ///                    空则使用默认值 "default"）
     ReActLoop(ICompletionProvider* provider,
               std::shared_ptr<tool::ToolRegistry> registry,
               IConfigManager* config_manager,
               ITaskManager* task_manager = nullptr,
               std::string cwd = "",
-              IEventBus* event_bus = nullptr)
-        : ReActLoop(provider, std::move(registry), Config{}, config_manager, task_manager, std::move(cwd), nullptr, event_bus, nullptr, nullptr) {}
+              IEventBus* event_bus = nullptr,
+              std::string session_id = "")
+        : ReActLoop(provider, std::move(registry), Config{}, config_manager, task_manager, std::move(cwd), nullptr, event_bus, nullptr, nullptr, std::move(session_id)) {}
 
     ~ReActLoop() = default;
 
@@ -407,6 +411,7 @@ private:
     ITaskManager* m_task_manager = nullptr;       ///< BashTool 后台任务 DI（可选，注入到 ToolContext）
     IEventBus* m_event_bus = nullptr;             ///< AskUserTool 事件发布 DI（可选，注入到 ToolContext）
     std::string m_cwd;                            ///< 工作目录（会话启动时捕获，注入到 ToolContext.cwd）
+    std::string m_session_id;                     ///< #30：会话 ID（注入到 ToolContext.session_id，审计日志关联）
     skill::TouchCollector* m_touch_collector = nullptr;  ///< conditional skills touch 收集器（可选）
     std::function<void()> m_file_index_invalidator;     ///< 宿主文件索引失效回调（可选，注入到 ToolContext）
     tool::PermissionMode m_permission_mode{tool::PermissionMode::Default};  ///< #28：会话级权限模式
