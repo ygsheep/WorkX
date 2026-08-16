@@ -149,4 +149,16 @@ struct SubAgentCompletedEvent {
     float duration_ms = 0.0f;   ///< 子 Agent 循环耗时（毫秒）
 };
 
+/// @brief 子 Agent 进度事件（AgentTool → 订阅者，v1.2.0 子任务进度流式订阅）
+/// @details 子 Agent 每个 ReAct 步骤完成时增量发布，携带 task_id 与当前步骤信息，
+///          使订阅者可按 task_id 实时跟踪子任务进度（无需轮询 TaskOutput）。
+///          ⚠️ 仅作增量通知，不注入父 LLM 上下文（与 SubAgentCompletedEvent 同策略）。
+///          完整输出仍通过 TaskOutputTool 按 task_id 读取。
+struct SubAgentProgressEvent {
+    std::string task_id;        ///< 子 Agent 任务 id（AgentTool 生成的 'a'+8 随机）
+    int32_t step_number = 0;    ///< 当前步骤序号（1-based，与 ReActStep.step_number 对齐）
+    std::string step_type;      ///< 步骤类型："thought" / "action" / "observation" / "final"
+    std::string content;        ///< 步骤内容（与写入 Task 输出缓冲的格式化行相同，可为空）
+};
+
 } // namespace agent

@@ -57,9 +57,20 @@ std::string format_step_line(const ReActStep& step) {
                                             : std::format("[{}] Observation: {}", step.step_number, step.observation);
         case ReActStepType::FinalAnswer:
             return step.thought_text.empty() ? std::string{}
-                                             : std::format("[{}] Final: {}", step.step_number, step.thought_text);
+                                            : std::format("[{}] Final: {}", step.step_number, step.thought_text);
     }
     return {};
+}
+
+/// @brief 步骤类型 → 字符串（v1.2.0 进度事件 step_type 字段）
+const char* step_type_str(ReActStepType type) {
+    switch (type) {
+        case ReActStepType::Thought:     return "thought";
+        case ReActStepType::Action:      return "action";
+        case ReActStepType::Observation: return "observation";
+        case ReActStepType::FinalAnswer: return "final";
+    }
+    return "unknown";
 }
 
 /// @brief 启动单个子 Agent 任务
@@ -126,10 +137,21 @@ std::shared_ptr<agent::Task> launch_sub_agent(
             auto task_ptr = task_manager->find_task(task_id);
             ReActResult result = loop.run(messages, prompt, tools_schema,
                 should_cancel,
-                [&task_ptr](const ReActStep& step) {
+                [task_id, event_bus, &task_ptr](const ReActStep& step) {
                     const std::string line = format_step_line(step);
                     if (task_ptr && !line.empty()) {
                         task_ptr->append_output(line);
+                    }
+                    // v1.2.0 子任务进度流式订阅：每个步骤增量推送结构化进度事件，
+                    // 使订阅者按 task_id 实时跟踪子任务进度（无需轮询 TaskOutput）。
+                    // 仅作增量通知，不注入父 LLM 上下文。
+                    if (event_bus != nullptr) {
+                        event_bus->publish_async(SubAgentProgressEvent{
+                            .task_id = task_id,
+                            .step_number = step.step_number,
+                            .step_type = step_type_str(step.type),
+                            .content = line
+                        });
                     }
                 });
 

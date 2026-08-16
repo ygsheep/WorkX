@@ -217,6 +217,50 @@ TEST_CASE_METHOD(TaskToolsFixture, "AgentTool background completion publishes Su
     REQUIRE_FALSE(completions[0].was_error);
 }
 
+TEST_CASE_METHOD(TaskToolsFixture, "AgentTool streams sub-agent progress events incrementally", "[agent_tool][review]") {
+    MockEventBus bus;
+    bus.set_dispatch_enabled(true);  // 同步派发，便于断言
+
+    std::vector<SubAgentProgressEvent> progress;
+    bus.subscribe<SubAgentProgressEvent>([&progress](const SubAgentProgressEvent& e) {
+        progress.push_back(e);
+    });
+
+    auto& tm = TaskManager::instance();
+    MockConfigManager cfg;
+    ToolContext ctx;
+
+    auto provider = std::make_shared<MockCompletionProvider>();
+    auto reader = std::make_shared<MockStreamReader>();
+    reader->add_content_chunk("progress result");
+    provider->set_next_reader(reader);
+    fill_ctx(ctx, bus, tm, cfg, provider.get());
+
+    AgentTool tool;
+    auto r = tool.call(nlohmann::json{{"prompt", "progress task"}}, ctx);
+    REQUIRE(r.is_ok());
+
+    auto tasks = tm.getTasks();
+    REQUIRE(tasks.size() == 1);
+    tm.wait(tasks[0]);
+    bus.drain_async_events();
+
+    // 进度事件已流式发布：非空、task_id 对齐、含 final 类型步骤
+    REQUIRE_FALSE(progress.empty());
+    for (const auto& e : progress) {
+        REQUIRE(e.task_id == tasks[0]->getName());
+    }
+    // 覆盖进度 step_type 与增量内容（至少存在一轮 thought → final）
+    bool saw_thought = false;
+    bool saw_final = false;
+    for (const auto& e : progress) {
+        if (e.step_type == "thought" && e.content.find("progress result") != std::string::npos) saw_thought = true;
+        if (e.step_type == "final" && e.content.find("Final: progress result") != std::string::npos) saw_final = true;
+    }
+    REQUIRE(saw_thought);
+    REQUIRE(saw_final);
+}
+
 TEST_CASE_METHOD(TaskToolsFixture, "AgentTool synchronous mode returns completed result", "[agent_tool]") {
     MockEventBus bus;
     auto& tm = TaskManager::instance();
