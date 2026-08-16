@@ -4,7 +4,7 @@
 >
 > 对标 Claude Code CLI 的 `AgentTool`，在 WorkX 的 ReAct 架构下实现"任务分解 + 并行子 Agent"能力。
 >
-> 版本：v1.1.0
+> 版本：v1.2.0
 
 ---
 
@@ -13,6 +13,7 @@
 `AgentTool` 是 Agent 工具集中负责"启动子 Agent"的工具，对应 LLM 工具名 `Agent`。支持：
 
 - **后台运行（默认）**：`run_in_background=true` 时通过 `TaskManager::launch()` 投递到线程池，立即返回 `task_id`
+- **并行批量调度**：`tasks` 数组一次启动多个子 Agent，各自独立 `task_id`，线程池并发执行（v1.2.0）
 - **同步运行**：`run_in_background=false` 时阻塞等待子 Agent 完成，返回其完整输出
 - **全新子会话**：子 Agent 使用全新消息历史，`system_prompt = prompt`
 - **权限继承**：子 Agent 继承父会话 `permission_mode`，防止 Plan 只读边界被绕过
@@ -20,15 +21,16 @@
 - **工具集白名单**：`tools` 字段按名称过滤子 Agent 可用工具（空/缺失时使用全部已注册工具）
 - **独立工具集**：子 Agent 使用独立 `ToolRegistry`，不共享父 registry 的暴露面；父处于 Plan（只读）时仅下发只读工具，双重防线防权限逃逸
 - **后台结果自动回送**：子 Agent 完成后发布 `SubAgentCompletedEvent`（task_id + 结果摘要），订阅者无需轮询 TaskOutput 即可感知完成；仅作通知，不注入父 LLM 上下文
+- **进度流式订阅**：子 Agent 每个 ReAct 步骤增量发布 `SubAgentProgressEvent`（task_id + 步骤类型 + 内容），订阅者可按 task_id 实时跟踪进度（v1.2.0）
 - **协作取消/生命周期**：`TaskStopTool` 取消，`ChatSession` 析构时 `cancelAll + waitForAll` 防 use-after-free
 
 ### 文件清单
 
 | 文件 | 用途 | 版本 |
 |------|------|------|
-| [agent_tool.h](agent_tool.h) | 工具接口声明 | v1.1.0 |
-| [agent_tool.cpp](agent_tool.cpp) | 工具实现（task_id 生成 + 子 agent 启动 + 同步/后台分发 + 独立工具集/白名单/只读过滤 + 后台结果自动回送） | v1.1.0 |
-| [README.md](README.md) | 本文档 | v1.1.0 |
+| [agent_tool.h](agent_tool.h) | 工具接口声明 | v1.2.0 |
+| [agent_tool.cpp](agent_tool.cpp) | 工具实现（task_id 生成 + 子 agent 启动 + 并行批量调度 + 同步/后台分发 + 独立工具集/白名单/只读过滤 + 后台结果自动回送 + 进度流式订阅） | v1.2.0 |
+| [README.md](README.md) | 本文档 | v1.2.0 |
 
 > 配套工具：`TaskOutputTool`（读子任务输出）、`TaskStopTool`（取消子任务），见 [tool/Task/](../Task/)。
 
@@ -62,9 +64,14 @@
 {
   "type": "object",
   "properties": {
-    "prompt":            { "type": "string",  "description": "The task prompt for the sub-agent" },
+    "prompt":            { "type": "string",  "description": "Single task prompt for the sub-agent (used when 'tasks' is omitted)" },
+    "tasks":             { "type": "array",   "items": { "type": "object", "properties": {
+                             "prompt": { "type": "string", "description": "Task prompt for one sub-agent" },
+                             "tools":  { "type": "array", "items": { "type": "string" }, "description": "Allowed tools for this task (whitelist; empty uses all registered tools)" }
+                           }, "required": ["prompt"], "additionalProperties": false },
+                           "description": "Batch of sub-agent tasks to launch in parallel (each gets its own task_id)" },
     "tools":             { "type": "array",   "items": { "type": "string" }, "description": "Allowed tools for the sub-agent (whitelist; empty/omitted uses all registered tools)" },
-    "run_in_background": { "type": "boolean", "description": "Run the sub-agent in background (default true); false runs synchronously" }
+    "run_in_background": { "type": "boolean", "description": "Run the sub-agent(s) in background (default true); false runs synchronously" }
   },
   "required": ["prompt"],
   "additionalProperties": false
@@ -75,7 +82,8 @@
 
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| `prompt` | string | 是 | — | 子 Agent 的任务提示词，作为其 `system_prompt`（不允许空字符串） |
+| `prompt` | string | 是* | — | 子 Agent 的任务提示词，作为其 `system_prompt`（不允许空字符串）。提供 `tasks` 时忽略，否则必填 |
+| `tasks` | object[] | 否 | — | 并行批量调度：一次启动多个子 Agent（v1.2.0）。每项含 `prompt`（必填）与可选 `tools`；提供时忽略顶级 `prompt`/`tools` |
 | `tools` | string[] | 否 | — | 子 Agent 允许的工具集白名单（按名称过滤；空/缺失时使用全部已注册工具，未注册名称忽略） |
 | `run_in_background` | bool | 否 | `true` | `true` 后台异步执行立即返回 task_id；`false` 同步阻塞等待完成 |
 
@@ -93,22 +101,28 @@
 Sub-agent launched (task: a1b2c3d4e5). Use TaskOutput to read its progress.
 ```
 
+批量调度（`tasks` 数组）返回全部 `task_id`：
+
+```
+Sub-agents launched (2 tasks): a1b2c3d4e5, f6g7h8j9k1. Use TaskOutput to read their progress.
+```
+
 后续通过 `TaskOutputTool`（按 `task_id`）读取输出与状态，或 `TaskStopTool` 取消。
 
 ### 同步运行
 
-阻塞等待子 Agent 完成（`TaskManager::wait` 内部带 30s 兜底超时），返回：
+阻塞等待子 Agent 完成（`TaskManager::wait` 内部带 30s 兜底超时），单个任务返回：
 
 ```
-Sub-agent completed (task: a1b2c3d4e5).
+Sub-agents completed (1 tasks).
+--- a1b2c3d4e5 ---
 [1] Thought: ...
 [2] Tool: FileReadTool
 [3] Observation: ...
 [4] Final: <final answer>
 ```
 
-- 输出为子 Agent 各 `ReActStep` 格式化行 + 收尾行（`Final: ...` 或 `Error: ...`）
-- 若 30s 超时任务仍在运行，返回提示文本（可用 `TaskStop` 取消），不无限阻塞工具调用线程
+批量调度按 `task_id` 分段返回每个子 Agent 的输出；超时仍在运行的任务返回提示文本（可用 `TaskStop` 取消），不无限阻塞工具调用线程。
 
 ---
 
@@ -252,6 +266,7 @@ flowchart TD
 |------|------|
 | 共享单例 | `TaskManager` 单例 + `IEventBus` + `ICompletionProvider` + `ToolRegistry` |
 | 子 → 父（结果） | 子 Agent 写 `Task` 输出缓冲，并异步发布 `TaskOutputEvent`（仅含 `task_name + line`） |
+| 子 → 父（进度） | 子 Agent 每个 ReAct 步骤发布 `SubAgentProgressEvent`（task_id + 步骤类型 + 内容，v1.2.0） |
 | 子 → 父（回送） | 子 Agent 完成时发布 `SubAgentCompletedEvent`（task_id + 结果摘要，v1.1.0） |
 | 父 → 子（读取） | `TaskOutputTool` 按 `task_id` 读输出缓冲 + 状态 |
 | 父 → 子（控制） | `TaskStopTool` 取消任务 |
@@ -275,6 +290,7 @@ sequenceDiagram
         TM-->>SA: 新建 ReActLoop + 继承 permission_mode
         SA-->>TM: on_step → append_output(line)
         SA-->>P: 发布 TaskOutputEvent(task_name, line)
+        SA-->>P: 发布 SubAgentProgressEvent(task_id, step)  ← v1.2.0 进度增量
         SA-->>TM: 完成 → 写 Final/Error 到输出缓冲
         SA-->>P: 发布 SubAgentCompletedEvent(task_id, 摘要)  ← v1.1.0 自动回送
     end
@@ -365,6 +381,7 @@ auto stop = TaskStopTool{}.call({{"task_id", "a1b2c3d4e5"}}, ctx);
 | 工具集过滤 | ✅ | ✅ `tools` 白名单生效 | 空/缺失时使用全部已注册工具 |
 | 独立/只读工具集 | ✅ | ✅ 独立 registry + Plan 只读过滤 | 暴露面层隔离，双重防线 |
 | 结果回传 LLM（后台） | ✅ | ✅ 发布 `SubAgentCompletedEvent`（通知，不注入上下文） | 一致（通知式） |
+| 进度流式订阅 | ✅ | ✅ 发布 `SubAgentProgressEvent`（task_id + 步骤，增量） | 一致（通知式） |
 
 ### 设计差异分析
 
@@ -373,6 +390,7 @@ auto stop = TaskStopTool{}.call({{"task_id", "a1b2c3d4e5"}}, ctx);
 3. **工具集过滤**：`tools` 字段按名称白名单过滤子 Agent 可用工具，未注册名称自动忽略；空/缺失时回退到全部已注册工具，兼顾安全与易用。
 4. **独立/只读工具集**：子 Agent 使用独立 `ToolRegistry`，不共享父暴露面；父处于 Plan 时仅下发 `is_read_only()` 工具，与 `check_permissions` 形成纵深双重防线。
 5. **后台结果回送**：后台子 Agent 完成后发布 `SubAgentCompletedEvent`（仅携带 task_id + 结果摘要），供订阅者无需轮询 TaskOutput 即可感知完成；**不注入父 LLM 上下文**，完整输出仍通过 `TaskOutputTool` 按需读取，避免长输出刷屏父会话。
+6. **进度流式订阅**：子 Agent 每个 ReAct 步骤增量发布 `SubAgentProgressEvent`（task_id + step_type + 内容），订阅者可按 task_id 实时跟踪子任务进度；同样仅作增量通知，不注入父 LLM 上下文。
 
 ---
 
@@ -391,6 +409,8 @@ auto stop = TaskStopTool{}.call({{"task_id", "a1b2c3d4e5"}}, ctx);
 | **工具集过滤** | `tools` 白名单 + `get_schemas_by_names` | 仅保留匹配名称，未注册名忽略 |
 | **防递归** | 父 registry 含 `Agent` 工具 + 白名单含 `Agent` | 子 Agent schema 不含 `Agent` |
 | **后台结果自动回送** | 后台子 Agent 完成 | 发布 `SubAgentCompletedEvent`（task_id + 结果摘要） |
+| **进度流式订阅** | 后台子 Agent 运行 | 增量发布 `SubAgentProgressEvent`（task_id 对齐，含 thought/final 类型） |
+| **并行批量调度** | `tasks` 数组 | 一次启动多个子 Agent，各自独立 task_id |
 | **TaskOutput** | 读已完成/运行中/超时任务 | ok，含 status/output |
 | **TaskStop** | 停止运行中任务 | ok，任务进入 Cancelled |
 
@@ -411,6 +431,8 @@ auto stop = TaskStopTool{}.call({{"task_id", "a1b2c3d4e5"}}, ctx);
 | `is_read_only()` 标记（IToolMetadata 默认 false） | 只读工具（Read/Glob/Grep/WebFetch/TaskOutput/Skill）覆盖为 true，供只读工具集过滤 |
 | 析构 `cancelAll + waitForAll` | 绑定子任务生命周期到父会话，防 use-after-free（评审 #2） |
 | 后台完成发布 `SubAgentCompletedEvent` | 通知式回送：订阅者免轮询感知完成；仅携带摘要，不注入父 LLM 上下文，避免刷屏 |
+| `tasks` 数组并行批量调度 | 一次启动多个子 Agent，各自独立 `task_id`，线程池并发执行，提升任务吞吐 |
+| 每步发布 `SubAgentProgressEvent` | 进度流式订阅：订阅者按 task_id 实时跟踪子任务进度，无需轮询 TaskOutput |
 | `task_id = 'a' + 8 随机` | 对齐 TS generateTaskId，短且可读，前缀 `a` 区分任务 |
 | `additionalProperties: false` | 严格 schema 校验，对齐其他工具 |
 | 同步 wait 带 30s 兜底 | 防止 LLM 死循环/无响应时无限阻塞工具调用线程（评审 #3） |
@@ -435,7 +457,7 @@ auto stop = TaskStopTool{}.call({{"task_id", "a1b2c3d4e5"}}, ctx);
 - [x] 后台任务结果自动回送策略（`SubAgentCompletedEvent` 通知式回送，不注入父 LLM 上下文）
 - [x] 防递归：子 Agent 工具集强制排除 `Agent` 工具本身
 
-### v1.2.0（进行中 🚧）
+### v1.2.0（已完成 ✅）
 
-- [ ] 子 Agent 并行批量调度（一次启动多个子 Agent）
-- [ ] 子任务进度流式订阅（事件总线增量推送）
+- [x] 子 Agent 并行批量调度（`tasks` 数组一次启动多个子 Agent，各自独立 `task_id`）
+- [x] 子任务进度流式订阅（`SubAgentProgressEvent` 事件总线增量推送，按 task_id 实时跟踪）
