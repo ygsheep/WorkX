@@ -83,6 +83,18 @@ public:
     }
 };
 
+/// @brief Stub Agent 工具（模拟 AgentTool 本体，name = "Agent"），供防递归测试
+class StubAgentTool : public ITool {
+public:
+    const std::string& name() const override { static const std::string n{"Agent"}; return n; }
+    const std::string& description() const override { static const std::string d{"agent"}; return d; }
+    const std::string& prompt() const override { static const std::string p; return p; }
+    nlohmann::json input_schema() const override { return {{"type", "object"}}; }
+    ResultV2<ToolResult> call(const nlohmann::json&, const ToolContext&) const override {
+        return ResultV2<ToolResult>::ok(ToolResult::ok(std::string("agent-ok")));
+    }
+};
+
 } // namespace
 
 // ============================================================
@@ -321,6 +333,43 @@ TEST_CASE_METHOD(TaskToolsFixture, "AgentTool applies tools whitelist", "[agent_
     }
     REQUIRE(std::find(got.begin(), got.end(), "Read") != got.end());
     REQUIRE(std::find(got.begin(), got.end(), "Bash") != got.end());
+}
+
+TEST_CASE_METHOD(TaskToolsFixture, "AgentTool excludes Agent tool to prevent recursion", "[agent_tool][review]") {
+    MockEventBus bus;
+    auto& tm = TaskManager::instance();
+    MockConfigManager cfg;
+    ToolContext ctx;
+
+    auto provider = std::make_shared<MockCompletionProvider>();
+    auto reader = std::make_shared<MockStreamReader>();
+    reader->add_content_chunk("no recursion");
+    provider->set_next_reader(reader);
+    fill_ctx(ctx, bus, tm, cfg, provider.get());
+
+    // 父 registry 同时含 Agent 工具与其他工具；即使白名单显式包含 "Agent" 也应被忽略
+    auto registry = std::make_shared<ToolRegistry>();
+    registry->register_tool(std::make_shared<StubAgentTool>());
+    registry->register_tool(std::make_shared<StubReadOnlyTool>());
+    registry->register_tool(std::make_shared<StubWriteTool>());
+    ctx.tool_registry = registry;
+
+    AgentTool tool;
+    auto r = tool.call(nlohmann::json{
+        {"prompt", "task"}, {"tools", nlohmann::json::array({"Agent", "Read", "Bash"})}}, ctx);
+    REQUIRE(r.is_ok());
+
+    auto tasks = tm.getTasks();
+    REQUIRE(tasks.size() == 1);
+    tm.wait(tasks[0]);
+    REQUIRE(tasks[0]->isFinished());
+
+    // 子 Agent 工具集不含 Agent 工具（防无限递归），仅保留 Read/Bash
+    REQUIRE(provider->last_tools.is_array());
+    REQUIRE(provider->last_tools.size() == 2);
+    for (const auto& s : provider->last_tools) {
+        REQUIRE(s["name"].get<std::string>() != "Agent");
+    }
 }
 
 TEST_CASE_METHOD(TaskToolsFixture, "TaskStopTool stops a running task", "[task_stop][slow]") {

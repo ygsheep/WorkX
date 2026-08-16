@@ -144,6 +144,8 @@ ResultV2<ToolResult> AgentTool::call(
             //  - 白名单过滤：tools 为空使用全部已注册工具，否则仅保留白名单内工具
             //  - Plan 只读：父处于 Plan（只读）时仅保留只读工具，杜绝写/执行能力，
             //    与 check_permissions 形成双重防线（权限逃逸纵深防御）
+            //  - 防递归：无论如何排除 Agent 工具本身，子 Agent 不能再启动子 Agent，
+            //    杜绝无限嵌套/循环（即使白名单显式包含 "Agent" 也会被忽略）
             auto sub_agent_registry = std::make_shared<ToolRegistry>();
             if (sub_registry) {
                 std::vector<std::shared_ptr<ITool>> candidates =
@@ -159,6 +161,9 @@ ResultV2<ToolResult> AgentTool::call(
                             return sel;
                         }();
                 for (const auto& t : candidates) {
+                    if (t->name() == "Agent") {
+                        continue;  // 防递归：子 Agent 不携带 Agent 工具
+                    }
                     if (permission_mode == tool::PermissionMode::Plan && !t->is_read_only()) {
                         continue;  // Plan 只读：跳过写/执行工具
                     }

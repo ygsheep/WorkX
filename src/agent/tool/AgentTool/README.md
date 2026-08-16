@@ -16,7 +16,7 @@
 - **同步运行**：`run_in_background=false` 时阻塞等待子 Agent 完成，返回其完整输出
 - **全新子会话**：子 Agent 使用全新消息历史，`system_prompt = prompt`
 - **权限继承**：子 Agent 继承父会话 `permission_mode`，防止 Plan 只读边界被绕过
-- **可递归嵌套**：子 Agent 的 `ToolContext` 同样注入 provider + 工具集，可再启动孙子 Agent
+- **防递归**：子 Agent 工具集**强制排除 `Agent` 工具本身**（即使白名单显式包含 `Agent` 也会被忽略），杜绝子 Agent 再启动子 Agent 的无限嵌套/循环
 - **工具集白名单**：`tools` 字段按名称过滤子 Agent 可用工具（空/缺失时使用全部已注册工具）
 - **独立工具集**：子 Agent 使用独立 `ToolRegistry`，不共享父 registry 的暴露面；父处于 Plan（只读）时仅下发只读工具，双重防线防权限逃逸
 - **后台结果自动回送**：子 Agent 完成后发布 `SubAgentCompletedEvent`（task_id + 结果摘要），订阅者无需轮询 TaskOutput 即可感知完成；仅作通知，不注入父 LLM 上下文
@@ -223,21 +223,20 @@ launch(task_id, ...)
 - **白名单**：`tools` 非空则仅注册白名单内工具（未注册名忽略）；为空则注册全部已注册工具
 - **Plan 只读**：父处于 Plan（只读）时，仅注册 `is_read_only() == true` 的工具（Read/Glob/Grep/WebFetch/TaskOutput/Skill），写/执行类工具从暴露面层剔除
 - **双重防线**：与 6.2 的 `check_permissions` 运行时拒绝形成纵深防御——Plan 子 Agent 根本拿不到写/执行工具
-- **递归继承**：子 Agent 的 `ToolContext.tool_registry` 指向该独立 registry，其启动的孙 Agent 同样基于独立工具集
+- **防递归**：无论白名单如何，**强制排除 `Agent` 工具本身**，子 Agent 无法再启动子 Agent，杜绝无限嵌套/循环
 
 > 工具实例本身仍由父/子共享（`call()` 标注 `const`、无实例可变状态，见 [itool.h](../itool.h) 线程安全保证），线程安全由该契约保障；独立的是 registry 暴露面与过滤逻辑。
 
-### 6.4 递归嵌套
+### 6.4 防递归
 
-子 Agent 的 `ToolContext` 同样被注入 `provider_ptr + tool_registry`（见 [react_loop.cpp](../../core/react_loop.cpp)），因此子 Agent 内部也可调用 `Agent` 启动孙子 Agent，形成树状任务分解。
+子 Agent 构建工具集时**强制剔除 `Agent` 工具**（即使 `tools` 白名单显式包含 `Agent` 也会被忽略），因此子 Agent 内部无法再调用 `Agent` 启动孙子 Agent，杜绝无限递归/循环嵌套。
 
 ```mermaid
 flowchart TD
     P["父会话（ChatSession）"] --> A["Agent#1 子任务<br/>task_id: a1b2c3d4e5"]
     P --> B["Agent#2 子任务<br/>task_id: b2c3d4e5f6"]
-    A --> A1["Agent#1.1 孙任务<br/>task_id: c3d4e5f6a7"]
-    A --> A2["Agent#1.2 孙任务<br/>task_id: d4e5f6a7b8"]
-    B --> B1["Agent#2.1 孙任务<br/>task_id: e5f6a7b8c9"]
+    A --> X["❌ 子 Agent 工具集不含 Agent<br/>无法再启动孙 Agent（防递归）"]
+    B --> Y["❌ 同上"]
 ```
 
 ### 6.5 取消与生命周期（评审 #2）
@@ -390,6 +389,7 @@ auto stop = TaskStopTool{}.call({{"task_id", "a1b2c3d4e5"}}, ctx);
 | **权限继承** | 父 Plan 模式启动子 Agent | ok（子 Agent 继承 Plan 只读） |
 | **独立/只读工具集** | 父 Plan + 含只读/可写工具的 registry | 子 Agent schema 仅含只读工具 |
 | **工具集过滤** | `tools` 白名单 + `get_schemas_by_names` | 仅保留匹配名称，未注册名忽略 |
+| **防递归** | 父 registry 含 `Agent` 工具 + 白名单含 `Agent` | 子 Agent schema 不含 `Agent` |
 | **后台结果自动回送** | 后台子 Agent 完成 | 发布 `SubAgentCompletedEvent`（task_id + 结果摘要） |
 | **TaskOutput** | 读已完成/运行中/超时任务 | ok，含 status/output |
 | **TaskStop** | 停止运行中任务 | ok，任务进入 Cancelled |
@@ -407,6 +407,7 @@ auto stop = TaskStopTool{}.call({{"task_id", "a1b2c3d4e5"}}, ctx);
 | 继承父 `permission_mode` | 安全优先，防止 Plan 只读边界被并发子任务绕过（评审 #1） |
 | `tools` 白名单过滤（`get_schemas_by_names`） | 按名称裁剪子 Agent 工具集，未注册名忽略，空列表回退全部工具 |
 | 独立 `ToolRegistry` + Plan 只读过滤 | 不共享父暴露面；Plan 下仅下发 `is_read_only()` 工具，与 `check_permissions` 双重防线 |
+| 强制排除 `Agent` 工具本身 | 防递归：子 Agent 无法再启动子 Agent，杜绝无限嵌套/循环（即使白名单显式含 `Agent`） |
 | `is_read_only()` 标记（IToolMetadata 默认 false） | 只读工具（Read/Glob/Grep/WebFetch/TaskOutput/Skill）覆盖为 true，供只读工具集过滤 |
 | 析构 `cancelAll + waitForAll` | 绑定子任务生命周期到父会话，防 use-after-free（评审 #2） |
 | 后台完成发布 `SubAgentCompletedEvent` | 通知式回送：订阅者免轮询感知完成；仅携带摘要，不注入父 LLM 上下文，避免刷屏 |
