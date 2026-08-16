@@ -3,7 +3,7 @@
  * @brief Agent 编排事件类型（H-10：从 events.h 按域拆分）
  * @details Agent 推理步骤、工具调用、工具结果、Agent 编排完成等事件。
  *          订阅方按需 include 本文件，避免引入系统/流式事件。
- * @version 1.0.0
+ * @version 1.1.0
  * @date 2026-07
  */
 
@@ -135,6 +135,30 @@ struct ExitPlanModeEvent {
     std::string session_id;
     std::string plan;       ///< 方案文本（改哪些文件、风险点等）
     bool approved = false;  ///< 用户是否批准
+};
+
+/// @brief 子 Agent 后台任务完成事件（AgentTool → 订阅者，v1.1.0 后台结果自动回送）
+/// @details 后台子 Agent 结束后由 AgentTool 发布，携带 task_id 与最终结果摘要，
+///          使父会话/UI 等订阅者无需轮询 TaskOutput 即可感知子任务完成。
+///          ⚠️ 仅作通知，不注入父 LLM 上下文（避免长输出刷屏父会话，见设计决策）。
+///          完整输出仍通过 TaskOutputTool 按 task_id 读取。
+struct SubAgentCompletedEvent {
+    std::string task_id;        ///< 子 Agent 任务 id（AgentTool 生成的 'a'+8 随机）
+    std::string final_answer;   ///< 最终答案（Final: ...）或错误信息（Error: ...），可为空
+    bool was_error = false;     ///< 子任务是否以错误结束
+    double duration_ms = 0.0;   ///< 子 Agent 循环耗时（毫秒，与 AgentDoneEvent 同型）
+};
+
+/// @brief 子 Agent 进度事件（AgentTool → 订阅者，v1.2.0 子任务进度流式订阅）
+/// @details 子 Agent 每个 ReAct 步骤完成时增量发布，携带 task_id 与当前步骤信息，
+///          使订阅者可按 task_id 实时跟踪子任务进度（无需轮询 TaskOutput）。
+///          ⚠️ 仅作增量通知，不注入父 LLM 上下文（与 SubAgentCompletedEvent 同策略）。
+///          完整输出仍通过 TaskOutputTool 按 task_id 读取。
+struct SubAgentProgressEvent {
+    std::string task_id;        ///< 子 Agent 任务 id（AgentTool 生成的 'a'+8 随机）
+    int32_t step_number = 0;    ///< 当前步骤序号（1-based，与 ReActStep.step_number 对齐）
+    std::string step_type;      ///< 步骤类型："thought" / "action" / "observation" / "final"
+    std::string content;        ///< 步骤内容（与写入 Task 输出缓冲的格式化行相同，可为空）
 };
 
 } // namespace agent
