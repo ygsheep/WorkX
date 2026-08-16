@@ -2,7 +2,7 @@
  * @file agent_tool.cpp
  * @brief AgentTool 实现
  * @details 子 Agent 调度工具的具体实现
- * @version 1.2.0
+ * @version 1.3.0
  * @date 2026-07
  */
 
@@ -21,10 +21,14 @@ namespace agent::tool {
 
 namespace {
 
+/// @brief Agent 工具名（防递归排除 + 工具元信息共用，避免硬编码漂移）
+constexpr const char* kAgentToolName = "Agent";
+
 /// @brief 生成任务 id（对齐 TS generateTaskId：'a' 前缀 + 8 个随机小写字母数字）
 std::string generate_task_id() {
     static constexpr char kAlphabet[] = "0123456789abcdefghijklmnopqrstuvwxyz";
-    std::random_device rd;
+    // 复用随机源（MSVC 上 std::random_device 每次构造开销大，批量调度场景明显）
+    static std::random_device rd;
     std::uniform_int_distribution<size_t> dist(0, sizeof(kAlphabet) - 2);
     std::string id = "a";
     id.reserve(9);
@@ -42,6 +46,11 @@ std::string fmt_join_ids(const std::vector<std::string>& ids) {
         out += ids[i];
     }
     return out;
+}
+
+/// @brief 格式化任务数量描述（单复数："1 task" / "3 tasks"）
+std::string fmt_task_count(size_t n) {
+    return std::format("{} {}", n, n == 1 ? "task" : "tasks");
 }
 
 /// @brief 格式化 ReAct 步骤为输出行（写入 Task 输出缓冲）
@@ -73,27 +82,28 @@ const char* step_type_str(ReActStepType type) {
     return "unknown";
 }
 
+/// @brief 子 Agent 启动参数（聚合，避免长参数列表）
+struct SubAgentLaunchOptions {
+    std::string task_id;                         ///< 任务 id（AgentTool 生成的 'a'+8 随机）
+    std::string prompt;                          ///< 子 Agent 任务 prompt
+    std::vector<std::string> tool_whitelist;     ///< 工具白名单（空 → 全部已注册工具）
+    ICompletionProvider* provider = nullptr;     ///< LLM provider（宿主保证存活于会话周期）
+    std::shared_ptr<ToolRegistry> sub_registry;  ///< 父会话工具注册表（构建子 Agent 独立工具集）
+    IConfigManager* config_manager = nullptr;
+    ITaskManager* task_manager = nullptr;
+    IEventBus* event_bus = nullptr;
+    std::string cwd;
+    tool::PermissionMode permission_mode = tool::PermissionMode::Default;
+};
+
 /// @brief 启动单个子 Agent 任务
 /// @details v1.2.0：并行批量调度复用。为每个任务生成独立 task_id 并投递到线程池，
 ///          多个子 Agent 并发执行。返回已启动的 Task（供调用方等待/读输出）。
-/// @param task_id 任务 id（AgentTool 生成的 'a'+8 随机）
-/// @param prompt 子 Agent 任务 prompt
-/// @param tool_whitelist 工具白名单（空 → 全部已注册工具）
+/// @param options 子 Agent 启动参数
 /// @return 已启动的 Task
-std::shared_ptr<agent::Task> launch_sub_agent(
-    const std::string& task_id,
-    const std::string& prompt,
-    const std::vector<std::string>& tool_whitelist,
-    ICompletionProvider* provider,
-    std::shared_ptr<ToolRegistry> sub_registry,
-    IConfigManager* config_manager,
-    ITaskManager* task_manager,
-    IEventBus* event_bus,
-    std::string cwd,
-    tool::PermissionMode permission_mode) {
-    return task_manager->launch(task_id,
-        [task_id, prompt, tool_whitelist, provider, sub_registry, config_manager,
-         task_manager, event_bus, cwd, permission_mode](const std::atomic<bool>& should_cancel) {
+std::shared_ptr<agent::Task> launch_sub_agent(const SubAgentLaunchOptions& options) {
+    return options.task_manager->launch(options.task_id,
+        [options](const std::atomic<bool>& should_cancel) {
             // v1.1.0：为子 Agent 构建独立工具集（不共享父 registry 的暴露面）
             //  - 白名单过滤：tools 为空使用全部已注册工具，否则仅保留白名单内工具
             //  - Plan 只读：父处于 Plan（只读）时仅保留只读工具，杜绝写/执行能力，
@@ -101,24 +111,24 @@ std::shared_ptr<agent::Task> launch_sub_agent(
             //  - 防递归：无论如何排除 Agent 工具本身，子 Agent 不能再启动子 Agent，
             //    杜绝无限嵌套/循环（即使白名单显式包含 "Agent" 也会被忽略）
             auto sub_agent_registry = std::make_shared<ToolRegistry>();
-            if (sub_registry) {
+            if (options.sub_registry) {
                 std::vector<std::shared_ptr<ITool>> candidates =
-                    tool_whitelist.empty()
-                        ? sub_registry->get_all_tools()
+                    options.tool_whitelist.empty()
+                        ? options.sub_registry->get_all_tools()
                         : [&] {
                             std::vector<std::shared_ptr<ITool>> sel;
-                            for (const auto& name : tool_whitelist) {
-                                if (auto t = sub_registry->find_by_name(name)) {
+                            for (const auto& name : options.tool_whitelist) {
+                                if (auto t = options.sub_registry->find_by_name(name)) {
                                     sel.push_back(t);
                                 }
                             }
                             return sel;
                         }();
                 for (const auto& t : candidates) {
-                    if (t->name() == "Agent") {
+                    if (t->name() == kAgentToolName) {
                         continue;  // 防递归：子 Agent 不携带 Agent 工具
                     }
-                    if (permission_mode == tool::PermissionMode::Plan && !t->is_read_only()) {
+                    if (options.permission_mode == tool::PermissionMode::Plan && !t->is_read_only()) {
                         continue;  // Plan 只读：跳过写/执行工具
                     }
                     sub_agent_registry->register_tool(t);
@@ -126,18 +136,18 @@ std::shared_ptr<agent::Task> launch_sub_agent(
             }
 
             // 子会话：全新消息历史，system_prompt = 任务 prompt
-            ReActLoop loop(provider, sub_agent_registry, config_manager,
-                           task_manager, cwd, event_bus);
+            ReActLoop loop(options.provider, sub_agent_registry, options.config_manager,
+                           options.task_manager, options.cwd, options.event_bus);
             // 评审 #1：子 Agent 继承父会话权限模式，避免 Plan 只读边界被绕过
-            loop.set_permission_mode(permission_mode);
+            loop.set_permission_mode(options.permission_mode);
             std::vector<ChatMessage> messages;
             // 独立工具集 schema（子 Agent 的 ToolContext.tool_registry 亦指向独立 registry）
             nlohmann::json tools_schema = sub_agent_registry->get_all_schemas();
 
-            auto task_ptr = task_manager->find_task(task_id);
-            ReActResult result = loop.run(messages, prompt, tools_schema,
+            auto task_ptr = options.task_manager->find_task(options.task_id);
+            ReActResult result = loop.run(messages, options.prompt, tools_schema,
                 should_cancel,
-                [task_id, event_bus, &task_ptr](const ReActStep& step) {
+                [options, &task_ptr](const ReActStep& step) {
                     const std::string line = format_step_line(step);
                     if (task_ptr && !line.empty()) {
                         task_ptr->append_output(line);
@@ -145,9 +155,9 @@ std::shared_ptr<agent::Task> launch_sub_agent(
                     // v1.2.0 子任务进度流式订阅：每个步骤增量推送结构化进度事件，
                     // 使订阅者按 task_id 实时跟踪子任务进度（无需轮询 TaskOutput）。
                     // 仅作增量通知，不注入父 LLM 上下文。
-                    if (event_bus != nullptr) {
-                        event_bus->publish_async(SubAgentProgressEvent{
-                            .task_id = task_id,
+                    if (options.event_bus != nullptr) {
+                        options.event_bus->publish_async(SubAgentProgressEvent{
+                            .task_id = options.task_id,
                             .step_number = step.step_number,
                             .step_type = step_type_str(step.type),
                             .content = line
@@ -169,12 +179,13 @@ std::shared_ptr<agent::Task> launch_sub_agent(
             // v1.1.0 后台结果自动回送：子 Agent 完成后发布完成事件，
             // 使父会话/UI 等订阅者无需轮询 TaskOutput 即可感知结果。
             // 仅携带 task_id + 结果摘要，不注入父 LLM 上下文（避免刷屏父会话）。
-            if (event_bus != nullptr && !summary.empty()) {
-                event_bus->publish_async(SubAgentCompletedEvent{
-                    .task_id = task_id,
+            // 无条件发布（即使摘要为空），保证订阅者总能感知任务收尾（评审 #49 L-5）。
+            if (options.event_bus != nullptr) {
+                options.event_bus->publish_async(SubAgentCompletedEvent{
+                    .task_id = options.task_id,
                     .final_answer = summary,
                     .was_error = result.was_error,
-                    .duration_ms = static_cast<float>(result.total_duration_ms)
+                    .duration_ms = static_cast<double>(result.total_duration_ms)
                 });
             }
         });
@@ -183,7 +194,7 @@ std::shared_ptr<agent::Task> launch_sub_agent(
 } // namespace
 
 const std::string& AgentTool::name() const {
-    static const std::string n{"Agent"};
+    static const std::string n{kAgentToolName};
     return n;
 }
 
@@ -223,7 +234,10 @@ nlohmann::json AgentTool::input_schema() const {
             {"tools", {{"type", "array"}, {"items", {{"type", "string"}}}, {"description", "Allowed tools for the single sub-agent (whitelist; empty/omitted uses all registered tools)"}}},
             {"run_in_background", {{"type", "boolean"}, {"description", "Run the sub-agent(s) in background (default true); false waits for completion"}}}
         }},
-        {"required", nlohmann::json::array()},
+        {"anyOf", nlohmann::json::array({
+            {{"required", nlohmann::json::array({"prompt"})}},
+            {{"required", nlohmann::json::array({"tasks"})}}
+        })},
         {"additionalProperties", false}
     };
 }
@@ -312,10 +326,18 @@ ResultV2<ToolResult> AgentTool::call(
     for (const auto& spec : specs) {
         const std::string task_id = generate_task_id();
         ids.push_back(task_id);
-        tasks.push_back(launch_sub_agent(
-            task_id, spec.prompt, spec.tools,
-            provider, sub_registry, config_manager, task_manager, event_bus,
-            cwd, permission_mode));
+        tasks.push_back(launch_sub_agent(SubAgentLaunchOptions{
+            .task_id = task_id,
+            .prompt = spec.prompt,
+            .tool_whitelist = spec.tools,
+            .provider = provider,
+            .sub_registry = sub_registry,
+            .config_manager = config_manager,
+            .task_manager = task_manager,
+            .event_bus = event_bus,
+            .cwd = cwd,
+            .permission_mode = permission_mode
+        }));
     }
 
     // 3. 同步模式：等待全部任务完成再返回。TaskManager::wait 内部已带 30s 兜底超时；
@@ -332,16 +354,16 @@ ResultV2<ToolResult> AgentTool::call(
                 partial += std::format("--- {} ---\n{}\n", ids[i], tasks[i]->output());
             }
             return ResultV2<ToolResult>::ok(ToolResult::ok(std::format(
-                "Sub-agent(s) timed out waiting ({} tasks): {}. They may still be running; "
+                "Sub-agent(s) timed out waiting ({}): {}. They may still be running; "
                 "use TaskStop to cancel. Partial output:\n{}",
-                ids.size(), fmt_join_ids(ids), partial)));
+                fmt_task_count(ids.size()), fmt_join_ids(ids), partial)));
         }
         std::string out;
         for (size_t i = 0; i < tasks.size(); ++i) {
             out += std::format("--- {} ---\n{}\n", ids[i], tasks[i]->output());
         }
         return ResultV2<ToolResult>::ok(ToolResult::ok(std::format(
-            "Sub-agents completed ({} tasks).\n{}", ids.size(), out)));
+            "Sub-agents completed ({}).\n{}", fmt_task_count(ids.size()), out)));
     }
 
     // 后台模式：立即返回全部 task_id
@@ -350,8 +372,8 @@ ResultV2<ToolResult> AgentTool::call(
             "Sub-agent launched (task: {}). Use TaskOutput to read its progress.", ids[0])));
     }
     return ResultV2<ToolResult>::ok(ToolResult::ok(std::format(
-        "Sub-agents launched ({} tasks): {}. Use TaskOutput to read their progress.",
-        ids.size(), fmt_join_ids(ids))));
+        "Sub-agents launched ({}): {}. Use TaskOutput to read their progress.",
+        fmt_task_count(ids.size()), fmt_join_ids(ids))));
 }
 
 } // namespace agent::tool

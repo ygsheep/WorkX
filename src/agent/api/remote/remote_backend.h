@@ -2,7 +2,7 @@
  * @file remote_backend.h
  * @brief 远程后端（OpenAI/Anthropic HTTP/SSE）
  * @details 通过 IProviderAdapter 适配不同 API 协议，使用 HttpClient 发送请求
- * @version 4.0.0
+ * @version 4.1.0
  * @date 2026-07
  */
 
@@ -12,6 +12,7 @@
 #include <memory>
 #include <atomic>
 #include <mutex>
+#include <vector>
 #include "agent/api/i_backend.h"
 #include "agent/api/remote/sse_stream_reader.h"
 #include "agent/api/remote/http_client.h"
@@ -57,7 +58,7 @@ private:
     //      消除"m_ready=false 但 m_generating=true"等非法组合，原子读写保证状态一致
     std::atomic<BackendState> m_state{BackendState::Idle};
 
-    /// @brief interrupt 内部实现（M-A：调用方必须已持有 m_active_mutex）
+    /// @brief 中断全部在飞请求（调用方必须已持有 m_active_mutex）
     /// @details 拆出 interrupt_locked 以便 shutdown() 在持锁状态下复用清理逻辑，
     ///          避免 interrupt() 内部再次加锁导致死锁，并消除 shutdown 与 interrupt 间的 TOCTOU 竞态。
     void interrupt_locked();
@@ -68,10 +69,13 @@ private:
     /// @brief HTTP 客户端
     std::unique_ptr<HttpClient> m_http_client;
 
-    // 当前活跃的 reader，用于中断
-    // m_active_mutex 保护 m_active_reader 的读写，避免与 interrupt 并发竞态
+    /// @brief 在飞请求的 reader 集合（v1.2.0 修复：支持并发在飞请求）
+    /// @details 原单一 m_active_reader 仅允许一个在飞请求，与子 Agent 并行批量调度冲突
+    ///          （第二个请求被拒绝）。HttpClient 基于 curl_multi 天然支持并发流，
+    ///          此处改为集合管理，interrupt/shutdown 遍历取消全部。
+    ///          m_active_mutex 保护本集合的读写，避免与 interrupt 并发竞态。
     mutable std::mutex m_active_mutex;
-    std::shared_ptr<SSEStreamReader> m_active_reader;
+    std::vector<std::shared_ptr<SSEStreamReader>> m_active_readers;
 
     /// @brief H-1：DI 注入的事件总线（nullptr 时不发布后端状态事件）
     IEventBus* m_event_bus = nullptr;

@@ -390,7 +390,7 @@ auto stop = TaskStopTool{}.call({{"task_id", "a1b2c3d4e5"}}, ctx);
 3. **工具集过滤**：`tools` 字段按名称白名单过滤子 Agent 可用工具，未注册名称自动忽略；空/缺失时回退到全部已注册工具，兼顾安全与易用。
 4. **独立/只读工具集**：子 Agent 使用独立 `ToolRegistry`，不共享父暴露面；父处于 Plan 时仅下发 `is_read_only()` 工具，与 `check_permissions` 形成纵深双重防线。
 5. **后台结果回送**：后台子 Agent 完成后发布 `SubAgentCompletedEvent`（仅携带 task_id + 结果摘要），供订阅者无需轮询 TaskOutput 即可感知完成；**不注入父 LLM 上下文**，完整输出仍通过 `TaskOutputTool` 按需读取，避免长输出刷屏父会话。
-6. **进度流式订阅**：子 Agent 每个 ReAct 步骤增量发布 `SubAgentProgressEvent`（task_id + step_type + 内容），订阅者可按 task_id 实时跟踪子任务进度；同样仅作增量通知，不注入父 LLM 上下文。
+6. **进度流式订阅**：子 Agent 每个 ReAct 步骤增量发布 `SubAgentProgressEvent`（task_id + step_type + 内容），订阅者可按 task_id 实时跟踪子任务进度；同样仅作增量通知，不注入父 LLM 上下文。**订阅边界**：每步内容同时写入 Task 输出缓冲（触发 `TaskOutputEvent`）——需要结构化进度（step_type）订阅本事件，只需原始行文本订阅 `TaskOutputEvent` 即可，两者二选一避免重复消费。
 
 ---
 
@@ -406,7 +406,7 @@ auto stop = TaskStopTool{}.call({{"task_id", "a1b2c3d4e5"}}, ctx);
 | **同步运行** | `run_in_background=false` | ok，含 `Sub-agent completed` 与子 Agent 输出 |
 | **权限继承** | 父 Plan 模式启动子 Agent | ok（子 Agent 继承 Plan 只读） |
 | **独立/只读工具集** | 父 Plan + 含只读/可写工具的 registry | 子 Agent schema 仅含只读工具 |
-| **工具集过滤** | `tools` 白名单 + `get_schemas_by_names` | 仅保留匹配名称，未注册名忽略 |
+| **工具集过滤** | `tools` 白名单（`find_by_name` 按名裁剪） | 仅保留匹配名称，未注册名忽略，空列表回退全部工具 |
 | **防递归** | 父 registry 含 `Agent` 工具 + 白名单含 `Agent` | 子 Agent schema 不含 `Agent` |
 | **后台结果自动回送** | 后台子 Agent 完成 | 发布 `SubAgentCompletedEvent`（task_id + 结果摘要） |
 | **进度流式订阅** | 后台子 Agent 运行 | 增量发布 `SubAgentProgressEvent`（task_id 对齐，含 thought/final 类型） |
@@ -425,13 +425,14 @@ auto stop = TaskStopTool{}.call({{"task_id", "a1b2c3d4e5"}}, ctx);
 | 后台任务通过 `TaskManager::launch()` | 复用进程级线程池与事件总线，父子通过共享基础设施异步通信 |
 | 子 Agent 用全新 `ReActLoop` + 空消息历史 | 任务粒度隔离，`system_prompt=prompt` 聚焦单一子任务 |
 | 继承父 `permission_mode` | 安全优先，防止 Plan 只读边界被并发子任务绕过（评审 #1） |
-| `tools` 白名单过滤（`get_schemas_by_names`） | 按名称裁剪子 Agent 工具集，未注册名忽略，空列表回退全部工具 |
+| `tools` 白名单过滤（`find_by_name` 按名裁剪） | 按名称裁剪子 Agent 工具集，未注册名忽略，空列表回退全部工具 |
 | 独立 `ToolRegistry` + Plan 只读过滤 | 不共享父暴露面；Plan 下仅下发 `is_read_only()` 工具，与 `check_permissions` 双重防线 |
 | 强制排除 `Agent` 工具本身 | 防递归：子 Agent 无法再启动子 Agent，杜绝无限嵌套/循环（即使白名单显式含 `Agent`） |
 | `is_read_only()` 标记（IToolMetadata 默认 false） | 只读工具（Read/Glob/Grep/WebFetch/TaskOutput/Skill）覆盖为 true，供只读工具集过滤 |
 | 析构 `cancelAll + waitForAll` | 绑定子任务生命周期到父会话，防 use-after-free（评审 #2） |
 | 后台完成发布 `SubAgentCompletedEvent` | 通知式回送：订阅者免轮询感知完成；仅携带摘要，不注入父 LLM 上下文，避免刷屏 |
 | `tasks` 数组并行批量调度 | 一次启动多个子 Agent，各自独立 `task_id`，线程池并发执行，提升任务吞吐 |
+| provider 并发支持（`RemoteBackend` 多活跃请求） | 并行子任务各自持有独立 LLM 流；`HttpClient` 基于 curl_multi 天然支持并发流，`interrupt`/`shutdown` 遍历取消全部 |
 | 每步发布 `SubAgentProgressEvent` | 进度流式订阅：订阅者按 task_id 实时跟踪子任务进度，无需轮询 TaskOutput |
 | `task_id = 'a' + 8 随机` | 对齐 TS generateTaskId，短且可读，前缀 `a` 区分任务 |
 | `additionalProperties: false` | 严格 schema 校验，对齐其他工具 |
@@ -452,7 +453,7 @@ auto stop = TaskStopTool{}.call({{"task_id", "a1b2c3d4e5"}}, ctx);
 
 ### v1.1.0（已完成 ✅）
 
-- [x] `tools` 字段生效：按白名单过滤子 Agent 工具集（`get_schemas_by_names`）
+- [x] `tools` 字段生效：按白名单过滤子 Agent 工具集（`find_by_name` 按名裁剪，未注册名忽略）
 - [x] 子 Agent 独立/只读工具集（独立 `ToolRegistry` + `is_read_only()` + 并发线程安全审计）
 - [x] 后台任务结果自动回送策略（`SubAgentCompletedEvent` 通知式回送，不注入父 LLM 上下文）
 - [x] 防递归：子 Agent 工具集强制排除 `Agent` 工具本身

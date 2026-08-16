@@ -3,7 +3,7 @@
  * @brief Agent 编排事件类型（H-10：从 events.h 按域拆分）
  * @details Agent 推理步骤、工具调用、工具结果、Agent 编排完成等事件。
  *          订阅方按需 include 本文件，避免引入系统/流式事件。
- * @version 1.0.0
+ * @version 1.1.0
  * @date 2026-07
  */
 
@@ -144,9 +144,9 @@ struct ExitPlanModeEvent {
 ///          完整输出仍通过 TaskOutputTool 按 task_id 读取。
 struct SubAgentCompletedEvent {
     std::string task_id;        ///< 子 Agent 任务 id（AgentTool 生成的 'a'+8 随机）
-    std::string final_answer;   ///< 最终答案（Final: ...）或错误信息（Error: ...）
+    std::string final_answer;   ///< 最终答案（Final: ...）或错误信息（Error: ...），可为空
     bool was_error = false;     ///< 子任务是否以错误结束
-    float duration_ms = 0.0f;   ///< 子 Agent 循环耗时（毫秒）
+    double duration_ms = 0.0;   ///< 子 Agent 循环耗时（毫秒，与 AgentDoneEvent 同型）
 };
 
 /// @brief 子 Agent 进度事件（AgentTool → 订阅者，v1.2.0 子任务进度流式订阅）

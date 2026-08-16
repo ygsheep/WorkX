@@ -276,7 +276,7 @@ TEST_CASE_METHOD(TaskToolsFixture, "AgentTool synchronous mode returns completed
     AgentTool tool;
     auto r = tool.call(nlohmann::json{{"prompt", "quick task"}, {"run_in_background", false}}, ctx);
     REQUIRE(r.is_ok());
-    REQUIRE(r.value().text.find("Sub-agents completed (1 tasks)") != std::string::npos);
+    REQUIRE(r.value().text.find("Sub-agents completed (1 task)") != std::string::npos);
     REQUIRE(r.value().text.find("sync answer") != std::string::npos);
 }
 
@@ -458,6 +458,55 @@ TEST_CASE_METHOD(TaskToolsFixture, "AgentTool launches batch of sub-agents in pa
     const std::string all = tasks[0]->output() + tasks[1]->output();
     REQUIRE(all.find("result A") != std::string::npos);
     REQUIRE(all.find("result B") != std::string::npos);
+}
+
+TEST_CASE_METHOD(TaskToolsFixture, "AgentTool batch with busy provider reports failure via completion events", "[agent_tool][review]") {
+    // 评审 #49 H-1 回归：模拟单活跃 provider（第二个 submit 返回 nullptr）。
+    // 并行子任务中失败者不得挂起，必须通过完成事件（was_error=true）收尾。
+    MockEventBus bus;
+    bus.set_dispatch_enabled(true);  // 同步派发，便于断言
+
+    std::vector<SubAgentCompletedEvent> completions;
+    bus.subscribe<SubAgentCompletedEvent>([&completions](const SubAgentCompletedEvent& e) {
+        completions.push_back(e);
+    });
+
+    auto& tm = TaskManager::instance();
+    MockConfigManager cfg;
+    ToolContext ctx;
+
+    auto provider = std::make_shared<MockCompletionProvider>();
+    // 仅提供一个 reader：两个并行子任务竞争，第二个 submit_completion 返回 nullptr
+    auto r1 = std::make_shared<MockStreamReader>();
+    r1->add_content_chunk("only result");
+    provider->set_next_reader(r1);
+    fill_ctx(ctx, bus, tm, cfg, provider.get());
+
+    AgentTool tool;
+    auto r = tool.call(nlohmann::json{
+        {"tasks", nlohmann::json::array({
+            {{"prompt", "task A"}},
+            {{"prompt", "task B"}},
+        })}
+    }, ctx);
+    REQUIRE(r.is_ok());
+
+    auto tasks = tm.getTasks();
+    REQUIRE(tasks.size() == 2);
+    tm.wait(tasks[0]);
+    tm.wait(tasks[1]);
+    bus.drain_async_events();
+
+    // 两个任务都以完成事件收尾（一个成功、一个 provider 拒绝而失败），无挂起
+    REQUIRE(completions.size() == 2);
+    bool saw_success = false;
+    bool saw_error = false;
+    for (const auto& e : completions) {
+        if (e.was_error) saw_error = true;
+        else saw_success = true;
+    }
+    REQUIRE(saw_success);
+    REQUIRE(saw_error);
 }
 
 TEST_CASE_METHOD(TaskToolsFixture, "TaskStopTool stops a running task", "[task_stop][slow]") {
