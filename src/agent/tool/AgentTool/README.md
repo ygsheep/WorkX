@@ -428,13 +428,14 @@ auto stop = TaskStopTool{}.call({{"task_id", "a1b2c3d4e5"}}, ctx);
 - [x] 同步 wait 30s 兜底（评审 #3）
 - [x] 单元测试
 
-### v1.1.0（进行中 🚧）
+### v1.1.0（已完成 ✅）
 
 - [x] `tools` 字段生效：按白名单过滤子 Agent 工具集（`get_schemas_by_names`）
 - [x] 子 Agent 独立/只读工具集（独立 `ToolRegistry` + `is_read_only()` + 并发线程安全审计）
 - [x] 后台任务结果自动回送策略（`SubAgentCompletedEvent` 通知式回送，不注入父 LLM 上下文）
+- [x] 防递归：子 Agent 工具集强制排除 `Agent` 工具本身
 
-### v1.2.0（中期）
+### v1.2.0（进行中 🚧）
 
 - [ ] 子 Agent 并行批量调度（一次启动多个子 Agent）
 - [ ] 子任务进度流式订阅（事件总线增量推送）
