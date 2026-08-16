@@ -9,12 +9,17 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
+#include <algorithm>
+#include <vector>
 
 #include "agent/tool/AgentTool/agent_tool.h"
 #include "agent/tool/Task/task_output_tool.h"
 #include "agent/tool/Task/task_stop_tool.h"
+#include "agent/tool/registry.h"
+#include "agent/tool/itool.h"
 #include "core/task/task_manager.h"
 #include "core/task/task_events.h"
+#include "core/events/agent_events.h"
 
 #include "helpers/mock_config_manager.h"
 #include "helpers/mock_event_bus.h"
@@ -52,6 +57,31 @@ void fill_ctx(ToolContext& ctx, MockEventBus& bus, ITaskManager& tm, IConfigMana
     ctx.event_bus_ptr = &bus;
     ctx.provider_ptr = provider;
 }
+
+/// @brief Stub 只读工具（模拟 Read，is_read_only() = true）
+class StubReadOnlyTool : public ITool {
+public:
+    const std::string& name() const override { static const std::string n{"Read"}; return n; }
+    const std::string& description() const override { static const std::string d{"read"}; return d; }
+    const std::string& prompt() const override { static const std::string p; return p; }
+    nlohmann::json input_schema() const override { return {{"type", "object"}}; }
+    bool is_read_only() const override { return true; }
+    ResultV2<ToolResult> call(const nlohmann::json&, const ToolContext&) const override {
+        return ResultV2<ToolResult>::ok(ToolResult::ok(std::string("read-ok")));
+    }
+};
+
+/// @brief Stub 可写工具（模拟 Bash，is_read_only() = false）
+class StubWriteTool : public ITool {
+public:
+    const std::string& name() const override { static const std::string n{"Bash"}; return n; }
+    const std::string& description() const override { static const std::string d{"write"}; return d; }
+    const std::string& prompt() const override { static const std::string p; return p; }
+    nlohmann::json input_schema() const override { return {{"type", "object"}}; }
+    ResultV2<ToolResult> call(const nlohmann::json&, const ToolContext&) const override {
+        return ResultV2<ToolResult>::ok(ToolResult::ok(std::string("write-ok")));
+    }
+};
 
 } // namespace
 
@@ -139,6 +169,42 @@ TEST_CASE_METHOD(TaskToolsFixture, "AgentTool launches sub-agent in background a
     REQUIRE(task->output().find("done result") != std::string::npos);
 }
 
+TEST_CASE_METHOD(TaskToolsFixture, "AgentTool background completion publishes SubAgentCompletedEvent", "[agent_tool][review]") {
+    MockEventBus bus;
+    bus.set_dispatch_enabled(true);  // 同步派发，便于断言
+
+    std::vector<SubAgentCompletedEvent> completions;
+    bus.subscribe<SubAgentCompletedEvent>([&completions](const SubAgentCompletedEvent& e) {
+        completions.push_back(e);
+    });
+
+    auto& tm = TaskManager::instance();
+    MockConfigManager cfg;
+    ToolContext ctx;
+
+    auto provider = std::make_shared<MockCompletionProvider>();
+    auto reader = std::make_shared<MockStreamReader>();
+    reader->add_content_chunk("auto feedback result");
+    provider->set_next_reader(reader);
+    fill_ctx(ctx, bus, tm, cfg, provider.get());
+
+    AgentTool tool;
+    auto r = tool.call(nlohmann::json{{"prompt", "background task"}}, ctx);
+    REQUIRE(r.is_ok());
+
+    // 等待后台任务完成（完成事件在子 Agent 收尾时发布）
+    auto tasks = tm.getTasks();
+    REQUIRE(tasks.size() == 1);
+    tm.wait(tasks[0]);
+    bus.drain_async_events();
+
+    // 自动回送事件已发布：携带 task_id 与最终结果摘要
+    REQUIRE(completions.size() == 1);
+    REQUIRE(completions[0].task_id == tasks[0]->getName());
+    REQUIRE(completions[0].final_answer.find("Final: auto feedback result") != std::string::npos);
+    REQUIRE_FALSE(completions[0].was_error);
+}
+
 TEST_CASE_METHOD(TaskToolsFixture, "AgentTool synchronous mode returns completed result", "[agent_tool]") {
     MockEventBus bus;
     auto& tm = TaskManager::instance();
@@ -184,9 +250,78 @@ TEST_CASE_METHOD(TaskToolsFixture, "AgentTool inherits parent permission mode (P
     REQUIRE(tasks[0]->isFinished());
 }
 
-// ============================================================
-// TaskStopTool
-// ============================================================
+TEST_CASE_METHOD(TaskToolsFixture, "AgentTool Plan mode gives sub-agent read-only tool set", "[agent_tool][review]") {
+    MockEventBus bus;
+    auto& tm = TaskManager::instance();
+    MockConfigManager cfg;
+    ToolContext ctx;
+
+    auto provider = std::make_shared<MockCompletionProvider>();
+    auto reader = std::make_shared<MockStreamReader>();
+    reader->add_content_chunk("readonly result");
+    provider->set_next_reader(reader);
+    fill_ctx(ctx, bus, tm, cfg, provider.get());
+    ctx.permission_mode = PermissionMode::Plan;  // 父会话处于 Plan（只读）
+
+    // 父 registry 同时含只读(Read)与可写(Bash)工具
+    auto registry = std::make_shared<ToolRegistry>();
+    registry->register_tool(std::make_shared<StubReadOnlyTool>());
+    registry->register_tool(std::make_shared<StubWriteTool>());
+    ctx.tool_registry = registry;
+
+    AgentTool tool;
+    auto r = tool.call(nlohmann::json{{"prompt", "research only"}}, ctx);
+    REQUIRE(r.is_ok());
+
+    auto tasks = tm.getTasks();
+    REQUIRE(tasks.size() == 1);
+    tm.wait(tasks[0]);
+    REQUIRE(tasks[0]->isFinished());
+
+    // 子 Agent 收到的工具集仅含只读工具 Read，写工具 Bash 被过滤
+    REQUIRE(provider->last_tools.is_array());
+    REQUIRE(provider->last_tools.size() == 1);
+    REQUIRE(provider->last_tools[0]["name"] == "Read");
+}
+
+TEST_CASE_METHOD(TaskToolsFixture, "AgentTool applies tools whitelist", "[agent_tool]") {
+    MockEventBus bus;
+    auto& tm = TaskManager::instance();
+    MockConfigManager cfg;
+    ToolContext ctx;
+
+    auto provider = std::make_shared<MockCompletionProvider>();
+    auto reader = std::make_shared<MockStreamReader>();
+    reader->add_content_chunk("whitelisted result");
+    provider->set_next_reader(reader);
+    fill_ctx(ctx, bus, tm, cfg, provider.get());
+    // 默认权限模式（Default，非只读）
+
+    auto registry = std::make_shared<ToolRegistry>();
+    registry->register_tool(std::make_shared<StubReadOnlyTool>());
+    registry->register_tool(std::make_shared<StubWriteTool>());
+    ctx.tool_registry = registry;
+
+    AgentTool tool;
+    auto r = tool.call(nlohmann::json{
+        {"prompt", "task"}, {"tools", nlohmann::json::array({"Read", "Bash"})}}, ctx);
+    REQUIRE(r.is_ok());
+
+    auto tasks = tm.getTasks();
+    REQUIRE(tasks.size() == 1);
+    tm.wait(tasks[0]);
+    REQUIRE(tasks[0]->isFinished());
+
+    // 白名单生效：仅含 Read 与 Bash（发送前按 name 排序，故不依赖顺序）
+    REQUIRE(provider->last_tools.is_array());
+    REQUIRE(provider->last_tools.size() == 2);
+    std::vector<std::string> got;
+    for (const auto& s : provider->last_tools) {
+        got.push_back(s["name"].get<std::string>());
+    }
+    REQUIRE(std::find(got.begin(), got.end(), "Read") != got.end());
+    REQUIRE(std::find(got.begin(), got.end(), "Bash") != got.end());
+}
 
 TEST_CASE_METHOD(TaskToolsFixture, "TaskStopTool stops a running task", "[task_stop][slow]") {
     MockEventBus bus;

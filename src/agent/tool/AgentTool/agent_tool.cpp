@@ -2,7 +2,7 @@
  * @file agent_tool.cpp
  * @brief AgentTool 实现
  * @details 子 Agent 调度工具的具体实现
- * @version 1.0.0
+ * @version 1.1.0
  * @date 2026-07
  */
 
@@ -15,6 +15,7 @@
 #include "agent/core/react_loop.h"
 #include "core/task/task_manager.h"
 #include "core/utils/error.h"
+#include "core/events/agent_events.h"
 
 namespace agent::tool {
 
@@ -76,7 +77,7 @@ nlohmann::json AgentTool::input_schema() const {
         {"type", "object"},
         {"properties", {
             {"prompt", {{"type", "string"}, {"description", "The task prompt for the sub-agent"}}},
-            {"tools", {{"type", "array"}, {"items", {{"type", "string"}}}, {"description", "Allowed tools for the sub-agent (reserved)"}}},
+            {"tools", {{"type", "array"}, {"items", {{"type", "string"}}}, {"description", "Allowed tools for the sub-agent (whitelist; empty/omitted uses all registered tools)"}}},
             {"run_in_background", {{"type", "boolean"}, {"description", "Run the sub-agent in background (default true); false runs synchronously"}}}
         }},
         {"required", {"prompt"}},
@@ -99,6 +100,16 @@ ResultV2<ToolResult> AgentTool::call(
             Error::Code::MissingArgument, "Agent: 'prompt' is required");
     }
     const bool run_in_background = input.value("run_in_background", true);
+
+    // v1.1.0：解析 tools 白名单（空/缺失 → 使用全部已注册工具）
+    std::vector<std::string> tool_whitelist;
+    if (input.contains("tools") && input["tools"].is_array()) {
+        for (const auto& item : input["tools"]) {
+            if (item.is_string()) {
+                tool_whitelist.push_back(item.get<std::string>());
+            }
+        }
+    }
 
     if (ctx.provider_ptr == nullptr) {
         return ResultV2<ToolResult>::err(
@@ -128,16 +139,41 @@ ResultV2<ToolResult> AgentTool::call(
 
     auto task = task_manager->launch(task_id,
         [task_id, provider, sub_registry, config_manager, task_manager,
-         event_bus, cwd, prompt, permission_mode](const std::atomic<bool>& should_cancel) {
+         event_bus, cwd, prompt, permission_mode, tool_whitelist](const std::atomic<bool>& should_cancel) {
+            // v1.1.0：为子 Agent 构建独立工具集（不共享父 registry 的暴露面）
+            //  - 白名单过滤：tools 为空使用全部已注册工具，否则仅保留白名单内工具
+            //  - Plan 只读：父处于 Plan（只读）时仅保留只读工具，杜绝写/执行能力，
+            //    与 check_permissions 形成双重防线（权限逃逸纵深防御）
+            auto sub_agent_registry = std::make_shared<ToolRegistry>();
+            if (sub_registry) {
+                std::vector<std::shared_ptr<ITool>> candidates =
+                    tool_whitelist.empty()
+                        ? sub_registry->get_all_tools()
+                        : [&] {
+                            std::vector<std::shared_ptr<ITool>> sel;
+                            for (const auto& name : tool_whitelist) {
+                                if (auto t = sub_registry->find_by_name(name)) {
+                                    sel.push_back(t);
+                                }
+                            }
+                            return sel;
+                        }();
+                for (const auto& t : candidates) {
+                    if (permission_mode == tool::PermissionMode::Plan && !t->is_read_only()) {
+                        continue;  // Plan 只读：跳过写/执行工具
+                    }
+                    sub_agent_registry->register_tool(t);
+                }
+            }
+
             // 子会话：全新消息历史，system_prompt = 任务 prompt
-            ReActLoop loop(provider, sub_registry, config_manager,
+            ReActLoop loop(provider, sub_agent_registry, config_manager,
                            task_manager, cwd, event_bus);
             // 评审 #1：子 Agent 继承父会话权限模式，避免 Plan 只读边界被绕过
             loop.set_permission_mode(permission_mode);
             std::vector<ChatMessage> messages;
-            nlohmann::json tools_schema = sub_registry
-                ? sub_registry->get_all_schemas()
-                : nlohmann::json::array();
+            // 独立工具集 schema（子 Agent 的 ToolContext.tool_registry 亦指向独立 registry）
+            nlohmann::json tools_schema = sub_agent_registry->get_all_schemas();
 
             auto task_ptr = task_manager->find_task(task_id);
             ReActResult result = loop.run(messages, prompt, tools_schema,
@@ -150,12 +186,26 @@ ResultV2<ToolResult> AgentTool::call(
                 });
 
             // 收尾：错误或最终答案写入输出缓冲
-            if (task_ptr) {
-                if (result.was_error) {
-                    task_ptr->append_output(std::format("Error: {}", result.error_message));
-                } else if (!result.final_answer.empty()) {
-                    task_ptr->append_output(std::format("Final: {}", result.final_answer));
-                }
+            std::string summary;
+            if (result.was_error) {
+                summary = std::format("Error: {}", result.error_message);
+            } else if (!result.final_answer.empty()) {
+                summary = std::format("Final: {}", result.final_answer);
+            }
+            if (task_ptr && !summary.empty()) {
+                task_ptr->append_output(summary);
+            }
+
+            // v1.1.0 后台结果自动回送：子 Agent 完成后发布完成事件，
+            // 使父会话/UI 等订阅者无需轮询 TaskOutput 即可感知结果。
+            // 仅携带 task_id + 结果摘要，不注入父 LLM 上下文（避免刷屏父会话）。
+            if (event_bus != nullptr && !summary.empty()) {
+                event_bus->publish_async(SubAgentCompletedEvent{
+                    .task_id = task_id,
+                    .final_answer = summary,
+                    .was_error = result.was_error,
+                    .duration_ms = static_cast<float>(result.total_duration_ms)
+                });
             }
         });
 

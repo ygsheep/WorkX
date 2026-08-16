@@ -154,8 +154,12 @@ public:
     int submit_count = 0;
     int interrupt_count = 0;
 
-    std::shared_ptr<IStreamReader> submit_completion(const CompletionRequest& /*request*/) override {
+    // 记录最近一次请求的 tools schema（供测试断言子 Agent 工具集过滤）
+    nlohmann::json last_tools;
+
+    std::shared_ptr<IStreamReader> submit_completion(const CompletionRequest& request) override {
         submit_count++;
+        last_tools = request.tools;
         if (readers_.empty()) return nullptr;
         auto reader = readers_.front();
         readers_.pop_front();

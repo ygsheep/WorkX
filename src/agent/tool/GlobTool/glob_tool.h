@@ -28,6 +28,8 @@ public:
     const std::string& description() const override;
     const std::string& prompt() const override;
     nlohmann::json input_schema() const override;
+    /// @brief 只读工具（无副作用）
+    bool is_read_only() const override { return true; }
 
     /// @brief 验证输入：pattern 不能为空
     ValidationResult validate_input(

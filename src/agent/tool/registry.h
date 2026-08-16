@@ -63,6 +63,24 @@ public:
         return schemas;
     }
 
+    /// @brief 按名称白名单获取 schema（供子 Agent 工具集过滤）
+    /// @param names 允许的工具名称列表；仅保留名称匹配且已注册的工具
+    /// @return JSON 数组，每个元素包含 name/description/input_schema
+    inline nlohmann::json get_schemas_by_names(const std::vector<std::string>& names) const {
+        nlohmann::json schemas = nlohmann::json::array();
+        for (const auto& name : names) {
+            auto it = name_index_.find(name);
+            if (it == name_index_.end()) continue;  // 未注册的工具名忽略
+            const auto& tool = it->second;
+            schemas.push_back({
+                {"name", tool->name()},
+                {"description", tool->description()},
+                {"input_schema", tool->input_schema()},
+            });
+        }
+        return schemas;
+    }
+
     /// @brief 检查工具是否存在
     /// @param name 工具名称
     /// @return 存在返回 true

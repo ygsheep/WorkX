@@ -137,4 +137,16 @@ struct ExitPlanModeEvent {
     bool approved = false;  ///< 用户是否批准
 };
 
+/// @brief 子 Agent 后台任务完成事件（AgentTool → 订阅者，v1.1.0 后台结果自动回送）
+/// @details 后台子 Agent 结束后由 AgentTool 发布，携带 task_id 与最终结果摘要，
+///          使父会话/UI 等订阅者无需轮询 TaskOutput 即可感知子任务完成。
+///          ⚠️ 仅作通知，不注入父 LLM 上下文（避免长输出刷屏父会话，见设计决策）。
+///          完整输出仍通过 TaskOutputTool 按 task_id 读取。
+struct SubAgentCompletedEvent {
+    std::string task_id;        ///< 子 Agent 任务 id（AgentTool 生成的 'a'+8 随机）
+    std::string final_answer;   ///< 最终答案（Final: ...）或错误信息（Error: ...）
+    bool was_error = false;     ///< 子任务是否以错误结束
+    float duration_ms = 0.0f;   ///< 子 Agent 循环耗时（毫秒）
+};
+
 } // namespace agent

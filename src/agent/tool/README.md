@@ -171,7 +171,7 @@ sequenceDiagram
 
 | 目录 | 工具名 | 功能 | 输入 |
 |------|--------|------|------|
-| `AgentTool/` | `Agent` | 启动子 Agent 处理子任务 | `prompt`, `tools` |
+| `AgentTool/` | `Agent` | 启动子 Agent 处理子任务 | `prompt`, `tools`, `run_in_background` |
 | `AskUser/` | `AskUser` | 向用户提问（TUI 选择面板，阻塞 + 超时） | `questions`, `timeout_ms` |
 | `MCPTool/` | `MCP` | 调用 MCP 协议外部工具 | `server`, `tool`, `input` |
 
