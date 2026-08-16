@@ -2,7 +2,7 @@
  * @file react_loop.cpp
  * @brief ReActLoop 实现
  * @details Thought / Action / Observation 三阶段循环逻辑
- * @version 1.0.0
+ * @version 1.1.0
  * @date 2026-07
  */
 
@@ -10,6 +10,7 @@
 #include "agent/core/react_observer.h"
 #include "agent/api/i_stream_reader.h"
 #include "agent/compact/prefix_shape.h"  // DS_CACHE M-2: normalize_tools_schema
+#include "agent/config/app_config.h"     // #30：agent::keys::MODEL_NAME
 #include "agent/skill/inclaude/conditional.h"
 #include "core/process/subprocess.h"  // #30：git 环境探测
 #include "core/utils/uuid.h"          // #30：每次 turn 生成 request_id
@@ -472,7 +473,7 @@ ReActResult ReActLoop::run(
     //      避免在无工具调用的 turn 或取消时序敏感场景下阻塞 run() 启动。
     const std::string turn_request_id = core::util::generate_uuid();
     const std::string turn_model =
-        m_config_manager->get_or<std::string>("backend.model_name", "");
+        m_config_manager->get_or<std::string>(agent::keys::MODEL_NAME, "");
     const std::string turn_history_summary = build_history_summary(messages);
     // git 探测结果（首次用到工具时懒加载；非仓库时保持默认值）
     tool::ToolContext turn_env_probe;
