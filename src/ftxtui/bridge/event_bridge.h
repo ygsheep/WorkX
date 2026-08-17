@@ -3,12 +3,14 @@
  * @brief EventBridge — EventBus 订阅 → ActionQueue 映射
  * @details 事件回调（可能位于后台/事件泵线程）只入队 action；UI 线程每帧 drain。
  *          不持锁碰 UI 状态。见设计文档 §3。
+ *          B4：stop() 真正按 token 退订（存储退订 lambda），不依赖外部 bus.clear() 兜底。
  */
 
 #pragma once
 
 #include <functional>
 #include <string>
+#include <typeindex>
 #include <vector>
 
 #include "core/events/i_event_bus.h"
@@ -29,7 +31,7 @@ public:
     /// @brief 订阅全部 UI 相关事件
     void start();
 
-    /// @brief 退订并在成功后清空桥内引用
+    /// @brief 退订所有已注册事件（按 token 精确退订，不误伤其他订阅者）
     void stop();
 
     /// @brief 设置通知回调：入队后调用，用于唤醒 UI 线程重绘（screen.PostEvent）
@@ -39,11 +41,20 @@ public:
     void push(Action action);
 
 private:
+    /// @brief 订阅一个事件并登记退订 lambda
+    template<typename T>
+    void subscribe_typed(std::function<void(const T&)> cb) {
+        auto token = m_bus.subscribe<T>(std::move(cb));
+        // 退订需带上类型；此处以类型擦除的 lambda 捕获类型信息
+        m_unsubscribers.push_back([this, token]() { m_bus.unsubscribe<T>(token); });
+    }
+
     agent::IEventBus& m_bus;
     ActionQueue& m_queue;
     std::function<void()> m_wake;
 
-    std::vector<agent::EventToken> m_tokens;
+    /// @brief 已注册事件的退订回调（B4：逐个精确退订）
+    std::vector<std::function<void()>> m_unsubscribers;
 };
 
 }  // namespace ftxtui

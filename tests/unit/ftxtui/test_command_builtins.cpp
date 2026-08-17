@@ -1,0 +1,115 @@
+/**
+ * @file test_command_builtins.cpp
+ * @brief ftxtui 内置命令注册（B2 统一命令）单元测试
+ * @details 验证 register_ftx_builtins 把内置命令注册进 agent 侧 CommandRegistry：
+ *          命令清单完整、可执行（LocalCommand 调用）、副作用回调被正确触发。
+ */
+
+#include <catch2/catch_test_macros.hpp>
+
+#include <string>
+
+#include "command/builtins.h"
+
+using namespace ftxtui;
+
+namespace {
+
+/// @brief 执行注册表里的命令，返回结果文本
+agent::command::CommandResult run_registered(
+    const agent::command::CommandRegistry& reg,
+    const std::string& name,
+    const std::string& args = "") {
+    auto cmd = reg.find_by_name(name);
+    REQUIRE(cmd != nullptr);
+    auto local = std::dynamic_pointer_cast<agent::command::LocalCommand>(cmd);
+    REQUIRE(local != nullptr);
+    agent::command::CommandContext ctx;
+    return local->call(args, ctx);
+}
+
+}  // namespace
+
+TEST_CASE("register_ftx_builtins registers the core commands", "[ftx_builtins][registry]") {
+    agent::command::CommandRegistry reg;
+    register_ftx_builtins(reg, {});
+    REQUIRE(reg.size() == 7);  // help/exit/quit/clear/model/resume/rename
+    REQUIRE(reg.exists("help"));
+    REQUIRE(reg.exists("exit"));
+    REQUIRE(reg.exists("quit"));
+    REQUIRE(reg.exists("clear"));
+    REQUIRE(reg.exists("model"));
+    REQUIRE(reg.exists("resume"));
+    REQUIRE(reg.exists("rename"));
+}
+
+TEST_CASE("register_ftx_builtins marks all as user invocable", "[ftx_builtins][registry]") {
+    agent::command::CommandRegistry reg;
+    register_ftx_builtins(reg, {});
+    auto cmds = reg.get_user_invocable_commands();
+    REQUIRE(cmds.size() == 7);
+    for (const auto& c : cmds) {
+        REQUIRE_FALSE(c->name().empty());
+        REQUIRE_FALSE(c->description().empty());
+    }
+}
+
+TEST_CASE("register_ftx_builtins help lists all commands", "[ftx_builtins][exec]") {
+    agent::command::CommandRegistry reg;
+    register_ftx_builtins(reg, {});
+    auto res = run_registered(reg, "help");
+    REQUIRE(res.type == agent::command::CommandResult::Type::Text);
+    REQUIRE_FALSE(res.is_error);
+    REQUIRE(res.text.find("/model") != std::string::npos);
+    REQUIRE(res.text.find("/resume") != std::string::npos);
+}
+
+TEST_CASE("register_ftx_builtins exit triggers on_exit callback", "[ftx_builtins][exec]") {
+    int exited = 0;
+    agent::command::CommandRegistry reg;
+    register_ftx_builtins(reg, {.on_exit = [&] { ++exited; }});
+    run_registered(reg, "exit");
+    REQUIRE(exited == 1);
+}
+
+TEST_CASE("register_ftx_builtins model triggers on_model_select callback", "[ftx_builtins][exec]") {
+    int opened = 0;
+    agent::command::CommandRegistry reg;
+    register_ftx_builtins(reg, {.on_model_select = [&] { ++opened; }});
+    run_registered(reg, "model");
+    REQUIRE(opened == 1);
+}
+
+TEST_CASE("register_ftx_builtins resume passes args to callback", "[ftx_builtins][exec]") {
+    std::string captured;
+    agent::command::CommandRegistry reg;
+    register_ftx_builtins(reg, {.on_resume = [&](const std::string& args) { captured = args; }});
+    run_registered(reg, "resume", "2");
+    REQUIRE(captured == "2");
+}
+
+TEST_CASE("register_ftx_builtins rename passes title to callback", "[ftx_builtins][exec]") {
+    std::string captured;
+    agent::command::CommandRegistry reg;
+    register_ftx_builtins(reg, {.on_rename = [&](const std::string& args) { captured = args; }});
+    run_registered(reg, "rename", "新标题");
+    REQUIRE(captured == "新标题");
+}
+
+TEST_CASE("register_ftx_builtins clear triggers on_clear callback", "[ftx_builtins][exec]") {
+    int cleared = 0;
+    agent::command::CommandRegistry reg;
+    register_ftx_builtins(reg, {.on_clear = [&] { ++cleared; }});
+    run_registered(reg, "clear");
+    REQUIRE(cleared == 1);
+}
+
+TEST_CASE("register_ftx_builtins without callbacks is safe (no throw)", "[ftx_builtins][exec]") {
+    agent::command::CommandRegistry reg;
+    register_ftx_builtins(reg, {});
+    REQUIRE_NOTHROW(run_registered(reg, "exit"));
+    REQUIRE_NOTHROW(run_registered(reg, "clear"));
+    REQUIRE_NOTHROW(run_registered(reg, "model"));
+    REQUIRE_NOTHROW(run_registered(reg, "resume", "1"));
+    REQUIRE_NOTHROW(run_registered(reg, "rename", "t"));
+}

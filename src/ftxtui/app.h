@@ -40,6 +40,10 @@ namespace agent::command {
 class CommandRegistry;
 }  // namespace agent::command
 
+namespace agent::input {
+class InputProcessor;
+}  // namespace agent::input
+
 namespace ftxtui {
 
 /// @brief App 依赖（从 main 注入）
@@ -52,7 +56,7 @@ struct AppDeps {
     std::string project;
     std::string agent_name;
     std::string session_dir;  ///< 项目会话目录（/resume 列出历史用）
-    /// @brief 命令注册表（命令面板数据源；斜杠命令经 InputProcessor 执行）
+    /// @brief 命令注册表（内置 + 用户命令；斜杠命令经统一命令执行路径）
     std::shared_ptr<agent::command::CommandRegistry> command_registry;
 
     /// @brief 提交一条用户消息（由 main 的实现路由到会话/处理器）
@@ -79,6 +83,8 @@ private:
     void handle_ask_user(const ActionAskUser& a);
     void close_ask(bool submitted);
     void send_input(const std::string& text);
+    /// @brief 统一命令执行入口（斜杠命令经 InputProcessor → CommandExecutor）
+    void run_command(const std::string& cmd, const std::string& args);
     void start_mock_stream(const std::string& user_text);
     void cmd_resume(const std::string& args);
     void cmd_rename(const std::string& args);
@@ -95,6 +101,8 @@ private:
     ActionQueue m_queue;
     EventBridge m_bridge;
     ftxui::ScreenInteractive m_screen;
+    /// @brief 命令处理器（B2 统一：所有输入经它分派；持有 agent 注册表）
+    std::unique_ptr<agent::input::InputProcessor> m_command_processor;
 
     /// @brief 折叠卡片渲染后的屏幕位置（每帧由 build_transcript 重建）
     // 用 deque：reflect 持有 Box&（CardHit 元素引用），deque push_back 不使已有元素引用失效

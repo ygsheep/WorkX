@@ -14,15 +14,13 @@ void EventBridge::push(Action action) {
 }
 
 void EventBridge::start() {
-    auto& bus = m_bus;
-
-    m_tokens.push_back(bus.subscribe<agent::StreamTokenEvent>(
+    subscribe_typed<agent::StreamTokenEvent>(
         [this](const agent::StreamTokenEvent& e) {
             if (!e.content_delta.empty()) push(ActionTokenDelta{e.content_delta});
             if (!e.reasoning_delta.empty()) push(ActionReasoningDelta{e.reasoning_delta});
-        }));
+        });
 
-    m_tokens.push_back(bus.subscribe<agent::StreamDoneEvent>(
+    subscribe_typed<agent::StreamDoneEvent>(
         [this](const agent::StreamDoneEvent& e) {
             push(ActionTurnDone{
                 .full_content = e.full_content,
@@ -36,36 +34,36 @@ void EventBridge::start() {
                 .generation_ms = e.generation_ms,
             });
             push(ActionSetBusy{.busy = false});
-        }));
+        });
 
-    m_tokens.push_back(bus.subscribe<agent::StepDoneEvent>(
-        [this](const agent::StepDoneEvent&) { push(ActionStepDone{}); }));
+    subscribe_typed<agent::StepDoneEvent>(
+        [this](const agent::StepDoneEvent&) { push(ActionStepDone{}); });
 
-    m_tokens.push_back(bus.subscribe<agent::StreamErrorEvent>(
+    subscribe_typed<agent::StreamErrorEvent>(
         [this](const agent::StreamErrorEvent& e) {
             push(ActionError{.message = e.message});
             push(ActionSetBusy{.busy = false});
-        }));
+        });
 
-    m_tokens.push_back(bus.subscribe<agent::ToolCallEvent>(
+    subscribe_typed<agent::ToolCallEvent>(
         [this](const agent::ToolCallEvent& e) {
             push(ActionBeginTool{
                 .tool_name = e.tool_name,
                 .call_id = e.call_id,
                 .arguments = e.arguments,
             });
-        }));
+        });
 
-    m_tokens.push_back(bus.subscribe<agent::ToolResultEvent>(
+    subscribe_typed<agent::ToolResultEvent>(
         [this](const agent::ToolResultEvent& e) {
             push(ActionEndTool{
                 .call_id = e.call_id,
                 .result = e.result,
                 .is_error = e.is_error,
             });
-        }));
+        });
 
-    m_tokens.push_back(bus.subscribe<agent::AgentDoneEvent>(
+    subscribe_typed<agent::AgentDoneEvent>(
         [this](const agent::AgentDoneEvent& e) {
             push(ActionAgentDone{
                 .final_answer = e.final_response,
@@ -73,9 +71,9 @@ void EventBridge::start() {
                 .total_tool_calls = e.total_tool_calls,
                 .total_duration_ms = e.total_duration_ms,
             });
-        }));
+        });
 
-    m_tokens.push_back(bus.subscribe<agent::AskUserRequestEvent>(
+    subscribe_typed<agent::AskUserRequestEvent>(
         [this](const agent::AskUserRequestEvent& e) {
             push(ActionAskUser{
                 .questions = e.questions,
@@ -83,31 +81,28 @@ void EventBridge::start() {
                 .result_promise = e.result_promise,
                 .cancel_flag = e.cancel_flag,
             });
-        }));
+        });
 
-    m_tokens.push_back(bus.subscribe<agent::AskUserTimeoutEvent>(
-        [this](const agent::AskUserTimeoutEvent&) { push(ActionAskUserTimeout{}); }));
+    subscribe_typed<agent::AskUserTimeoutEvent>(
+        [this](const agent::AskUserTimeoutEvent&) { push(ActionAskUserTimeout{}); });
 
-    m_tokens.push_back(bus.subscribe<agent::EnterPlanModeEvent>(
-        [this](const agent::EnterPlanModeEvent&) { push(ActionPermissions{.label = "plan"}); }));
+    subscribe_typed<agent::EnterPlanModeEvent>(
+        [this](const agent::EnterPlanModeEvent&) { push(ActionPermissions{.label = "plan"}); });
 
-    m_tokens.push_back(bus.subscribe<agent::ExitPlanModeEvent>(
-        [this](const agent::ExitPlanModeEvent&) { push(ActionPermissions{.label = ""}); }));
+    subscribe_typed<agent::ExitPlanModeEvent>(
+        [this](const agent::ExitPlanModeEvent&) { push(ActionPermissions{.label = ""}); });
 
-    m_tokens.push_back(bus.subscribe<agent::ShutdownEvent>(
-        [this](const agent::ShutdownEvent&) { push(ActionShutdown{}); }));
+    subscribe_typed<agent::ShutdownEvent>(
+        [this](const agent::ShutdownEvent&) { push(ActionShutdown{}); });
 }
 
 void EventBridge::stop() {
-    auto& bus = m_bus;
-    for (auto& t : m_tokens) {
-        // 统一通过泛型不可行；这里逐事件退订。简化：EventBus 支持 clear()，
-        // 但会误伤其他订阅。为最小侵入，仅记录并提供 clear 供外部决定。
-        (void)t;
+    // B4：逐个精确退订（按订阅时登记的 token + 类型），不依赖外部 bus.clear() 兜底，
+    //      也不误伤 EventBus 上其他订阅者。
+    for (auto& unsub : m_unsubscribers) {
+        if (unsub) unsub();
     }
-    // 注意：IEventBus 不暴露按 token 的通用退订；此实验 UI 进程独享 EventBus，
-    //       退出时由外部调用 bus.clear()（见 app 的清理顺序）。
-    m_tokens.clear();
+    m_unsubscribers.clear();
 }
 
 }  // namespace ftxtui

@@ -10,13 +10,19 @@
 #pragma once
 
 #include <functional>
+#include <string>
 #include <vector>
 
 #include <ftxui/component/component.hpp>
 
-#include "command/command_registry.h"
-
 namespace ftxtui {
+
+/// @brief 命令面板条目（从 agent 命令注册表派生；保持 UI 侧数据模型独立）
+struct PaletteCommand {
+    std::string command;   ///< 实际执行命令，如 "/model"
+    std::string title;     ///< 显示标题，如 "切换模型"
+    std::string keywords;  ///< 额外搜索关键词（中英文/别名），可空
+};
 
 /// @brief 构建命令面板组件（内部自带搜索 + 过滤，打开后自动聚焦）
 /// @param commands 全部命令条目（调用方按原始顺序；面板内部做子串搜索过滤）

@@ -103,7 +103,19 @@
 - [ ] A4 IDLE 时无重绘线程占用
 - [ ] A5 用户文案集中；Nerd Font 有 ASCII 降级
 - [ ] B1 `src/app` 与 ftxtui 共享受会话装配，工具集一致
-- [ ] B2 单一命令执行路径；命令面板消费统一注册表；移除双注册表
+- [x] B2 单一命令执行路径；命令面板消费统一注册表；移除双注册表
+  - 内置命令（help/exit/quit/clear/model/resume/rename）注册进 agent 侧
+    `CommandRegistry`（`command/builtins.{h,cpp}`），副作用回调到 App；
+    App `send_input` 斜杠分支收敛为 `run_command`（经 `InputProcessor`）；
+    命令面板从 `get_user_invocable_commands()` 派生；删除旧 ftxtui 双注册表；
+    删除 `setup_input_pipeline`（App 统一输入链）。
+    测试：`ftxtui_unit_tests` 50 用例 / 177 断言全通过（新增 test_command_builtins）
 - [ ] B3 桥接补齐设计 §5 事件；AskUser 多问题 + cancel_flag；真实 session_id
-- [ ] B4 `log_run` 路径平台无关；`EventBridge.stop()` 真正退订
+- [x] B4 `log_run` 路径平台无关；`EventBridge.stop()` 真正退订
+  - `log_run` 统一写 `~/.workx/logs/codex_run.log`（复用 `agent::default_log_path()`
+    目录约定），删除硬编码绝对路径；`localtime_s` 加 `#ifdef _WIN32` 平台保护
+  - `EventBridge` 改为登记退订 lambda（`subscribe_typed`），`stop()` 按 token+类型
+    逐个精确退订，不依赖外部 `bus.clear()` 兜底、不误伤其他订阅者
+  - 测试：`test_event_bridge`（订阅清单 / 精确退订 / 不伤无关订阅 / 幂等 / 派发映射），
+    `ftxtui_unit_tests` 55 用例 / 189 断言全通过
 - [ ] B5 bridge 映射 / 超时取消 / 命令分发单测通过；`--mock` 进 CI 冒烟

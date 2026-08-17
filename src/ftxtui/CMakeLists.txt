@@ -18,7 +18,7 @@ FetchContent_MakeAvailable(ftxui)
 add_executable(codex
     main.cpp
     app.cpp
-    command/command_registry.cpp
+    command/builtins.cpp
     vm/message_node.cpp
     vm/view_model.cpp
     bridge/action_queue.cpp

@@ -65,7 +65,7 @@ workx_add_unit_target(app_unit_tests    workx_app    ${APP_TEST_SOURCES})
 
 # ---- ftxtui 无头单测（H1 修复：为实验 FTXUI TUI 建立回归网）----
 # 仅编译不依赖 ScreenInteractive 的无头源（view_model/message_node/markdown/
-# command_registry），避免在测试链接中拖动整个 FTXUI 交互栈。
+# builtins），避免在测试链接中拖动整个 FTXUI 交互栈。
 # 依赖 codex 目标通过 WORKX_BUILD_FTX_TUI 打开的 ftxui::* imported targets。
 file(GLOB_RECURSE FTXTUI_TEST_SOURCES
      CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/ftxtui/*.cpp)
@@ -78,7 +78,9 @@ if(WORKX_BUILD_FTX_TUI AND FTXTUI_TEST_SOURCES)
         ${WORKX_ROOT}/src/ftxtui/render/syntax_highlight.cpp
         ${WORKX_ROOT}/src/ftxtui/vm/message_node.cpp
         ${WORKX_ROOT}/src/ftxtui/vm/view_model.cpp
-        ${WORKX_ROOT}/src/ftxtui/command/command_registry.cpp
+        ${WORKX_ROOT}/src/ftxtui/command/builtins.cpp
+        ${WORKX_ROOT}/src/ftxtui/bridge/action_queue.cpp
+        ${WORKX_ROOT}/src/ftxtui/bridge/event_bridge.cpp
     )
     target_include_directories(ftxtui_unit_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}

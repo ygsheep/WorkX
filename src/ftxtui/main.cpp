@@ -20,8 +20,6 @@
 #include "agent/command/inclaude/registry.h"
 #include "agent/config/app_config.h"
 #include "agent/core/chat_session.h"
-#include "agent/input/i_file_loader.h"
-#include "agent/input/processor.h"
 #include "agent/model/provider_preset.h"
 #include "agent/session/session_store.h"
 #include "agent/tool/AskUser/AskUserTool.h"
@@ -35,7 +33,6 @@
 #include "agent/tool/registry.h"
 #include "core/config/config_manager.h"
 #include "core/events/event_bus.h"
-#include "core/events/stream_events.h"
 #include "core/task/task_manager.h"
 
 #include "app.h"
@@ -141,91 +138,6 @@ static std::unique_ptr<agent::ChatSession> create_min_session(
 
 }  // namespace ftxtui
 
-/// @brief 订阅用户输入事件 → InputProcessor 管线（复刻 src/app/main.cpp）
-/// @details UserInputEvent 经 InputParser(解析层) → InputProcessor(处理层) →
-///          根据 ProcessResult 调用执行层（本地命令输出 / send_message）。
-static void setup_input_pipeline(agent::IEventBus& bus,
-                                 std::unique_ptr<agent::ChatSession>& session,
-                                 std::shared_ptr<agent::command::CommandRegistry> registry) {
-    auto input_processor = std::make_unique<agent::input::InputProcessor>(
-        registry, std::make_shared<agent::input::LocalFileLoader>());
-
-    bus.subscribe<agent::UserInputEvent>(
-        [&session, &input_processor, &bus](const agent::UserInputEvent& e) {
-            if (!input_processor) return;
-
-            agent::command::CommandContext ctx;
-            auto result = input_processor->process(e.text, ctx);
-
-            if (result.is_error) {
-                bus.publish(agent::StreamErrorEvent{
-                    .session_id = "default",
-                    .message = result.output_text,
-                    .retryable = false,
-                });
-                return;
-            }
-
-            // 本地命令有输出文本 → 直接发布（is_local_command=true：不累加 token 统计）
-            if (!result.output_text.empty() && !result.should_query) {
-                bus.publish(agent::StreamTokenEvent{
-                    .session_id = "default",
-                    .content_delta = result.output_text,
-                    .reasoning_delta = "",
-                    .is_thinking = false,
-                    .token_count = 0,
-                });
-                bus.publish(agent::StreamDoneEvent{
-                    .session_id = "default",
-                    .full_content = result.output_text,
-                    .full_reasoning = "",
-                    .was_interrupted = false,
-                    .is_local_command = true,
-                });
-                return;
-            }
-
-            // 需要调 LLM
-            if (!result.should_query) return;
-            if (session) {
-                std::string query_text;
-                if (!result.output_text.empty()) {
-                    query_text = result.output_text;
-                } else if (!result.messages.empty()) {
-                    for (size_t i = 0; i < result.messages.size(); ++i) {
-                        if (i > 0) query_text += "\n\n";
-                        query_text += result.messages[i];
-                    }
-                } else if (!e.text.empty() && e.text[0] != '/') {
-                    query_text = e.text;
-                } else {
-                    bus.publish(agent::StreamErrorEvent{
-                        .session_id = "default",
-                        .message = "命令展开为空，已取消发送",
-                        .retryable = false,
-                    });
-                    return;
-                }
-                session->send_message(query_text, std::move(result.image_paths));
-            } else {
-                // 无后端时回显
-                bus.publish(agent::StreamTokenEvent{
-                    .session_id = "default",
-                    .content_delta = "Echo: " + e.text + "\n",
-                    .reasoning_delta = "",
-                    .is_thinking = false,
-                    .token_count = 0,
-                });
-                bus.publish(agent::StreamDoneEvent{
-                    .session_id = "default",
-                    .full_content = "Echo: " + e.text + "\n",
-                    .full_reasoning = "",
-                    .was_interrupted = false,
-                });
-            }
-        });
-}
-
 int main(int argc, char** argv) {
     bool mock_mode = false;
     for (int i = 1; i < argc; ++i) {
@@ -256,7 +168,6 @@ int main(int argc, char** argv) {
     auto command_registry = std::make_shared<agent::command::CommandRegistry>();
     if (!mock_mode) {
         session = ftxtui::create_min_session(cfg, tm, bus, model_name, session_dir);
-        setup_input_pipeline(bus, session, command_registry);
     }
 
     ftxtui::AppDeps deps;

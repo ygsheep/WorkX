@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <ctime>
+#include <filesystem>
 #include <thread>
 #include <vector>
 
@@ -20,9 +21,11 @@
 #include "agent/api/i_backend_admin.h"
 #include "agent/api/chat_types.h"
 #include "agent/command/inclaude/registry.h"
+#include "agent/config/app_config.h"
 #include "agent/core/chat_session.h"
+#include "agent/input/processor.h"
 #include "agent/session/session_store.h"
-#include "command/command_registry.h"
+#include "command/builtins.h"
 #include "core/events/stream_events.h"
 #include "theme/theme.h"
 #include "render/markdown_to_elements.h"
@@ -112,6 +115,29 @@ App::App(AppDeps deps)
     m_vm.sidebar.model = m_deps.model_name;
     m_vm.sidebar.project = m_deps.project;
     m_vm.sidebar.agent = m_deps.agent_name;
+
+    // B2 统一命令：单一定义 — 内置命令注册进 agent 注册表，副作用回调到 App
+    if (!m_deps.command_registry) {
+        m_deps.command_registry = std::make_shared<agent::command::CommandRegistry>();
+    }
+    register_ftx_builtins(*m_deps.command_registry, FtuiCommandCallbacks{
+        .on_exit = [this] {
+            m_vm.apply(ActionShutdown{});
+            if (m_vm.pending_exit) m_screen.Exit();
+        },
+        .on_model_select = [this] { open_model_selector(); },
+        .on_resume = [this](const std::string& args) { cmd_resume(args); },
+        .on_rename = [this](const std::string& args) { cmd_rename(args); },
+        .on_clear = [this] {
+            if (m_deps.session) m_deps.session->clear_history();
+            m_vm.messages.clear();
+            m_scroll = 0;
+        },
+    });
+
+    // B2 统一命令：App 持有唯一命令处理器（消费 agent 注册表，含内置命令）
+    m_command_processor = std::make_unique<agent::input::InputProcessor>(
+        m_deps.command_registry, std::make_shared<agent::input::LocalFileLoader>());
 
     m_bridge.set_wake_callback([this] { m_screen.PostEvent(Event::Custom); });
     m_bridge.start();
@@ -208,12 +234,23 @@ void App::drain() {
 
 void App::log_run(std::string_view msg) {
     std::lock_guard<std::mutex> lock(m_log_mutex);
-    FILE* f = fopen("D:\\develop\\Workspace\\workx\\codex_run.log", "a");
+    // B4：日志路径平台无关，统一写 ~/.workx/logs/codex_run.log（复用 agent 配置约定）
+    namespace fs = std::filesystem;
+    fs::path log_path = agent::default_log_path().parent_path() / "codex_run.log";
+    std::error_code ec;
+    if (auto parent = log_path.parent_path(); !parent.empty()) {
+        fs::create_directories(parent, ec);
+    }
+    FILE* f = fopen(log_path.string().c_str(), "a");
     if (!f) return;
     auto now = std::chrono::system_clock::now();
     auto t = std::chrono::system_clock::to_time_t(now);
     std::tm tm{};
+#if defined(_WIN32)
     localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
     char ts[64];
     std::strftime(ts, sizeof(ts), "%H:%M:%S", &tm);
     fprintf(f, "[%s] %.*s\n", ts, static_cast<int>(msg.size()), msg.data());
@@ -341,50 +378,8 @@ void App::cmd_rename(const std::string& args) {
 void App::send_input(const std::string& text) {
     // 本地命令：不发送给模型
     if (!text.empty() && text[0] == '/') {
-        std::string cmd = text;
-        std::string args;
-        auto sp = cmd.find(' ');
-        if (sp != std::string::npos) {
-            args = cmd.substr(sp + 1);
-            cmd = cmd.substr(0, sp);
-        }
-        if (cmd == "/exit") {
-            m_vm.apply(ActionShutdown{});
-            if (m_vm.pending_exit) m_screen.Exit();
-            return;
-        }
-        if (cmd == "/model") {
-            open_model_selector();
-            return;
-        }
-        if (cmd == "/help") {
-            m_vm.apply(ActionAppendMessage{.role = "assistant",
-                .text = "可用命令：/help /clear /exit /model /resume /rename\n"
-                        "快捷键：Enter 发送 · Ctrl+P 命令面板 · Shift+Tab 权限 · Ctrl+O 思考"});
-            return;
-        }
-        if (cmd == "/clear") {
-            if (m_deps.session) m_deps.session->clear_history();
-            m_vm.messages.clear();
-            m_scroll = 0;
-            return;
-        }
-        if (cmd == "/resume") {
-            cmd_resume(args);
-            return;
-        }
-        if (cmd == "/rename") {
-            cmd_rename(args);
-            return;
-        }
-        // 其余本地命令：交给 InputProcessor 管线执行（命令面板注册的命令）
-        if (m_deps.event_bus && !m_deps.mock_mode) {
-            m_deps.event_bus->publish(agent::UserInputEvent{.text = text});
-            return;
-        }
-        // 其余本地命令暂以回显提示处理
-        m_vm.apply(ActionAppendMessage{.role = "assistant",
-                                       .text = "（实验 TUI 暂未实现该本地命令）\n"});
+        // B2 统一命令：斜杠命令全部经 run_command 执行（单一命令路径）
+        run_command(text, "");
         return;
     }
 
@@ -398,11 +393,49 @@ void App::send_input(const std::string& text) {
         return;
     }
 
-    // 真实链路：发布 UserInputEvent → main 的 InputProcessor 管线 → ChatSession
-    if (m_deps.event_bus) {
-        m_deps.event_bus->publish(agent::UserInputEvent{.text = text});
+    // 真实链路：统一经 on_submit 路由到会话（B2：输入链单一入口）
+    if (m_deps.on_submit) {
+        m_deps.on_submit(text);
     } else {
         m_vm.apply(ActionSetBusy{.busy = false});
+    }
+}
+
+void App::run_command(const std::string& cmd, const std::string& args) {
+    // 组装完整命令串（args 已含空格分隔；若调用方传了原始文本则整体处理）
+    std::string input = args.empty() ? cmd : cmd + " " + args;
+    if (!m_command_processor) {
+        m_vm.apply(ActionAppendMessage{.role = "assistant",
+                                       .text = "（命令处理器不可用）\n"});
+        return;
+    }
+
+    agent::command::CommandContext ctx;
+    auto result = m_command_processor->process(input, ctx);
+
+    if (result.is_error) {
+        m_vm.apply(ActionError{.message = result.output_text});
+        return;
+    }
+    // 本地命令有输出文本 → 追加为 assistant 消息（不回显到模型，token 统计为 0）
+    if (!result.output_text.empty() && !result.should_query) {
+        m_vm.apply(ActionAppendMessage{.role = "assistant", .text = result.output_text});
+        return;
+    }
+    // 需要调模型：交给 on_submit 路由到会话（与普通文本一致）
+    if (result.should_query && m_deps.on_submit) {
+        std::string query = result.output_text;
+        if (query.empty()) {
+            for (const auto& m : result.messages) {
+                if (!query.empty()) query += "\n\n";
+                query += m;
+            }
+        }
+        if (!query.empty()) {
+            m_vm.apply(ActionAppendMessage{.role = "user", .text = query});
+            m_vm.apply(ActionSetBusy{.busy = true});
+            m_deps.on_submit(query);
+        }
     }
 }
 
@@ -605,18 +638,17 @@ void App::run() {
                                  m_vm.busy);
     };
 
-    // 命令面板：ftxtui 独立注册表（内置中英文）+ agent 注册表命令注入
-    CommandRegistry cmd_reg = CommandRegistry::builtins();
+    // 命令面板：统一从 agent 命令注册表派生（B2 单一定义，无第二套注册表）
+    std::vector<PaletteCommand> palette_cmds;
     if (m_deps.command_registry) {
         for (const auto& c : m_deps.command_registry->get_user_invocable_commands()) {
-            cmd_reg.add(PaletteCommand{
+            palette_cmds.push_back(PaletteCommand{
                 .command = "/" + c->name(),
                 .title = c->name(),
                 .keywords = c->description(),
             });
         }
     }
-    std::vector<PaletteCommand> palette_cmds = cmd_reg.all();
 
     ComposerOptions comp_opt;
     comp_opt.buffer = &m_input_buffer;
@@ -660,11 +692,8 @@ void App::run() {
                 return;
             }
             const std::string& cmd = palette_cmds[static_cast<size_t>(idx)].command;
-            if (cmd == "/model") {
-                open_model_selector();
-            } else {
-                send_input(cmd);
-            }
+            // 统一走命令执行路径（内置命令副作用在回调内触发）
+            run_command(cmd, "");
             m_palette_open = false;
         },
         m_palette_open,
