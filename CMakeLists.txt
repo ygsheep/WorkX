@@ -45,6 +45,9 @@ find_package(CURL CONFIG REQUIRED)
 #       这样 vcpkg.json 不需要新增端口, 也不会因 vcpkg 缺少 tree-sitter port 导致 manifest 失败
 option(WORKX_WITH_TREE_SITTER "Enable tree-sitter based syntax highlighting" ON)
 option(WORKX_FETCH_GRAMMARS  "Fetch tree-sitter runtime + grammars via FetchContent (requires network at configure time)" ON)
+# 实验 TUI（FTXUI 双栏渲染器，见 docs/plans/2026-08-17-ftxui-tui-design.md）
+# 与 src/tui 完全隔离，默认关闭。目标：workx-ftx。
+option(WORKX_BUILD_FTX_TUI "Build the experimental FTXUI TUI (codex)" ON)
 
 set(WORKX_TS_RUNTIME_LIB "")
 set(WORKX_TS_GRAMMAR_LIBS "")
@@ -138,7 +141,9 @@ function(workx_fetch_ts_grammar name git_repo git_tag)
     # GIT_TAG 为 40 位 commit hash 时禁用 shallow clone:
     # 若该 commit 不是分支 tip 可达, git shallow clone 会长时间卡住/失败。
     # 具名 tag (如 v0.24.2) 保持 shallow, 加速 fetch。
-    if(git_tag MATCHES "^[0-9a-f]{40}$")
+    # 注意: CMake if(MATCHES) 正则不支持 {n} 计数量词, 需 LENGTH + 字符类组合校验
+    string(LENGTH "${git_tag}" _tag_len)
+    if(_tag_len EQUAL 40 AND git_tag MATCHES "^[0-9a-f]+$")
         set(_ts_shallow FALSE)
     else()
         set(_ts_shallow TRUE)
@@ -279,5 +284,6 @@ if(WORKX_BUILD_EXAMPLES)
     add_subdirectory(example/example_markdown)
     add_subdirectory(example/example_code_highlight)
     add_subdirectory(example/example_provider_form)
+    add_subdirectory(example/example_agent_card)
     add_subdirectory(example/example_dynamic_island)
 endif()

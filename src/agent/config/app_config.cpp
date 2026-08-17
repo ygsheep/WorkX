@@ -294,33 +294,9 @@ std::filesystem::path default_log_path() {
     std::strftime(time_suffix, sizeof(time_suffix), "%Y%m%d_%H%M%S", &tm);
     std::string log_filename = std::string("workx_") + time_suffix + ".log";
 
-#ifndef NDEBUG
-    // Debug 构建：日志写入 exe 同目录的 logs/，便于开发调试
-    // 通过 GetModuleFileNameW / readlink(/proc/self/exe) 获取 exe 路径
-    std::filesystem::path exe_path;
-#ifdef _WIN32
-    wchar_t buf[MAX_PATH];
-    DWORD len = GetModuleFileNameW(nullptr, buf, MAX_PATH);
-    if (len > 0 && len < MAX_PATH) {
-        exe_path = std::filesystem::path(buf);
-    }
-#else
-    char buf[4096];
-    ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-    if (len > 0) {
-        buf[len] = '\0';
-        exe_path = std::filesystem::path(buf);
-    }
-#endif
-    if (!exe_path.empty()) {
-        return exe_path.parent_path() / "logs" / log_filename;
-    }
-    // 回退：当前工作目录
-    return std::filesystem::current_path() / "logs" / log_filename;
-#else
-    // Release 构建：日志写入用户配置目录（AppData / XDG_CONFIG_HOME）
+// 所有构建（Debug/Release）：日志统一写入用户配置目录 ~/.workx/logs/
+    // 便于在多启动实例间集中管理日志，避免散落于 exe 同目录
     return get_config_dir() / "logs" / log_filename;
-#endif
 }
 
 } // namespace agent

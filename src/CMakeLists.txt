@@ -10,6 +10,10 @@ add_subdirectory(agent)
 add_subdirectory(island)
 add_subdirectory(tui)
 add_subdirectory(app)
+# 实验 FTXUI TUI（与 workx_tui 隔离，默认关闭）
+if(WORKX_BUILD_FTX_TUI)
+    add_subdirectory(ftxtui)
+endif()
 
 # ============================================================
 # workx 可执行文件
