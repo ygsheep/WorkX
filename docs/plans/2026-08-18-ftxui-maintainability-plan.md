@@ -95,8 +95,10 @@
 
 ## 6. 后续验收清单（Checklist）
 
-- [ ] A1 全部魔法数迁入 theme；`sidebar_rule()` 删除或实现
-- [ ] A2 建立 ftxtui 单测目标；markdown / VM action / composer 光标均有覆盖
+- [x] A1 全部魔法数迁入 theme；`sidebar_rule()` 删除或实现
+- [x] A2 建立 ftxtui 单测目标；markdown / VM action / composer 光标均有覆盖
+  - `ftxtui_unit_tests`：45 用例 / 148 断言，全部通过（message_node / view_model /
+    command_registry / markdown_to_elements）
 - [ ] A3 `layout_rows` 与 `build_transcript` 合并为单一布局源
 - [ ] A4 IDLE 时无重绘线程占用
 - [ ] A5 用户文案集中；Nerd Font 有 ASCII 降级
