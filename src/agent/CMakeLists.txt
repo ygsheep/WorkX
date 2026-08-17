@@ -35,6 +35,9 @@ target_sources(workx_agent PRIVATE
     # config
     config/app_config.cpp
 
+    # factory（宿主无关会话装配，B1：workx 与 codex 双端复用）
+    factory.cpp
+
     # api
     api/sse_parser.cpp
     api/backend_factory.cpp

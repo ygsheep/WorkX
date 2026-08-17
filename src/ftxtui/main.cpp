@@ -1,8 +1,11 @@
 /**
  * @file main.cpp
  * @brief codex 入口 — FTXUI 双栏实验 TUI
- * @details 复刻 create_session 的核心装配（不链接 workx_app，避免拖动 workx_tui）。
- *          复用 workx_agent + workx_core。见 docs/plans/2026-08-17-ftxui-tui-design.md。
+ * @details 复用 workx_agent 的会话装配（agent::create_session，B1 统一）：
+ *          与 workx 主程序共享同一工厂（Backend + 全量工具集 + 系统提示词 +
+ *          会话持久化），不再各自维护 create_min_session 造成工具集漂移。
+ *          不链接 workx_app（避免拖动 workx_tui）。见
+ *          docs/plans/2026-08-17-ftxui-tui-design.md。
  * @version 0.1.0（实验）
  */
 
@@ -14,129 +17,18 @@
 
 #include <liblogger/logger.h>
 
-#include "agent/api/backend_factory.h"
-#include "agent/api/i_backend.h"
 #include "agent/api/i_backend_admin.h"
 #include "agent/command/inclaude/registry.h"
 #include "agent/config/app_config.h"
 #include "agent/core/chat_session.h"
+#include "agent/factory.h"
 #include "agent/model/provider_preset.h"
 #include "agent/session/session_store.h"
-#include "agent/tool/AskUser/AskUserTool.h"
-#include "agent/tool/BashTool/bash_tool.h"
-#include "agent/tool/FileEditTool/file_edit_tool.h"
-#include "agent/tool/FileReadTool/file_read_tool.h"
-#include "agent/tool/FileWriteTool/file_write_tool.h"
-#include "agent/tool/GlobTool/glob_tool.h"
-#include "agent/tool/GrepTool/grep_tool.h"
-#include "agent/tool/PowerShellTool/powershell_tool.h"
-#include "agent/tool/registry.h"
 #include "core/config/config_manager.h"
 #include "core/events/event_bus.h"
 #include "core/task/task_manager.h"
 
 #include "app.h"
-
-namespace ftxtui {
-
-// ---------------------------------------------------------------------------
-// 会话装配（workx_app::create_session 的轻量复刻）
-// ---------------------------------------------------------------------------
-
-static void register_min_tools(agent::tool::ToolRegistry& registry) {
-    registry.register_tool(std::make_shared<agent::tool::FileReadTool>());
-    registry.register_tool(std::make_shared<agent::tool::FileWriteTool>());
-    registry.register_tool(std::make_shared<agent::tool::FileEditTool>());
-    registry.register_tool(std::make_shared<agent::tool::BashTool>());
-    registry.register_tool(std::make_shared<agent::tool::GlobTool>());
-    registry.register_tool(std::make_shared<agent::tool::GrepTool>());
-    registry.register_tool(std::make_shared<agent::tool::AskUserTool>());
-#ifdef _WIN32
-    registry.register_tool(std::make_shared<agent::tool::PowerShellTool>());
-#endif
-}
-
-static std::string build_sys_prompt() {
-    namespace fs = std::filesystem;
-    std::string p;
-    p += "# Environment\n";
-    p += "- Working directory: " + fs::current_path().string() + "\n";
-#ifdef _WIN32
-    p += "- Platform: win32\n";
-#else
-    p += "- Platform: unix\n";
-#endif
-    p += "\n用户消息中可能出现 <file path=\"...\">...</file> 标签，这是用户通过 @path "
-         "语法引用的文件内容，已由前端读取并注入。对此类标签内的路径，禁止再次调用 "
-         "Read 工具读取；直接基于标签内已有内容回答。";
-    return p;
-}
-
-static std::unique_ptr<agent::ChatSession> create_min_session(
-    agent::ConfigManager& cfg,
-    agent::ITaskManager& task_manager,
-    agent::IEventBus& event_bus,
-    std::string& model_name_out,
-    std::string& project_dir_out) {
-    (void)event_bus;
-
-    std::string provider = cfg.get_or<std::string>(agent::keys::PROVIDER, "");
-    std::string remote_url = cfg.get_or<std::string>(agent::keys::REMOTE_URL, "");
-    std::string api_key = cfg.get_or<std::string>(agent::keys::API_KEY, "");
-    std::string model = cfg.get_or<std::string>(agent::keys::MODEL_NAME, "");
-
-    const agent::ProviderPreset* preset = provider.empty() ? nullptr
-                                                           : agent::find_preset(provider);
-    if (remote_url.empty() && preset && !preset->default_url.empty())
-        remote_url = preset->default_url;
-    if (model.empty() && preset && !preset->default_model.empty())
-        model = preset->default_model;
-    if (remote_url.empty()) return nullptr;
-
-    agent::BackendConfig backend_config;
-    backend_config.type = agent::BackendConfig::Type::Remote;
-    backend_config.provider = preset ? preset->type : agent::ProviderType::OpenAI;
-    backend_config.base_url = remote_url;
-    backend_config.model_name = model;
-    backend_config.api_key = api_key;
-    int default_timeout = (preset && preset->timeout_ms > 0) ? preset->timeout_ms : 30000;
-    backend_config.timeout_ms = cfg.get_or<int>(agent::keys::TIMEOUT_MS, default_timeout);
-
-    auto backend = agent::BackendFactory::create(backend_config, &event_bus);
-    if (!backend) return nullptr;
-    auto init_result = backend->initialize(backend_config);
-    if (init_result.is_err()) return nullptr;
-
-    int retry = (preset && preset->retry_delay_ms > 0) ? preset->retry_delay_ms : 1000;
-    auto session = std::make_unique<agent::ChatSession>(
-        std::move(backend), task_manager, event_bus, cfg, retry, "ftx");
-
-    if (cfg.get_or<bool>(agent::keys::BYPASS_PERMISSIONS, false)) {
-        session->set_permission_mode(agent::tool::PermissionMode::BypassPermissions);
-    }
-
-    auto registry = std::make_shared<agent::tool::ToolRegistry>();
-    register_min_tools(*registry);
-    session->set_tool_registry(registry);
-
-    std::string sys = build_sys_prompt();
-    if (!sys.empty()) session->set_system_prompt(sys);
-
-    int32_t ctx = cfg.get_or<int>(agent::keys::CONTEXT_LENGTH, 0);
-    if (ctx > 0) session->set_compactor_context_window(ctx);
-
-    // 会话持久化（首条 user 消息时懒创建 SessionStore，JSONL 实时追加）
-    namespace fs = std::filesystem;
-    auto config_dir = agent::default_config_path().parent_path();
-    project_dir_out = agent::session::get_project_session_dir(
-        config_dir, fs::current_path().string()).string();
-    session->configure_session_store(project_dir_out, fs::current_path().string(), model, "");
-
-    model_name_out = model;
-    return session;
-}
-
-}  // namespace ftxtui
 
 int main(int argc, char** argv) {
     bool mock_mode = false;
@@ -165,13 +57,30 @@ int main(int argc, char** argv) {
     std::string model_name;
     std::string session_dir;
     std::unique_ptr<agent::ChatSession> session;
+    agent::IBackendAdmin* backend_admin = nullptr;
     auto command_registry = std::make_shared<agent::command::CommandRegistry>();
+
     if (!mock_mode) {
-        session = ftxtui::create_min_session(cfg, tm, bus, model_name, session_dir);
+        // B1：与 workx 主程序共用同一会话装配（全量工具集 + 系统提示词 + 持久化）
+        const std::string provider = cfg.get_or<std::string>(agent::keys::PROVIDER, "");
+        const agent::ProviderPreset* preset = provider.empty() ? nullptr
+                                                               : agent::find_preset(provider);
+        auto result = agent::create_session(cfg, preset, tm, bus);
+        session = std::move(result.session);
+        model_name = result.model_name;
+        backend_admin = result.backend_admin;
+
+        // 会话持久化目录（/resume 列出历史用）
+        if (session) {
+            auto config_dir = agent::default_config_path().parent_path();
+            session_dir = agent::session::get_project_session_dir(
+                config_dir, fs::current_path().string()).string();
+        }
     }
 
     ftxtui::AppDeps deps;
     deps.session = session.get();
+    deps.backend_admin = backend_admin;
     deps.event_bus = &bus;
     deps.mock_mode = mock_mode;
     deps.model_name = model_name;

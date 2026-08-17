@@ -102,7 +102,15 @@
 - [ ] A3 `layout_rows` 与 `build_transcript` 合并为单一布局源
 - [ ] A4 IDLE 时无重绘线程占用
 - [ ] A5 用户文案集中；Nerd Font 有 ASCII 降级
-- [ ] B1 `src/app` 与 ftxtui 共享受会话装配，工具集一致
+- [x] B1 `src/app` 与 ftxtui 共享受会话装配，工具集一致
+  - 宿主无关装配上提到 `agent/factory.{h,cpp}`（workx_agent）：`create_session` /
+    `register_builtin_tools`（全量工具集单一来源）/ `build_system_prompt`
+  - `workx_app/factory` 收窄为宿主薄封装（仅保留 `init_logger` / `init_audit_logger` /
+    `make_terminal_config`，re-export `agent/factory.h` 保持调用方不感知）
+  - ftxtui `main.cpp` 删除 `create_min_session`/`register_min_tools`/`build_sys_prompt`，
+    改调 `agent::create_session`（工具集与 workx 主程序同步）
+  - 测试：app [factory] 15 用例 / 55 断言、ftxtui 55 用例 / 189 断言全通过；
+    agent 套件仅剩预存在的 test_bash_tool 环境失败
 - [x] B2 单一命令执行路径；命令面板消费统一注册表；移除双注册表
   - 内置命令（help/exit/quit/clear/model/resume/rename）注册进 agent 侧
     `CommandRegistry`（`command/builtins.{h,cpp}`），副作用回调到 App；
