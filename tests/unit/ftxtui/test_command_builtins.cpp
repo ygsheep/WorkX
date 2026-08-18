@@ -33,12 +33,13 @@ agent::command::CommandResult run_registered(
 TEST_CASE("register_ftx_builtins registers the core commands", "[ftx_builtins][registry]") {
     agent::command::CommandRegistry reg;
     register_ftx_builtins(reg, {});
-    REQUIRE(reg.size() == 7);  // help/exit/quit/clear/model/resume/rename
+    REQUIRE(reg.size() == 8);  // help/exit/quit/clear/model/provider/resume/rename
     REQUIRE(reg.exists("help"));
     REQUIRE(reg.exists("exit"));
     REQUIRE(reg.exists("quit"));
     REQUIRE(reg.exists("clear"));
     REQUIRE(reg.exists("model"));
+    REQUIRE(reg.exists("provider"));
     REQUIRE(reg.exists("resume"));
     REQUIRE(reg.exists("rename"));
 }
@@ -47,7 +48,7 @@ TEST_CASE("register_ftx_builtins marks all as user invocable", "[ftx_builtins][r
     agent::command::CommandRegistry reg;
     register_ftx_builtins(reg, {});
     auto cmds = reg.get_user_invocable_commands();
-    REQUIRE(cmds.size() == 7);
+    REQUIRE(cmds.size() == 8);
     for (const auto& c : cmds) {
         REQUIRE_FALSE(c->name().empty());
         REQUIRE_FALSE(c->description().empty());

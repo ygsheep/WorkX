@@ -24,9 +24,31 @@ namespace agent {
 
 class ChatSession;
 class IBackendAdmin;
+class ICompletionProvider;
 struct ProviderPreset;
 class ITaskManager;
 class IEventBus;
+
+/// @brief 后端创建结果（工厂返回）
+/// @details provider 为空表示配置不足（无 remote_url）或创建/初始化失败。
+struct BackendCreateResult {
+    std::unique_ptr<ICompletionProvider> provider;  ///< 创建的后端（可为空）
+    std::string remote_url;                         ///< 解析后的 API URL
+    std::string model_name;                         ///< 解析后的模型名
+};
+
+/// @brief 根据配置创建后端（不创建会话，供启动装配与运行时供应商热切换复用）
+/// @details 与 create_session 前半段等价：
+///          1. 从 cfg 读取 provider，查找 ProviderPreset
+///          2. 解析 remote_url（cfg > preset > ""）和 model_name（cfg > preset > ""）
+///          3. 若 remote_url 非空：BackendFactory::create → initialize
+/// @param cfg 配置管理器
+/// @param preset Provider 预设（nullptr 表示无预设）
+/// @param event_bus 事件总线（BackendStatusEvent 发布用）
+/// @return BackendCreateResult（provider 可能为 nullptr）
+BackendCreateResult create_backend(IConfigManager& cfg,
+                                   const ProviderPreset* preset,
+                                   IEventBus& event_bus);
 
 /// @brief 会话创建结果（工厂返回）
 /// @details H-8：新增 backend_admin 字段，UI 层通过它调用 list_models /

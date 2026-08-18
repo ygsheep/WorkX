@@ -89,8 +89,7 @@ src/ftxtui/
 
 - **头文件拆分**：`ftxui::Event` 拆到独立头
   `ftxui/component/event.hpp`（`component.hpp` 不再传递包含）。
-  用到 `Event::Xxx` 的 .cpp 需显式 include：`app.cpp`、`widgets/composer.cpp`、
-  `widgets/model_selector.cpp`、`widgets/command_palette.cpp`。
+  用到 `Event::Xxx` 的 .cpp 需显式 include：`app.cpp`、`widgets/composer.cpp`。
 - **兼容别名**：v7 破坏性重命名（`ScreenInteractive→App`、`Pixel→Cell`、
   `PixelAt→CellAt`）均提供兼容别名，现有 v5 风格代码无需改动。
 

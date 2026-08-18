@@ -74,6 +74,7 @@ target_sources(workx_agent PRIVATE
 
     # model
     model/provider_preset.cpp
+    model/provider_config.cpp
     model/config.cpp
     model/context_resolver.cpp
     model/model_catalog.cpp

@@ -55,14 +55,13 @@
 namespace agent {
 
 // ============================================================
-// create_session
+// create_backend
 // ============================================================
 
-SessionResult create_session(IConfigManager& cfg,
-                             const ProviderPreset* preset,
-                             ITaskManager& task_manager,
-                             IEventBus& event_bus) {
-    SessionResult result;
+BackendCreateResult create_backend(IConfigManager& cfg,
+                                   const ProviderPreset* preset,
+                                   IEventBus& event_bus) {
+    BackendCreateResult result;
 
     // URL: cfg(显式设置) > preset > ""
     if (cfg.has(keys::REMOTE_URL)) {
@@ -99,13 +98,36 @@ SessionResult create_session(IConfigManager& cfg,
     //              M-1：不再回退 EventBus::instance()）
     auto backend = BackendFactory::create(backend_config, &event_bus);
     if (!backend) {
-        return result;  // session 保持 nullptr
+        return result;  // provider 保持 nullptr
     }
 
     // 初始化后端（V2-3：initialize 返回 ResultV2）
     auto init_result = backend->initialize(backend_config);
     if (init_result.is_err()) {
-        return result;  // session 保持 nullptr
+        return result;  // provider 保持 nullptr
+    }
+    result.provider = std::move(backend);
+    return result;
+}
+
+// ============================================================
+// create_session
+// ============================================================
+
+SessionResult create_session(IConfigManager& cfg,
+                             const ProviderPreset* preset,
+                             ITaskManager& task_manager,
+                             IEventBus& event_bus) {
+    SessionResult result;
+
+    // 复用 create_backend：URL/Model 解析 + 后端创建与初始化
+    auto backend_result = create_backend(cfg, preset, event_bus);
+    result.remote_url = backend_result.remote_url;
+    result.model_name = backend_result.model_name;
+
+    // 无 remote_url 时不创建会话
+    if (result.remote_url.empty() || !backend_result.provider) {
+        return result;
     }
 
     // 构造 ChatSession（M-1：显式注入 task_manager / event_bus / cfg，不再用单例）
@@ -115,7 +137,7 @@ SessionResult create_session(IConfigManager& cfg,
     std::string session_id = core::util::generate_uuid();
     int default_retry_delay = preset && preset->retry_delay_ms > 0 ? preset->retry_delay_ms : 1000;
     result.session = std::make_unique<ChatSession>(
-        std::move(backend),
+        std::move(backend_result.provider),
         task_manager,
         event_bus,
         cfg,

@@ -209,6 +209,15 @@ public:
     ///          返回的指针生命周期由 ChatSession 管理，session 析构后禁止使用。
     ICompletionProvider* completion_provider() const { return m_provider.get(); }
 
+    /// @brief 运行时切换推理后端（/provider 热切换）
+    /// @param provider 新后端（须已 initialize；空指针忽略）
+    /// @return true=已替换；false=生成中拒绝切换（调用方应先用 is_generating 检查）
+    /// @details 线程安全（受 m_state_mutex 保护）。ReActLoop 每次 run 时从
+    ///          m_provider 取指针（chat_session.cpp run_completion 内新建），
+    ///          非生成中替换无并发访问。切换后调用方通常需 import_messages
+    ///          保留对话继续（消息在 ChatSession 内，不受 provider 影响）。
+    bool set_provider(std::unique_ptr<ICompletionProvider> provider);
+
     /// @brief #45：设置会话级权限模式（CLI --bypass-permissions 注入）
     /// @details 仅接受 Default/BypassPermissions（Plan 由 toggle_permission_mode 管理）。
     ///          线程安全（受 m_state_mutex 保护）。跨 turn 生效（下一轮 ReActLoop 注入）。
