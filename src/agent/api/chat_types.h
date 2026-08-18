@@ -50,6 +50,7 @@ struct ChatMessage {
     std::vector<ToolUse> tool_uses; ///< Assistant 角色时的工具调用列表
     bool is_error = false;          ///< Tool 角色时标记工具执行失败（对齐 Anthropic is_error）
     std::vector<std::string> image_paths; ///< User 消息携带的图片绝对路径（多模态）
+    double reasoning_ms = 0.0;      ///< 思考阶段耗时（毫秒，最后一轮 LLM 响应；会话持久化/恢复用）
 
     /// @brief 便捷构造
     static ChatMessage system(const std::string& text) {

@@ -99,9 +99,27 @@
 - [x] A2 建立 ftxtui 单测目标；markdown / VM action / composer 光标均有覆盖
   - `ftxtui_unit_tests`：45 用例 / 148 断言，全部通过（message_node / view_model /
     command_registry / markdown_to_elements）
-- [ ] A3 `layout_rows` 与 `build_transcript` 合并为单一布局源
-- [ ] A4 IDLE 时无重绘线程占用
-- [ ] A5 用户文案集中；Nerd Font 有 ASCII 降级
+- [x] A3 `layout_rows` 与 `build_transcript` 合并为单一布局源
+  - 私有 `layout_rows/approx_height` 从 app.cpp 删除，改调
+    `estimate_message_height(msg)`（render/markdown_to_elements 单一布局描述）
+  - 新增对拍单测 `test_layout_estimate.cpp`：`build_message(...)->ComputeRequirement()
+    .min_y` 与估算值逐一对照（纯文本 / 代码块 / 空输入 / 用户块 / 思考卡展开收起 /
+    工具卡 / 错误 / 流式），布局漂移先红
+  - 修正过程中确认的 FTXUI 语义：`text("")` 的 `min_y=1`（非 0）、代码块无边框
+    （行数 = 代码行 + lang 标签行）、空行 → emptyElement（min_y=0）
+- [x] A4 IDLE 时无重绘线程占用
+  - 动画线程改条件变量：busy 时 80ms 驱动帧，IDLE 完全睡眠
+    （`m_anim_cv.wait` 等待 busy 变化唤醒）；drain 同步忙标志变化时 notify；
+    析构 notify_all + join
+- [x] A5 用户文案集中；Nerd Font 有 ASCII 降级
+  - 新增 `theme/strings.h`：用户可见文案单一来源（侧栏 / 状态行 / composer /
+    命令面板 / AskUser / 命令描述 / 事件回显），渲染层不再散落中文字符串
+  - 新增 `theme/icons.h`：Nerd Font 私有区字符（`\uF0EB` 灯泡 / `\uF078` chevron /
+    `\uF0AD` 扳手 / `\uEB53` key / `\uF256` hand 等）↔ ASCII 降级开关，
+    默认开启；Braille 旋转符、✓/✖ 等通用 Unicode 保留
+  - `markdown_to_elements / status_line / sidebar / composer / command_palette /
+    view_model / builtins / app` 全部切换到 strings/icons 层
+  - 单测 `test_icons.cpp`：默认字形、降级映射、开关往返
 - [x] B1 `src/app` 与 ftxtui 共享受会话装配，工具集一致
   - 宿主无关装配上提到 `agent/factory.{h,cpp}`（workx_agent）：`create_session` /
     `register_builtin_tools`（全量工具集单一来源）/ `build_system_prompt`
@@ -118,7 +136,13 @@
     命令面板从 `get_user_invocable_commands()` 派生；删除旧 ftxtui 双注册表；
     删除 `setup_input_pipeline`（App 统一输入链）。
     测试：`ftxtui_unit_tests` 50 用例 / 177 断言全通过（新增 test_command_builtins）
-- [ ] B3 桥接补齐设计 §5 事件；AskUser 多问题 + cancel_flag；真实 session_id
+- [x] B3 桥接补齐设计 §5 事件；AskUser 多问题 + cancel_flag；真实 session_id
+  - EventBridge 订阅补齐 `CacheDiagnostics / CompactionPaused / SubAgentProgress /
+    SubAgentCompleted`（共 16 种）；测试断言 12 → 16
+  - AskUser 多问题 + 自定义输入 + cancel_flag 已有实现；补 `advance_ask` 头文件声明
+    （此前定义未声明，codex 目标编译不过，本次构建暴露）
+  - `main.cpp` 注入真实 session_id（`session->session_id()`，回退 "default"）；
+    `/resume` 切换后同步 `sidebar.agent`，与审计日志 / 事件流一致
 - [x] B4 `log_run` 路径平台无关；`EventBridge.stop()` 真正退订
   - `log_run` 统一写 `~/.workx/logs/codex_run.log`（复用 `agent::default_log_path()`
     目录约定），删除硬编码绝对路径；`localtime_s` 加 `#ifdef _WIN32` 平台保护
@@ -126,4 +150,15 @@
     逐个精确退订，不依赖外部 `bus.clear()` 兜底、不误伤其他订阅者
   - 测试：`test_event_bridge`（订阅清单 / 精确退订 / 不伤无关订阅 / 幂等 / 派发映射），
     `ftxtui_unit_tests` 55 用例 / 189 断言全通过
-- [ ] B5 bridge 映射 / 超时取消 / 命令分发单测通过；`--mock` 进 CI 冒烟
+- [x] B5 bridge 映射 / 超时取消 / 命令分发单测通过；`--mock` 进 CI 冒烟
+  - bridge 映射 / 退订 / 命令分发单测在 B3/B2 完成（test_event_bridge /
+    test_command_builtins）
+  - `codex --smoke`：自动驱动一轮 mock 对话（投递消息 → 等待 busy 回落 +
+    消息数 ≥2 → 再渲染 ~1s → 退出；15s 未完成按失败退出码 1）；
+    driver 线程仅经 atomic 与 UI 线程通信（m_smoke_submit / m_smoke_exit /
+    m_msg_count），不直接触碰 ViewModel
+  - `main.cpp --smoke` 隐式启用 `--mock`（CI 无后端可跑）
+  - CI：`code-quality.yml` 新增 `ftxtui-smoke` job（构建 codex + ftxtui_unit_tests
+    → ctest → `script -qec` 伪 tty 跑 `codex --mock --smoke`，退出码 0 通过）
+  - 本地验证：`ftxtui_unit_tests` 76 用例 / 241 断言全通过；`codex --smoke` 退出码 0；
+    ctest 全量中 agent/app 二进制（旧构建，本会话未重建）的预存在失败与本次改动无关

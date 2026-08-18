@@ -84,7 +84,8 @@ public:
                                   const std::string& content,
                                   const std::string& reasoning_content,
                                   const std::vector<ToolUse>& tool_uses,
-                                  const std::string& timestamp);
+                                  const std::string& timestamp,
+                                  double reasoning_ms = 0.0);
 
     /// @brief 追加 tool 消息
     bool append_tool_message(const std::string& uuid,

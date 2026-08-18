@@ -321,6 +321,14 @@ void ChatSession::import_messages(std::vector<ChatMessage> messages) {
     m_last_prefix_shape = PrefixShape{};
 }
 
+bool ChatSession::set_provider(std::unique_ptr<ICompletionProvider> provider) {
+    if (!provider) return false;
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    if (m_generating.load()) return false;  // 生成中拒绝切换（ReActLoop 持有 provider 指针）
+    m_provider = std::move(provider);
+    return true;
+}
+
 bool ChatSession::switch_session(const std::string& file_path) {    // 加载历史消息和元信息（文件 I/O 在锁外执行）
     auto messages = agent::session::SessionStore::load_messages(file_path);
     if (messages.empty()) return false;
@@ -451,7 +459,8 @@ void ChatSession::persist_message(const ChatMessage& msg) {
         case ChatMessage::Role::Assistant:
             store->append_assistant_message(uuid, "", msg.content,
                                             msg.reasoning_content,
-                                            msg.tool_uses, timestamp);
+                                            msg.tool_uses, timestamp,
+                                            msg.reasoning_ms);
             break;
         case ChatMessage::Role::Tool:
             store->append_tool_message(uuid, "", msg.tool_call_id,
@@ -486,7 +495,8 @@ void ChatSession::persist_messages_range(size_t start_idx, const std::string& pa
             case ChatMessage::Role::Assistant:
                 store->append_assistant_message(uuid, current_parent, msg.content,
                                                 msg.reasoning_content,
-                                                msg.tool_uses, timestamp);
+                                                msg.tool_uses, timestamp,
+                                                msg.reasoning_ms);
                 break;
             case ChatMessage::Role::Tool:
                 store->append_tool_message(uuid, current_parent, msg.tool_call_id,
@@ -803,6 +813,18 @@ void ChatSession::run_completion(const std::string& user_text,
                 m_messages, m_system_prompt, tools_schema,
                 should_cancel, &publisher
             );
+
+            // 思考时长回填：prompt_ms（最后一轮 LLM 思考耗时）仅在流式结束后可知，
+            // 持久化前回填到本轮最后一条 assistant 消息（写入 JSONL 的 reasoningMs 字段）
+            if (react_result.prompt_ms > 0.0) {
+                std::lock_guard<std::mutex> lock(m_state_mutex);
+                for (auto it = m_messages.rbegin(); it != m_messages.rend(); ++it) {
+                    if (it->role == ChatMessage::Role::Assistant) {
+                        it->reasoning_ms = react_result.prompt_ms;
+                        break;
+                    }
+                }
+            }
 
             // 项目会话恢复：批量持久化 ReActLoop 新增的 assistant/tool 消息
             persist_messages_range(messages_before_loop);

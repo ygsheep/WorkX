@@ -233,6 +233,27 @@ TEST_CASE("FileReadTool redacts secrets from output", "[tool][permission][read]"
     REQUIRE(out.find("[REDACTED:Anthropic API Key]") != std::string::npos);
 }
 
+TEST_CASE("FileReadTool rejects image files with no-image-input error", "[tool][permission][read]") {
+    TempDir tmp;
+    ToolContext ctx;
+    fill_ctx(ctx, tmp.path);
+
+    fs::path target = tmp.path / "photo.png";
+    {
+        std::ofstream ofs(target, std::ios::binary);
+        ofs << "\x89PNG\r\n\x1a\n" << std::string(32, '\x00');
+    }
+
+    FileReadTool tool;
+    auto res = tool.call(R"({"file_path": "photo.png"})"_json, ctx);
+    REQUIRE(res.is_err());
+    REQUIRE(res.error().code == Error::Code::InvalidInput);
+    const std::string msg = res.error().message;
+    REQUIRE(msg.find("image") != std::string::npos);
+    REQUIRE(msg.find("no image input support") != std::string::npos);
+    REQUIRE(msg.find("photo.png") != std::string::npos);
+}
+
 // ============================================================
 // BashTool
 // ============================================================

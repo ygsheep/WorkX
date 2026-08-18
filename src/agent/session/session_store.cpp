@@ -109,7 +109,8 @@ bool SessionStore::append_assistant_message(const std::string& uuid,
                                             const std::string& content,
                                             const std::string& reasoning_content,
                                             const std::vector<ToolUse>& tool_uses,
-                                            const std::string& timestamp) {
+                                            const std::string& timestamp,
+                                            double reasoning_ms) {
     nlohmann::json j;
     j["type"] = "assistant";
     j["uuid"] = uuid;
@@ -117,6 +118,7 @@ bool SessionStore::append_assistant_message(const std::string& uuid,
     j["timestamp"] = timestamp;
     j["content"] = content;
     j["reasoningContent"] = reasoning_content;
+    j["reasoningMs"] = reasoning_ms;
     nlohmann::json uses = nlohmann::json::array();
     for (const auto& u : tool_uses) {
         uses.push_back({{"id", u.id}, {"name", u.name}, {"input", u.input}});
@@ -221,6 +223,7 @@ std::vector<ChatMessage> SessionStore::load_messages(const std::string& file_pat
         } else if (type == "assistant") {
             ChatMessage msg = ChatMessage::assistant(j.value("content", ""));
             msg.reasoning_content = j.value("reasoningContent", "");
+            msg.reasoning_ms = j.value("reasoningMs", 0.0);
             if (j.contains("toolUses") && j["toolUses"].is_array()) {
                 for (const auto& u : j["toolUses"]) {
                     ToolUse tu;
