@@ -96,11 +96,12 @@ public:
             close();
             return true;
         }
-        // Enter：执行选中项（映射回原始下标）
+        // Enter：先关面板（on_close 恢复焦点），再执行选中项（动作可再开新面板）
         if (event == Event::Return) {
-            if (m_selected >= 0 && static_cast<size_t>(m_selected) < m_order.size())
-                if (m_on_select) m_on_select(m_order[static_cast<size_t>(m_selected)]);
+            const int idx = m_selected;
             close();
+            if (idx >= 0 && static_cast<size_t>(idx) < m_order.size())
+                if (m_on_select) m_on_select(m_order[static_cast<size_t>(idx)]);
             return true;
         }
         // 移动选择：↑↓ / Ctrl+N / Ctrl+P / Tab（Tab = 向下循环，等同 ArrowDown）
