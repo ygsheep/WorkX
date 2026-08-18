@@ -1278,7 +1278,11 @@ void App::run() {
         [this](int idx) {
             m_palette_open = false;
             apply_search_entry(idx);
-            if (m_composer) m_composer->TakeFocus();
+            // 选中动作可能已打开新面板（模型/供应商），焦点归新面板；
+            // 仅无面板打开时恢复输入栏焦点
+            if (!m_model_open && !m_resume_open && !m_provider_open) {
+                if (m_composer) m_composer->TakeFocus();
+            }
         },
         m_palette_open,
         [this] { if (m_composer) m_composer->TakeFocus(); });
@@ -1419,11 +1423,11 @@ void App::run() {
         if (m_palette_open)
             layers.push_back(ftxui::center(m_palette_comp->Render()));
         if (m_model_open)
-            layers.push_back(ftxui::center(m_model_comp->Render()) | ftxui::clear_under);
+            layers.push_back(ftxui::center(m_model_comp->Render()));
         if (m_resume_open)
-            layers.push_back(ftxui::center(m_resume_comp->Render()) | ftxui::clear_under);
+            layers.push_back(ftxui::center(m_resume_comp->Render()));
         if (m_provider_open)
-            layers.push_back(ftxui::center(m_provider_comp->Render()) | ftxui::clear_under);
+            layers.push_back(ftxui::center(m_provider_comp->Render()));
         // 整个背景使用黑色
         return ftxui::dbox(std::move(layers)) | ftxui::bgcolor(theme::T::Canvas);
     });
