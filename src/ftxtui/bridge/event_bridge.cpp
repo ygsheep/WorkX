@@ -92,6 +92,47 @@ void EventBridge::start() {
     subscribe_typed<agent::ExitPlanModeEvent>(
         [this](const agent::ExitPlanModeEvent&) { push(ActionPermissions{.label = ""}); });
 
+    // B3：缓存诊断 / 压缩暂停 / 子 Agent 进度（对齐设计文档 §5 事件映射）
+    subscribe_typed<agent::CacheDiagnosticsEvent>(
+        [this](const agent::CacheDiagnosticsEvent& e) {
+            push(ActionCacheDiagnostics{
+                .prefix_hash = e.prefix_hash,
+                .prefix_changed = e.prefix_changed,
+                .reasons = e.reasons,
+                .cache_hit_tokens = e.cache_hit_tokens,
+                .cache_miss_tokens = e.cache_miss_tokens,
+            });
+        });
+
+    subscribe_typed<agent::CompactionPausedEvent>(
+        [this](const agent::CompactionPausedEvent& e) {
+            push(ActionCompactionPaused{
+                .paused = e.paused,
+                .consecutive_compacts = e.consecutive_compacts,
+                .notice = e.notice,
+            });
+        });
+
+    subscribe_typed<agent::SubAgentProgressEvent>(
+        [this](const agent::SubAgentProgressEvent& e) {
+            push(ActionSubAgentProgress{
+                .task_id = e.task_id,
+                .step_number = e.step_number,
+                .step_type = e.step_type,
+                .content = e.content,
+            });
+        });
+
+    subscribe_typed<agent::SubAgentCompletedEvent>(
+        [this](const agent::SubAgentCompletedEvent& e) {
+            push(ActionSubAgentCompleted{
+                .task_id = e.task_id,
+                .final_answer = e.final_answer,
+                .was_error = e.was_error,
+                .duration_ms = e.duration_ms,
+            });
+        });
+
     subscribe_typed<agent::ShutdownEvent>(
         [this](const agent::ShutdownEvent&) { push(ActionShutdown{}); });
 }

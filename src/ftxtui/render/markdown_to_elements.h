@@ -23,6 +23,14 @@ namespace ftxtui {
 /// @brief 渲染整段 Markdown 为纵向元素
 ftxui::Element build_markdown(std::string_view text, int width);
 
+/// @brief 估算 Markdown 渲染行数（与 build_markdown 布局逐行一致；A3 单一布局源）
+/// @details 文本不按宽度换行，行数只与块结构（代码块/空行/语言标签）有关。
+int estimate_markdown_height(std::string_view text);
+
+/// @brief 估算整条消息渲染行数（与 build_message 布局逐行一致；A3 单一布局源）
+/// @details 供转录滚动/视口高度估算使用，消除 app 侧手工复刻的布局漂移。
+int estimate_message_height(const MessageNode& msg);
+
 /// @brief 渲染单行行内文本（含粗体/斜体/删除线/代码）为横向元素
 ftxui::Element build_inline_line(std::string_view line);
 

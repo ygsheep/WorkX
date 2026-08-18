@@ -202,14 +202,33 @@ TEST_CASE("ViewModel agent done seals unsealed assistant and fills text", "[view
     REQUIRE_FALSE(vm.busy);
 }
 
-TEST_CASE("ViewModel agent done creates fallback assistant without active stream", "[view_model][agent_done]") {
+TEST_CASE("ViewModel agent done does not append fallback message when last is sealed", "[view_model][agent_done]") {
     ViewModel vm;
-    // 无流式节点、无未封口 assistant
+    // 正常流式完成路径：StreamDoneEvent 已封口（ActionTurnDone），
+    // AgentDoneEvent 只是最终汇总，不得追加第二条（否则回复显示两遍）
     vm.apply(ActionAppendMessage{.role = "user", .text = "q"});
-    vm.apply(ActionAgentDone{.final_answer = "answer"});
+    vm.apply(ActionSetBusy{.busy = true});  // 预留 assistant
+    vm.apply(ActionTurnDone{.full_content = "answer", .prompt_ms = 10.0, .generation_ms = 20.0});
+    REQUIRE(vm.messages.back().sealed);
+    vm.apply(ActionAgentDone{.final_answer = "answer", .total_duration_ms = 99.0});
+    REQUIRE(vm.messages.size() == 2);  // user + assistant，无第三遍
+    REQUIRE(vm.messages.back().role == MsgRole::Assistant);
+    REQUIRE(vm.messages.back().text == "answer");
+    REQUIRE_FALSE(vm.busy);
+}
+
+TEST_CASE("ViewModel agent done fills unsealed assistant without active stream", "[view_model][agent_done]") {
+    ViewModel vm;
+    // 流式事件缺失（异常/丢失）：未封口 assistant 由 AgentDone 补填封口
+    vm.apply(ActionAppendMessage{.role = "user", .text = "q"});
+    vm.apply(ActionSetBusy{.busy = true});
+    vm.apply(ActionAgentDone{.final_answer = "answer", .total_duration_ms = 99.0});
+    REQUIRE(vm.messages.size() == 2);
     REQUIRE(vm.messages.back().role == MsgRole::Assistant);
     REQUIRE(vm.messages.back().text == "answer");
     REQUIRE(vm.messages.back().sealed);
+    REQUIRE(vm.messages.back().duration_ms == 99.0);
+    REQUIRE_FALSE(vm.busy);
 }
 
 TEST_CASE("ViewModel agent done with empty answer does nothing", "[view_model][agent_done]") {

@@ -35,6 +35,10 @@ size_t bridge_subscriber_count(MockEventBus& bus) {
     n += bus.subscriber_count_typed<agent::AskUserTimeoutEvent>();
     n += bus.subscriber_count_typed<agent::EnterPlanModeEvent>();
     n += bus.subscriber_count_typed<agent::ExitPlanModeEvent>();
+    n += bus.subscriber_count_typed<agent::CacheDiagnosticsEvent>();
+    n += bus.subscriber_count_typed<agent::CompactionPausedEvent>();
+    n += bus.subscriber_count_typed<agent::SubAgentProgressEvent>();
+    n += bus.subscriber_count_typed<agent::SubAgentCompletedEvent>();
     n += bus.subscriber_count_typed<agent::ShutdownEvent>();
     return n;
 }
@@ -47,8 +51,8 @@ TEST_CASE("EventBridge start subscribes all UI events", "[event_bridge][start]")
     EventBridge bridge(bus, queue);
     bridge.start();
 
-    REQUIRE(bridge_subscriber_count(bus) == 12);
-    REQUIRE(bus.total_subscriber_count() == 12);
+    REQUIRE(bridge_subscriber_count(bus) == 16);
+    REQUIRE(bus.total_subscriber_count() == 16);
 }
 
 TEST_CASE("EventBridge stop unsubscribes every registered event", "[event_bridge][stop]") {

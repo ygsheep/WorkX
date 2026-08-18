@@ -32,9 +32,13 @@
 
 int main(int argc, char** argv) {
     bool mock_mode = false;
+    bool smoke_mode = false;
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--mock") mock_mode = true;
+        if (std::string(argv[i]) == "--smoke") smoke_mode = true;
     }
+    // 冒烟（B5）依赖 mock 流：无后端也能在 CI 无头管道下跑通全链路
+    if (smoke_mode) mock_mode = true;
     namespace fs = std::filesystem;
     auto& cfg = agent::ConfigManager::instance();
     agent::register_config_defaults(cfg);
@@ -82,18 +86,29 @@ int main(int argc, char** argv) {
     deps.session = session.get();
     deps.backend_admin = backend_admin;
     deps.event_bus = &bus;
+    deps.config_manager = &cfg;
     deps.mock_mode = mock_mode;
+    deps.smoke_mode = smoke_mode;
     deps.model_name = model_name;
     deps.session_dir = session_dir;
     deps.command_registry = command_registry;
     deps.project = fs::current_path().filename().string();
-    deps.agent_name = "default";
+    // B3：侧栏 Agent 显示真实会话 ID（非硬编码 "default"），
+    //     与审计日志 / 事件流的 session_id 一致，便于对照
+    deps.agent_name = (session && !session->session_id().empty())
+                          ? session->session_id()
+                          : "default";
     deps.on_submit = [&](const std::string& text) {
         if (session) session->send_message(text);
+    };
+    // /provider 热切换：复用统一后端工厂（预设名或自定义条目 id 均可解析）
+    deps.create_provider = [&cfg, &bus](const std::string& name) {
+        return agent::create_backend(cfg, agent::find_preset(name), bus);
     };
 
     ftxtui::App app(std::move(deps));
     app.run();
+    const int exit_code = app.exit_code();
 
     // 清理
     tm.cancelAll();
@@ -104,5 +119,5 @@ int main(int argc, char** argv) {
     }
     session.reset();
     bus.clear();
-    return 0;
+    return exit_code;
 }
