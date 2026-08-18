@@ -18,6 +18,8 @@
 #include <vector>
 
 #include <nlohmann/json.hpp>
+#include "agent/api/i_completion_provider.h"
+#include "agent/model/provider_config.h"
 #include "core/events/agent_events.h"  // agent::AskUserResult
 
 namespace ftxtui {
@@ -104,6 +106,39 @@ struct ActionAskUser {
 /// @brief AskUser 超时（关闭模态，返回 cancelled）
 struct ActionAskUserTimeout {};
 
+/// @brief 缓存诊断事件（DeepSeek 缓存命中率劣化归因）
+/// @details prefix_changed=true 时提示缓存前缀变化原因，辅助理解命中率下降。
+struct ActionCacheDiagnostics {
+    std::string prefix_hash;
+    bool prefix_changed = false;
+    std::vector<std::string> reasons;   ///< 变化原因（"system"/"tools"/"log_rewrite"）
+    int32_t cache_hit_tokens = 0;
+    int32_t cache_miss_tokens = 0;
+};
+
+/// @brief 压缩暂停/恢复事件（DS_CACHE H-3 卡死守卫）
+struct ActionCompactionPaused {
+    bool paused = true;                 ///< true=守卫触发暂停；false=自愈恢复
+    int32_t consecutive_compacts = 0;
+    std::string notice;                 ///< 人类可读说明
+};
+
+/// @brief 子 Agent 进度增量（AgentTool → 订阅者）
+struct ActionSubAgentProgress {
+    std::string task_id;
+    int32_t step_number = 0;
+    std::string step_type;              ///< "thought"/"action"/"observation"/"final"
+    std::string content;
+};
+
+/// @brief 子 Agent 完成（AgentTool → 订阅者）
+struct ActionSubAgentCompleted {
+    std::string task_id;
+    std::string final_answer;
+    bool was_error = false;
+    double duration_ms = 0.0;
+};
+
 /// @brief 请求 UI 关闭（/exit）
 struct ActionShutdown {};
 
@@ -116,6 +151,32 @@ struct ActionToast {
 /// @brief 模型列表加载完成（App 后台线程 list_models 后入队）
 struct ActionModelsLoaded {
     std::vector<std::string> models;
+};
+
+/// @brief 会话列表条目（UI 侧轻量拷贝，避免 action.h 依赖 SessionStore）
+struct SessionLite {
+    std::string title;       ///< 会话标题（无则回退 session_id）
+    std::string file_path;   ///< JSONL 文件路径（恢复用）
+    int message_count = 0;
+};
+
+/// @brief 会话列表加载完成（App 后台线程 list_sessions 后入队）
+struct ActionSessionsLoaded {
+    std::vector<SessionLite> sessions;
+};
+
+/// @brief 供应商切换完成（后台 create_backend 成功后入队；provider 移交 UI 线程）
+/// @details UI 线程处理时执行 set_provider + import_messages（保留对话继续），
+///          成功后再写配置（apply_provider_switch）。
+struct ActionProviderSwitched {
+    std::unique_ptr<agent::ICompletionProvider> provider;  ///< 新后端（已 initialize）
+    std::string model_name;                                ///< 新模型名（可能为空）
+    agent::ProviderConfigEntry entry;                      ///< 已选条目（写配置用）
+};
+
+/// @brief 供应商切换失败（后台 create_backend 创建/初始化失败）
+struct ActionProviderSwitchFailed {
+    std::string provider_name;  ///< 显示名（提示用）
 };
 
 /// @brief 统一动作类型
@@ -133,9 +194,16 @@ using Action = std::variant<
     ActionPermissions,
     ActionAskUser,
     ActionAskUserTimeout,
+    ActionCacheDiagnostics,
+    ActionCompactionPaused,
+    ActionSubAgentProgress,
+    ActionSubAgentCompleted,
     ActionShutdown,
     ActionToast,
-    ActionModelsLoaded
+    ActionModelsLoaded,
+    ActionSessionsLoaded,
+    ActionProviderSwitched,
+    ActionProviderSwitchFailed
 >;
 
 }  // namespace ftxtui

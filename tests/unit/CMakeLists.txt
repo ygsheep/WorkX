@@ -81,6 +81,8 @@ if(WORKX_BUILD_FTX_TUI AND FTXTUI_TEST_SOURCES)
         ${WORKX_ROOT}/src/ftxtui/command/builtins.cpp
         ${WORKX_ROOT}/src/ftxtui/bridge/action_queue.cpp
         ${WORKX_ROOT}/src/ftxtui/bridge/event_bridge.cpp
+        ${WORKX_ROOT}/src/ftxtui/widgets/suggest_panel.cpp
+        ${WORKX_ROOT}/src/ftxtui/widgets/search_palette.cpp
     )
     target_include_directories(ftxtui_unit_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
@@ -94,6 +96,7 @@ if(WORKX_BUILD_FTX_TUI AND FTXTUI_TEST_SOURCES)
         workx_core
         ftxui::dom
         ftxui::screen
+        ftxui::component
         Catch2::Catch2WithMain
     )
     if(nlohmann_json_FOUND)

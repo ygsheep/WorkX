@@ -28,8 +28,8 @@ add_executable(codex
     widgets/sidebar.cpp
     widgets/composer.cpp
     widgets/status_line.cpp
-    widgets/command_palette.cpp
-    widgets/model_selector.cpp
+    widgets/suggest_panel.cpp
+    widgets/search_palette.cpp
 )
 
 target_include_directories(codex PRIVATE

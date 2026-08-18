@@ -3,7 +3,10 @@
  * @brief 底部输入组件（自定义渲染：块状光标 + 灰色提示 + 快捷键处理）
  * @details 自绘单行输入，避免 ftxui::Input 的 Windows 光标回退问题
  *          （空输入时光标落在终端右下角）与默认 Bar 光标。
- *          Enter 提交；Shift+Tab 切换权限；Ctrl+P 命令面板；Ctrl+O 思考视图。
+ *          Enter 提交；Shift+Tab 切换权限；Ctrl+O 思考视图。
+ *          Ctrl+P 不在输入栏消费（全局搜索面板由 App 顶层捕获）。
+ *          输入栏提示面板（"/" 命令 / "@" 文件）不占焦点：导航键在面板
+ *          激活时经 suggest_* 回调转发给 App 状态机，否则走原逻辑。
  */
 
 #include "widgets/composer.h"
@@ -16,6 +19,7 @@
 #include <ftxui/component/event.hpp>
 #include <ftxui/dom/elements.hpp>
 
+#include "theme/strings.h"
 #include "theme/theme.h"
 
 namespace ftxtui {
@@ -28,8 +32,6 @@ using ftxui::Event;
 namespace {
 /// @brief 输入区背景色（与侧边栏一致）
 const Color kPanelBg = theme::T::Panel;
-/// @brief 输入框提示文本
-const char* kPlaceholder = "输入消息，Enter 发送  ·  Ctrl+P 命令";
 
 /// @brief 光标位置 pos 处字符的字节长度（UTF-8 安全；pos 越界返回 0）
 size_t char_len_at(const std::string& s, size_t pos) {
@@ -60,11 +62,10 @@ Element cursor_block() {
 Element render_with_cursor(const std::string& text, size_t cursor, bool focused) {
     cursor = std::min(cursor, text.size());
     if (text.empty()) {
-        if (!focused) return ftxui::text(kPlaceholder) | ftxui::color(theme::T::Text);
-        return ftxui::hbox({
-            cursor_block(),
-            ftxui::text(kPlaceholder) | ftxui::color(theme::T::Text),
-        });
+        Element ph = ftxui::text(std::string(str::kComposerPlaceholder)) |
+                     ftxui::color(theme::T::Text);
+        if (!focused) return ph;
+        return ftxui::hbox({cursor_block(), ph});
     }
     if (cursor >= text.size()) {
         Element e = ftxui::text(text) | ftxui::color(theme::T::Text);
@@ -89,18 +90,22 @@ Element render_with_cursor(const std::string& text, size_t cursor, bool focused)
 }  // namespace
 
 Component make_composer(ComposerOptions& opt) {
-    auto cursor = std::make_shared<size_t>(0);  ///< 光标字节位置（渲染/事件共享）
+    size_t internal_cursor = 0;  ///< 内部光标（opt.cursor 为空时使用）
+    size_t& cursor = opt.cursor ? *opt.cursor : internal_cursor;
 
-    auto renderer = ftxui::Renderer([&opt, cursor](bool focused) {
-        return render_with_cursor(*opt.buffer, *cursor, focused) | ftxui::bgcolor(kPanelBg);
+    auto renderer = ftxui::Renderer([&opt, &cursor](bool focused) {
+        return render_with_cursor(*opt.buffer, cursor, focused) | ftxui::bgcolor(kPanelBg);
     });
 
-    Component wrapped = renderer | ftxui::CatchEvent([&opt, cursor, renderer](Event e) {
+    Component wrapped = renderer | ftxui::CatchEvent([&opt, &cursor, renderer](Event e) {
         std::string& text = *opt.buffer;
-        size_t& cur = *cursor;
-        cur = std::min(cur, text.size());
+        cursor = std::min(cursor, text.size());
+
+        // ---- 提示面板优先：激活时拦截导航键（面板不占焦点，事件经此处转发）----
+        const bool suggest = opt.suggest_active && opt.suggest_active();
 
         if (e == Event::Return) {
+            if (suggest && opt.suggest_enter && opt.suggest_enter()) return true;
             std::string t = text;
             size_t b = t.find_first_not_of(" \t");
             size_t en = t.find_last_not_of(" \t");
@@ -108,36 +113,62 @@ Component make_composer(ComposerOptions& opt) {
             std::string trimmed = t.substr(b, en - b + 1);
             if (opt.on_submit) opt.on_submit(trimmed);
             text.clear();
-            cur = 0;
+            cursor = 0;
+            if (opt.suggest_refresh) opt.suggest_refresh();
             return true;
         }
-        if (e == Event::Backspace) {
-            if (cur > 0) {
-                size_t p = prev_char(text, cur);
-                text.erase(p, cur - p);
-                cur = p;
+        if (e == Event::Tab) {
+            if (suggest && opt.suggest_move) {
+                opt.suggest_move(+1);  // Tab = 向下循环选择
+                return true;
             }
+            return true;  // 无面板时 Tab 无操作（防插入控制字符）
+        }
+        if (e == Event::Escape) {
+            if (suggest && opt.suggest_cancel) {
+                opt.suggest_cancel();
+                return true;
+            }
+            return false;
+        }
+        if (e == Event::ArrowUp) {
+            if (suggest && opt.suggest_move) { opt.suggest_move(-1); return true; }
+            return false;
+        }
+        if (e == Event::ArrowDown) {
+            if (suggest && opt.suggest_move) { opt.suggest_move(+1); return true; }
+            return false;
+        }
+
+        if (e == Event::Backspace) {
+            if (cursor > 0) {
+                size_t p = prev_char(text, cursor);
+                text.erase(p, cursor - p);
+                cursor = p;
+            }
+            if (opt.suggest_refresh) opt.suggest_refresh();
             return true;
         }
         if (e == Event::Delete) {
-            if (cur < text.size()) text.erase(cur, char_len_at(text, cur));
+            if (cursor < text.size()) text.erase(cursor, char_len_at(text, cursor));
+            if (opt.suggest_refresh) opt.suggest_refresh();
             return true;
         }
         if (e == Event::ArrowLeft) {
-            cur = prev_char(text, cur);
+            cursor = prev_char(text, cursor);
             return true;
         }
         if (e == Event::ArrowRight) {
-            size_t n = char_len_at(text, cur);
-            cur = std::min(text.size(), cur + std::max<size_t>(1, n));
+            size_t n = char_len_at(text, cursor);
+            cursor = std::min(text.size(), cursor + std::max<size_t>(1, n));
             return true;
         }
         if (e == Event::Home) {
-            cur = 0;
+            cursor = 0;
             return true;
         }
         if (e == Event::End) {
-            cur = text.size();
+            cursor = text.size();
             return true;
         }
         if (e == Event::TabReverse) {  // Shift+Tab 权限切换
@@ -150,27 +181,24 @@ Component make_composer(ComposerOptions& opt) {
             return (e.is_character() && e.character() == s) ||
                    e == ftxui::Event::Special(s);
         };
-        if (is_ctrl(0x10)) {  // Ctrl+P 命令面板
-            if (opt.on_command_palette) opt.on_command_palette();
-            return true;
-        }
         if (is_ctrl(0x0f)) {  // Ctrl+O 思考视图
             if (opt.on_toggle_thinking) opt.on_toggle_thinking();
             return true;
         }
         if (is_ctrl(0x01)) {  // Ctrl+A 行首
-            cur = 0;
+            cursor = 0;
             return true;
         }
         if (is_ctrl(0x05)) {  // Ctrl+E 行尾
-            cur = text.size();
+            cursor = text.size();
             return true;
         }
         if (e.is_character()) {
             const std::string& ch = e.character();
             if (ch.size() == 1 && static_cast<uint8_t>(ch[0]) < 0x20) return false;
-            text.insert(cur, ch);
-            cur += ch.size();
+            text.insert(cursor, ch);
+            cursor += ch.size();
+            if (opt.suggest_refresh) opt.suggest_refresh();
             return true;
         }
         if (e.is_mouse()) {

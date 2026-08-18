@@ -1,6 +1,10 @@
 #include "vm/view_model.h"
 
+#include <format>
+#include <string>
 #include <utility>
+
+#include "theme/strings.h"
 
 namespace ftxtui {
 
@@ -121,20 +125,17 @@ bool ViewModel::apply_variant(const ActionEndTool& a) {
 
 bool ViewModel::apply_variant(const ActionAgentDone& a) {
     busy = false;
-    if (has_active_stream() || (!messages.empty() && messages.back().role == MsgRole::Assistant && !messages.back().sealed)) {
+    // 成功路径 StreamDoneEvent（ActionTurnDone）已先行封口并填充 final_answer
+    //（同一线程顺序发布，队列保序），AgentDoneEvent 只是最终汇总：
+    // 仅当流式路径缺失（事件丢失/顺序异常）且消息未封口时才补填，
+    // 绝不追加新消息——否则 final_answer 会作为第二遍重复显示。
+    if (!messages.empty() && messages.back().role == MsgRole::Assistant
+        && !messages.back().sealed) {
         auto& m = messages.back();
-        if (m.role == MsgRole::Assistant && !m.sealed) {
-            if (m.text.empty() && !a.final_answer.empty()) m.text = a.final_answer;
-            m.sealed = true;
-            m.streaming = false;
-            m.duration_ms = a.total_duration_ms;
-        }
-    } else if (!a.final_answer.empty()) {
-        MessageNode n;
-        n.role = MsgRole::Assistant;
-        n.text = a.final_answer;
-        n.sealed = true;
-        messages.push_back(std::move(n));
+        if (m.text.empty() && !a.final_answer.empty()) m.text = a.final_answer;
+        m.sealed = true;
+        m.streaming = false;
+        m.duration_ms = a.total_duration_ms;
     }
     return true;
 }
@@ -158,6 +159,63 @@ bool ViewModel::apply_variant(const ActionPermissions& a) {
 bool ViewModel::apply_variant(const ActionAskUser&) { return true; }
 bool ViewModel::apply_variant(const ActionAskUserTimeout&) { return true; }
 
+bool ViewModel::apply_variant(const ActionCacheDiagnostics& a) {
+    // 仅 prefix_changed 时提示（对齐 src/tui ChatRenderer 语义）
+    if (!a.prefix_changed) return false;
+    std::string reason_str;
+    for (size_t i = 0; i < a.reasons.size(); ++i) {
+        if (i > 0) reason_str += "+";
+        reason_str += a.reasons[i];
+    }
+    prompt_echo = std::string(str::kCachePrefixChanged)
+                  + (reason_str.empty() ? "?" : reason_str)
+                  + std::string(str::kCacheMissSep)
+                  + std::to_string(a.cache_miss_tokens)
+                  + std::string(str::kCacheTokensUnit);
+    return true;
+}
+
+bool ViewModel::apply_variant(const ActionCompactionPaused& a) {
+    if (!a.notice.empty()) prompt_echo = a.notice;
+    else if (a.paused) prompt_echo = std::string(str::kCompactPausedPrefix)
+                                        + std::to_string(a.consecutive_compacts)
+                                        + std::string(str::kCompactPausedSuffix);
+    else prompt_echo = std::string(str::kCompactResumed);
+    return true;
+}
+
+bool ViewModel::apply_variant(const ActionSubAgentProgress& a) {
+    // 子任务进度：追加一条 assistant 消息（含 task_id 标识），不流式
+    std::string prefix = std::string(str::kSubAgentPrefix) + a.task_id + std::string(str::kSubAgentSep);
+    if (a.step_type == "final") {
+        // final 步由 SubAgentCompleted 处理，这里不重复
+        return false;
+    }
+    MessageNode n;
+    n.role = MsgRole::Assistant;
+    n.text = prefix + (a.content.empty()
+        ? (std::string(str::kSubStepPrefix) + std::to_string(a.step_number)
+           + std::string(str::kSubStepOpen) + a.step_type + std::string(str::kSubStepClose))
+        : a.content);
+    n.sealed = true;
+    messages.push_back(std::move(n));
+    return true;
+}
+
+bool ViewModel::apply_variant(const ActionSubAgentCompleted& a) {
+    MessageNode n;
+    n.role = MsgRole::Assistant;
+    std::string status = a.was_error ? std::string(str::kSubFailed) : std::string(str::kSubCompleted);
+    n.text = std::string(str::kSubAgentPrefix) + a.task_id + std::string(str::kSubAgentSep) + status
+             + std::format(str::kSubDuration, a.duration_ms / 1000.0);
+    if (!a.final_answer.empty()) {
+        n.text += "\n" + a.final_answer;
+    }
+    n.sealed = true;
+    messages.push_back(std::move(n));
+    return true;
+}
+
 bool ViewModel::apply_variant(const ActionShutdown&) {
     pending_exit = true;
     return true;
@@ -170,6 +228,18 @@ bool ViewModel::apply_variant(const ActionToast& a) {
 
 bool ViewModel::apply_variant(const ActionModelsLoaded&) {
     return false;  // 由 App 消费（刷新模型列表），ViewModel 不关心
+}
+
+bool ViewModel::apply_variant(const ActionSessionsLoaded&) {
+    return false;  // 由 App 消费（填充会话搜索条目），ViewModel 不关心
+}
+
+bool ViewModel::apply_variant(const ActionProviderSwitched&) {
+    return false;  // 由 App 消费（运行时热切换后端），ViewModel 不关心
+}
+
+bool ViewModel::apply_variant(const ActionProviderSwitchFailed&) {
+    return false;  // 由 App 消费（提示切换失败），ViewModel 不关心
 }
 
 }  // namespace ftxtui

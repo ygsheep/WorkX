@@ -73,9 +73,16 @@ private:
     bool apply_variant(const ActionPermissions&);
     bool apply_variant(const ActionAskUser&);
     bool apply_variant(const ActionAskUserTimeout&);
+    bool apply_variant(const ActionCacheDiagnostics&);
+    bool apply_variant(const ActionCompactionPaused&);
+    bool apply_variant(const ActionSubAgentProgress&);
+    bool apply_variant(const ActionSubAgentCompleted&);
     bool apply_variant(const ActionShutdown&);
     bool apply_variant(const ActionToast&);
     bool apply_variant(const ActionModelsLoaded&);
+    bool apply_variant(const ActionSessionsLoaded&);
+    bool apply_variant(const ActionProviderSwitched&);
+    bool apply_variant(const ActionProviderSwitchFailed&);
 };
 
 }  // namespace ftxtui
