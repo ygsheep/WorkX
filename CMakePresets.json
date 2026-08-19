@@ -9,7 +9,8 @@
       "toolchainFile": "D:/Programs/vcpkg/scripts/buildsystems/vcpkg.cmake",
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
+        "CMAKE_BUILD_TYPE": "Debug",
+        "WORKX_BUILD_FTX_TUI": "ON"
       }
     },
     {
