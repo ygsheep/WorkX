@@ -69,10 +69,12 @@ std::vector<size_t> filter_commands(const std::vector<std::string>& commands,
 Element render_suggest_panel(SuggestMode mode,
                              const std::vector<SuggestEntry>& entries,
                              int selected,
-                             bool file_ready) {
+                             bool file_ready,
+                             std::deque<ftxui::Box>* hit_boxes) {
     using namespace ftxui;
 
     if (mode == SuggestMode::None) return emptyElement();
+    if (hit_boxes) hit_boxes->clear();
 
     // 空态文案（区分命令/文件；文件另有「索引构建中」）
     Element body;
@@ -85,10 +87,21 @@ Element render_suggest_panel(SuggestMode mode,
                    | color(theme::T::TextDim);
         }
     } else {
+        // 滚动窗口：选中项始终可见（Tab 向下 / Shift+Tab 向上循环到超长列表时不脱视）
+        constexpr int kMaxVisible = 8;
+        const int total = static_cast<int>(entries.size());
+        const int vis = std::min(total, kMaxVisible);
+        int start = 0;
+        if (selected >= 0) {
+            start = std::max(0, selected - (vis - 1) / 2);
+            if (start + vis > total) start = std::max(0, total - vis);
+        }
+        const int shown_end = std::min(start + vis, total);
+
         Elements rows;
-        for (size_t i = 0; i < entries.size(); ++i) {
-            const auto& e = entries[i];
-            const bool sel = (static_cast<int>(i) == selected);
+        for (int i = start; i < shown_end; ++i) {
+            const auto& e = entries[static_cast<size_t>(i)];
+            const bool sel = (i == selected);
             auto row = hbox({
                 text(sel ? "  ❯ " : "    "),
                 text(e.title) | color(theme::T::Text),
@@ -99,8 +112,19 @@ Element render_suggest_panel(SuggestMode mode,
                 text(" "),
             });
             if (sel) row = row | bgcolor(theme::T::Selection);
+            if (hit_boxes) {
+                // 记录候选行屏幕 box（deque 保证 reflect 的 Box& 地址稳定）
+                hit_boxes->push_back(ftxui::Box{});
+                row = row | ftxui::reflect(hit_boxes->back());
+            }
             rows.push_back(row);
         }
+        const int hidden = total - shown_end;
+        if (hidden > 0)
+            rows.push_back(text(std::string(str::kPaletteMorePrefix) +
+                                std::to_string(hidden) +
+                                std::string(str::kPaletteMoreSuffix)) |
+                           color(theme::T::TextFaint));
         body = vbox(std::move(rows));
     }
 

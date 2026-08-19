@@ -171,7 +171,11 @@ Component make_composer(ComposerOptions& opt) {
             cursor = text.size();
             return true;
         }
-        if (e == Event::TabReverse) {  // Shift+Tab 权限切换
+        if (e == Event::TabReverse) {  // Shift+Tab：提示面板激活时向上循环，否则切换权限
+            if (suggest && opt.suggest_move) {
+                opt.suggest_move(-1);
+                return true;
+            }
             if (opt.on_perm_toggle) opt.on_perm_toggle();
             return true;
         }

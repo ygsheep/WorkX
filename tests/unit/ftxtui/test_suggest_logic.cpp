@@ -13,10 +13,32 @@
 #include <string>
 #include <vector>
 
+#include <ftxui/component/component.hpp>
+#include <ftxui/component/event.hpp>
+#include <ftxui/screen/screen.hpp>
+#include <ftxui/screen/string.hpp>
+
 #include "widgets/search_palette.h"
 #include "widgets/suggest_panel.h"
 
 using namespace ftxtui;
+
+namespace {
+
+/// @brief 把组件渲染到固定尺寸 Screen（面板默认去噪行为验证用）
+std::string render_comp(const ftxui::Component& c, int cols = 80, int rows = 20) {
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(cols),
+                                        ftxui::Dimension::Fixed(rows));
+    ftxui::Render(screen, c->Render());
+    std::string out;
+    for (int y = 0; y < rows; ++y) {
+        for (int x = 0; x < cols; ++x) out += screen.PixelAt(x, y).character;
+        out += '\n';
+    }
+    return out;
+}
+
+}  // namespace
 
 // ============================================================================
 // parse_suggest_query："/" 命令模式
@@ -177,4 +199,107 @@ TEST_CASE("filter_search_entries keeps source order for substring hits", "[palet
     REQUIRE(hits.size() == 2);
     REQUIRE(hits[0] == 0);
     REQUIRE(hits[1] == 2);
+}
+
+TEST_CASE("filter_search_entries slash prefix restricts to Feature", "[palette][filter][prefix]") {
+    std::vector<SearchEntry> entries = {
+        make_entry(SearchCategory::Feature, "切换模型 /model"),
+        make_entry(SearchCategory::File, "src/model.cpp"),
+        make_entry(SearchCategory::Session, "昨天模型讨论"),
+    };
+    // "/model" 去掉前缀后只搜功能类，文件/会话被排除
+    auto hits = filter_search_entries(entries, "/model");
+    REQUIRE(hits.size() == 1);
+    REQUIRE(hits[0] == 0);
+}
+
+TEST_CASE("filter_search_entries slash prefix no match empty", "[palette][filter][prefix]") {
+    std::vector<SearchEntry> entries = {
+        make_entry(SearchCategory::Feature, "清空会话"),
+        make_entry(SearchCategory::File, "app.cpp"),
+    };
+    REQUIRE(filter_search_entries(entries, "/app").empty());  // 功能类无 app
+}
+
+TEST_CASE("filter_search_entries at prefix restricts to File", "[palette][filter][prefix]") {
+    std::vector<SearchEntry> entries = {
+        make_entry(SearchCategory::Feature, "app路径"),
+        make_entry(SearchCategory::File, "src/app/main.cpp"),
+        make_entry(SearchCategory::Session, "app会话"),
+    };
+    auto hits = filter_search_entries(entries, "@app");
+    REQUIRE(hits.size() == 1);
+    REQUIRE(hits[0] == 1);
+}
+
+TEST_CASE("filter_search_entries at prefix no match empty", "[palette][filter][prefix]") {
+    std::vector<SearchEntry> entries = {
+        make_entry(SearchCategory::File, "main.cpp"),
+        make_entry(SearchCategory::Feature, "切换模型"),
+    };
+    REQUIRE(filter_search_entries(entries, "@模型").empty());  // 文件类无模型
+}
+
+TEST_CASE("filter_search_entries other prefixes unaffected", "[palette][filter][prefix]") {
+    std::vector<SearchEntry> entries = {
+        make_entry(SearchCategory::Feature, "a"),
+        make_entry(SearchCategory::File, "b"),
+        make_entry(SearchCategory::Session, "c"),
+    };
+    // 非 @ / 前缀不限定类别
+    REQUIRE(filter_search_entries(entries, "b").size() == 1);
+    REQUIRE(filter_search_entries(entries, "a").size() == 1);
+}
+
+// ============================================================================
+// 聚合面板默认去噪：restrict_default=true 且空查询时仅显示「会话记录 / 设置」
+// ============================================================================
+
+TEST_CASE("search palette restrict_default hides feature/file on empty query",
+          "[palette][filter][default]") {
+    std::vector<SearchEntry> entries = {
+        make_entry(SearchCategory::Feature, "切换模型"),
+        make_entry(SearchCategory::File, "app.cpp"),
+        make_entry(SearchCategory::Session, "昨天的工作"),
+        make_entry(SearchCategory::Setting, "自动滚动"),
+    };
+    bool open = true;
+    auto win = make_search_palette(entries, [](int) {}, open, nullptr, "", /*restrict_default=*/true);
+    const auto text = render_comp(win);
+    REQUIRE(text.find("切换模型") == std::string::npos);  // 功能隐藏
+    REQUIRE(text.find("app.cpp") == std::string::npos);   // 文件隐藏
+    REQUIRE(text.find("昨天的工作") != std::string::npos); // 会话保留
+    REQUIRE(text.find("自动滚动") != std::string::npos);   // 设置保留
+}
+
+TEST_CASE("search palette restrict_default lifts on typed query",
+          "[palette][filter][default]") {
+    std::vector<SearchEntry> entries = {
+        make_entry(SearchCategory::Feature, "切换模型"),
+        make_entry(SearchCategory::File, "app.cpp"),
+        make_entry(SearchCategory::Session, "昨天的工作"),
+        make_entry(SearchCategory::Setting, "自动滚动"),
+    };
+    bool open = true;
+    auto win = make_search_palette(entries, [](int) {}, open, nullptr, "", /*restrict_default=*/true);
+    // 空查询默认只显示会话/设置
+    REQUIRE(render_comp(win).find("切换模型") == std::string::npos);
+    // 输入搜索词后恢复全类搜索，功能条目重新可见
+    win->OnEvent(ftxui::Event::Character("切换"));
+    REQUIRE(render_comp(win).find("切换模型") != std::string::npos);
+}
+
+TEST_CASE("search palette no restrict_default shows all on empty query",
+          "[palette][filter][default]") {
+    std::vector<SearchEntry> entries = {
+        make_entry(SearchCategory::Feature, "切换模型"),
+        make_entry(SearchCategory::File, "app.cpp"),
+        make_entry(SearchCategory::Session, "昨天的工作"),
+        make_entry(SearchCategory::Setting, "自动滚动"),
+    };
+    bool open = true;
+    auto win = make_search_palette(entries, [](int) {}, open, nullptr, "", /*restrict_default=*/false);
+    const auto text = render_comp(win);
+    REQUIRE(text.find("切换模型") != std::string::npos); // 默认 false 不影响 /model /resume
+    REQUIRE(text.find("app.cpp") != std::string::npos);
 }

@@ -9,6 +9,7 @@
 #pragma once
 
 #include <cstddef>
+#include <deque>
 #include <string>
 #include <vector>
 
@@ -53,9 +54,12 @@ std::vector<size_t> filter_commands(const std::vector<std::string>& commands,
 /// @param entries 已过滤的候选列表
 /// @param selected 选中项下标（-1 = 无选中）
 /// @param file_ready 文件索引是否就绪（File 模式未就绪时显示「构建中」）
+/// @param hit_boxes 非空时记录每条候选行渲染后的屏幕 box（鼠标点击命中用；
+///                  deque 保证 reflect 持有的 Box& 地址稳定）
 ftxui::Element render_suggest_panel(SuggestMode mode,
                                     const std::vector<SuggestEntry>& entries,
                                     int selected,
-                                    bool file_ready);
+                                    bool file_ready,
+                                    std::deque<ftxui::Box>* hit_boxes = nullptr);
 
 }  // namespace ftxtui

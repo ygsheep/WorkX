@@ -50,11 +50,14 @@ std::vector<int> filter_search_entries(const std::vector<SearchEntry>& entries,
 /// @param open 开关引用（Esc / Enter 关闭时置 false）
 /// @param on_close 关闭回调（用于恢复焦点等；可为空）
 /// @param title 面板标题（显示在搜索框上方，空则不显示）
+/// @param restrict_default 为 true 且搜索框为空时，仅保留「会话记录 / 设置」两类，
+///                          供全局聚合面板（Ctrl+P）默认去噪；输入后恢复全类搜索。
 ftxui::Component make_search_palette(
     std::vector<SearchEntry>& entries,
     std::function<void(int)> on_select,
     bool& open,
     std::function<void()> on_close = nullptr,
-    std::string title = "");
+    std::string title = "",
+    bool restrict_default = false);
 
 }  // namespace ftxtui
