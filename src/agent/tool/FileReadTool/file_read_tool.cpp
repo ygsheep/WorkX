@@ -235,7 +235,8 @@ PermissionResult FileReadTool::check_permissions(
     while (std::getline(ss, part, '|')) {
         try {
             const std::string expanded = expand_path(part, ctx.cwd);
-            auto res = validate_path_access(expanded, ctx.cwd);
+            auto res = validate_path_access(expanded, ctx.cwd,
+                                            repo_root_allowlist(ctx.git_repo_root));
             if (res.is_err()) {
                 // 评审 #2：绝对禁止（私钥/凭据）不可确认；越界/可确认敏感路径由用户确认放行
                 if (!is_absolutely_forbidden_path(expanded) &&

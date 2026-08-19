@@ -53,4 +53,14 @@ bool is_within_allowed_root(
     std::string_view cwd,
     const std::vector<std::string>& allowlist = {});
 
+/// @brief 构造额外允许根列表（git 仓库根目录）
+/// @details cwd 已由 validate_path_access 默认包含；此处仅补充 git 仓库根，
+///          使「当前项目」（仓库根）及其子目录/子项目均可访问，
+///          即使 cwd 位于仓库深层子目录（如 build/bin/Debug）。
+inline std::vector<std::string> repo_root_allowlist(std::string_view git_repo_root) {
+    std::vector<std::string> roots;
+    if (!git_repo_root.empty()) roots.emplace_back(git_repo_root);
+    return roots;
+}
+
 } // namespace agent::tool

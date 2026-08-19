@@ -69,12 +69,21 @@ bool ask_user_confirm(
     request->timeout_ms = timeout_ms;
     request->result_promise = wait_promise;
     request->cancel_flag = std::make_shared<std::atomic<bool>>(false);
-    request->questions = nlohmann::json::array({
-        {
-            {"question", question},
-            {"header", "Permission Required"},
-            {"options", {"Yes", "No"}},
-        }
+    // 与 AskUserTool 契约一致：questions 字段为 {questions:[...]} 对象，
+    // options 为 {label, description} 对象数组（ftxtui handle_ask_user 只解析
+    // 对象选项；若发字符串数组会被当作无选项而静默取消，权限确认永不弹出）。
+    request->questions = nlohmann::json::object({
+        {"questions", nlohmann::json::array({
+            {
+                {"question", question},
+                {"header", "Permission Required"},
+                {"allow_custom_input", false},
+                {"options", nlohmann::json::array({
+                    {{"label", "Yes"}, {"description", "允许"}},
+                    {{"label", "No"}, {"description", "拒绝"}},
+                })},
+            }
+        })}
     });
 
     // 发布到总线；宿主（TUI）订阅 AskUserRequestEvent 后弹出确认面板

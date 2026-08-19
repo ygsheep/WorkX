@@ -25,7 +25,9 @@
 #include "agent/tool/permission_ask.h"
 #include "agent/tool/secret_scanner.h"
 #include "core/config/config_manager.h"
+#include "core/events/agent_events.h"
 #include "core/utils/error.h"
+#include "helpers/mock_event_bus.h"
 
 using namespace agent;
 using namespace agent::tool;
@@ -119,6 +121,43 @@ TEST_CASE("is_absolutely_forbidden_path hard-rejects keys/credentials", "[tool][
 }
 
 // ============================================================
+// 路径边界：分隔符归一化 + git 仓库根放行
+// ============================================================
+
+TEST_CASE("is_within_allowed_root handles mixed path separators", "[tool][permission][path]") {
+    TempDir tmp;
+    fs::path root = tmp.path / "root";
+    fs::create_directories(root);
+    fs::path inside = root / "in.txt";
+    fs::path outside = tmp.path / "out.txt";  // root 的兄弟目录（越界）
+    { std::ofstream ofs(inside); ofs << "x"; }
+    { std::ofstream ofs(outside); ofs << "x"; }
+
+    // cwd 用平台原生分隔符（Windows 反斜杠），canonical 用正斜杠：
+    // 前缀比较前必须归一化分隔符，否则 cwd 内路径被误判越界。
+    const std::string cwd = root.string();
+    REQUIRE(is_within_allowed_root(fs::canonical(inside).generic_string(), cwd, {}));
+    REQUIRE_FALSE(is_within_allowed_root(fs::canonical(outside).generic_string(), cwd, {}));
+}
+
+TEST_CASE("repo_root_allowlist permits git repo root and subprojects", "[tool][permission][path]") {
+    TempDir tmp;
+    fs::path repo = tmp.path / "repo";
+    fs::create_directories(repo);
+    fs::path deep = repo / "build" / "bin" / "debug";  // 深层子目录（如 build/bin/Debug）
+    fs::create_directories(deep);
+    fs::path file = repo / "src" / "main.cpp";  // 仓库内但不在 cwd 下
+    fs::create_directories(file.parent_path());
+    { std::ofstream ofs(file); ofs << "x"; }
+
+    // cwd 位于仓库深层子目录时，仓库根加入 allowlist 后仓库内路径可访问
+    const std::string cwd = deep.string();
+    const auto allowlist = repo_root_allowlist(repo.string());
+    REQUIRE(is_within_allowed_root(fs::canonical(file).generic_string(), cwd, allowlist));
+    REQUIRE_FALSE(is_within_allowed_root(fs::canonical(file).generic_string(), cwd, {}));
+}
+
+// ============================================================
 // ask_user_confirm fail-closed
 // ============================================================
 
@@ -128,6 +167,56 @@ TEST_CASE("ask_user_confirm fails closed without event bus", "[tool][permission]
     fill_ctx(ctx, tmp.path);
 
     REQUIRE_FALSE(ask_user_confirm(ctx, "Allow?"));
+}
+
+TEST_CASE("ask_user_confirm publishes object-format questions contract", "[tool][permission]") {
+    agent::test::MockEventBus bus;
+    bus.set_dispatch_enabled(true);
+    bus.set_async_auto_flush(true);
+
+    nlohmann::json captured;
+    bool captured_ok = false;
+    bus.subscribe<agent::AskUserRequestEvent>(
+        [&](const agent::AskUserRequestEvent& e) {
+            captured = e.questions;
+            captured_ok = true;
+            agent::AskUserResult r;
+            r.submitted = true;
+            r.answers.emplace_back("Allow?", "Yes");
+            e.result_promise->set_value(std::move(r));
+        });
+
+    ToolContext ctx;
+    ctx.session_id = "test";
+    ctx.config_manager_ptr = &ConfigManager::instance();
+    ctx.event_bus_ptr = &bus;
+
+    REQUIRE(ask_user_confirm(ctx, "Allow?"));
+
+    // 契约：questions 字段为 {questions:[...]} 对象（与 AskUserTool / parse_choice_config 一致），
+    // 保证 ftxtui handle_ask_user 能解析出有效问题，避免空向量越界崩溃。
+    REQUIRE(captured_ok);
+    REQUIRE(captured.is_object());
+    REQUIRE(captured.contains("questions"));
+    REQUIRE(captured["questions"].is_array());
+    REQUIRE(captured["questions"].size() == 1);
+    const auto& q = captured["questions"][0];
+    REQUIRE(q.contains("question"));
+    REQUIRE(q["question"].get<std::string>() == "Allow?");
+    REQUIRE(q.contains("header"));
+    REQUIRE(q.contains("options"));
+    REQUIRE(q["options"].is_array());
+    REQUIRE(q["options"].size() == 2);
+    // 契约：options 必须为 {label, description} 对象数组（ftxtui handle_ask_user
+    // 只解析对象选项；字符串数组会被当作无选项而静默取消，权限确认永不弹出）。
+    for (const auto& o : q["options"]) {
+        REQUIRE(o.is_object());
+        REQUIRE(o.contains("label"));
+    }
+    REQUIRE(q["options"][0]["label"].get<std::string>() == "Yes");
+    REQUIRE(q["options"][1]["label"].get<std::string>() == "No");
+    // 权限确认不需要自定义输入，避免误选
+    REQUIRE(q.value("allow_custom_input", true) == false);
 }
 
 // ============================================================

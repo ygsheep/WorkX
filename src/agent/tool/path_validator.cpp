@@ -187,12 +187,17 @@ bool is_within_allowed_root(
 ) {
     // 评审 #4：Windows 文件系统大小写不敏感，前缀比较前统一小写，避免
     // 合法路径（cwd 与解析结果大小写不一致）被误判为越界。
+    // 同时统一分隔符：canonical.generic_string() 产出正斜杠，而 cwd/expand_path
+    // 在 Windows 上可能为反斜杠，字符串前缀比较前必须归一化，否则 cwd 内路径
+    // 也会因 '/' 与 '\' 不匹配被误判越界。
     const auto norm = [](std::string_view s) -> std::string {
+        std::string out(s);
 #ifdef _WIN32
-        return lower(s);
-#else
-        return std::string(s);
+        std::transform(out.begin(), out.end(), out.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        std::replace(out.begin(), out.end(), '\\', '/');
 #endif
+        return out;
     };
     const std::string np = norm(path);
     auto under = [&np, &norm](std::string_view root) {
