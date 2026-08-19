@@ -24,6 +24,7 @@ struct ToolCallNode {
     bool done = false;        ///< 已返回
     bool is_error = false;    ///< 出错
     bool expanded = false;    ///< 结果是否展开
+    std::size_t text_pos = 0; ///< 该工具调用在正文 text 中的插入位置（字节偏移，用于与正文交错渲染）
 };
 
 /// @brief 一条消息

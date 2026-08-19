@@ -1,5 +1,6 @@
 #include "render/markdown_to_elements.h"
 #include "render/syntax_highlight.h"
+#include "render/text_wrap.h"
 #include "theme/icons.h"
 #include "theme/strings.h"
 #include "theme/theme.h"
@@ -7,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <format>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -165,30 +167,66 @@ enum class DiffPrefix : int { Add, Del, Context, None };
 struct DiffLine {
     DiffPrefix prefix = DiffPrefix::Context;
     std::string content;
+    int old_no = 0;  ///< 真实旧文件行号（1-based；0=无对应行）
+    int new_no = 0;  ///< 真实新文件行号（1-based；0=无对应行）
 };
 
-/// @brief 解析 diff 文本：跳过 ---/+++/@@ 头，识别 +/-/空格 前缀
+/// @brief 解析字符串开头的整数（忽略前导空白 / 逗号；支持负号）
+int parse_leading_int(std::string_view s) {
+    size_t i = 0;
+    while (i < s.size() && (s[i] == ' ' || s[i] == ',')) ++i;
+    bool neg = false;
+    if (i < s.size() && s[i] == '-') { neg = true; ++i; }
+    int n = 0;
+    while (i < s.size() && s[i] >= '0' && s[i] <= '9') {
+        n = n * 10 + (s[i] - '0');
+        ++i;
+    }
+    return neg ? -n : n;
+}
+
+/// @brief 解析 diff 文本：解析 @@ -旧起,旧数 +新起,新数 @@ 头并给每行填真实行号；
+///        跳过 ---/+++ 文件头，识别 +/-/空格 前缀
 std::vector<DiffLine> parse_diff_lines(std::string_view diff) {
     std::vector<DiffLine> lines;
     size_t pos = 0;
+    int old_cur = 0, new_cur = 0;
+    bool have_hunk = false;
     while (pos <= diff.size()) {
         const size_t nl = diff.find('\n', pos);
         const std::string_view line = (nl == std::string_view::npos)
             ? diff.substr(pos)
             : diff.substr(pos, nl - pos);
+        // 取得当前行后立即推进 pos，保证下方所有 continue 分支都不会卡在同一行
+        pos = (nl == std::string_view::npos) ? diff.size() + 1 : nl + 1;
         const bool header =
-            (line.size() >= 3 && (line.substr(0, 3) == "---" || line.substr(0, 3) == "+++"))
-            || (line.size() >= 2 && line.substr(0, 2) == "@@");
+            (line.size() >= 3 && (line.substr(0, 3) == "---" || line.substr(0, 3) == "+++"));
+        if (!header && line.size() >= 2 && line[0] == '@' && line[1] == '@') {
+            // hunk 头（含多 hunk 时每 hunk 重开行号游标）
+            old_cur = 0; new_cur = 0; have_hunk = false;
+            const size_t a = line.find('-', 2);
+            const size_t b = (a == std::string_view::npos)
+                                 ? std::string_view::npos : line.find('+', a);
+            if (a != std::string_view::npos && b != std::string_view::npos) {
+                old_cur = parse_leading_int(line.substr(a + 1));
+                new_cur = parse_leading_int(line.substr(b + 1));
+                have_hunk = true;
+            }
+            continue;
+        }
         if (!header && !line.empty()) {
             DiffLine dl;
             if (line[0] == '+') {
                 dl.prefix = DiffPrefix::Add;
                 dl.content = std::string(line.substr(1));
+                if (have_hunk) dl.new_no = new_cur++;
             } else if (line[0] == '-') {
                 dl.prefix = DiffPrefix::Del;
                 dl.content = std::string(line.substr(1));
+                if (have_hunk) dl.old_no = old_cur++;
             } else if (line[0] == ' ') {
                 dl.content = std::string(line.substr(1));
+                if (have_hunk) { dl.old_no = old_cur++; dl.new_no = new_cur++; }
             } else {
                 dl.prefix = DiffPrefix::None;
                 dl.content = std::string(line);
@@ -197,19 +235,17 @@ std::vector<DiffLine> parse_diff_lines(std::string_view diff) {
         } else if (line.empty()) {
             lines.push_back({});
         }
-        if (nl == std::string_view::npos) break;
-        pos = nl + 1;
     }
     return lines;
 }
 
-/// @brief │N  行号前缀（Dim 色，右对齐，尾随两空格）
+/// @brief │N 行号前缀（Dim 色，右对齐，尾随一空格）
 Element line_num_prefix(int line_num, int num_width) {
     const std::string box_v = "\u2502";
     const std::string num_str = std::to_string(line_num);
     const int pad = std::max(0, num_width - static_cast<int>(num_str.size()));
     return ftxui::color(theme::T::TextDim)(
-        ftxui::text(box_v + std::string(pad, ' ') + num_str + "  "));
+        ftxui::text(box_v + std::string(pad, ' ') + num_str + " "));
 }
 
 /// @brief 工具结果展开的最大显示行数（对齐 src/tui MAX_DISPLAY_LINES）
@@ -481,6 +517,13 @@ std::vector<std::string> split_table_row(std::string_view line) {
     return cells;
 }
 
+/// @brief 单元格显示宽度：先剥离行内标记（**bold** → bold），与 line_to_element 渲染对齐
+int cell_display_width(std::string_view cell) {
+    int w = 0;
+    for (const auto& s : parse_inline_spans(cell)) w += ftxui::string_width(s.text);
+    return w;
+}
+
 /// @brief 表格块渲染（FTXUI 版，样式对齐 src/tui render_table）
 /// @param rows 原始表格行：rows[0]=表头，rows[1]=分隔行，rows[2..]=数据行
 Element render_table_block(const std::vector<std::string>& rows) {
@@ -498,10 +541,10 @@ Element render_table_block(const std::vector<std::string>& rows) {
 
     std::vector<int> widths(cols, 0);
     for (size_t c = 0; c < header.size(); ++c)
-        widths[c] = std::max(widths[c], ftxui::string_width(header[c]));
+        widths[c] = std::max(widths[c], cell_display_width(header[c]));
     for (const auto& r : data)
         for (size_t c = 0; c < r.size(); ++c)
-            widths[c] = std::max(widths[c], ftxui::string_width(r[c]));
+            widths[c] = std::max(widths[c], cell_display_width(r[c]));
 
     auto border = [&](const char* left, const char* mid, const char* right) {
         std::string s = left;
@@ -518,7 +561,7 @@ Element render_table_block(const std::vector<std::string>& rows) {
         for (size_t c = 0; c < cols; ++c) {
             if (c > 0) children.push_back(ftxui::text(" \u2502 "));
             std::string cell = c < cells.size() ? cells[c] : "";
-            int w = ftxui::string_width(cell);
+            int w = cell_display_width(cell);
             int pad = std::max(0, widths[c] - w);
             int left = 0, right = pad;
             if (aligns[c] == 1) { left = pad / 2; right = pad - left; }
@@ -556,9 +599,12 @@ std::vector<std::string> split_lines(std::string_view text) {
 /// @brief 统计 Markdown 块级渲染行数（A3：与 build_markdown 布局一一对应）
 /// @details 与渲染约定的对应关系：
 ///          - 空行 → emptyElement（min_y=0，不占行）
-///          - 标题/分隔线/列表/表格/段落 → 文本 1 行
-///          - 代码块 → 每代码行 1 行 + 语言标签 1 行（仅当有内容时渲染）
-int count_markdown_lines(const std::vector<std::string>& lines) {
+///          - 标题/分隔线/列表/段落 → 文本按显示宽度折行后的行数
+///          - 代码块 → 每代码行 1 行（不折行）+ 语言标签 1 行（仅当有内容时渲染）
+///          - 表格  → 表头+分隔+数据行固定布局
+/// @param width 正文折行的单行最大显示列宽（列表项额外减 4 列子弹缩进）
+int count_markdown_lines(const std::vector<std::string>& lines, int width) {
+    const int safe_w = std::max(1, width);
     int h = 0;
     bool in_code = false;
     std::string code_lang;
@@ -596,11 +642,22 @@ int count_markdown_lines(const std::vector<std::string>& lines) {
             i = j - 1;
             continue;
         }
-        // 空行/全空白：emptyElement（min_y=0）不占行；其余块各 1 行
+        // 空行/全空白：emptyElement（min_y=0）不占行
         bool blank = line.empty() ||
             std::all_of(line.begin(), line.end(),
                         [](char c) { return c == ' ' || c == '\t'; });
-        if (!blank) ++h;
+        if (blank) continue;
+        // 标题/列表/普通行：按 build_markdown 的折行宽度统计（单源真值）
+        int level = 0;
+        std::string_view heading;
+        std::string content;
+        bool ordered = false;
+        if (is_heading(line, level, heading))
+            h += static_cast<int>(wrap_text(heading, safe_w).size());
+        else if (is_list_item(line, content, ordered))
+            h += static_cast<int>(wrap_text(content, std::max(1, safe_w - 4)).size());
+        else
+            h += static_cast<int>(wrap_text(line, safe_w).size());
     }
     flush_code();
     return h;
@@ -608,8 +665,25 @@ int count_markdown_lines(const std::vector<std::string>& lines) {
 
 }  // namespace
 
+/// @brief 把一段文本按显示宽度折行并渲染为纵向块（每物理行一个行内元素）
+/// @param src    渲染源文本（含行内标记）
+/// @param wrap_w 单行最大显示列宽
+/// @param decorate 可选：对每个物理行元素施加样式（如标题加粗）
+Element wrap_block(std::string_view src, int wrap_w,
+                   const std::function<Element(Element)>& decorate = {}) {
+    auto rows = wrap_text(src, std::max(1, wrap_w));
+    Elements es;
+    es.reserve(rows.size());
+    for (auto [b, e] : rows) {
+        Element r = line_to_element(src.substr(b, e - b));
+        if (decorate) r = decorate(std::move(r));
+        es.push_back(std::move(r));
+    }
+    return ftxui::vbox(std::move(es));
+}
+
 Element build_markdown(std::string_view text, int width) {
-    (void)width;
+    const int safe_w = std::max(1, width);
     if (text.empty()) return ftxui::text("");
 
     const std::vector<std::string> lines = split_lines(text);
@@ -671,7 +745,8 @@ Element build_markdown(std::string_view text, int width) {
         int level = 0;
         std::string_view heading;
         if (is_heading(line, level, heading)) {
-            auto e = line_to_element(heading) | ftxui::bold;
+            auto e = wrap_block(heading, safe_w,
+                                [](Element x) { return x | ftxui::bold; });
             if (level >= 5) e = e | ftxui::color(theme::T::Text);
             blocks.push_back(e);
             continue;
@@ -686,8 +761,19 @@ Element build_markdown(std::string_view text, int width) {
         bool ordered = false;
         if (is_list_item(line, content, ordered)) {
             (void)ordered;
-            auto inner = line_to_element(content);
-            blocks.push_back(ftxui::hbox({ftxui::text("  • "), ftxui::flex(inner)}));
+            // 列表项：首行 "  • " 前缀，续行按内容列缩进（4 格）；折行减前缀宽
+            auto rows = wrap_text(content, std::max(1, safe_w - 4));
+            Elements es;
+            es.reserve(rows.size());
+            for (size_t k = 0; k < rows.size(); ++k) {
+                const char* prefix = (k == 0) ? "  \u2022 " : "    ";
+                es.push_back(ftxui::hbox({
+                    ftxui::text(prefix),
+                    ftxui::flex(line_to_element(
+                        content.substr(rows[k].first, rows[k].second - rows[k].first))),
+                }));
+            }
+            blocks.push_back(ftxui::vbox(std::move(es)));
             continue;
         }
 
@@ -706,12 +792,13 @@ Element build_markdown(std::string_view text, int width) {
 
         // 孤立 | 行（无分隔行）：降级为普通行内文本（保留 | 分隔，可读）
         if (is_table_row(line)) {
-            blocks.push_back(ftxui::color(theme::T::Text)(line_to_element(line)));
+            blocks.push_back(ftxui::color(theme::T::Text)(
+                wrap_block(line, safe_w)));
             continue;
         }
 
-        // 普通段落
-        blocks.push_back(ftxui::flex(line_to_element(line)));
+        // 普通段落：按显示宽度折行
+        blocks.push_back(wrap_block(line, safe_w));
     }
     flush_code();
     return ftxui::vbox(std::move(blocks));
@@ -777,11 +864,23 @@ Element render_tool_result(const ToolCallNode& t, int width) {
         }
         flush_status();
 
-        // diff 块：Panel 背景 + 上下留白 + │N 序号 + 前景高亮 + +/- 背景色
+        // diff 块：Panel 背景 + 上下留白 + │真实行号 + 前景高亮 + +/- 背景色
         std::vector<DiffLine> diff = parse_diff_lines(t.result.substr(diff_start));
         const bool truncated = static_cast<int>(diff.size()) > kMaxToolResultLines;
         if (truncated) diff.resize(kMaxToolResultLines);
-        const int num_width = calc_line_num_width(static_cast<int>(diff.size()));
+        // 每行显示的行号：新增行→新文件行号，删除行→旧文件行号，上下文→新文件行号
+        std::vector<int> disp_no;
+        disp_no.reserve(diff.size());
+        int max_line_num = 0;
+        for (const auto& dl : diff) {
+            int n = 0;
+            if (dl.prefix == DiffPrefix::Add && dl.new_no > 0) n = dl.new_no;
+            else if (dl.prefix == DiffPrefix::Del && dl.old_no > 0) n = dl.old_no;
+            else if (dl.prefix == DiffPrefix::Context && dl.new_no > 0) n = dl.new_no;
+            disp_no.push_back(n);
+            max_line_num = std::max(max_line_num, n);
+        }
+        const int num_width = calc_line_num_width(max_line_num);
         Elements code_rows;
         code_rows.reserve(diff.size());
         for (size_t i = 0; i < diff.size(); ++i) {
@@ -793,8 +892,9 @@ Element render_tool_result(const ToolCallNode& t, int width) {
                 content = content | ftxui::bgcolor(Color::RGB(0x5f, 0x00, 0x00));
             }
             code_rows.push_back(ftxui::hbox({
-                ftxui::text(indent4),
-                line_num_prefix(static_cast<int>(i + 1), num_width),
+                ftxui::text("  "),
+                disp_no[i] > 0 ? line_num_prefix(disp_no[i], num_width)
+                               : ftxui::text(" "),
                 ftxui::flex(content),
             }));
         }
@@ -861,7 +961,7 @@ Element render_tool_result(const ToolCallNode& t, int width) {
     code_rows.reserve(code_lines.size());
     for (size_t i = 0; i < code_lines.size(); ++i) {
         Elements row;
-        row.push_back(ftxui::text(indent4));
+        row.push_back(ftxui::text("  "));
         if (line_nums[i] > 0) row.push_back(line_num_prefix(line_nums[i], num_width));
         else row.push_back(ftxui::text(""));
         row.push_back(ftxui::flex(highlight_code_line(code_lines[i], lang)));
@@ -892,13 +992,13 @@ Element render_tool_result(const ToolCallNode& t, int width) {
 }
 
 /// @brief 工具结果展开行数估算（与 render_tool_result 布局逐行对齐；A3 单一布局源）
-int estimate_tool_result_lines(const ToolCallNode& t) {
+int estimate_tool_result_lines(const ToolCallNode& t, int width) {
     const std::string fpath = tool_file_path(t.arguments);
     const bool is_read = t.tool_name == "Read" || t.tool_name == "FileRead";
     const bool is_write_or_edit = t.tool_name == "Write" || t.tool_name == "Edit"
                                || t.tool_name == "FileWrite" || t.tool_name == "FileEdit";
     if (t.is_error || (!is_read && !is_write_or_edit))
-        return std::max(1, estimate_markdown_height(t.result));
+        return std::max(1, estimate_markdown_height(t.result, width));
 
     if (is_write_or_edit) {
         size_t pos = 0, line_start = 0, diff_start = std::string::npos;
@@ -913,7 +1013,7 @@ int estimate_tool_result_lines(const ToolCallNode& t) {
             ++pos;
         }
         if (diff_start == std::string::npos)
-            return std::max(1, estimate_markdown_height(t.result));
+            return std::max(1, estimate_markdown_height(t.result, width));
 
         int status_lines = 0;
         bool in_line = false;
@@ -956,19 +1056,20 @@ int estimate_tool_result_lines(const ToolCallNode& t) {
     return std::max(1, h);
 }
 
-int estimate_markdown_height(std::string_view text) {
+int estimate_markdown_height(std::string_view text, int width) {
     // build_markdown 入口对空输入返回 text("")（FTXUI 空文本 min_y=1）
     if (text.empty()) return 1;
-    return count_markdown_lines(split_lines(text));
+    return count_markdown_lines(split_lines(text), width);
 }
 
-int estimate_message_height(const MessageNode& msg) {
+int estimate_message_height(const MessageNode& msg, int width) {
     // 与 build_message 的视觉结构逐行对齐（A3 单一布局源）：
     // - 用户块：上/下留白各 1 行 + markdown 内容
     // - 思考/工具卡：圆角边框 2 行 + 头行 1 行 + 展开内容
     // - 流式游标 1 行；正文行恒 ≥1 行（左侧缩进 text("  ") 占 1 行）
-    auto content_lines = [](std::string_view t) {
-        return std::max(1, estimate_markdown_height(t));
+    // 正文行数随 width 变化（按显示列宽折行）→ 传入与 build_message 相同的宽度。
+    auto content_lines = [width](std::string_view t) {
+        return std::max(1, estimate_markdown_height(t, width));
     };
     if (msg.role == MsgRole::User) {
         int h = 2;  // 顶部/底部留白各 1 行
@@ -989,9 +1090,15 @@ int estimate_message_height(const MessageNode& msg) {
     for (const auto& t : msg.tool_calls) {
         h += 3;  // 边框 2 行 + 头行 1 行
         if (t.done && t.expanded)
-            h += estimate_tool_result_lines(t) + (tool_file_path(t.arguments).empty() ? 0 : 1);
+            h += estimate_tool_result_lines(t, width) + (tool_file_path(t.arguments).empty() ? 0 : 1);
     }
+    // 卡片间距：每张卡片前空 1 行 + 最后一张卡片后空 1 行
+    //（交错渲染统一插入单行分隔，相邻卡片不叠加双倍间距）
+    if (!msg.tool_calls.empty())
+        h += static_cast<int>(msg.tool_calls.size()) + 1;
     if (msg.streaming) ++h;  // 流式游标
+    // 操作按钮栏（复制/重试）：仅正常回复（有正文），思考/工具调用专用消息不显示
+    if (msg.role == MsgRole::Assistant && msg.sealed && !trim_copy(msg.text).empty()) ++h;
     return h;
 }
 
@@ -1070,15 +1177,8 @@ Element build_message(const MessageNode& msg, int width, std::size_t anim_frame,
         rows.push_back(std::move(card));
     }
 
-    // 正文
-    if (!msg.text.empty() || msg.streaming) {
-        rows.push_back(ftxui::hbox({ftxui::text("  "),
-                                    ftxui::flex(build_markdown(msg.text, width))}));
-    }
-
     // 工具块：圆角卡片，头行可点击展开/收起
-    for (std::size_t ti = 0; ti < msg.tool_calls.size(); ++ti) {
-        const auto& t = msg.tool_calls[ti];
+    auto render_tool_card = [&](std::size_t ti, const ToolCallNode& t) -> Element {
         std::string status;
         Color c = Color::YellowLight;
         if (t.running) {
@@ -1124,12 +1224,81 @@ Element build_message(const MessageNode& msg, int width, std::size_t anim_frame,
             card_hits->back().tool_idx = static_cast<int>(ti);
             card = card | ftxui::reflect(card_hits->back().box);
         }
-        rows.push_back(std::move(card));
+        // 卡片本身不包裹 vPad：间距由交错循环统一插入单行分隔，
+        // 避免相邻卡片各自上下留白叠加成双倍间距
+        return card;
+    };
+
+    // 正文 + 工具卡交错：模型在回复中途调用工具时，卡片显示在对应正文之后
+    //（而非统一堆到末尾）。工具卡按 text_pos（正文插入点）排序后，将正文
+    // 按插入点切分为若干段，与卡片交替渲染。
+    std::vector<std::size_t> tool_order(msg.tool_calls.size());
+    for (std::size_t i = 0; i < tool_order.size(); ++i) tool_order[i] = i;
+    std::stable_sort(tool_order.begin(), tool_order.end(),
+                     [&](std::size_t a, std::size_t b) {
+                         return msg.tool_calls[a].text_pos < msg.tool_calls[b].text_pos;
+                     });
+
+    if (tool_order.empty()) {
+        // 无工具卡：正文整体渲染
+        if (!msg.text.empty() || msg.streaming) {
+            rows.push_back(ftxui::hbox({ftxui::text("  "),
+                                        ftxui::flex(build_markdown(msg.text, width))}));
+        }
+    } else {
+        std::size_t cursor = 0;
+        for (const std::size_t ti : tool_order) {
+            const auto& t = msg.tool_calls[ti];
+            const std::size_t pos = std::min(t.text_pos, msg.text.size());
+            if (pos > cursor) {
+                rows.push_back(ftxui::hbox({
+                    ftxui::text("  "),
+                    ftxui::flex(build_markdown(msg.text.substr(cursor, pos - cursor), width)),
+                }));
+                cursor = pos;
+            }
+            // 每张卡片前空一行（相邻卡片之间只留 1 行，不再双倍叠加）
+            rows.push_back(ftxui::text(" "));
+            rows.push_back(render_tool_card(ti, t));
+        }
+        if (cursor < msg.text.size()) {
+            // 最后一张卡片与后续正文之间空一行
+            rows.push_back(ftxui::text(" "));
+            rows.push_back(ftxui::hbox({
+                ftxui::text("  "),
+                ftxui::flex(build_markdown(msg.text.substr(cursor), width)),
+            }));
+        } else {
+            // 最后一张卡片之后空一行（与流式游标/操作按钮栏分隔）
+            rows.push_back(ftxui::text(" "));
+        }
     }
 
     // 流式游标
     if (msg.streaming) {
         rows.push_back(ftxui::hbox({ftxui::text("  "), ftxui::text("▋") | ftxui::color(theme::T::TextFaint)}));
+    }
+
+    // 消息操作按钮栏（复制 / 重试）：仅正常回复（有正文），思考/工具调用专用消息不显示
+    if (msg.role == MsgRole::Assistant && msg.sealed && !trim_copy(msg.text).empty()) {
+        auto make_btn = [&](int kind, std::string_view icon, std::string_view label) {
+            Element e = ftxui::color(theme::T::TextFaint)(
+                ftxui::text(std::string(icon) + " " + std::string(label)));
+            if (card_hits) {
+                card_hits->push_back(CardHit{});
+                card_hits->back().tool_idx = -1;
+                card_hits->back().button = kind;
+                e = e | ftxui::reflect(card_hits->back().box);
+            }
+            return e;
+        };
+        rows.push_back(ftxui::hbox({
+            ftxui::text("  "),
+            make_btn(0, theme::icon_copy(), str::kMsgCopy),
+            ftxui::text("   "),
+            make_btn(1, theme::icon_retry(), str::kMsgRetry),
+            ftxui::flex(ftxui::text("")),
+        }));
     }
 
     return ftxui::vbox(std::move(rows));

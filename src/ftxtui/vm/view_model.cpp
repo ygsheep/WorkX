@@ -76,9 +76,11 @@ bool ViewModel::apply_variant(const ActionTurnDone& a) {
     m.generated_tokens = a.generated_tokens;
     m.cache_read_tokens = a.cache_read_input_tokens;
     m.duration_ms = a.prompt_ms + a.generation_ms;
-    m.reasoning_ms = a.prompt_ms;
+    m.reasoning_ms = a.reasoning_ms;
     total_tokens = a.prompt_tokens + a.generated_tokens + a.cache_read_input_tokens;
     sidebar.context_used = a.prompt_tokens;
+    sidebar.cache_read_tokens = a.cache_read_input_tokens;
+    sidebar.total_tokens = total_tokens;
     busy = false;
     return true;
 }
@@ -102,6 +104,7 @@ bool ViewModel::apply_variant(const ActionBeginTool& a) {
     t.arguments = a.arguments;
     t.running = true;
     t.expanded = card_defaults.tool_expanded;
+    t.text_pos = m.text.size();  // 记录正文插入点，供与正文交错渲染
     m.tool_calls.push_back(std::move(t));
     m.tool_use_ids.push_back(a.call_id);
     return true;

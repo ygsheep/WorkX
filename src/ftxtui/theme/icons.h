@@ -47,5 +47,9 @@ inline std::string_view icon_plan() { return icon("\uF044", "P"); }
 inline std::string_view icon_full_access() { return icon("\uEB53", "A"); }
 /// @brief 手动审批（hand nf-fa-hand-paper）→ "?"
 inline std::string_view icon_manual() { return icon("\uF256", "?"); }
+/// @brief 复制（nf-fa-copy）→ "C"
+inline std::string_view icon_copy() { return icon("\uF0C5", "C"); }
+/// @brief 重试（nf-fa-rotate-right）→ "R"
+inline std::string_view icon_retry() { return icon("\uF2F9", "R"); }
 
 }  // namespace ftxtui::theme

@@ -24,12 +24,13 @@ namespace ftxtui {
 ftxui::Element build_markdown(std::string_view text, int width);
 
 /// @brief 估算 Markdown 渲染行数（与 build_markdown 布局逐行一致；A3 单一布局源）
-/// @details 文本不按宽度换行，行数只与块结构（代码块/空行/语言标签）有关。
-int estimate_markdown_height(std::string_view text);
+/// @param width 正文折行的单行最大显示列宽；代码行/表格不折行
+int estimate_markdown_height(std::string_view text, int width);
 
 /// @brief 估算整条消息渲染行数（与 build_message 布局逐行一致；A3 单一布局源）
 /// @details 供转录滚动/视口高度估算使用，消除 app 侧手工复刻的布局漂移。
-int estimate_message_height(const MessageNode& msg);
+///          正文行数随 width 变化，须与 build_message 传入相同宽度。
+int estimate_message_height(const MessageNode& msg, int width);
 
 /// @brief 渲染单行行内文本（含粗体/斜体/删除线/代码）为横向元素
 ftxui::Element build_inline_line(std::string_view line);
@@ -39,6 +40,7 @@ struct CardHit {
     ftxui::Box box;      ///< 渲染后的屏幕坐标
     int msg_idx = -1;    ///< 消息索引（渲染层不知，由调用方回填）
     int tool_idx = -1;   ///< -1 = 思考卡片；>=0 = 工具块索引
+    int button = -1;     ///< >=0 = 消息操作按钮（0=复制，1=重试）；-1 = 非按钮
 };
 
 /// @brief 把一条消息渲染为元素（用户/助手/错误 + 思考折叠 + 工具块）

@@ -18,6 +18,8 @@ inline constexpr std::string_view kErrorHeader      = "✖ 错误";
 inline constexpr std::string_view kGaugeNA          = "n/a";
 inline constexpr std::string_view kThinkingRunning  = " 思考中…";
 inline constexpr std::string_view kThinkingLabel    = " 思考 ";
+inline constexpr std::string_view kMsgCopy          = "复制";
+inline constexpr std::string_view kMsgRetry         = "重试";
 
 // ----------------------------------------------------------------------------
 // 侧栏
