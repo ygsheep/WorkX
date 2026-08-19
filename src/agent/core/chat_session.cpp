@@ -114,14 +114,14 @@ void ChatSession::ReActEventPublisher::on_action(const ReActStep& step) {
     m_bus.publish_async(ToolCallEvent{
         .tool_name = step.tool_name,
         .arguments = step.tool_input.dump(),
-        .call_id = "",
+        .call_id = step.tool_use_id,
         .tool_type = tool::infer_tool_type(step.tool_name)
     });
 }
 
 void ChatSession::ReActEventPublisher::on_observation(const ReActStep& step) {
     m_bus.publish_async(ToolResultEvent{
-        .call_id = "",
+        .call_id = step.tool_use_id,
         .result = step.observation,
         .is_error = step.is_error
     });
@@ -217,6 +217,26 @@ ChatSession::~ChatSession() {
     m_task_manager.get().waitForAll();
 }
 
+void ChatSession::cancel_and_wait_current_task() {
+    // H-9 wait 模式：先 cancel 当前任务 + wait（condition_variable.wait_until + 30s 兜底），
+    // 再 cancelAll + waitForAll 终止 AgentTool 启动的子 Agent 后台任务。
+    // 全部等待完成后再改共享状态，避免与 ReActLoop 对 m_messages 的引用读写并发。
+    std::shared_ptr<Task> task;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        task = m_current_task;
+    }
+    if (task) {
+        task->cancel();
+        m_task_manager.get().wait(task);
+    }
+    m_task_manager.get().cancelAll();
+    m_task_manager.get().waitForAll();
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    m_generating.store(false);
+    m_current_task.reset();
+}
+
 void ChatSession::set_system_prompt(const std::string& prompt) {
     std::lock_guard<std::mutex> lock(m_state_mutex);
     m_system_prompt = prompt;
@@ -258,6 +278,8 @@ skill::TouchCollector& ChatSession::touch_collector() {
 }
 
 void ChatSession::clear_history() {
+    // 生成中安全：清空消息前先取消并等待当前任务，避免与 ReActLoop 竞争 m_messages。
+    cancel_and_wait_current_task();
     std::lock_guard<std::mutex> lock(m_state_mutex);
     m_messages.clear();
     // DS_CACHE M-3：移除 m_cache_hit_total/m_cache_miss_total 重置（死代码已删除）
@@ -314,6 +336,8 @@ bool ChatSession::restore_from_file(const std::string& file_path) {
 }
 
 void ChatSession::import_messages(std::vector<ChatMessage> messages) {
+    // 生成中安全：与 switch_session 同理，先取消并等待当前任务，避免与 ReActLoop 竞争 m_messages。
+    cancel_and_wait_current_task();
     std::lock_guard<std::mutex> lock(m_state_mutex);
     m_messages = std::move(messages);
     // 重置压缩器与前缀形状基线（对齐 switch_session，新上下文从零开始）
@@ -330,6 +354,11 @@ bool ChatSession::set_provider(std::unique_ptr<ICompletionProvider> provider) {
 }
 
 bool ChatSession::switch_session(const std::string& file_path) {    // 加载历史消息和元信息（文件 I/O 在锁外执行）
+    // 生成中安全：切换会话前先取消并等待当前任务完全退出。
+    // ReActLoop::run 通过非 const 引用直接读写 m_messages，若此处（UI 线程）并发 move
+    // m_messages，会与任务线程形成数据竞争 → 堆损坏（resume 后重发消息崩溃的 UAF 根因）。
+    cancel_and_wait_current_task();
+
     auto messages = agent::session::SessionStore::load_messages(file_path);
     if (messages.empty()) return false;
 
@@ -615,6 +644,33 @@ void ChatSession::regenerate() {
     run_completion(last_user_text, last_user_images);
 }
 
+void ChatSession::regenerate_from(const std::string& user_text) {
+    // 检查是否正在生成
+    if (m_generating.load()) {
+        m_event_bus.get().publish_async(StreamErrorEvent{
+            .session_id = m_session_id,
+            .message = "Still generating, cannot regenerate",
+            .retryable = true
+        });
+        return;
+    }
+
+    std::vector<std::string> last_user_images;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        // 从后往前找最后一条匹配的用户消息，删除该用户消息及其后所有消息
+        //（run_completion 会重新 push 该用户消息，避免重复）
+        for (auto it = m_messages.rbegin(); it != m_messages.rend(); ++it) {
+            if (it->role == ChatMessage::Role::User && it->content == user_text) {
+                last_user_images = it->image_paths;
+                m_messages.erase(it.base() - 1, m_messages.end());
+                break;
+            }
+        }
+    }
+    run_completion(user_text, last_user_images);
+}
+
 void ChatSession::send_message(const std::string& text,
                                const std::vector<std::string>& images) {
     if (m_generating.load()) {
@@ -814,13 +870,13 @@ void ChatSession::run_completion(const std::string& user_text,
                 should_cancel, &publisher
             );
 
-            // 思考时长回填：prompt_ms（最后一轮 LLM 思考耗时）仅在流式结束后可知，
+            // 思考时长回填：reasoning_ms（本 turn 所有 Thought 阶段实际耗时）仅在流式结束后可知，
             // 持久化前回填到本轮最后一条 assistant 消息（写入 JSONL 的 reasoningMs 字段）
-            if (react_result.prompt_ms > 0.0) {
+            if (react_result.reasoning_ms > 0.0) {
                 std::lock_guard<std::mutex> lock(m_state_mutex);
                 for (auto it = m_messages.rbegin(); it != m_messages.rend(); ++it) {
                     if (it->role == ChatMessage::Role::Assistant) {
-                        it->reasoning_ms = react_result.prompt_ms;
+                        it->reasoning_ms = react_result.reasoning_ms;
                         break;
                     }
                 }
@@ -867,7 +923,8 @@ void ChatSession::run_completion(const std::string& user_text,
                     .prompt_cache_hit_tokens = react_result.prompt_cache_hit_tokens,
                     .prompt_cache_miss_tokens = react_result.prompt_cache_miss_tokens,
                     .prompt_ms = react_result.prompt_ms,
-                    .generation_ms = react_result.generation_ms
+                    .generation_ms = react_result.generation_ms,
+                    .reasoning_ms = react_result.reasoning_ms
                 });
                 m_generating.store(false);
                 return;
@@ -938,7 +995,8 @@ void ChatSession::run_completion(const std::string& user_text,
                 .prompt_cache_hit_tokens = react_result.prompt_cache_hit_tokens,
                 .prompt_cache_miss_tokens = react_result.prompt_cache_miss_tokens,
                 .prompt_ms = react_result.prompt_ms,
-                .generation_ms = react_result.generation_ms
+                .generation_ms = react_result.generation_ms,
+                .reasoning_ms = react_result.reasoning_ms
             });
 
             // DS_CACHE M-3：移除 m_cache_hit_total/m_cache_miss_total 累加（死代码已删除）

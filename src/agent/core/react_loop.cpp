@@ -515,6 +515,8 @@ ReActResult ReActLoop::run(
         auto thought_end = std::chrono::steady_clock::now();
         double thought_ms = std::chrono::duration<double, std::milli>(
             thought_end - thought_start).count();
+        // 思考阶段实际耗时累计（UI 思考折叠标签 + 会话持久化 reasoningMs 用）
+        result.reasoning_ms += thought_ms;
 
         LOG_INFO("[react_loop] iteration={} thought_end, status={}, content_len={}, "
                  "reasoning_len={}, tool_uses={}, prompt_tokens={}, generated_tokens={}, "
@@ -631,6 +633,7 @@ ReActResult ReActLoop::run(
                 action_step.type = ReActStepType::Action;
                 action_step.step_number = ++step_counter;
                 action_step.tool_name = tu.name;
+                action_step.tool_use_id = tu.id;
                 action_step.tool_input = tu.input;
                 result.steps.push_back(action_step);
                 if (on_step) on_step(action_step);
@@ -642,6 +645,7 @@ ReActResult ReActLoop::run(
                 ReActStep obs_step;
                 obs_step.type = ReActStepType::Observation;
                 obs_step.step_number = ++step_counter;
+                obs_step.tool_use_id = tu.id;
                 obs_step.observation = err_msg;
                 obs_step.is_error = true;
                 result.steps.push_back(obs_step);
@@ -730,6 +734,7 @@ ReActResult ReActLoop::run(
             step.type = ReActStepType::Action;
             step.step_number = ++step_counter;
             step.tool_name = tu.name;
+            step.tool_use_id = tu.id;
             step.tool_input = tu.input;
             result.steps.push_back(step);
 
@@ -808,6 +813,7 @@ ReActResult ReActLoop::run(
                 ReActStep step;
                 step.type = ReActStepType::Observation;
                 step.step_number = ++step_counter;
+                step.tool_use_id = exec.tool_use_id;
                 step.observation = result_text;
                 step.is_error = tool_error;
                 step.duration_ms = action_ms;

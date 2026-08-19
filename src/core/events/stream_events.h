@@ -73,6 +73,7 @@ struct StreamDoneEvent {
     int32_t prompt_cache_miss_tokens = 0;  ///< DeepSeek usage.prompt_cache_miss_tokens
     double prompt_ms = 0.0;
     double generation_ms = 0.0;
+    double reasoning_ms = 0.0;  ///< 思考阶段实际耗时（毫秒，会话持久化/恢复用）
 };
 
 /// @brief 单步 LLM 输出结束（P3 新增，清理 StreamDoneEvent 语义污染）

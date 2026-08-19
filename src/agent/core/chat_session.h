@@ -135,6 +135,13 @@ public:
     /// @brief 重新生成最后一条回复
     void regenerate();
 
+    /// @brief 从指定用户消息重新生成（重试按钮：截断到该用户消息后重新推理）
+    /// @param user_text 触发该回复的用户消息文本（从后往前匹配最后一条相同文本）
+    /// @details 与 regenerate() 的区别：regenerate() 只重生成最后一条回复；
+    ///          本方法先截断到匹配的用户消息（含）之后的所有消息，再以该用户
+    ///          消息重新生成，支持对历史任意一条回复做重试。
+    void regenerate_from(const std::string& user_text);
+
     /// @brief 获取对话历史（返回拷贝，线程安全）
     std::vector<ChatMessage> get_messages() const;
 
@@ -322,6 +329,14 @@ private:
     /// @param start_idx 起始索引（含）
     /// @param parent_uuid 父消息 UUID（用于 parentUuid 字段）
     void persist_messages_range(size_t start_idx, const std::string& parent_uuid = "");
+
+    /// @brief 生成中安全：取消并等待当前后台任务完全退出后，再复位生成标志
+    /// @details 切换/清理会话共享状态（m_messages / m_compactor / m_session_store）前必须先调用。
+    ///          因为 ReActLoop::run 通过非 const 引用直接读写 m_messages，若调用方（UI 线程）
+    ///          并发执行 switch_session/clear_history/import_messages 对 m_messages 做 move/clear，
+    ///          会与任务线程形成数据竞争 → 堆损坏（resume 后重发消息崩溃的 UAF 根因）。
+    ///          复刻析构 wait 模式：cancel 当前任务 + wait → cancelAll + waitForAll → 复位标志。
+    void cancel_and_wait_current_task();
 
     std::unique_ptr<ICompletionProvider> m_provider;
     std::vector<ChatMessage> m_messages;

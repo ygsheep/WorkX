@@ -66,6 +66,7 @@ struct ReActStep {
 
     // --- Action 阶段字段 ---
     std::string tool_name;                        ///< 当前执行的工具名
+    std::string tool_use_id;                      ///< 工具调用唯一 ID（与 tool_uses[].id 对应）
     nlohmann::json tool_input;                    ///< 工具输入参数
 
     // --- Observation 阶段字段 ---
@@ -112,6 +113,7 @@ struct ReActResult {
     int32_t rewrite_version = 0;
     double prompt_ms = 0.0;
     double generation_ms = 0.0;
+    double reasoning_ms = 0.0;  ///< 思考阶段实际耗时（本 turn 所有 Thought 阶段之和，毫秒）
 
     // --- 状态 ---
     bool was_interrupted = false;                 ///< 用户中断
