@@ -29,6 +29,15 @@ struct SidebarModel {
     double cost_usd = 0.0;      ///< 会话成本
     std::string permission;     ///< 权限模式标签 ""/"plan"/"bypass"
     bool visible = true;        ///< 侧栏是否可见（窄屏折叠）
+
+    // 3.1 统计指标（来自 ActionTurnDone 用量）
+    int32_t cache_read_tokens = 0;  ///< DS 缓存命中（读取）token
+    int32_t total_tokens = 0;       ///< 会话累计 token
+
+    // 3.2 MCP 列表（agent 侧未实现，预留接口；当前为空）
+    std::vector<std::string> mcp_servers;
+    // 3.3 TODO 列表（agent 侧未实现，预留接口；当前为空）
+    std::vector<std::string> todos;
 };
 
 /// @brief 折叠卡片默认配置（新卡片创建时的展开/收起初始值）

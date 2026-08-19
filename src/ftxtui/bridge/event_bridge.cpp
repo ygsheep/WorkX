@@ -32,6 +32,7 @@ void EventBridge::start() {
                 .cache_read_input_tokens = e.cache_read_input_tokens,
                 .prompt_ms = e.prompt_ms,
                 .generation_ms = e.generation_ms,
+                .reasoning_ms = e.reasoning_ms,
             });
             push(ActionSetBusy{.busy = false});
         });

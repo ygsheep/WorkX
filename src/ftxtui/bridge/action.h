@@ -54,6 +54,7 @@ struct ActionTurnDone {
     int32_t cache_read_input_tokens = 0;
     double prompt_ms = 0.0;
     double generation_ms = 0.0;
+    double reasoning_ms = 0.0;  ///< 思考阶段实际耗时（毫秒，思考折叠标签显示）
 };
 
 /// @brief 推理错误
@@ -157,6 +158,7 @@ struct ActionModelsLoaded {
 struct SessionLite {
     std::string title;       ///< 会话标题（无则回退 session_id）
     std::string file_path;   ///< JSONL 文件路径（恢复用）
+    std::string project_name;///< 项目名称（cwd 末级目录名，展示用）
     int message_count = 0;
 };
 

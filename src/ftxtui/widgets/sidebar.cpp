@@ -2,6 +2,8 @@
 
 #include <cstdio>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include <ftxui/dom/direction.hpp>
 
@@ -37,6 +39,31 @@ Element kv(const std::string& key, const std::string& value,
         ftxui::flex(val_el),
     });
 }
+
+/// @brief 区块标题：米白
+Element section_title(const std::string_view& title) {
+    return ftxui::text(std::string(title)) | ftxui::color(kInfoText);
+}
+
+/// @brief 侧栏列表区块（MCP / TODO）：标题 + 条目列表；空则显示占位符
+/// @note agent 侧 MCP / TODO 能力尚未实现，数据接口预留（items 当前恒为空）
+void append_list_section(Elements& rows, const std::string_view& title,
+                         const std::vector<std::string>& items) {
+    rows.push_back(section_title(title));
+    if (items.empty()) {
+        rows.push_back(ftxui::hbox({
+            ftxui::text("  "),
+            ftxui::text(std::string(str::kDash)) | ftxui::color(theme::T::TextFaint),
+        }));
+        return;
+    }
+    for (const auto& it : items) {
+        rows.push_back(ftxui::hbox({
+            ftxui::text("  "),
+            ftxui::flex(ftxui::text(it) | ftxui::color(theme::T::TextDim)),
+        }));
+    }
+}
 }  // namespace
 
 Element sidebar_rule() {
@@ -51,18 +78,20 @@ Element build_sidebar(const SidebarModel& s) {
     rows.push_back(ftxui::text(title) | ftxui::bold);
     rows.push_back(sidebar_rule());
 
-    // 项目 / 分支 / Agent（项目与 Agent 文本用米白色）
+    // 基础信息：项目 / 分支 / Agent / 模型（项目、Agent、模型用米白）
     rows.push_back(kv(std::string(str::kSidebarProject),
                       s.project.empty() ? std::string(str::kDash) : s.project, kInfoText));
     if (!s.branch.empty())
         rows.push_back(kv(std::string(str::kSidebarBranch), s.branch));
     if (!s.agent.empty())
         rows.push_back(kv(std::string(str::kSidebarAgent), s.agent, kInfoText));
+    rows.push_back(kv(std::string(str::kSidebarModel),
+                      s.model.empty() ? std::string(str::kDash) : s.model, kInfoText));
 
     rows.push_back(sidebar_rule());
 
-    // 上下文占用
-    rows.push_back(ftxui::text(std::string(str::kSidebarContext)));
+    // ── 3.1 统计：上下文 / DS 缓存 / Token / 成本 ──
+    rows.push_back(section_title(str::kSidebarContext));
     rows.push_back(ftxui::hbox({
         build_context_gauge(s.context_used, s.context_limit),
     }));
@@ -71,26 +100,46 @@ Element build_sidebar(const SidebarModel& s) {
                                                : std::string(str::kInfinity));
     rows.push_back(ftxui::hbox({ftxui::text(ctx_str)}));
 
-    // 成本
     {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "$%.4f", s.cost_usd);
-        rows.push_back(kv(std::string(str::kSidebarCost), buf, kInfoText));
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%d", s.cache_read_tokens);
+        rows.push_back(kv(std::string(str::kSidebarCache), buf, kInfoText));
+    }
+    {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%d", s.total_tokens);
+        rows.push_back(kv(std::string(str::kSidebarToken), buf, kInfoText));
+    }
+    {
+        // 成本：agent 侧暂无成本链路，cost_usd 恒为 0，显示占位符
+        std::string cost_str;
+        if (s.cost_usd > 0.0) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "$%.4f", s.cost_usd);
+            cost_str = buf;
+        } else {
+            cost_str = std::string(str::kDash);
+        }
+        rows.push_back(kv(std::string(str::kSidebarCost), cost_str, kInfoText));
     }
 
-    // 模型
-    rows.push_back(kv(std::string(str::kSidebarModel),
-                      s.model.empty() ? std::string(str::kDash) : s.model, kInfoText));
+    rows.push_back(sidebar_rule());
+
+    // ── 3.2 MCP 列表（agent 未实现，占位）──
+    append_list_section(rows, str::kSidebarMCP, s.mcp_servers);
+
+    rows.push_back(sidebar_rule());
+
+    // ── 3.3 TODO 列表（agent 未实现，占位）──
+    append_list_section(rows, str::kSidebarTODO, s.todos);
 
     return ftxui::vbox({
-        ftxui::emptyElement(),   // 顶部内边距
-        ftxui::emptyElement(),
+        ftxui::text(" "),   // 顶部内边距（1 行空白，实际占位）
         ftxui::hbox({
-            ftxui::text("  "),   // 左侧内边距
+            ftxui::text("  "), // 左侧内边距（2 格）
             ftxui::flex(ftxui::vbox(std::move(rows))),
         }),
-        ftxui::emptyElement(),   // 底部内边距
-        ftxui::emptyElement(),
+        ftxui::text(" "),   // 底部内边距（1 行空白，实际占位）
     });
 }
 

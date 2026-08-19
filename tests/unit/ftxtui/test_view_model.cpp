@@ -116,7 +116,8 @@ TEST_CASE("ViewModel turn done fills text when empty and seals", "[view_model][t
     ViewModel vm;
     vm.apply(ActionTurnDone{.full_content = "final", .prompt_tokens = 10,
                             .generated_tokens = 20, .cache_read_input_tokens = 5,
-                            .prompt_ms = 100.0, .generation_ms = 200.0});
+                            .prompt_ms = 100.0, .generation_ms = 200.0,
+                            .reasoning_ms = 100.0});
     auto& m = vm.messages.back();
     REQUIRE(m.text == "final");
     REQUIRE(m.sealed);

@@ -108,6 +108,18 @@ void register_ftx_builtins(CommandRegistry& registry,
         return CommandResult::ok("");
     });
     registry.register_command(rename_cmd);
+
+    // /Test: 前缀测试命令：弹出 AskUser 提问弹窗（便于开发调试 TUI 渲染/交互）
+    auto test_askuser_cmd =
+        agent::command::make_local_command("Test:askuser",
+                                           std::string(str::kCmdTestAskUserDesc));
+    test_askuser_cmd->set_argument_hint("/Test:askuser");
+    test_askuser_cmd->set_call([on_test_askuser = cb.on_test_askuser](
+                                   const std::string&, const CommandContext&) -> CommandResult {
+        if (on_test_askuser) on_test_askuser();
+        return CommandResult::ok("");
+    });
+    registry.register_command(test_askuser_cmd);
 }
 
 }  // namespace ftxtui

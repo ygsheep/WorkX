@@ -28,6 +28,8 @@ struct FtuiCommandCallbacks {
     std::function<void(const std::string&)> on_rename;
     /// @brief /clear：清空会话
     std::function<void()> on_clear;
+    /// @brief /Test:askuser：弹出 AskUser 提问弹窗（测试模态渲染/交互）
+    std::function<void()> on_test_askuser;
 };
 
 /// @brief 把内置命令注册进 agent 命令注册表

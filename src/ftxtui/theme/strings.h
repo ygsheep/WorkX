@@ -31,6 +31,10 @@ inline constexpr std::string_view kSidebarAgent      = "Agent";
 inline constexpr std::string_view kSidebarContext    = "上下文";
 inline constexpr std::string_view kSidebarCost       = "成本";
 inline constexpr std::string_view kSidebarModel      = "模型";
+inline constexpr std::string_view kSidebarCache      = "DS 缓存";
+inline constexpr std::string_view kSidebarToken      = "Token";
+inline constexpr std::string_view kSidebarMCP        = "MCP";
+inline constexpr std::string_view kSidebarTODO       = "TODO";
 inline constexpr std::string_view kDash               = "—";
 inline constexpr std::string_view kSlash              = " / ";
 inline constexpr std::string_view kInfinity           = "∞";
@@ -91,6 +95,8 @@ inline constexpr std::string_view kSettingClear    = "清空会话";
 inline constexpr std::string_view kSettingClearDesc = "等价 /clear";
 inline constexpr std::string_view kSettingExit     = "退出";
 inline constexpr std::string_view kSettingExitDesc = "等价 /exit";
+inline constexpr std::string_view kSettingSidebar     = "切换侧边栏位置";
+inline constexpr std::string_view kSettingSidebarDesc = "侧边栏居右 / 居左";
 
 // ----------------------------------------------------------------------------
 // AskUser 模态
@@ -144,6 +150,11 @@ inline constexpr std::string_view kCmdModelDesc    = "切换模型";
 inline constexpr std::string_view kCmdProviderDesc = "切换供应商";
 inline constexpr std::string_view kCmdResumeDesc   = "恢复历史会话";
 inline constexpr std::string_view kCmdRenameDesc   = "重命名会话";
+inline constexpr std::string_view kCmdTestAskUserDesc = "测试 AskUser 提问弹窗（/Test: 测试命令）";
+
+// ---- AskUser 测试命令回显 ----
+inline constexpr std::string_view kTestAskUserPrefix   = "[Test:askuser] 返回值\n";
+inline constexpr std::string_view kTestAskUserCancelled = "[Test:askuser] 已取消/超时";
 
 // ----------------------------------------------------------------------------
 // 事件回显（ViewModel prompt_echo）
