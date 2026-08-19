@@ -831,8 +831,10 @@ void App::update_suggest() {
         if (fi.is_ready()) {
             m_suggest_files = fi.search(query, 15);
             for (size_t i = 0; i < m_suggest_files.size(); ++i) {
+                std::string title = m_suggest_files[i].name;
+                if (m_suggest_files[i].is_directory) title += "/";
                 m_suggest_entries.push_back(SuggestEntry{
-                    .title = m_suggest_files[i].name,
+                    .title = std::move(title),
                     .subtitle = m_suggest_files[i].relative_path,
                     .payload = static_cast<int>(i),
                 });
@@ -1509,7 +1511,9 @@ Element App::build_ask_modal() const {
         }));
     }
 
-    return ftxui::xflex(ftxui::border(ftxui::vbox(std::move(body))));
+    // 背景与输入框一致（Panel），避免黑底弹窗与灰底界面割裂
+    return ftxui::xflex(ftxui::border(ftxui::vbox(std::move(body))))
+        | ftxui::bgcolor(theme::T::Panel);
 }
 
 // ---------------------------------------------------------------------------
@@ -1753,7 +1757,9 @@ void App::run() {
 
         // 左列：标题 + 转录 + 输入区（含内嵌状态行）
         Element content_col = ftxui::vbox({
-            ftxui::text(std::string(str::kAppTitle)) | ftxui::color(theme::T::Text),
+            // 标题背景与输出区一致（Surface），与转录区视觉连成一体
+            ftxui::text(std::string(str::kAppTitle)) | ftxui::color(theme::T::Text)
+                | ftxui::bgcolor(theme::T::Surface),
             left_col | ftxui::yflex,
             build_ask_modal(),
             suggest_elem,
