@@ -365,6 +365,13 @@ private:
             // C.10：直接传 string_view，避免每个 SSE chunk 都构造 std::string 拷贝
             self->m_reader->feed_data(std::string_view(
                 static_cast<const char*>(ptr), size * nmemb));
+
+        // 数据接收进度：每 256KB 记录一次（避免高频日志）
+        const size_t received = self->m_bytes_received.fetch_add(size * nmemb,
+            std::memory_order_relaxed) + size * nmemb;
+        if (received / (256 * 1024) != (received - size * nmemb) / (256 * 1024)) {
+            LOG_INFO("[http][stream] received_bytes={}KB", received / 1024);
+        }
         return size * nmemb;
     }
 
@@ -377,6 +384,7 @@ private:
     std::shared_ptr<SSEStreamReader> m_reader;
     std::function<void()> m_on_complete;
     std::atomic<bool> m_cancelled{false};
+    std::atomic<size_t> m_bytes_received{0};  // 数据接收累计字节（进度日志用）
     // H-2：总时长超时（Timer-based），0 表示禁用
     int m_total_timeout_ms = 120000;  // 默认 2 分钟
     std::chrono::steady_clock::time_point m_start_time;
@@ -500,7 +508,7 @@ void HttpClient::async_post_stream(
         std::shared_ptr<SSEStreamReader> reader,
         std::function<void()> on_complete,
         int timeout_ms) const {
-    LOG_DEBUG("[http][stream] POST {} body_len={} timeout={}ms", url, body.size(), timeout_ms);
+    LOG_INFO("[http][stream] POST {} body_len={} timeout={}ms", url, body.size(), timeout_ms);
     auto parsed = parse_url(url);
     // H-4：URL 解析失败（scheme 为空）时直接 finish reader，避免构造 "://" 怪 URL
     if (parsed.scheme.empty()) {
