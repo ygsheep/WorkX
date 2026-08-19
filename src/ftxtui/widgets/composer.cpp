@@ -12,6 +12,7 @@
 #include "widgets/composer.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -93,11 +94,25 @@ Component make_composer(ComposerOptions& opt) {
     size_t internal_cursor = 0;  ///< 内部光标（opt.cursor 为空时使用）
     size_t& cursor = opt.cursor ? *opt.cursor : internal_cursor;
 
+    // 粘贴脉冲检测：终端粘贴的多行容被拆成多个字符事件快速到达，其中的换行
+    // 又会被解析成 Event::Return。靠"与上一次字符插入间隔极短且连续多次"
+    // 判定当前处于粘贴中，从而把粘贴换行当作空格插入而非提交。
+    // 状态必须堆分配并按值捕获：make_composer 返回后局部变量即失效，
+    // 若捕获其引用，每次按键写已释放的栈内存会破坏调用栈（表现为
+    // RunOnce 复制组件 shared_ptr 时访问违例）。
+    struct PasteState {
+        std::chrono::steady_clock::time_point last_insert{};
+        int paste_burst = 0;
+    };
+    auto paste = std::make_shared<PasteState>();
+
     auto renderer = ftxui::Renderer([&opt, &cursor](bool focused) {
         return render_with_cursor(*opt.buffer, cursor, focused) | ftxui::bgcolor(kPanelBg);
     });
 
-    Component wrapped = renderer | ftxui::CatchEvent([&opt, &cursor, renderer](Event e) {
+    Component wrapped = renderer | ftxui::CatchEvent(
+        [&opt, &cursor, paste, renderer](Event e) {
+        try {
         std::string& text = *opt.buffer;
         cursor = std::min(cursor, text.size());
 
@@ -105,6 +120,18 @@ Component make_composer(ComposerOptions& opt) {
         const bool suggest = opt.suggest_active && opt.suggest_active();
 
         if (e == Event::Return) {
+            // 粘贴多行里的换行（\r\n → \n → Return）：不提交，转为一个空格。
+            // 判定条件：刚从连续快速字符插入（粘贴脉冲）中收到 Return。
+            const bool is_paste_newline =
+                paste->paste_burst >= 2 && paste->last_insert != std::chrono::steady_clock::time_point{} &&
+                (std::chrono::steady_clock::now() - paste->last_insert) <=
+                    std::chrono::milliseconds(150);
+            if (is_paste_newline) {
+                text.insert(cursor, " ");
+                cursor += 1;
+                if (opt.suggest_refresh) opt.suggest_refresh();
+                return true;
+            }
             if (suggest && opt.suggest_enter && opt.suggest_enter()) return true;
             std::string t = text;
             size_t b = t.find_first_not_of(" \t");
@@ -200,6 +227,15 @@ Component make_composer(ComposerOptions& opt) {
         if (e.is_character()) {
             const std::string& ch = e.character();
             if (ch.size() == 1 && static_cast<uint8_t>(ch[0]) < 0x20) return false;
+            // 维护粘贴脉冲计数：距上次插入 ≤100ms 视为连续（粘贴），否则重新计数
+            const auto now = std::chrono::steady_clock::now();
+            if (paste->last_insert != std::chrono::steady_clock::time_point{} &&
+                now - paste->last_insert <= std::chrono::milliseconds(100)) {
+                ++paste->paste_burst;
+            } else {
+                paste->paste_burst = 1;
+            }
+            paste->last_insert = now;
             text.insert(cursor, ch);
             cursor += ch.size();
             if (opt.suggest_refresh) opt.suggest_refresh();
@@ -213,6 +249,10 @@ Component make_composer(ComposerOptions& opt) {
             }
         }
         return false;
+        } catch (...) {
+            // 单次按键处理即便抛出（含非 std::exception 类型），也不应令整个程序退出
+            return true;
+        }
     });
 
     return wrapped;

@@ -11,6 +11,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <future>
@@ -110,6 +111,8 @@ private:
     void start_mock_stream(const std::string& user_text);
     void cmd_resume(const std::string& args);
     void cmd_rename(const std::string& args);
+    /// @brief /Test:askuser：弹出 AskUser 提问弹窗（开发调试 TUI 渲染/交互用）
+    void cmd_test_askuser();
     /// @brief 恢复指定会话（switch_session + 历史载入；cmd_resume 与搜索面板共用）
     void resume_session(const std::string& file_path, const std::string& title);
     void open_model_selector();
@@ -147,10 +150,15 @@ private:
     void apply_search_entry(int index);
     /// @brief 执行设置动作（搜索面板「设置」类）
     void run_setting(int action);
-    int approx_height(int width) const;
     ftxui::Element build_transcript(int width);
     ftxui::Element build_ask_modal() const;
     static std::string mode_label(agent::tool::PermissionMode m);
+    /// @brief 触发「已复制 N 字符」短暂提示（底层单线程，1.5s 后自动清除后重绘）
+    void flash_copy_message(std::size_t char_count);
+    /// @brief 选区文本变化回调：缓存最新选中内容，供鼠标释放时写入剪贴板
+    void on_selection_changed();
+    /// @brief 重试指定助手消息：截断到其触发用户消息并重新生成
+    void retry_message(int msg_idx);
 
     AppDeps m_deps;
     ViewModel m_vm;
@@ -164,12 +172,40 @@ private:
     // 用 deque：reflect 持有 Box&（CardHit 元素引用），deque push_back 不使已有元素引用失效
     std::deque<CardHit> m_hits;
 
+    /// @brief sealed 消息的渲染元素缓存（第 2 层：滚动复用，跳过 Markdown/高亮重建）
+    // hits 用堆上 deque（unique_ptr）：缓存的 Element 内 reflect 持有 Box&，需稳定地址。
+    // 注意：不能把 deque 直接作为成员放进 vector——MSVC 的 std::deque move 非 noexcept，
+    //       vector 扩容时按拷贝搬移 deque，元素地址全部变化，reflect 的 Box& 悬垂 →
+    //       SetBox 写坏 shared_ptr 的 _Ptr（resume 后重发消息崩溃 0x560000002A 根因）。
+    struct MsgCacheEntry {
+        ftxui::Element element;     ///< 缓存的渲染树（仅 sealed，帧无关）
+        std::unique_ptr<std::deque<CardHit>> hits;  ///< 卡片命中（reflect 实时回写屏幕坐标）
+        int width = -1;             ///< 上次渲染宽度（resize 失效）
+        std::uint64_t key = 0;      ///< 渲染内容指纹（长度+折叠状态，见 sealed_cache_key）
+        bool has = false;
+    };
+    std::vector<MsgCacheEntry> m_msg_cache;
+
+    /// @brief 会话/消息清空时整体失效元素缓存与高度缓存
+    void invalidate_msg_cache();
+    /// @brief 计算 sealed 消息的渲染指纹（折叠状态+各文本长度；长度相同内容不同属罕见）
+    static std::uint64_t sealed_cache_key(const MessageNode& m, int width);
+    /// @brief 计算消息的估计高度指纹（与宽度无关；sealed 后内容定稿即可缓存高度）
+    static std::uint64_t height_fingerprint(const MessageNode& m);
+
+    /// @brief 第 3 层 前缀和缓存：逐消息估计高度（sealed 复用，流式逐帧重估）
+    std::vector<int> m_msg_height;
+    std::vector<std::uint64_t> m_msg_height_ver;
+
     /// @brief 追加一行运行时日志（codex_run.log，多线程安全）
     void log_run(std::string_view msg);
     std::mutex m_log_mutex;
 
     // 输入缓冲与面板状态
     std::string m_input_buffer;
+    std::chrono::steady_clock::time_point m_last_ctrl_c{};  ///< 上次 Ctrl+C 时刻（1s 内连按退出）
+    bool m_ctrl_c_hint = false;              ///< 状态栏「再次按 Ctrl+C 退出」提示是否显示
+    std::chrono::steady_clock::time_point m_ctrl_c_hint_until;  ///< 提示显示截止时刻
     std::string m_ask_buffer;          ///< AskUser 模态输入（自定义输入模式用）
     bool m_palette_open = false;
     bool m_model_open = false;
@@ -182,6 +218,8 @@ private:
     std::vector<SuggestEntry> m_suggest_entries;   ///< 过滤后的候选
     std::vector<agent::FileIndex::Entry> m_suggest_files;  ///< 文件候选（payload 映射）
     int m_suggest_selected = -1;       ///< 选中项下标（-1 = 无）
+    /// @brief 提示面板候选行渲染后的屏幕 box（每帧重建；deque 保证 reflect 地址稳定）
+    std::deque<ftxui::Box> m_suggest_hits;
 
     // ---- 聚合搜索面板（Ctrl+P）----
     std::vector<PaletteCommand> m_palette_cmds;      ///< 命令条目（注册表派生，搜索/提示共用）
@@ -197,6 +235,9 @@ private:
     bool m_provider_open = false;
     std::vector<agent::ProviderConfigEntry> m_providers;  ///< 配置中的供应商列表
     std::string m_current_provider;              ///< 当前供应商 id（backend.provider）
+
+    // ---- 侧边栏布局 ----
+    bool m_sidebar_left = false;                 ///< 侧边栏居中位置（false=右，true=左）
 
     // ---- AskUser 模态（B3：多问题 + 选项 + 自定义输入 + cancel_flag）----
     struct AskQuestion {
@@ -216,6 +257,8 @@ private:
     std::shared_ptr<std::promise<agent::AskUserResult>> m_ask_promise;
     std::shared_ptr<std::atomic<bool>> m_ask_cancel;  ///< 取消标志（工作线程超时置位）
     std::chrono::steady_clock::time_point m_ask_deadline;
+    /// @brief /Test:askuser 标记：模态关闭后把答案回显为 assistant 消息（调试用）
+    bool m_ask_test_echo = false;
 
     std::vector<std::string> m_model_items;  ///< 模型列表（/model 面板）
     int m_mock_perm_cycle = 0;   ///< mock 下 Shift+Tab 权限循环序号（""→plan→bypass）
@@ -248,6 +291,14 @@ private:
     ftxui::Component m_resume_comp;
     ftxui::Component m_model_comp;
     ftxui::Component m_provider_comp;
+
+    // ---- 拖拽选中 → 复制剪贴板（FTXUI 原生 Selection + 系统剪贴板）----
+    std::string m_selection_text;          ///< 最新选中文本（SelectionChange 回调维护）
+    bool m_copy_flash = false;             ///< 复制提示是否显示（仅 UI 线程读写）
+    std::size_t m_copy_flash_n = 0;        ///< 提示中的字符数
+    std::chrono::steady_clock::time_point m_copy_flash_until;  ///< 提示过期时刻
+    /// @brief 提示自清除线程：仅 sleep 后触发一次重绘，不触碰任何 App 成员（析构安全）
+    std::thread m_copy_flash_thread;
 };
 
 }  // namespace ftxtui

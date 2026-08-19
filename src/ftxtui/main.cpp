@@ -9,6 +9,7 @@
  * @version 0.1.0（实验）
  */
 
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -27,10 +28,13 @@
 #include "core/config/config_manager.h"
 #include "core/events/event_bus.h"
 #include "core/task/task_manager.h"
+#include "core/utils/file_index.h"
 
 #include "app.h"
+#include "crash_reporter.h"
 
 int main(int argc, char** argv) {
+    crash::InstallHandlers();
     bool mock_mode = false;
     bool smoke_mode = false;
     for (int i = 1; i < argc; ++i) {
@@ -79,6 +83,33 @@ int main(int argc, char** argv) {
             auto config_dir = agent::default_config_path().parent_path();
             session_dir = agent::session::get_project_session_dir(
                 config_dir, fs::current_path().string()).string();
+        }
+    }
+
+    // ---- 文件索引异步构建（@ 补全面板数据源）----
+    // 后台线程扫描工作目录，不阻塞 TUI 出现；索引未就绪时 @ 面板返回空，
+    // 就绪后自动显示文件列表。从用户主目录启动时跳过，避免扫描海量文件卡顿。
+    {
+        std::string cwd = fs::current_path().string();
+        bool is_home_dir = false;
+        const char* home_envs[] = {
+#ifdef _WIN32
+            "USERPROFILE", "APPDATA"
+#else
+            "HOME"
+#endif
+        };
+        for (const char* env : home_envs) {
+            if (const char* home = getenv(env)) {
+                std::error_code ec;
+                if (fs::equivalent(cwd, home, ec)) {
+                    is_home_dir = true;
+                    break;
+                }
+            }
+        }
+        if (!is_home_dir) {
+            agent::global_file_index().build_async(cwd);  // 后台线程构建，不阻塞启动
         }
     }
 

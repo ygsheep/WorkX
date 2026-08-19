@@ -46,6 +46,7 @@ inline constexpr std::string_view kStatusGenerating  = "● 生成中";
 inline constexpr std::string_view kStatusPlan        = "计划模式";
 inline constexpr std::string_view kStatusFullAccess  = "完全访问";
 inline constexpr std::string_view kStatusManual      = "手动审批";
+inline constexpr std::string_view kStatusCtrlC       = "再次按 Ctrl+C 退出";
 
 // ----------------------------------------------------------------------------
 // composer / 输入
