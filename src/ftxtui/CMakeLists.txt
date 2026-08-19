@@ -5,19 +5,20 @@
 # 见 docs/plans/2026-08-17-ftxui-tui-design.md
 # ============================================================
 
-# ---- FTXUI（实验独占依赖，不进入 vcpkg manifest；需网络拉取）----
+# ---- FTXUI（实验独占依赖，不进入 vcpkg manifest）----
+# 使用 vendored 源码（third_party/ftxui），含 Windows 鼠标事件补丁：
+# 上游 v7.0.3 在 Windows 下忽略 MOUSE_EVENT，导致点击/滚轮/文本选中全部失效。
 include(FetchContent)
 FetchContent_Declare(
     ftxui
-    GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
-    GIT_TAG        v7.0.3
-    GIT_SHALLOW    TRUE
+    SOURCE_DIR ${CMAKE_SOURCE_DIR}/third_party/ftxui
 )
 FetchContent_MakeAvailable(ftxui)
 
 add_executable(codex
     main.cpp
     app.cpp
+    crash_reporter.cpp
     command/builtins.cpp
     vm/message_node.cpp
     vm/view_model.cpp
