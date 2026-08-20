@@ -76,6 +76,18 @@ ResultV2<ToolResult> TaskCreateTool::call(
         return ResultV2<ToolResult>::err(
             Error::Code::InvalidInput, "TaskCreate: input must be an object");
     }
+    // 先做 JSON 类型校验（LLM 可能传错类型，避免 value()/get<>() 抛 type_error）
+    for (const char* key : {"subject", "description", "activeForm"}) {
+        if (input.contains(key) && !input[key].is_string()) {
+            return ResultV2<ToolResult>::err(
+                Error::Code::InvalidInput,
+                std::string("TaskCreate: '") + key + "' must be a string");
+        }
+    }
+    if (input.contains("metadata") && !input["metadata"].is_object()) {
+        return ResultV2<ToolResult>::err(
+            Error::Code::InvalidInput, "TaskCreate: 'metadata' must be an object");
+    }
     const std::string subject = input.value("subject", std::string{});
     if (subject.empty()) {
         return ResultV2<ToolResult>::err(

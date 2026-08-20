@@ -158,9 +158,16 @@ void TodoStore::restore_todos(const std::string& session_id,
     notify_changed(session_id, list_todos(session_id));
 }
 
-void TodoStore::clear_session(const std::string& session_id) {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_sessions.erase(session_id);
+void TodoStore::reset_session(const std::string& session_id) {
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto it = m_sessions.find(session_id);
+        if (it == m_sessions.end()) return;
+        it->second.todos.clear();
+        it->second.next_id = 1;
+    }
+    // 锁外：写空快照（JSONL，防止 /resume 恢复旧清单）+ 发布事件（UI 清空）
+    notify_changed(session_id, {});
 }
 
 void TodoStore::clear_for_test() {

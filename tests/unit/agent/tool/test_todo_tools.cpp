@@ -6,6 +6,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <string>
@@ -152,6 +153,34 @@ TEST_CASE_METHOD(TodoFixture, "TodoStore restore_todos resumes ids above max", "
     REQUIRE(new_id == "8");
 }
 
+TEST_CASE_METHOD(TodoFixture, "TodoStore reset_session clears todos, writes empty snapshot, keeps persist_cb",
+                 "[todo][store]") {
+    auto& store = TodoStore::instance();
+    store.create_todo("s1", make_item("A"));
+
+    // 注册持久化回调（模拟 ChatSession wire_todo_persistence）
+    std::vector<std::vector<core::todo::TodoItem>> persisted;
+    store.set_persist_callback("s1", [&](const std::vector<core::todo::TodoItem>& todos) {
+        persisted.push_back(todos);
+    });
+
+    store.reset_session("s1");
+    REQUIRE(store.list_todos("s1").empty());
+
+    // 空快照已写入 JSONL（/resume 不再恢复旧清单）
+    REQUIRE(persisted.size() == 1);
+    REQUIRE(persisted[0].empty());
+
+    // next_id 重置：新任务从 1 开始
+    auto new_id = store.create_todo("s1", make_item("B"));
+    REQUIRE(new_id == "1");
+
+    // 持久化回调仍绑定：清空后新变更继续持久化
+    REQUIRE(persisted.size() == 2);
+    REQUIRE(persisted[1].size() == 1);
+    REQUIRE(persisted[1][0].content == "B");
+}
+
 // ============================================================
 // TodoWriteTool（全量替换）
 // ============================================================
@@ -197,6 +226,65 @@ TEST_CASE_METHOD(TodoFixture, "TodoWriteTool rejects empty content", "[todo][tod
     REQUIRE(r.error().code == Error::Code::InvalidInput);
 }
 
+TEST_CASE_METHOD(TodoFixture, "TodoWriteTool rejects wrong-typed status", "[todo][todowrite]") {
+    TodoWriteTool tool;
+    ToolContext ctx;
+    fill_ctx(ctx);
+    nlohmann::json input = {
+        {"todos", nlohmann::json::array({
+            {{"content", "Run tests"}, {"status", 42}, {"activeForm", "Running tests"}},
+        })}
+    };
+    auto r = tool.call(input, ctx);
+    REQUIRE(r.is_err());
+    REQUIRE(r.error().code == Error::Code::InvalidInput);
+    // 校验失败不产生任何写入
+    REQUIRE(TodoStore::instance().list_todos("test-session").empty());
+}
+
+TEST_CASE_METHOD(TodoFixture, "TodoWriteTool preserves ids for matching content", "[todo][todowrite]") {
+    // 先用 TaskCreate 创建带 id 的任务
+    TaskCreateTool create_tool;
+    ToolContext ctx;
+    fill_ctx(ctx);
+    auto c1 = create_tool.call(nlohmann::json{{"subject", "Run tests"}}, ctx);
+    auto c2 = create_tool.call(nlohmann::json{{"subject", "Write docs"}}, ctx);
+    REQUIRE(c1.is_ok());
+    REQUIRE(c2.is_ok());
+    REQUIRE(c1.value().data["task"]["id"] == "1");
+    REQUIRE(c2.value().data["task"]["id"] == "2");
+
+    // TodoWrite 全量替换：content 匹配的条目应继承原 id（与顺序无关）
+    TodoWriteTool write_tool;
+    nlohmann::json input = {
+        {"todos", nlohmann::json::array({
+            {{"content", "Write docs"}, {"status", "in_progress"}, {"activeForm", "Writing docs"}},
+            {{"content", "Run tests"}, {"status", "completed"}, {"activeForm", "Running tests"}},
+        })}
+    };
+    auto r = write_tool.call(input, ctx);
+    REQUIRE(r.is_ok());
+    REQUIRE(r.value().data["newTodos"].size() == 2);
+
+    auto& store = TodoStore::instance();
+    auto todos = store.list_todos("test-session");
+    REQUIRE(todos.size() == 2);
+    auto it_docs = std::find_if(todos.begin(), todos.end(),
+        [](const core::todo::TodoItem& t) { return t.content == "Write docs"; });
+    auto it_tests = std::find_if(todos.begin(), todos.end(),
+        [](const core::todo::TodoItem& t) { return t.content == "Run tests"; });
+    REQUIRE(it_docs != todos.end());
+    REQUIRE(it_tests != todos.end());
+    REQUIRE(it_docs->id == "2");
+    REQUIRE(it_tests->id == "1");
+
+    // 后续 TaskUpdate 按 id 仍可操作（id 未断裂）
+    TaskUpdateTool update_tool;
+    auto u = update_tool.call(nlohmann::json{{"taskId", "2"}, {"status", "completed"}}, ctx);
+    REQUIRE(u.is_ok());
+    REQUIRE(u.value().data["task"]["status"] == "completed");
+}
+
 // ============================================================
 // TaskV2 系列
 // ============================================================
@@ -227,6 +315,17 @@ TEST_CASE_METHOD(TodoFixture, "TaskCreateTool rejects missing subject", "[todo][
     auto r = tool.call(nlohmann::json{{"description", "no subject"}}, ctx);
     REQUIRE(r.is_err());
     REQUIRE(r.error().code == Error::Code::MissingArgument);
+}
+
+TEST_CASE_METHOD(TodoFixture, "TaskCreateTool rejects wrong-typed subject", "[todo][task]") {
+    TaskCreateTool tool;
+    ToolContext ctx;
+    fill_ctx(ctx);
+    auto r = tool.call(nlohmann::json{{"subject", 123}}, ctx);
+    REQUIRE(r.is_err());
+    REQUIRE(r.error().code == Error::Code::InvalidInput);
+    // 校验失败不产生任何写入
+    REQUIRE(TodoStore::instance().list_todos("test-session").empty());
 }
 
 TEST_CASE_METHOD(TodoFixture, "TaskGetTool returns task or null", "[todo][task]") {
@@ -296,6 +395,23 @@ TEST_CASE_METHOD(TodoFixture, "TaskUpdateTool rejects unknown task", "[todo][tas
     auto r = tool.call(nlohmann::json{{"taskId", "999"}, {"subject", "x"}}, ctx);
     REQUIRE(r.is_err());
     REQUIRE(r.error().code == Error::Code::ResourceNotFound);
+}
+
+TEST_CASE_METHOD(TodoFixture, "TaskUpdateTool rejects wrong-typed status", "[todo][task]") {
+    TodoStore::instance().create_todo("test-session", make_item("Original"));
+
+    TaskUpdateTool tool;
+    ToolContext ctx;
+    fill_ctx(ctx);
+    auto r = tool.call(nlohmann::json{{"taskId", "1"}, {"status", 42}}, ctx);
+    REQUIRE(r.is_err());
+    REQUIRE(r.error().code == Error::Code::InvalidInput);
+
+    // 校验失败不产生任何写入（无部分更新、无事件丢失）
+    auto got = TodoStore::instance().get_todo("test-session", "1");
+    REQUIRE(got.has_value());
+    REQUIRE(got->content == "Original");
+    REQUIRE(got->status == core::todo::TodoStatus::Pending);
 }
 
 TEST_CASE_METHOD(TodoFixture, "TaskListTool lists all tasks", "[todo][task]") {

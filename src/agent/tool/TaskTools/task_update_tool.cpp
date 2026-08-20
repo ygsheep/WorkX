@@ -110,6 +110,36 @@ ResultV2<ToolResult> TaskUpdateTool::call(
             Error::Code::MissingArgument, "TaskUpdate: 'taskId' is required");
     }
 
+    // 先做 JSON 类型校验：LLM 可能传错类型（如 status 为 number），
+    // 避免在 TodoStore::update_todo 的锁内 mutate 中抛 type_error → 部分更新 + 事件丢失
+    for (const char* key : {"subject", "description", "activeForm", "status", "owner"}) {
+        if (input.contains(key) && !input[key].is_string()) {
+            return ResultV2<ToolResult>::err(
+                Error::Code::InvalidInput,
+                std::string("TaskUpdate: '") + key + "' must be a string");
+        }
+    }
+    if (input.contains("metadata") && !input["metadata"].is_object()) {
+        return ResultV2<ToolResult>::err(
+            Error::Code::InvalidInput, "TaskUpdate: 'metadata' must be an object");
+    }
+    for (const char* key : {"blocks", "blockedBy"}) {
+        if (input.contains(key)) {
+            if (!input[key].is_array()) {
+                return ResultV2<ToolResult>::err(
+                    Error::Code::InvalidInput,
+                    std::string("TaskUpdate: '") + key + "' must be an array of strings");
+            }
+            for (const auto& e : input[key]) {
+                if (!e.is_string()) {
+                    return ResultV2<ToolResult>::err(
+                        Error::Code::InvalidInput,
+                        std::string("TaskUpdate: '") + key + "' must be an array of strings");
+                }
+            }
+        }
+    }
+
     auto& store = TodoStore::instance();
 
     // status=deleted → 删除任务（对齐 cc TaskUpdateTool 语义）

@@ -294,8 +294,8 @@ void ChatSession::clear_history() {
     // 清理 conditional skills 会话级累积：过期 touch 不再触发激活
     m_touch_collector.clear();
     m_activated_skills.clear();
-    // #24：清空 TodoStore 该 session 状态（内存 + 持久化回调解绑）
-    tool::TodoStore::instance().clear_session(m_session_id);
+    // #24：清空待办清单（写空快照到 JSONL 防止 /resume 恢复旧清单，保留持久化回调）
+    tool::TodoStore::instance().reset_session(m_session_id);
 }
 
 void ChatSession::set_compactor_context_window(int32_t context_window_tokens) {

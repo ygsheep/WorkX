@@ -71,8 +71,9 @@ public:
     /// @brief 恢复内存态（/resume 时 ChatSession 调用，随后发布事件刷新 UI）
     void restore_todos(const std::string& session_id, std::vector<core::todo::TodoItem> todos);
 
-    /// @brief 清空某 session 状态（clear_history 时调用）
-    void clear_session(const std::string& session_id);
+    /// @brief 清空某 session 待办（保留持久化回调），写空快照到 JSONL + 发布事件
+    /// @details clear_history 场景：清空后 /resume 不再恢复旧清单，新变更继续持久化
+    void reset_session(const std::string& session_id);
 
     /// @brief 清空全部（测试用）
     void clear_for_test();

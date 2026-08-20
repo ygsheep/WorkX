@@ -7,6 +7,7 @@
 
 #include "agent/tool/TodoWriteTool/todo_write_tool.h"
 
+#include <algorithm>
 #include <format>
 
 #include "agent/tool/TodoStore/todo_store.h"
@@ -116,6 +117,18 @@ ResultV2<ToolResult> TodoWriteTool::call(
 
     std::vector<core::todo::TodoItem> parsed;
     for (const auto& j : input["todos"]) {
+        if (!j.is_object()) {
+            return ResultV2<ToolResult>::err(
+                Error::Code::InvalidInput, "TodoWrite: each todo must be an object");
+        }
+        // 先做 JSON 类型校验（LLM 可能传错类型，避免 value()/get<>() 抛 type_error）
+        for (const char* key : {"content", "activeForm", "status"}) {
+            if (j.contains(key) && !j[key].is_string()) {
+                return ResultV2<ToolResult>::err(
+                    Error::Code::InvalidInput,
+                    std::string("TodoWrite: '") + key + "' must be a string");
+            }
+        }
         core::todo::TodoItem item;
         item.content = j.value("content", std::string{});
         item.active_form = j.value("activeForm", std::string{});
@@ -129,6 +142,19 @@ ResultV2<ToolResult> TodoWriteTool::call(
 
     auto& store = TodoStore::instance();
     const auto old_todos = store.list_todos(ctx.session_id);
+
+    // 保留匹配项的 id：TodoWrite 条目无 id，按 content 匹配旧条目继承 id，
+    // 避免与 TaskV2（按 id 管理）混用时全量替换导致 id 断裂
+    for (auto& item : parsed) {
+        if (item.id.empty()) {
+            auto it = std::find_if(old_todos.begin(), old_todos.end(),
+                [&](const core::todo::TodoItem& o) {
+                    return o.content == item.content && !o.id.empty();
+                });
+            if (it != old_todos.end()) item.id = it->id;
+        }
+    }
+
     const auto new_todos = store.replace_todos(ctx.session_id, parsed);
 
     nlohmann::json result = {
