@@ -37,6 +37,30 @@ TEST_CASE("parser maps ctrl-enter kitty sequence to Special event",
     REQUIRE(received[0].input() == seq);
 }
 
+TEST_CASE("parser maps ctrl-left kitty sequence to Special event",
+          "[composer][parser]") {
+    std::vector<ftxui::Event> received;
+    ftxui::TerminalInputParser parser(
+        [&](ftxui::Event e) { received.push_back(std::move(e)); });
+    const std::string seq = "\x1b[1;5D";
+    for (char c : seq) parser.Add(c);
+    REQUIRE(received.size() == 1);
+    REQUIRE_FALSE(received[0].is_character());
+    REQUIRE(received[0].input() == seq);
+}
+
+TEST_CASE("parser maps ctrl-right kitty sequence to Special event",
+          "[composer][parser]") {
+    std::vector<ftxui::Event> received;
+    ftxui::TerminalInputParser parser(
+        [&](ftxui::Event e) { received.push_back(std::move(e)); });
+    const std::string seq = "\x1b[1;5C";
+    for (char c : seq) parser.Add(c);
+    REQUIRE(received.size() == 1);
+    REQUIRE_FALSE(received[0].is_character());
+    REQUIRE(received[0].input() == seq);
+}
+
 // ============================================================================
 // composer：Ctrl+Enter / Enter 在提示面板激活时的行为
 // ============================================================================

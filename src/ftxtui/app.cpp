@@ -68,8 +68,6 @@ namespace {
 constexpr int kComposerHeight = 3;
 /// @brief 侧栏折叠宽度阈值：低于该列宽时不渲染右侧栏（窄屏保护内容区）
 constexpr int kSidebarCollapseWidth = 100;
-/// @brief 侧栏固定宽度（列）；输出区可用宽度 = 终端宽 − 侧栏 − 1 分隔空格
-constexpr int kSidebarWidth = 30;
 
 #if defined(_WIN32)
 
@@ -1877,7 +1875,7 @@ void App::run() {
                                      const ftxui::Element& change_viewer_elem) {
         return build_sidebar_tabs(m_vm.tabs, m_vm.sidebar, &m_tab_hits, &m_section_hits,
                                   sub_menu_elem, change_viewer_elem)
-            | ftxui::size(ftxui::WIDTH, ftxui::EQUAL, kSidebarWidth)
+            | ftxui::size(ftxui::WIDTH, ftxui::EQUAL, m_sidebar_width)
             | ftxui::yflex
             | ftxui::bgcolor(theme::T::Panel);
     };
@@ -2065,7 +2063,7 @@ void App::run() {
         // 再减每行左侧 2 格缩进，作为正文折行的列宽。→ 消息按此宽度折行，
         // 终端 resize 时 width 变化触发元素/高度缓存失效并重排。
         const bool show_sidebar_body = width >= kSidebarCollapseWidth;
-        const int sidebar_used = show_sidebar_body ? (kSidebarWidth + 1) : 0;
+        const int sidebar_used = show_sidebar_body ? (m_sidebar_width + 1) : 0;
         const int content_w = std::max(24, width - sidebar_used);
         const int msg_width = std::max(1, content_w - 2);
 
@@ -2286,6 +2284,19 @@ void App::run() {
                 if (m_palette_comp) m_palette_comp->TakeFocus();
                 return true;
             }
+        }
+        // Ctrl+←/→：调整侧边栏宽度（Windows 补丁改写为 kitty 序列 \x1b[1;5D / \x1b[1;5C）。
+        // 方向语义：箭头键始终推动侧边栏的外边缘——
+        //   侧栏在右 → Ctrl+→ 收窄（向右推，侧栏占更少空间），Ctrl+← 增宽
+        //   侧栏在左 → Ctrl+→ 增宽（向右推，侧栏占更多空间），Ctrl+← 收窄
+        // 侧栏折叠（窄屏）时仍记录宽度，宽屏恢复后生效。
+        if (e == ftxui::Event::Special("\x1b[1;5C")) {
+            adjust_sidebar_width(m_sidebar_left ? +2 : -2);
+            return true;
+        }
+        if (e == ftxui::Event::Special("\x1b[1;5D")) {
+            adjust_sidebar_width(m_sidebar_left ? -2 : +2);
+            return true;
         }
         // Esc：打断模型回复 / 工具调用（刷新 / AskUser / 面板的 Esc 已在上方各自处理）
         if (e == Event::Escape) {
@@ -2664,6 +2675,14 @@ void App::close_sidebar_tab(SidebarTab tab) {
         m_vm.tabs.active = SidebarTab::kTasks;
         if (m_composer) m_composer->TakeFocus();  // 关闭后交还输入栏焦点
     }
+}
+
+/// @brief 调整侧边栏宽度（Ctrl+← 减小 / Ctrl+→ 增大，钳制在 [20, 50]）
+void App::adjust_sidebar_width(int delta) {
+    constexpr int kMinSidebarWidth = 20;
+    constexpr int kMaxSidebarWidth = 50;
+    m_sidebar_width = std::clamp(m_sidebar_width + delta, kMinSidebarWidth, kMaxSidebarWidth);
+    m_screen.RequestAnimationFrame();
 }
 
 /// @brief 跳转文件 tab 到选中修改点对应行（变更记录 tab Enter）

@@ -175,6 +175,8 @@ private:
     void retry_message(int msg_idx);
     /// @brief 关闭侧边栏可开合 tab（变更记录/文件），返回任务调度
     void close_sidebar_tab(SidebarTab tab);
+    /// @brief 调整侧边栏宽度（Ctrl+← 减小 / Ctrl+→ 增大，钳制在 [20, 50]）
+    void adjust_sidebar_width(int delta);
     /// @brief 跳转转录区到选中子 Agent 关联消息（任务调度 tab Menu Enter）
     void jump_to_sub_agent();
     /// @brief 跳转文件 tab 到选中修改点对应行（变更记录 tab Enter）
@@ -260,6 +262,7 @@ private:
 
     // ---- 侧边栏布局 ----
     bool m_sidebar_left = false;                 ///< 侧边栏居中位置（false=右，true=左）
+    int m_sidebar_width = 30;                    ///< 侧边栏宽度（Ctrl+←/→ 调整，[20,50]）
     /// @brief 侧边栏 tab 栏命中区（每帧由 build_sidebar_tabs 重建；鼠标点击用）
     std::deque<TabHit> m_tab_hits;
     /// @brief 侧栏可折叠区块命中区（MCP/TODO 标题行；每帧由 append_sidebar_info 重建）
