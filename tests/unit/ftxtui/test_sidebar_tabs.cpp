@@ -109,13 +109,11 @@ TEST_CASE("sidebar tabs context info hides cache when zero", "[sidebar_tabs][ren
     REQUIRE(text.find("cache") == std::string::npos);
 }
 
-TEST_CASE("sidebar tabs removes agent and cost", "[sidebar_tabs][render]") {
+TEST_CASE("sidebar tabs removes cost", "[sidebar_tabs][render]") {
     SidebarTabsModel tabs = make_tabs();
     SidebarModel sidebar;
-    sidebar.agent = "default";
     sidebar.cost_usd = 1.23;
     const auto text = render_elem(build_sidebar_tabs(tabs, sidebar));
-    REQUIRE(text.find("default") == std::string::npos);  // Agent 已移除
     REQUIRE(text.find("成本") == std::string::npos);     // 成本已移除
 }
 

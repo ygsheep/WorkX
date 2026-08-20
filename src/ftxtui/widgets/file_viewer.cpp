@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include <ftxui/component/event.hpp>
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/terminal.hpp>
 
@@ -108,6 +109,65 @@ Element build_file_viewer(const FileViewState& file) {
                 | ftxui::color(theme::T::TextFaint),
         }),
     });
+}
+
+/// @brief 文件查看 tab 可聚焦组件：↑↓/PgUp/PgDn/滚轮滚动
+/// @details 聚焦时接收滚动键，未聚焦（如输入栏聚焦）时事件交还上层，
+///          避免劫持 composer 的 ↑↓ 导航。
+namespace {
+class FileViewer : public ftxui::ComponentBase {
+public:
+    explicit FileViewer(FileViewState* file) : m_file(file) {}
+
+    bool OnEvent(ftxui::Event event) override {
+        if (!m_file || m_file->path.empty()) return false;
+        const int total = static_cast<int>(m_file->lines.size());
+        const int visible = visible_line_count();
+        const int max_scroll = std::max(0, total - visible);
+        if (event == ftxui::Event::ArrowUp) {
+            m_file->scroll = std::max(0, m_file->scroll - 1);
+            return true;
+        }
+        if (event == ftxui::Event::ArrowDown) {
+            m_file->scroll = std::min(max_scroll, m_file->scroll + 1);
+            return true;
+        }
+        if (event == ftxui::Event::PageUp) {
+            m_file->scroll = std::max(0, m_file->scroll - visible);
+            return true;
+        }
+        if (event == ftxui::Event::PageDown) {
+            m_file->scroll = std::min(max_scroll, m_file->scroll + visible);
+            return true;
+        }
+        if (event.is_mouse()) {
+            const auto& m = event.mouse();
+            if (m.button == ftxui::Mouse::WheelUp && m_box.Contain(m.x, m.y)) {
+                m_file->scroll = std::max(0, m_file->scroll - 3);
+                return true;
+            }
+            if (m.button == ftxui::Mouse::WheelDown && m_box.Contain(m.x, m.y)) {
+                m_file->scroll = std::min(max_scroll, m_file->scroll + 3);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    Element OnRender() override {
+        if (!m_file) return ftxui::emptyElement();
+        return build_file_viewer(*m_file) | ftxui::reflect(m_box);
+    }
+
+private:
+    FileViewState* m_file;
+    ftxui::Box m_box;  ///< 文件查看器渲染区域（滚轮命中用）
+};
+
+}  // namespace
+
+ftxui::Component make_file_viewer(FileViewState* file) {
+    return ftxui::Make<FileViewer>(file);
 }
 
 }  // namespace ftxtui

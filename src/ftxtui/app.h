@@ -272,6 +272,9 @@ private:
     ftxui::Component m_change_viewer;        ///< 修改点 Menu + hunk + 目的展开
     ftxui::Box m_change_box;                 ///< 组件渲染 box（点击命中用；折叠时置空）
 
+    // ---- 文件查看组件（文件 tab 可聚焦：↑↓/PgUp/PgDn/滚轮滚动）----
+    ftxui::Component m_file_viewer;          ///< 文件查看器（聚焦时接收滚动键）
+
     // ---- AskUser 模态（B3：多问题 + 选项 + 自定义输入 + cancel_flag）----
     struct AskQuestion {
         std::string question;          ///< 完整问题文本（答案 map 的 key）

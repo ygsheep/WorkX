@@ -299,10 +299,15 @@ std::vector<std::string> split_lines(const std::string& content) {
     return lines;
 }
 
-/// @brief 截断到 max 字符（超长加省略号）
+/// @brief 截断到 max 字符（超长加省略号；回退到多字节边界避免切断 UTF-8）
 std::string truncate_utf8(std::string s, std::size_t max) {
     if (s.size() <= max) return s;
     s.resize(max);
+    // 去掉续字节回到字符首字节；若首字节是不完整多字节字符则一并去掉
+    while (!s.empty() && (static_cast<unsigned char>(s.back()) & 0xC0) == 0x80)
+        s.pop_back();
+    if (!s.empty() && (static_cast<unsigned char>(s.back()) & 0xC0) == 0xC0)
+        s.pop_back();
     s += "…";
     return s;
 }

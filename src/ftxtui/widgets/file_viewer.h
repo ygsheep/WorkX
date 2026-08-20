@@ -7,11 +7,16 @@
 
 #pragma once
 
+#include <ftxui/component/component.hpp>
 #include <ftxui/dom/elements.hpp>
 
 #include "vm/view_model.h"
 
 namespace ftxtui {
+
+/// @brief 构建文件查看 tab 组件（可聚焦：↑↓/PgUp/PgDn/滚轮滚动）
+/// @param file 文件 tab 状态（App 持有；path 为空 = 未打开，显示占位）
+ftxui::Component make_file_viewer(FileViewState* file);
 
 /// @brief 构建文件查看视图
 /// @param file 文件 tab 状态（path 为空 = 未打开，显示占位）

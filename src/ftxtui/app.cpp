@@ -49,6 +49,7 @@
 #include "widgets/sidebar.h"
 #include "widgets/sidebar_tabs.h"
 #include "widgets/change_viewer.h"
+#include "widgets/file_viewer.h"
 #include "widgets/status_line.h"
 #include "widgets/composer.h"
 #include "widgets/suggest_panel.h"
@@ -194,7 +195,6 @@ App::App(AppDeps deps)
       m_screen(ftxui::ScreenInteractive::Fullscreen()) {
     m_vm.sidebar.model = m_deps.model_name;
     m_vm.sidebar.project = m_deps.project;
-    m_vm.sidebar.agent = m_deps.agent_name;
 
     // B2 统一命令：单一定义 — 内置命令注册进 agent 注册表，副作用回调到 App
     if (!m_deps.command_registry) {
@@ -215,6 +215,7 @@ App::App(AppDeps deps)
             invalidate_msg_cache();
             m_vm.tabs.sub_agents.clear();
             m_vm.tabs.sub_selected = -1;
+            m_vm.tabs.changes.changes.clear();
             m_scroll = 0;
         },
         .on_view = [this](const std::string& args) { cmd_view(args); },
@@ -622,6 +623,7 @@ void App::resume_session(const std::string& file_path, const std::string& title)
     m_vm.messages.clear();
     m_vm.tabs.sub_agents.clear();
     m_vm.tabs.sub_selected = -1;
+    m_vm.tabs.changes.changes.clear();
     invalidate_msg_cache();
     const auto history = m_deps.session->get_messages();
     for (const auto& cm : history) {
@@ -664,8 +666,6 @@ void App::resume_session(const std::string& file_path, const std::string& title)
     m_scroll = 0;
     m_follow = true;
     m_vm.sidebar.title = title;
-    // B3：会话切换后同步真实 session_id（switch_session 内部已更新）
-    m_vm.sidebar.agent = m_deps.session->session_id();
     m_vm.apply(ActionAppendMessage{.role = "assistant",
         .text = std::string(str::kResumedPrefix) + title + std::string(str::kMdBoldEnd)});
 }
@@ -830,12 +830,24 @@ void App::cmd_edit(const std::string& args) {
 
     // WithRestoredIO：临时卸载 FTXUI 终端钩子 → 全屏 nvim（模态）→ 恢复 TUI
     const std::string abs_path = fs::weakly_canonical(p, ec).string();
+    bool launched = false;
     int exit_code = 0;
     auto edit = m_screen.WithRestoredIO([&] {
         auto r = agent::process::exec_interactive(*nvim, {abs_path});
-        if (r.is_ok()) exit_code = r.value().exit_code;
+        if (r.is_ok()) {
+            launched = true;
+            exit_code = r.value().exit_code;
+        }
     });
     edit();
+
+    if (!launched) {
+        // 启动失败：不重读文件，避免把未修改内容误报为"编辑完成"
+        m_vm.apply(ActionAppendMessage{.role = "assistant",
+            .text = std::string(str::kEditFailed)});
+        m_screen.RequestAnimationFrame();
+        return;
+    }
 
     // 编辑返回：重读文件（与磁盘一致），刷新文件 tab
     reload_file();
@@ -901,8 +913,13 @@ void App::reload_file() {
         ch.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
         ch.diff = agent::line_diff(m_vm.tabs.file.lines, lines, 1);
-        m_vm.tabs.changes.changes.push_back(std::move(ch));
+        // 定位新内容中的修改区块填充 new_start（否则 file_viewer 跳过渲染）
+        const int start = locate_block(lines, ch.new_string);
+        if (start >= 0) ch.new_start = start + 1;  // 1-based
+        m_vm.tabs.changes.changes.push_back(ch);
         m_vm.tabs.changes_open = true;
+        // 手动编辑同步进文件 tab 高亮（编辑前预置的区块基于旧行号已错位）
+        m_vm.tabs.file.changes.push_back(std::move(ch));
     }
 
     m_vm.tabs.file.lines = std::move(lines);
@@ -1991,7 +2008,10 @@ void App::run() {
     m_change_viewer = make_change_viewer(&m_vm.tabs.changes,
                                          [this] { jump_change_to_file(); });
 
-    // 可聚焦组件栈：composer、AskUser 输入、命令面板、模型/会话/供应商面板、子 Agent 菜单、变更记录
+    // 文件查看组件（文件 tab）：可聚焦，↑↓/PgUp/PgDn/滚轮滚动
+    m_file_viewer = make_file_viewer(&m_vm.tabs.file);
+
+    // 可聚焦组件栈：composer、AskUser 输入、命令面板、模型/会话/供应商面板、子 Agent 菜单、变更记录、文件查看
     auto container = ftxui::Container::Vertical({
         m_composer,
         m_ask_input,
@@ -2001,6 +2021,7 @@ void App::run() {
         m_provider_comp,
         m_sub_menu,
         m_change_viewer,
+        m_file_viewer,
     });
 
     auto layout = ftxui::Renderer(container, [&]() -> ftxui::Element {
@@ -2276,8 +2297,9 @@ void App::run() {
             return true;
         }
         // 文件 tab（/view 只读查看器）：↑↓/PgUp/PgDn 滚动（优先于转录区全局滚动）
+        // 仅当 composer 未聚焦时拦截，否则 ↑↓ 应交给 composer 做历史回退/面板导航
         if (m_vm.tabs.active == SidebarTab::kFiles && m_vm.tabs.file_open &&
-            !m_vm.tabs.file.path.empty()) {
+            !m_vm.tabs.file.path.empty() && !m_composer->Focused()) {
             const int total = static_cast<int>(m_vm.tabs.file.lines.size());
             const int visible = std::max(1, ftxui::Terminal::Size().dimy - 7);
             const int max_scroll = std::max(0, total - visible);
@@ -2644,7 +2666,12 @@ void App::jump_change_to_file() {
     if (!cp.is_absolute()) cp = fs::current_path() / cp;
     std::error_code ec;
     const std::string canon = fs::weakly_canonical(cp, ec).string();
-    if (m_vm.tabs.file_open && m_vm.tabs.file.path == canon) {
+    // tabs.file.path 可能为相对路径（/view ./src/x.cpp），统一 canonical 后比较
+    fs::path fp(m_vm.tabs.file.path);
+    if (!fp.is_absolute()) fp = fs::current_path() / fp;
+    std::error_code ec2;
+    const std::string file_canon = fs::weakly_canonical(fp, ec2).string();
+    if (m_vm.tabs.file_open && file_canon == canon) {
         const int start = locate_block(m_vm.tabs.file.lines, ch.new_string);
         if (start >= 0) m_vm.tabs.file.scroll = start;
     }

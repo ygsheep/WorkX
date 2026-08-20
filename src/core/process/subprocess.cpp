@@ -743,16 +743,29 @@ ResultV2<InteractiveExecResult> exec_interactive_windows(const std::string& cmd,
 ResultV2<InteractiveExecResult> exec_interactive_posix(const std::string& cmd,
                                                        const std::vector<std::string>& args,
                                                        const std::string& cwd) {
+    // 子进程 → 父进程：execvp 失败时传递 errno，区分"命令不存在"与"退出码 127"
+    int err_pipe[2] = {-1, -1};
+    if (pipe(err_pipe) < 0) {
+        return ResultV2<InteractiveExecResult>::err(Error::Code::InternalError,
+            "pipe() failed: " + std::string(strerror(errno)), "subprocess::exec_interactive");
+    }
+
     pid_t pid = fork();
     if (pid < 0) {
+        close(err_pipe[0]); close(err_pipe[1]);
         return ResultV2<InteractiveExecResult>::err(Error::Code::InternalError,
             "fork() failed: " + std::string(strerror(errno)), "subprocess::exec_interactive");
     }
 
     if (pid == 0) {
         // 子进程：不重定向 stdio（继承父进程终端），留在前台进程组（可接收终端信号）
+        close(err_pipe[0]);  // 子进程只写
         if (!cwd.empty()) {
-            if (chdir(cwd.c_str()) != 0) _exit(127);
+            if (chdir(cwd.c_str()) != 0) {
+                const int e = errno;
+                (void)!write(err_pipe[1], &e, sizeof(e));
+                _exit(127);
+            }
         }
         signal(SIGINT, SIG_DFL);
         signal(SIGQUIT, SIG_DFL);
@@ -767,17 +780,37 @@ ResultV2<InteractiveExecResult> exec_interactive_posix(const std::string& cmd,
         argv.push_back(nullptr);
 
         execvp(cmd.c_str(), const_cast<char* const*>(argv.data()));
-        _exit(127);  // execvp 失败（命令不存在等）
+        // execvp 失败（命令不存在等）：把 errno 传给父进程
+        const int e = errno;
+        (void)!write(err_pipe[1], &e, sizeof(e));
+        _exit(127);
     }
+
+    close(err_pipe[1]);  // 父进程只读
 
     int status = 0;
     if (waitpid(pid, &status, 0) > 0) {
         if (WIFEXITED(status)) {
-            return ResultV2<InteractiveExecResult>::ok(
-                InteractiveExecResult{WEXITSTATUS(status)});
+            const int code = WEXITSTATUS(status);
+            if (code == 127) {
+                // 子进程可能因 execvp/chdir 失败退出：读 errno 判断启动失败
+                int e = 0;
+                const ssize_t n = read(err_pipe[0], &e, sizeof(e));
+                close(err_pipe[0]);
+                if (n == static_cast<ssize_t>(sizeof(e))) {
+                    return ResultV2<InteractiveExecResult>::err(Error::Code::ResourceNotFound,
+                        "execvp failed for '" + cmd + "': " + std::string(strerror(e)),
+                        "subprocess::exec_interactive");
+                }
+                return ResultV2<InteractiveExecResult>::ok(InteractiveExecResult{code});
+            }
+            close(err_pipe[0]);
+            return ResultV2<InteractiveExecResult>::ok(InteractiveExecResult{code});
         }
+        close(err_pipe[0]);
         return ResultV2<InteractiveExecResult>::ok(InteractiveExecResult{-1});  // 被信号终止
     }
+    close(err_pipe[0]);
     return ResultV2<InteractiveExecResult>::err(Error::Code::InternalError,
         "waitpid failed: " + std::string(strerror(errno)), "subprocess::exec_interactive");
 }

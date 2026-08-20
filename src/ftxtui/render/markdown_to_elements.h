@@ -56,7 +56,4 @@ ftxui::Element build_message(const MessageNode& msg,
                              std::size_t anim_frame = 0,
                              std::deque<CardHit>* card_hits = nullptr);
 
-/// @brief 侧栏进度条（上下文占用比例）
-ftxui::Element build_context_gauge(int used, int limit);
-
 }  // namespace ftxtui

@@ -27,7 +27,6 @@ inline constexpr std::string_view kMsgRetry         = "重试";
 inline constexpr std::string_view kSidebarNewSession = "新会话";
 inline constexpr std::string_view kSidebarProject    = "项目";
 inline constexpr std::string_view kSidebarBranch     = "分支";
-inline constexpr std::string_view kSidebarAgent      = "Agent";
 inline constexpr std::string_view kSidebarContext    = "上下文";
 inline constexpr std::string_view kSidebarCost       = "成本";
 inline constexpr std::string_view kSidebarModel      = "模型";
@@ -52,11 +51,9 @@ inline constexpr std::string_view kTasksTool          = "当前工具";
 inline constexpr std::string_view kTasksSteps         = "步骤";
 inline constexpr std::string_view kTasksSubAgents     = "子 Agent";
 inline constexpr std::string_view kTasksBackground    = "后台任务";
-inline constexpr std::string_view kSubStatusRunning   = "运行中";
 inline constexpr std::string_view kSubStatusDone      = "完成";
 inline constexpr std::string_view kSubStatusFailed     = "失败";
 inline constexpr std::string_view kSubStepLabel       = "步骤 ";
-inline constexpr std::string_view kSubDurationFmt      = "{:.1f}s";
 inline constexpr std::string_view kTabFilesEmpty      = "暂无打开的文件（/view <file>）";
 inline constexpr std::string_view kTabChangesEmpty    = "暂无文件修改";
 
@@ -79,7 +76,6 @@ inline constexpr std::string_view kViewTooLarge      = "（文件过大，已截
 inline constexpr std::string_view kViewLineSuffix    = " 行";
 inline constexpr std::string_view kViewLangSep       = " · ";
 inline constexpr std::string_view kViewScrollHint    = "↑↓ 滚动 · Esc 关闭";
-inline constexpr std::string_view kViewEmptyFile     = "（文件为空）";
 
 // ----------------------------------------------------------------------------
 // 内嵌 nvim 编辑（/edit 方案 B）
@@ -91,6 +87,7 @@ inline constexpr std::string_view kEditIsDir        = "（不能编辑目录："
 inline constexpr std::string_view kEditNewFile      = "（新建文件，nvim 保存后自动重读）\n";
 inline constexpr std::string_view kEditSaved        = "（编辑完成，已重读文件）\n";
 inline constexpr std::string_view kEditAborted      = "（编辑未正常保存，已按磁盘内容重读）\n";
+inline constexpr std::string_view kEditFailed       = "（编辑器启动失败，未重读文件）\n";
 inline constexpr std::string_view kEditChangePurpose = "手动编辑";
 inline constexpr std::string_view kEditChangeReason  = "用户通过 /edit 命令手动修改";
 

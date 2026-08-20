@@ -24,7 +24,6 @@ struct SidebarModel {
     std::string model;          ///< 模型名
     std::string project;        ///< 项目名
     std::string branch;         ///< git 分支
-    std::string agent;          ///< agent 名
     int context_limit = 0;      ///< 上下文上限（token）
     int context_used = 0;       ///< 已用（token）
     double cost_usd = 0.0;      ///< 会话成本

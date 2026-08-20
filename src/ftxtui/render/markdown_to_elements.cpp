@@ -1103,12 +1103,6 @@ int estimate_message_height(const MessageNode& msg, int width) {
     return h;
 }
 
-Element build_context_gauge(int used, int limit) {
-    if (limit <= 0) return ftxui::text(std::string(str::kGaugeNA));
-    double ratio = std::clamp(static_cast<double>(used) / limit, 0.0, 1.0);
-    return ftxui::gaugeRight(static_cast<float>(ratio));
-}
-
 Element build_message(const MessageNode& msg, int width, std::size_t anim_frame,
                       std::deque<CardHit>* card_hits) {
     // 用户消息：深色背景块 + 左边框线，无角色头，内容左缩进 2 格、上下留白各 1 行
