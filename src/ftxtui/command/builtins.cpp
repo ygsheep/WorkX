@@ -109,6 +109,26 @@ void register_ftx_builtins(CommandRegistry& registry,
     });
     registry.register_command(rename_cmd);
 
+    auto view_cmd =
+        agent::command::make_local_command("view", std::string(str::kCmdViewDesc));
+    view_cmd->set_argument_hint("/view <file>");
+    view_cmd->set_call([on_view = cb.on_view](const std::string& args,
+                                              const CommandContext&) -> CommandResult {
+        if (on_view) on_view(args);
+        return CommandResult::ok("");
+    });
+    registry.register_command(view_cmd);
+
+    auto edit_cmd =
+        agent::command::make_local_command("edit", std::string(str::kCmdEditDesc));
+    edit_cmd->set_argument_hint("/edit <file>");
+    edit_cmd->set_call([on_edit = cb.on_edit](const std::string& args,
+                                              const CommandContext&) -> CommandResult {
+        if (on_edit) on_edit(args);
+        return CommandResult::ok("");
+    });
+    registry.register_command(edit_cmd);
+
     // /Test: 前缀测试命令：弹出 AskUser 提问弹窗（便于开发调试 TUI 渲染/交互）
     auto test_askuser_cmd =
         agent::command::make_local_command("Test:askuser",

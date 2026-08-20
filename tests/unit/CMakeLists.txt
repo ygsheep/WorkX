@@ -83,6 +83,10 @@ if(WORKX_BUILD_FTX_TUI AND FTXTUI_TEST_SOURCES)
         ${WORKX_ROOT}/src/ftxtui/bridge/event_bridge.cpp
         ${WORKX_ROOT}/src/ftxtui/widgets/suggest_panel.cpp
         ${WORKX_ROOT}/src/ftxtui/widgets/search_palette.cpp
+        ${WORKX_ROOT}/src/ftxtui/widgets/sidebar.cpp
+        ${WORKX_ROOT}/src/ftxtui/widgets/sidebar_tabs.cpp
+        ${WORKX_ROOT}/src/ftxtui/widgets/file_viewer.cpp
+        ${WORKX_ROOT}/src/ftxtui/widgets/change_viewer.cpp
     )
     target_include_directories(ftxtui_unit_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}

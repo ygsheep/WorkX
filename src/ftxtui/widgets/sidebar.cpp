@@ -1,5 +1,6 @@
 #include "widgets/sidebar.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <string_view>
@@ -7,7 +8,7 @@
 
 #include <ftxui/dom/direction.hpp>
 
-#include "render/markdown_to_elements.h"
+#include "theme/icons.h"
 #include "theme/strings.h"
 #include "theme/theme.h"
 
@@ -45,11 +46,101 @@ Element section_title(const std::string_view& title) {
     return ftxui::text(std::string(title)) | ftxui::color(kInfoText);
 }
 
-/// @brief 侧栏列表区块（MCP / TODO）：标题 + 条目列表；空则显示占位符
-/// @note agent 侧 MCP / TODO 能力尚未实现，数据接口预留（items 当前恒为空）
-void append_list_section(Elements& rows, const std::string_view& title,
-                         const std::vector<std::string>& items) {
-    rows.push_back(section_title(title));
+/// @brief token 格式化：>=1000 显示 x.xk，否则原样
+std::string fmt_k(int32_t n) {
+    if (n >= 1000) {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%.0fk", n / 1000.0);
+        return buf;
+    }
+    return std::to_string(n);
+}
+
+/// @brief 上下文进度条（对齐 src/tui statusbar：10 段，四阶段色）
+///        0-50% 绿 / 50-80% 黄 / 80-90% 橙 / 90-100% 红
+Element context_bar(int used, int limit) {
+    if (limit <= 0) return ftxui::text(std::string(str::kGaugeNA));
+    double ratio = std::clamp(static_cast<double>(used) / limit, 0.0, 1.0);
+    int filled = static_cast<int>(ratio * 10.0);
+    Color bar_color;
+    if (ratio < 0.5) {
+        bar_color = ftxui::Color::Green;
+    } else if (ratio < 0.8) {
+        bar_color = ftxui::Color::Yellow;
+    } else if (ratio < 0.9) {
+        bar_color = ftxui::Color::RGB(0xFF, 0xA5, 0x00);  // 橙
+    } else {
+        bar_color = ftxui::Color::Red;
+    }
+    Element bar = ftxui::emptyElement();
+    for (int i = 0; i < 10; ++i) {
+        if (i < filled) {
+            bar = ftxui::hbox({bar, ftxui::text("█") | ftxui::color(bar_color)});
+        } else {
+            bar = ftxui::hbox({bar, ftxui::text("░") | ftxui::color(theme::T::TextFaint)});
+        }
+    }
+    return bar;
+}
+
+/// @brief 上下文信息区（statusbar 风格）：进度条 + 百分比 + 用量 + Token/缓存
+/// @note 仅保留 token + 上下文使用大小 + 缓存（成本/Agent 已移除）
+void append_context_info(Elements& rows, const SidebarModel& s) {
+    bool has_limit = s.context_limit > 0;
+    int limit = has_limit ? s.context_limit : 0;
+    double pct_d = has_limit
+        ? std::min(static_cast<double>(s.context_used) * 100.0 / limit, 100.0)
+        : 0.0;
+    int pct = static_cast<int>(pct_d);
+
+    // 上下文行：`上下文 ▓▓▓▓▓░░░░░ 6% 12k/200k`
+    std::string ctx_abs = has_limit
+        ? (fmt_k(s.context_used) + "/" + fmt_k(limit))
+        : ("~" + fmt_k(s.context_used));
+    char pct_buf[16];
+    if (has_limit) {
+        if (pct_d < 1.0 && s.context_used > 0)
+            snprintf(pct_buf, sizeof(pct_buf), "%.1f%%", pct_d);
+        else
+            snprintf(pct_buf, sizeof(pct_buf), "%d%%", pct);
+    }
+    rows.push_back(ftxui::hbox({
+        ftxui::text(std::string(str::kSidebarContext)) | ftxui::color(kInfoText),
+        ftxui::text(" "),
+        context_bar(s.context_used, s.context_limit),
+        ftxui::text(" "),
+        has_limit ? ftxui::text(pct_buf) | ftxui::color(theme::T::TextDim)
+                  : ftxui::text(std::string(str::kDash)) | ftxui::color(theme::T::TextDim),
+        ftxui::text(" "),
+        ftxui::text(ctx_abs) | ftxui::color(theme::T::TextFaint),
+    }));
+
+    // Token + 缓存行：`Token 12k · cache 8k`
+    std::string cache_str;
+    if (s.cache_read_tokens > 0)
+        cache_str = " · cache " + fmt_k(s.cache_read_tokens);
+    rows.push_back(ftxui::hbox({
+        ftxui::text(std::string(str::kSidebarToken)) | ftxui::color(kInfoText),
+        ftxui::text(" "),
+        ftxui::text(fmt_k(s.total_tokens)) | ftxui::color(theme::T::TextDim),
+        ftxui::text(cache_str) | ftxui::color(theme::T::TextFaint),
+    }));
+}
+
+/// @brief 可折叠区块（MCP / TODO）：chevron 标题行可点击，展开显示条目
+void append_collapsible_section(Elements& rows, const std::string_view& title,
+                                const std::vector<std::string>& items,
+                                bool expanded, SectionHit* hit) {
+    Element header = ftxui::hbox({
+        ftxui::text(std::string(expanded ? theme::icon_chevron_down()
+                                         : theme::icon_chevron_right()))
+            | ftxui::color(theme::T::TextFaint),
+        ftxui::text(" "),
+        ftxui::text(std::string(title)) | ftxui::color(kInfoText),
+    });
+    if (hit) header = header | ftxui::reflect(hit->box);
+    rows.push_back(header);
+    if (!expanded) return;
     if (items.empty()) {
         rows.push_back(ftxui::hbox({
             ftxui::text("  "),
@@ -66,81 +157,52 @@ void append_list_section(Elements& rows, const std::string_view& title,
 }
 }  // namespace
 
-Element sidebar_rule() {
-    return ftxui::emptyElement();
-}
+void append_sidebar_info(Elements& rows, const SidebarModel& s,
+                         std::deque<SectionHit>* section_hits) {
+    if (section_hits) section_hits->clear();
 
-Element build_sidebar(const SidebarModel& s) {
-    Elements rows;
+    Elements inner;
 
     // 标题
     std::string title = s.title.empty() ? std::string(str::kSidebarNewSession) : s.title;
-    rows.push_back(ftxui::text(title) | ftxui::bold);
-    rows.push_back(sidebar_rule());
+    inner.push_back(ftxui::text(title) | ftxui::bold);
 
-    // 基础信息：项目 / 分支 / Agent / 模型（项目、Agent、模型用米白）
-    rows.push_back(kv(std::string(str::kSidebarProject),
-                      s.project.empty() ? std::string(str::kDash) : s.project, kInfoText));
+    // 基础信息：项目 / 分支 / 模型（Agent 已按用户要求移除）
+    inner.push_back(kv(std::string(str::kSidebarProject),
+                       s.project.empty() ? std::string(str::kDash) : s.project, kInfoText));
     if (!s.branch.empty())
-        rows.push_back(kv(std::string(str::kSidebarBranch), s.branch));
-    if (!s.agent.empty())
-        rows.push_back(kv(std::string(str::kSidebarAgent), s.agent, kInfoText));
-    rows.push_back(kv(std::string(str::kSidebarModel),
-                      s.model.empty() ? std::string(str::kDash) : s.model, kInfoText));
+        inner.push_back(kv(std::string(str::kSidebarBranch), s.branch));
+    inner.push_back(kv(std::string(str::kSidebarModel),
+                       s.model.empty() ? std::string(str::kDash) : s.model, kInfoText));
 
-    rows.push_back(sidebar_rule());
+    // 上下文信息：token + 上下文使用大小 + 缓存（statusbar 风格）
+    append_context_info(inner, s);
 
-    // ── 3.1 统计：上下文 / DS 缓存 / Token / 成本 ──
-    rows.push_back(section_title(str::kSidebarContext));
+    // MCP 列表（可折叠）
+    SectionHit* mcp_hit = nullptr;
+    if (section_hits) {
+        section_hits->push_back(SectionHit{});
+        section_hits->back().kind = SectionHit::Kind::kMCP;
+        mcp_hit = &section_hits->back();
+    }
+    append_collapsible_section(inner, str::kSidebarMCP, s.mcp_servers,
+                               s.mcp_expanded, mcp_hit);
+
+    // TODO 列表（可折叠）
+    SectionHit* todo_hit = nullptr;
+    if (section_hits) {
+        section_hits->push_back(SectionHit{});
+        section_hits->back().kind = SectionHit::Kind::kTODO;
+        todo_hit = &section_hits->back();
+    }
+    append_collapsible_section(inner, str::kSidebarTODO, s.todos,
+                               s.todo_expanded, todo_hit);
+
+    // 左侧内边距（2 格），与任务调度 tab 其他行对齐
     rows.push_back(ftxui::hbox({
-        build_context_gauge(s.context_used, s.context_limit),
+        ftxui::text("  "),
+        ftxui::flex(ftxui::vbox(std::move(inner))),
     }));
-    std::string ctx_str = std::to_string(s.context_used) + std::string(str::kSlash) +
-                          (s.context_limit > 0 ? std::to_string(s.context_limit)
-                                               : std::string(str::kInfinity));
-    rows.push_back(ftxui::hbox({ftxui::text(ctx_str)}));
-
-    {
-        char buf[32];
-        snprintf(buf, sizeof(buf), "%d", s.cache_read_tokens);
-        rows.push_back(kv(std::string(str::kSidebarCache), buf, kInfoText));
-    }
-    {
-        char buf[32];
-        snprintf(buf, sizeof(buf), "%d", s.total_tokens);
-        rows.push_back(kv(std::string(str::kSidebarToken), buf, kInfoText));
-    }
-    {
-        // 成本：agent 侧暂无成本链路，cost_usd 恒为 0，显示占位符
-        std::string cost_str;
-        if (s.cost_usd > 0.0) {
-            char buf[64];
-            snprintf(buf, sizeof(buf), "$%.4f", s.cost_usd);
-            cost_str = buf;
-        } else {
-            cost_str = std::string(str::kDash);
-        }
-        rows.push_back(kv(std::string(str::kSidebarCost), cost_str, kInfoText));
-    }
-
-    rows.push_back(sidebar_rule());
-
-    // ── 3.2 MCP 列表（agent 未实现，占位）──
-    append_list_section(rows, str::kSidebarMCP, s.mcp_servers);
-
-    rows.push_back(sidebar_rule());
-
-    // ── 3.3 TODO 列表（agent 未实现，占位）──
-    append_list_section(rows, str::kSidebarTODO, s.todos);
-
-    return ftxui::vbox({
-        ftxui::text(" "),   // 顶部内边距（1 行空白，实际占位）
-        ftxui::hbox({
-            ftxui::text("  "), // 左侧内边距（2 格）
-            ftxui::flex(ftxui::vbox(std::move(rows))),
-        }),
-        ftxui::text(" "),   // 底部内边距（1 行空白，实际占位）
-    });
 }
 
 }  // namespace ftxtui

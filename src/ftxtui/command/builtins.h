@@ -28,6 +28,10 @@ struct FtuiCommandCallbacks {
     std::function<void(const std::string&)> on_rename;
     /// @brief /clear：清空会话
     std::function<void()> on_clear;
+    /// @brief /view：打开文件只读查看器（args 为文件路径）
+    std::function<void(const std::string&)> on_view;
+    /// @brief /edit：内嵌 nvim 编辑文件（args 为文件路径）
+    std::function<void(const std::string&)> on_edit;
     /// @brief /Test:askuser：弹出 AskUser 提问弹窗（测试模态渲染/交互）
     std::function<void()> on_test_askuser;
 };

@@ -241,6 +241,11 @@ public:
     /// @brief 是否正在生成
     bool is_generating() const { return m_generating.load(); }
 
+    /// @brief 暂停模型活动：取消并等待当前后台任务完全退出
+    /// @details 供宿主（TUI /edit 等）在需要独占文件/状态时调用，避免后台
+    ///          ReActLoop 写文件与宿主操作冲突。线程安全（内部持锁）。
+    void cancel_current_task() { cancel_and_wait_current_task(); }
+
     /// @brief 提交用户消息，触发 LLM 推理
     /// @param text 用户文本
     /// @param images 图片附件绝对路径（多模态，可为空）

@@ -33,7 +33,7 @@ agent::command::CommandResult run_registered(
 TEST_CASE("register_ftx_builtins registers the core commands", "[ftx_builtins][registry]") {
     agent::command::CommandRegistry reg;
     register_ftx_builtins(reg, {});
-    REQUIRE(reg.size() == 9);  // help/exit/quit/clear/model/provider/resume/rename/Test:askuser
+    REQUIRE(reg.size() == 11);  // help/exit/quit/clear/model/provider/resume/rename/view/edit/Test:askuser
     REQUIRE(reg.exists("help"));
     REQUIRE(reg.exists("exit"));
     REQUIRE(reg.exists("quit"));
@@ -42,6 +42,8 @@ TEST_CASE("register_ftx_builtins registers the core commands", "[ftx_builtins][r
     REQUIRE(reg.exists("provider"));
     REQUIRE(reg.exists("resume"));
     REQUIRE(reg.exists("rename"));
+    REQUIRE(reg.exists("view"));
+    REQUIRE(reg.exists("edit"));
     REQUIRE(reg.exists("Test:askuser"));
 }
 
@@ -49,7 +51,7 @@ TEST_CASE("register_ftx_builtins marks all as user invocable", "[ftx_builtins][r
     agent::command::CommandRegistry reg;
     register_ftx_builtins(reg, {});
     auto cmds = reg.get_user_invocable_commands();
-    REQUIRE(cmds.size() == 9);
+    REQUIRE(cmds.size() == 11);
     for (const auto& c : cmds) {
         REQUIRE_FALSE(c->name().empty());
         REQUIRE_FALSE(c->description().empty());
@@ -106,6 +108,22 @@ TEST_CASE("register_ftx_builtins clear triggers on_clear callback", "[ftx_builti
     REQUIRE(cleared == 1);
 }
 
+TEST_CASE("register_ftx_builtins view passes path to callback", "[ftx_builtins][exec]") {
+    std::string captured;
+    agent::command::CommandRegistry reg;
+    register_ftx_builtins(reg, {.on_view = [&](const std::string& args) { captured = args; }});
+    run_registered(reg, "view", "src/main.cpp");
+    REQUIRE(captured == "src/main.cpp");
+}
+
+TEST_CASE("register_ftx_builtins edit passes path to callback", "[ftx_builtins][exec]") {
+    std::string captured;
+    agent::command::CommandRegistry reg;
+    register_ftx_builtins(reg, {.on_edit = [&](const std::string& args) { captured = args; }});
+    run_registered(reg, "edit", "src/main.cpp");
+    REQUIRE(captured == "src/main.cpp");
+}
+
 TEST_CASE("register_ftx_builtins Test:askuser triggers on_test_askuser callback", "[ftx_builtins][exec]") {
     int opened = 0;
     agent::command::CommandRegistry reg;
@@ -122,5 +140,7 @@ TEST_CASE("register_ftx_builtins without callbacks is safe (no throw)", "[ftx_bu
     REQUIRE_NOTHROW(run_registered(reg, "model"));
     REQUIRE_NOTHROW(run_registered(reg, "resume", "1"));
     REQUIRE_NOTHROW(run_registered(reg, "rename", "t"));
+    REQUIRE_NOTHROW(run_registered(reg, "view", "file.txt"));
+    REQUIRE_NOTHROW(run_registered(reg, "edit", "file.txt"));
     REQUIRE_NOTHROW(run_registered(reg, "Test:askuser"));
 }
