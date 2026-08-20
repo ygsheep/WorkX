@@ -21,6 +21,7 @@
 #include "agent/api/i_completion_provider.h"
 #include "agent/model/provider_config.h"
 #include "core/events/agent_events.h"  // agent::AskUserResult
+#include "core/todo/todo_item.h"       // #24：待办清单条目（TodoUpdatedEvent 载荷）
 
 namespace ftxtui {
 
@@ -181,6 +182,13 @@ struct ActionProviderSwitchFailed {
     std::string provider_name;  ///< 显示名（提示用）
 };
 
+/// @brief 待办清单更新（#24：TodoStore → 侧边栏 TODO 区块 / StatusBar 进度）
+/// @details 携带该 session 完整清单快照，ViewModel 更新 sidebar.todos 触发重绘。
+struct ActionTodoUpdate {
+    std::string session_id;
+    std::vector<core::todo::TodoItem> todos;
+};
+
 /// @brief 统一动作类型
 using Action = std::variant<
     ActionAppendMessage,
@@ -205,7 +213,8 @@ using Action = std::variant<
     ActionModelsLoaded,
     ActionSessionsLoaded,
     ActionProviderSwitched,
-    ActionProviderSwitchFailed
+    ActionProviderSwitchFailed,
+    ActionTodoUpdate
 >;
 
 }  // namespace ftxtui

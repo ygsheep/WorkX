@@ -166,6 +166,14 @@ private:
     void run_setting(int action);
     ftxui::Element build_transcript(int width);
     ftxui::Element build_ask_modal() const;
+    /// @brief 标题栏下的层级子列表（面包屑导航）：主会话 / 子 Agent 记录
+    ftxui::Element build_breadcrumb();
+    /// @brief 第二层：子 Agent 独立记录渲染（不混入主转录区）
+    ftxui::Element build_sub_agent_view(int width);
+    /// @brief 切换到第二层并查看指定子 Agent 记录（task_id 匹配；找不到则选最近一条）
+    void show_sub_agent(const std::string& task_id);
+    /// @brief 返回主会话层级
+    void show_main_level();
     static std::string mode_label(agent::tool::PermissionMode m);
     /// @brief 触发「已复制 N 字符」短暂提示（底层单线程，1.5s 后自动清除后重绘）
     void flash_copy_message(std::size_t char_count);
@@ -267,6 +275,12 @@ private:
     std::deque<TabHit> m_tab_hits;
     /// @brief 侧栏可折叠区块命中区（MCP/TODO 标题行；每帧由 append_sidebar_info 重建）
     std::deque<SectionHit> m_section_hits;
+
+    // ---- 输出区域层级导航（标题栏下子列表）----
+    /// @brief 层级子列表命中区（面包屑项：主会话/子 Agent；每帧由 build_breadcrumb 重建）
+    std::deque<CardHit> m_breadcrumb_hits;
+    int m_sub_scroll = 0;       ///< 第二层（子 Agent 记录）独立滚动位置
+    bool m_sub_follow = true;   ///< 第二层自动跟随最新记录
 
     // ---- 子 Agent 菜单（任务调度 tab 可交互）----
     std::vector<std::string> m_sub_entries;  ///< 菜单条目（每帧由 sub_agents 重建）

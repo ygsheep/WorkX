@@ -185,6 +185,19 @@ std::string join_lines(const std::vector<std::string>& lines) {
     }
     return out;
 }
+
+/// @brief 截断子 Agent 任务 id（'a'+8 随机十六进制，展示截断到 10 位）
+std::string truncate_task_id(const std::string& id) {
+    if (id.size() <= 10) return id;
+    return id.substr(0, 10);
+}
+
+/// @brief 子 Agent 状态 → 中文标签
+std::string status_text(const std::string& status) {
+    if (status == "running") return std::string(str::kSubStatusRunning);
+    if (status == "failed") return std::string(str::kSubStatusFailed);
+    return std::string(str::kSubStatusDone);
+}
 }  // namespace
 
 App::App(AppDeps deps)
@@ -213,6 +226,9 @@ App::App(AppDeps deps)
             invalidate_msg_cache();
             m_vm.tabs.sub_agents.clear();
             m_vm.tabs.sub_selected = -1;
+            m_vm.sub_records.clear();
+            m_vm.sub_active = -1;
+            m_vm.output_level = OutputLevel::Main;
             m_vm.tabs.changes.changes.clear();
             m_scroll = 0;
         },
@@ -1678,8 +1694,8 @@ Element App::build_transcript(int width) {
         prefix[i + 1] = prefix[i] + m_msg_height[i] + 1;
 
     int dimy = ftxui::Terminal::Size().dimy;
-    // 减去：顶栏 1 + 输入区 kComposerHeight + 状态行 1 + 余量 2
-    int avail = std::max(1, dimy - (1 + 1 + kComposerHeight + 2));
+    // 减去：标题 1 + 面包屑 1 + 输入区 kComposerHeight + 状态行 1 + 余量 2
+    int avail = std::max(1, dimy - (2 + 1 + kComposerHeight + 2));
     int content_h = prefix[n];
     int max_scroll = std::max(0, content_h - avail);
 
@@ -1778,6 +1794,160 @@ Element App::build_transcript(int width) {
     return content
         | ftxui::focusPosition(0, m_scroll + avail / 2)
         | ftxui::yframe;
+}
+
+/// @brief 标题栏下的层级子列表（面包屑导航）：主会话 / 子 Agent 记录
+/// @details 用 `>` 箭头表示当前所处的层级。点击「主会话」或「子 Agent」项可切换输出层级。
+Element App::build_breadcrumb() {
+    m_breadcrumb_hits.clear();
+    Elements crumbs;
+
+    // 主会话（始终存在，可点击返回）：显示当前会话标题
+    {
+        // 先占位，取容器内稳定元素（deque 不因扩容失效），由 reflect 于渲染期回写 box
+        m_breadcrumb_hits.push_back(CardHit{});
+        CardHit& hit = m_breadcrumb_hits.back();
+        hit.tool_idx = -1;
+        hit.msg_idx = -1;
+        hit.nav_target = 0;
+        const std::string& title =
+            m_vm.sidebar.title.empty() ? std::string(str::kSidebarNewSession) : m_vm.sidebar.title;
+        const bool active = (m_vm.output_level == OutputLevel::Main);
+        auto el = ftxui::text(title)
+            | ftxui::color(active ? theme::T::Text : theme::T::TextDim)
+            | ftxui::reflect(hit.box);
+        if (active) el = el | ftxui::bold;
+        crumbs.push_back(std::move(el));
+    }
+
+    if (m_vm.output_level == OutputLevel::SubAgent) {
+        // 分隔箭头 + 子 Agent 记录项
+        crumbs.push_back(ftxui::text(std::string(str::kOutputSep)) | ftxui::color(theme::T::TextFaint));
+        m_breadcrumb_hits.push_back(CardHit{});
+        CardHit& hit = m_breadcrumb_hits.back();
+        hit.tool_idx = -1;
+        hit.msg_idx = -1;
+        hit.nav_target = 1;
+        std::string label = std::string(str::kOutputSubAgent);
+        auto el = ftxui::text(label)
+            | ftxui::color(theme::T::Accent)
+            | ftxui::reflect(hit.box)
+            | ftxui::bold;
+        crumbs.push_back(std::move(el));
+    }
+
+    auto bar = ftxui::hbox({
+        ftxui::text("  "),
+        ftxui::hbox(std::move(crumbs)),
+        ftxui::flex(ftxui::text("")),
+        ftxui::text(std::string(str::kOutputHint)) | ftxui::color(theme::T::TextFaint),
+        ftxui::text("  "),
+    });
+    return bar | ftxui::bgcolor(theme::T::Surface) | ftxui::color(theme::T::TextDim);
+}
+
+/// @brief 第二层：子 Agent 独立记录渲染（不混入主转录区）
+/// @details 渲染当前查看子 Agent 的步骤序列（思考/工具/观察/最终），
+///          独立滚动（m_sub_scroll/m_sub_follow），返回主会话用面包屑/Esc。
+Element App::build_sub_agent_view(int width) {
+    const int idx = m_vm.sub_active;
+    if (idx < 0 || static_cast<std::size_t>(idx) >= m_vm.sub_records.size()) {
+        return ftxui::vbox({
+            ftxui::text(" "),
+            ftxui::hbox({
+                ftxui::text("  "),
+                ftxui::text(std::string(str::kSubNoRecord)) | ftxui::color(theme::T::TextFaint),
+            }),
+        });
+    }
+    const auto& rec = m_vm.sub_records[static_cast<std::size_t>(idx)];
+
+    Elements es;
+
+    // 状态头
+    std::string status_icon = rec.status == "running" ? "●" : (rec.status == "failed" ? "✗" : "✓");
+    Color status_color = rec.status == "running" ? theme::T::Accent
+                        : (rec.status == "failed" ? Color::RedLight : Color::GreenLight);
+    es.push_back(ftxui::hbox({
+        ftxui::text("  "),
+        ftxui::text(status_icon) | ftxui::color(status_color),
+        ftxui::text(" "),
+        ftxui::color(theme::T::Text)(ftxui::text(std::string(str::kSubHeader))),
+        ftxui::text(" "),
+        ftxui::text(truncate_task_id(rec.task_id)) | ftxui::color(theme::T::TextFaint),
+        ftxui::text("  "),
+        ftxui::color(theme::T::TextDim)(ftxui::text(status_text(rec.status))),
+    }));
+
+    // 步骤序列
+    for (const auto& s : rec.steps) {
+        const std::string label = (s.step_type == "action")
+            ? std::string(str::kSubStepAction)
+            : (s.step_type == "observation") ? std::string(str::kSubStepObservation)
+            : (s.step_type == "final") ? std::string(str::kSubStepFinal)
+            : std::string(str::kSubStepThought);
+        const std::string pre = "[" + std::to_string(s.step_number) + "]";
+        es.push_back(ftxui::hbox({
+            ftxui::text("  "),
+            ftxui::text(pre) | ftxui::color(theme::T::TextFaint),
+            ftxui::text(" "),
+            ftxui::text(label) | ftxui::color(theme::T::Accent),
+        }));
+        es.push_back(ftxui::hbox({
+            ftxui::text("    "),
+            ftxui::flex(ftxui::color(theme::T::Text)(build_markdown(s.content, width))),
+        }));
+    }
+
+    // 最终答复
+    if (!rec.final_answer.empty()) {
+        es.push_back(ftxui::text(" "));
+        es.push_back(ftxui::hbox({
+            ftxui::text("  "),
+            ftxui::text(std::string(str::kSubFinalAnswer) + "：") | ftxui::color(theme::T::Text),
+        }));
+        es.push_back(ftxui::hbox({
+            ftxui::text("    "),
+            ftxui::flex(ftxui::color(theme::T::Text)(build_markdown(rec.final_answer, width))),
+        }));
+    }
+
+    if (m_sub_follow) {
+        return ftxui::vbox(std::move(es))
+            | ftxui::focusPositionRelative(0, 1.0f) | ftxui::yframe;
+    }
+    return ftxui::vbox(std::move(es))
+        | ftxui::focusPosition(0, m_sub_scroll) | ftxui::yframe;
+}
+
+/// @brief 切换到第二层并查看指定子 Agent 记录
+void App::show_sub_agent(const std::string& task_id) {
+    for (std::size_t i = 0; i < m_vm.sub_records.size(); ++i) {
+        if (m_vm.sub_records[i].task_id == task_id) {
+            m_vm.sub_active = static_cast<int>(i);
+            m_vm.output_level = OutputLevel::SubAgent;
+            m_sub_follow = true;
+            m_sub_scroll = 0;
+            m_screen.RequestAnimationFrame();
+            return;
+        }
+    }
+    // 找不到（记录尚未到达）：选最近一条
+    if (!m_vm.sub_records.empty()) {
+        m_vm.sub_active = static_cast<int>(m_vm.sub_records.size()) - 1;
+        m_vm.output_level = OutputLevel::SubAgent;
+        m_sub_follow = true;
+        m_sub_scroll = 0;
+    }
+    m_screen.RequestAnimationFrame();
+}
+
+/// @brief 返回主会话层级
+void App::show_main_level() {
+    if (m_vm.output_level == OutputLevel::Main) return;
+    m_vm.output_level = OutputLevel::Main;
+    m_vm.sub_active = -1;
+    m_screen.RequestAnimationFrame();
 }
 
 Element App::build_ask_modal() const {
@@ -1882,9 +2052,16 @@ void App::run() {
             | ftxui::bgcolor(theme::T::Panel);
     };
     auto build_status_elem = [this] {
+        // #24：待办进度位（✓ X/Y）
+        int todo_done = 0, todo_total = 0;
+        for (const auto& t : m_vm.sidebar.todos) {
+            ++todo_total;
+            if (t.status == core::todo::TodoStatus::Completed) ++todo_done;
+        }
         ftxui::Element line = build_status_line(m_vm.sidebar.model,
                                                 m_vm.sidebar.permission,
-                                                m_vm.busy);
+                                                m_vm.busy,
+                                                todo_done, todo_total);
         // Ctrl+C 提示：单次按下后 1 秒内显示「再次按 Ctrl+C 退出」，超时自动隐藏
         if (m_ctrl_c_hint) {
             if (std::chrono::steady_clock::now() >= m_ctrl_c_hint_until) {
@@ -2101,7 +2278,15 @@ void App::run() {
             m_sub_box = ftxui::Box{1, 0, 1, 0};  // 空 box（IsEmpty=true），禁用点击命中
             m_change_box = ftxui::Box{1, 0, 1, 0};
         }
-        Element left_col = ftxui::flex(build_transcript(msg_width))
+        // 输出区域按层级切换：主会话 → 转录区；子 Agent → 第二层独立记录渲染
+        Element output_elem;
+        if (m_vm.output_level == OutputLevel::SubAgent) {
+            m_hits.clear();  // 第二层无卡片，清空旧坐标避免误命中
+            output_elem = build_sub_agent_view(msg_width);
+        } else {
+            output_elem = build_transcript(msg_width);
+        }
+        Element left_col = ftxui::flex(output_elem)
             | ftxui::bgcolor(theme::T::Surface);
 
         // 输入区：固定较高高度 + 上/下/左内边距（灰底由底部面板统一提供）
@@ -2148,11 +2333,10 @@ void App::run() {
             m_suggest_mode, m_suggest_entries, m_suggest_selected,
             agent::global_file_index().is_ready(), &m_suggest_hits);
 
-        // 左列：标题 + 转录 + 输入区（含内嵌状态行）
+        // 左列：标题 + 层级子列表（面包屑导航）+ 转录 + 输入区（含内嵌状态行）
         Element content_col = ftxui::vbox({
-            // 标题背景与输出区一致（Surface），与转录区视觉连成一体
-            ftxui::text(std::string(str::kAppTitle)) | ftxui::color(theme::T::Text)
-                | ftxui::bgcolor(theme::T::Surface),
+            // 标题栏 = 面包屑（首项即当前会话标题），背景与输出区一致（Surface）
+            build_breadcrumb(),
             left_col | ftxui::yflex,
             build_ask_modal(),
             suggest_elem,
@@ -2306,6 +2490,11 @@ void App::run() {
             // 不在此拦截：否则根 CatchEvent 吞掉事件，面板永远收不到 Esc 而关不掉。
             if (m_palette_open || m_model_open || m_resume_open || m_provider_open)
                 return false;
+            // 第二层（子 Agent 记录）聚焦时，Esc 返回主会话层级
+            if (m_vm.output_level == OutputLevel::SubAgent) {
+                show_main_level();
+                return true;
+            }
             // 子 Agent 菜单聚焦时，Esc 退出菜单选择，焦点返回输入栏
             if (m_sub_menu && m_sub_menu->Focused()) {
                 if (m_composer) m_composer->TakeFocus();
@@ -2399,13 +2588,22 @@ void App::run() {
                 return true;
             }
             if (e.mouse().button == ftxui::Mouse::WheelUp) {
-                m_follow = false;
-                m_scroll = std::max(0, m_scroll - 3);
+                if (m_vm.output_level == OutputLevel::SubAgent) {
+                    m_sub_follow = false;
+                    m_sub_scroll = std::max(0, m_sub_scroll - 3);
+                } else {
+                    m_follow = false;
+                    m_scroll = std::max(0, m_scroll - 3);
+                }
                 m_screen.RequestAnimationFrame();
                 return true;
             }
             if (e.mouse().button == ftxui::Mouse::WheelDown) {
-                m_scroll += 3;
+                if (m_vm.output_level == OutputLevel::SubAgent) {
+                    m_sub_scroll += 3;
+                } else {
+                    m_scroll += 3;
+                }
                 m_screen.RequestAnimationFrame();
                 return true;
             }
@@ -2484,6 +2682,24 @@ void App::run() {
                         }
                     }
                 }
+                for (const auto& hit : m_breadcrumb_hits) {
+                    if (e.mouse().x >= hit.box.x_min && e.mouse().x <= hit.box.x_max &&
+                        e.mouse().y >= hit.box.y_min && e.mouse().y <= hit.box.y_max) {
+                        // 主会话项 → 返回主层级；未到子 Agent 项 → 切换到第二层
+                        if (hit.nav_target == 1) {
+                            if (m_vm.output_level == OutputLevel::Main) {
+                                m_vm.output_level = OutputLevel::SubAgent;
+                                if (!m_vm.sub_records.empty())
+                                    m_vm.sub_active = static_cast<int>(m_vm.sub_records.size()) - 1;
+                                m_sub_follow = true;
+                            }
+                        } else {
+                            show_main_level();
+                        }
+                        m_screen.RequestAnimationFrame();
+                        return true;
+                    }
+                }
                 for (const auto& hit : m_hits) {
                     if (e.mouse().x >= hit.box.x_min && e.mouse().x <= hit.box.x_max &&
                         e.mouse().y >= hit.box.y_min && e.mouse().y <= hit.box.y_max) {
@@ -2500,6 +2716,23 @@ void App::run() {
                             msg.reasoning_expanded = !msg.reasoning_expanded;
                         } else {
                             auto& t = msg.tool_calls[static_cast<std::size_t>(hit.tool_idx)];
+                            // 子 Agent 工具卡：点击跳转到输出区域第二层（独立渲染），不展开
+                            if (t.tool_name == "Agent") {
+                                if (!t.sub_task_id.empty()) {
+                                    show_sub_agent(t.sub_task_id);
+                                } else {
+                                    // 记录未到：切换到第二层看最近一条
+                                    m_vm.output_level = OutputLevel::SubAgent;
+                                    if (!m_vm.sub_records.empty()) {
+                                        m_vm.sub_active = static_cast<int>(m_vm.sub_records.size()) - 1;
+                                    } else {
+                                        m_vm.sub_active = -1;
+                                    }
+                                    m_sub_follow = true;
+                                    m_screen.RequestAnimationFrame();
+                                }
+                                return true;
+                            }
                             t.expanded = !t.expanded;
                         }
                         m_screen.RequestAnimationFrame();
@@ -2522,29 +2755,32 @@ void App::run() {
             }
         }
         // 鼠标滚轮在管道终端（如 opencode）可能不转发事件，提供键盘替代：
-        // Ctrl+↑/↓ 逐行滚动，PageUp/PageDown 整页滚动
+        // Ctrl+↑/↓ 逐行滚动，PageUp/PageDown 整页滚动（按输出层级路由）
+        const bool in_sub = (m_vm.output_level == OutputLevel::SubAgent);
         if (e == Event::ArrowUpCtrl) {
-            m_follow = false;
-            m_scroll = std::max(0, m_scroll - 3);
+            if (in_sub) { m_sub_follow = false; m_sub_scroll = std::max(0, m_sub_scroll - 3); }
+            else { m_follow = false; m_scroll = std::max(0, m_scroll - 3); }
             m_screen.RequestAnimationFrame();
             return true;
         }
         if (e == Event::ArrowDownCtrl) {
-            m_scroll += 3;
+            if (in_sub) m_sub_scroll += 3;
+            else m_scroll += 3;
             m_screen.RequestAnimationFrame();
             return true;
         }
         // 滚一页（转录区可视高度），PageUp 翻回上页、PageDown 翻回下页
         const int scroll_page =
-            std::max(1, ftxui::Terminal::Size().dimy - (1 + 1 + kComposerHeight + 2));
+            std::max(1, ftxui::Terminal::Size().dimy - (2 + 1 + kComposerHeight + 2));
         if (e == Event::PageDown) {
-            m_scroll += scroll_page;
+            if (in_sub) m_sub_scroll += scroll_page;
+            else m_scroll += scroll_page;
             m_screen.RequestAnimationFrame();
             return true;
         }
         if (e == Event::PageUp) {
-            m_follow = false;
-            m_scroll = std::max(0, m_scroll - scroll_page);
+            if (in_sub) { m_sub_follow = false; m_sub_scroll = std::max(0, m_sub_scroll - scroll_page); }
+            else { m_follow = false; m_scroll = std::max(0, m_scroll - scroll_page); }
             m_screen.RequestAnimationFrame();
             return true;
         }
@@ -2718,20 +2954,13 @@ void App::jump_change_to_file() {
     m_screen.RequestAnimationFrame();
 }
 
-/// @brief 跳转转录区到选中子 Agent 关联消息（任务调度 tab Menu Enter）
-/// @details 复用 build_transcript 的前缀和：prefix[msg_index] 即该消息顶行；
-///          置 m_follow=false 进入手动滚动，视口钉在该消息处。
+/// @brief 跳转到输出区域第二层查看选中子 Agent 记录（任务调度 tab Menu Enter）
+/// @details 子 Agent 记录独立渲染于第二层，选中后切到该子 Agent 详情。
 void App::jump_to_sub_agent() {
     const int idx = m_vm.tabs.sub_selected;
     if (idx < 0 || static_cast<std::size_t>(idx) >= m_vm.tabs.sub_agents.size()) return;
-    const std::size_t msg_index = m_vm.tabs.sub_agents[static_cast<std::size_t>(idx)].msg_index;
-    if (msg_index >= m_vm.messages.size()) return;
-    int top = 0;
-    for (std::size_t i = 0; i < msg_index && i < m_msg_height.size(); ++i)
-        top += m_msg_height[i] + 1;
-    m_follow = false;
-    m_scroll = std::max(0, top);
-    m_screen.RequestAnimationFrame();
+    const std::string& task_id = m_vm.tabs.sub_agents[static_cast<std::size_t>(idx)].task_id;
+    show_sub_agent(task_id);
 }
 
 /// @brief 刷新后台任务列表（渲染时只读查询 TaskManager，仅进行中/排队中）

@@ -47,6 +47,11 @@
 #include "agent/tool/PowerShellTool/powershell_tool.h"
 #include "agent/tool/ShellTool/shell_detector.h"
 #include "agent/tool/SkillTool/skill_tool.h"
+#include "agent/tool/TodoWriteTool/todo_write_tool.h"
+#include "agent/tool/TaskTools/task_create_tool.h"
+#include "agent/tool/TaskTools/task_get_tool.h"
+#include "agent/tool/TaskTools/task_update_tool.h"
+#include "agent/tool/TaskTools/task_list_tool.h"
 #include "agent/tool/registry.h"
 #include "core/config/config_manager.h"
 #include "core/utils/file_index.h"
@@ -235,6 +240,13 @@ void register_builtin_tools(tool::ToolRegistry& registry) {
     registry.register_tool(std::make_shared<tool::AgentTool>());
     registry.register_tool(std::make_shared<tool::TaskOutputTool>());
     registry.register_tool(std::make_shared<tool::TaskStopTool>());
+
+    // #24：待办清单（TodoWrite 全量 + TaskV2 细粒度 CRUD）
+    registry.register_tool(std::make_shared<tool::TodoWriteTool>());
+    registry.register_tool(std::make_shared<tool::TaskCreateTool>());
+    registry.register_tool(std::make_shared<tool::TaskGetTool>());
+    registry.register_tool(std::make_shared<tool::TaskUpdateTool>());
+    registry.register_tool(std::make_shared<tool::TaskListTool>());
 
     // Windows 平台额外注册 PowerShellTool（对齐 Claude Code 的条件注册策略）
     // BashTool（cmd.exe）和 PowerShellTool 并存，由模型根据任务特征自行选用

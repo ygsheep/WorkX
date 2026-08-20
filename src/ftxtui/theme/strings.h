@@ -173,7 +173,6 @@ inline constexpr std::string_view kAskInputPlaceholder = "输入答案…";
 // ----------------------------------------------------------------------------
 // 命令 / 会话操作（App 提示与内置命令描述）
 // ----------------------------------------------------------------------------
-inline constexpr std::string_view kAppTitle           = "WorkX · FTXUI 实验";
 inline constexpr std::string_view kNoBackendModels    = "（无后端，无法列出模型）\n";
 inline constexpr std::string_view kModelListFailed    = "（模型列表获取失败）";
 inline constexpr std::string_view kNoSessionBackend   = "（无会话后端，无法恢复历史会话）\n";
@@ -230,5 +229,22 @@ inline constexpr std::string_view kSubStepClose     = ")";
 inline constexpr std::string_view kSubFailed        = "✗ 子任务失败";
 inline constexpr std::string_view kSubCompleted     = "✓ 子任务完成";
 inline constexpr std::string_view kSubDuration      = " ({:.1f}s)";
+
+// ----------------------------------------------------------------------------
+// 输出区域层级（标题栏下子列表导航）
+// ----------------------------------------------------------------------------
+inline constexpr std::string_view kOutputMain        = "主会话";
+inline constexpr std::string_view kOutputSubAgent    = "子 Agent";
+inline constexpr std::string_view kOutputSep         = " > ";
+inline constexpr std::string_view kOutputHint        = "点击返回主会话";
+inline constexpr std::string_view kSubHeader         = "子 Agent 记录";
+inline constexpr std::string_view kSubStepThought    = "思考";
+inline constexpr std::string_view kSubStepAction     = "工具";
+inline constexpr std::string_view kSubStepObservation = "观察";
+inline constexpr std::string_view kSubStepFinal      = "最终";
+inline constexpr std::string_view kSubStatusRunning  = "运行中";
+inline constexpr std::string_view kSubFinalAnswer    = "最终答复";
+inline constexpr std::string_view kSubNoRecord       = "（无子 Agent 记录）";
+inline constexpr std::string_view kSubBackToMain     = "返回主会话";
 
 }  // namespace ftxtui::str

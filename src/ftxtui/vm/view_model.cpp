@@ -55,7 +55,7 @@ bool ViewModel::apply_variant(const ActionReasoningDelta& a) {
     if (!a.delta.empty()) {
         if (!m.reasoned) {
             m.reasoned = true;
-            m.reasoning_expanded = card_defaults.reasoning_expanded;
+            m.reasoning_expanded = true;  // 任务开始：思考卡自动展开
         }
     }
     m.reasoning.append(a.delta);
@@ -74,6 +74,7 @@ bool ViewModel::apply_variant(const ActionTurnDone& a) {
     auto& m = active_stream();
     m.streaming = false;
     m.sealed = true;
+    m.reasoning_expanded = false;  // 任务结束：思考卡自动折叠
     if (!a.full_content.empty() && m.text.empty()) m.text = a.full_content;
     if (!a.full_reasoning.empty() && m.reasoning.empty()) m.reasoning = a.full_reasoning;
     m.prompt_tokens = a.prompt_tokens;
@@ -107,7 +108,7 @@ bool ViewModel::apply_variant(const ActionBeginTool& a) {
     t.call_id = a.call_id;
     t.arguments = a.arguments;
     t.running = true;
-    t.expanded = card_defaults.tool_expanded;
+    t.expanded = true;  // 任务开始：工具卡自动展开
     t.text_pos = m.text.size();  // 记录正文插入点，供与正文交错渲染
     m.tool_calls.push_back(std::move(t));
     m.tool_use_ids.push_back(a.call_id);
@@ -198,59 +199,86 @@ bool ViewModel::apply_variant(const ActionCompactionPaused& a) {
 }
 
 bool ViewModel::apply_variant(const ActionSubAgentProgress& a) {
-    // 子任务进度：追加一条 assistant 消息（含 task_id 标识），不流式
-    std::string prefix = std::string(str::kSubAgentPrefix) + a.task_id + std::string(str::kSubAgentSep);
+    // 子任务进度：不混入主转录区，存入第二层独立记录（sub_records）
     if (a.step_type == "final") {
         // final 步由 SubAgentCompleted 处理，这里不重复
         return false;
     }
-    // 聚合到任务调度 tab（按 task_id；msg_index 指向本消息将 push 到的索引）
-    auto it = std::find_if(tabs.sub_agents.begin(), tabs.sub_agents.end(),
-        [&](const SubAgentLite& s) { return s.task_id == a.task_id; });
-    if (it == tabs.sub_agents.end()) {
-        tabs.sub_agents.push_back(SubAgentLite{});
-        it = std::prev(tabs.sub_agents.end());
+
+    // 第二层：完整记录（独立渲染）
+    auto it = std::find_if(sub_records.begin(), sub_records.end(),
+        [&](const SubAgentDetail& s) { return s.task_id == a.task_id; });
+    if (it == sub_records.end()) {
+        sub_records.push_back(SubAgentDetail{});
+        it = std::prev(sub_records.end());
         it->task_id = a.task_id;
     }
     it->status = "running";
     it->step_number = a.step_number;
-    it->current_step = a.step_type;
-    it->msg_index = messages.size();
+    SubAgentStep st;
+    st.step_number = a.step_number;
+    st.step_type = a.step_type;
+    st.content = a.content;
+    it->steps.push_back(std::move(st));
 
-    MessageNode n;
-    n.role = MsgRole::Assistant;
-    n.text = prefix + (a.content.empty()
-        ? (std::string(str::kSubStepPrefix) + std::to_string(a.step_number)
-           + std::string(str::kSubStepOpen) + a.step_type + std::string(str::kSubStepClose))
-        : a.content);
-    n.sealed = true;
-    messages.push_back(std::move(n));
+    // 侧边栏任务调度 tab 聚合（轻量条目）
+    auto lit = std::find_if(tabs.sub_agents.begin(), tabs.sub_agents.end(),
+        [&](const SubAgentLite& s) { return s.task_id == a.task_id; });
+    if (lit == tabs.sub_agents.end()) {
+        tabs.sub_agents.push_back(SubAgentLite{});
+        lit = std::prev(tabs.sub_agents.end());
+        lit->task_id = a.task_id;
+    }
+    lit->status = "running";
+    lit->step_number = a.step_number;
+    lit->current_step = a.step_type;
+
+    // 关联到最近的 Agent 工具卡（sub_task_id 为空时回填，供点击跳转第二层）
+    for (std::size_t i = messages.size(); i-- > 0;) {
+        auto& m = messages[i];
+        for (auto& t : m.tool_calls) {
+            if (t.tool_name == "Agent" && t.running && t.sub_task_id.empty()) {
+                t.sub_task_id = a.task_id;
+                return true;
+            }
+        }
+    }
+    for (std::size_t i = messages.size(); i-- > 0;) {
+        auto& m = messages[i];
+        for (auto& t : m.tool_calls) {
+            if (t.tool_name == "Agent" && t.sub_task_id.empty()) {
+                t.sub_task_id = a.task_id;
+                return true;
+            }
+        }
+    }
     return true;
 }
 
 bool ViewModel::apply_variant(const ActionSubAgentCompleted& a) {
-    // 聚合：更新状态/耗时，msg_index 指向完成消息
-    auto it = std::find_if(tabs.sub_agents.begin(), tabs.sub_agents.end(),
-        [&](const SubAgentLite& s) { return s.task_id == a.task_id; });
-    if (it == tabs.sub_agents.end()) {
-        tabs.sub_agents.push_back(SubAgentLite{});
-        it = std::prev(tabs.sub_agents.end());
+    // 第二层：更新状态/耗时/最终答复（不混入主转录区）
+    auto it = std::find_if(sub_records.begin(), sub_records.end(),
+        [&](const SubAgentDetail& s) { return s.task_id == a.task_id; });
+    if (it == sub_records.end()) {
+        sub_records.push_back(SubAgentDetail{});
+        it = std::prev(sub_records.end());
         it->task_id = a.task_id;
     }
     it->status = a.was_error ? "failed" : "done";
     it->duration_ms = a.duration_ms;
-    it->msg_index = messages.size();
+    it->final_answer = a.final_answer;
 
-    MessageNode n;
-    n.role = MsgRole::Assistant;
-    std::string status = a.was_error ? std::string(str::kSubFailed) : std::string(str::kSubCompleted);
-    n.text = std::string(str::kSubAgentPrefix) + a.task_id + std::string(str::kSubAgentSep) + status
-             + std::format(str::kSubDuration, a.duration_ms / 1000.0);
-    if (!a.final_answer.empty()) {
-        n.text += "\n" + a.final_answer;
+    // 侧边栏任务调度 tab 聚合
+    auto lit = std::find_if(tabs.sub_agents.begin(), tabs.sub_agents.end(),
+        [&](const SubAgentLite& s) { return s.task_id == a.task_id; });
+    if (lit == tabs.sub_agents.end()) {
+        tabs.sub_agents.push_back(SubAgentLite{});
+        lit = std::prev(tabs.sub_agents.end());
+        lit->task_id = a.task_id;
     }
-    n.sealed = true;
-    messages.push_back(std::move(n));
+    lit->status = a.was_error ? "failed" : "done";
+    lit->duration_ms = a.duration_ms;
+    lit->current_step = a.was_error ? "failed" : "done";
     return true;
 }
 
@@ -278,6 +306,12 @@ bool ViewModel::apply_variant(const ActionProviderSwitched&) {
 
 bool ViewModel::apply_variant(const ActionProviderSwitchFailed&) {
     return false;  // 由 App 消费（提示切换失败），ViewModel 不关心
+}
+
+bool ViewModel::apply_variant(const ActionTodoUpdate& a) {
+    if (sidebar.todos == a.todos) return false;  // 无变化，避免无谓重绘
+    sidebar.todos = a.todos;
+    return true;
 }
 
 namespace {

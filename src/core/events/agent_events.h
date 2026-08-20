@@ -17,6 +17,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/tool_kind.h"  // C-3：直接引用 core 层规范位置，避免 core→agent 分层越界
+#include "core/todo/todo_item.h"  // #24：待办清单条目（TodoStore → UI 事件载荷）
 
 namespace agent {
 
@@ -159,6 +160,15 @@ struct SubAgentProgressEvent {
     int32_t step_number = 0;    ///< 当前步骤序号（1-based，与 ReActStep.step_number 对齐）
     std::string step_type;      ///< 步骤类型："thought" / "action" / "observation" / "final"
     std::string content;        ///< 步骤内容（与写入 Task 输出缓冲的格式化行相同，可为空）
+};
+
+/// @brief 待办清单更新事件（#24：TodoStore → TUI 侧边栏/StatusBar）
+/// @details TodoStore 每次变更（TaskCreate/Update/Delete/List、TodoWrite 全量替换、
+///          restore_todos 恢复）后异步发布，携带该 session 完整清单快照。
+///          TUI 主循环 drain 后经 ActionTodoUpdate 更新 ViewModel，触发侧边栏重绘。
+struct TodoUpdatedEvent {
+    std::string session_id;     ///< 所属会话 id
+    std::vector<core::todo::TodoItem> todos;  ///< 变更后的完整清单快照
 };
 
 } // namespace agent

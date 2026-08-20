@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "bridge/action.h"
+#include "core/todo/todo_item.h"  // #24：侧边栏 TODO 条目（状态图标渲染）
 #include "core/utils/line_diff.h"
 #include "vm/message_node.h"
 
@@ -36,8 +37,8 @@ struct SidebarModel {
 
     // 3.2 MCP 列表（agent 侧未实现，预留接口；当前为空）
     std::vector<std::string> mcp_servers;
-    // 3.3 TODO 列表（agent 侧未实现，预留接口；当前为空）
-    std::vector<std::string> todos;
+    // 3.3 TODO 列表（#24：TodoStore 事件驱动，含状态供图标渲染）
+    std::vector<core::todo::TodoItem> todos;
     // 可折叠区块展开状态（MCP / TODO 标题行点击切换）
     bool mcp_expanded = true;
     bool todo_expanded = true;
@@ -61,6 +62,26 @@ struct SubAgentLite {
     double duration_ms = 0.0;
     std::size_t msg_index = 0; ///< 关联转录消息索引（跳转用）
 };
+
+/// @brief 子 Agent 单步记录（第二层独立渲染）
+struct SubAgentStep {
+    int step_number = 0;
+    std::string step_type;     ///< "thought"/"action"/"observation"/"final"
+    std::string content;
+};
+
+/// @brief 子 Agent 完整记录（第二层：独立渲染，不混入主转录区）
+struct SubAgentDetail {
+    std::string task_id;
+    std::string status;        ///< "running" / "done" / "failed"
+    int step_number = 0;
+    std::vector<SubAgentStep> steps;
+    std::string final_answer;
+    double duration_ms = 0.0;
+};
+
+/// @brief 输出区域层级（标题栏下子列表导航）
+enum class OutputLevel { Main = 0, SubAgent = 1 };
 
 /// @brief 后台任务条目（任务调度 tab）
 struct TaskLite {
@@ -128,6 +149,11 @@ public:
     bool pending_exit = false;  ///< 收到 /exit，UI 应退出
     CardDefaults card_defaults; ///< 折叠卡片默认配置
 
+    // ---- 输出区域层级（标题栏下子列表导航）----
+    OutputLevel output_level = OutputLevel::Main;  ///< 当前输出层级（主会话 / 子 Agent）
+    int sub_active = -1;         ///< 当前查看的子 Agent 记录索引（-1 = 无）
+    std::vector<SubAgentDetail> sub_records;  ///< 子 Agent 完整记录（第二层独立渲染）
+
     /// @brief 应用一个动作
     /// @return 状态是否有变化（用于决定是否重绘）
     bool apply(const Action& action);
@@ -164,6 +190,7 @@ private:
     bool apply_variant(const ActionSessionsLoaded&);
     bool apply_variant(const ActionProviderSwitched&);
     bool apply_variant(const ActionProviderSwitchFailed&);
+    bool apply_variant(const ActionTodoUpdate&);
 
     /// @brief 修改追踪：Edit/Write 工具调用 → FileChange（purpose + 行级 diff）
     void track_file_change(const ActionBeginTool& a);

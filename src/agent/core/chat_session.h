@@ -343,6 +343,11 @@ private:
     ///          复刻析构 wait 模式：cancel 当前任务 + wait → cancelAll + waitForAll → 复位标志。
     void cancel_and_wait_current_task();
 
+    /// @brief #24：接线 TodoStore 持久化回调（session_id → 当前 SessionStore 写 todo 事件）
+    /// @details 在 SessionStore 创建/切换后调用（懒创建 + switch_session）。
+    ///          回调捕获 store 的 shared_ptr，TodoStore 每次变更时追加全量快照。
+    void wire_todo_persistence();
+
     std::unique_ptr<ICompletionProvider> m_provider;
     std::vector<ChatMessage> m_messages;
     std::string m_system_prompt;

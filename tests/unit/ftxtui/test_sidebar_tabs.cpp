@@ -15,11 +15,19 @@
 
 #include <ftxui/screen/screen.hpp>
 
+#include "core/todo/todo_item.h"
 #include "widgets/sidebar_tabs.h"
 
 using namespace ftxtui;
 
 namespace {
+
+/// @brief 构造待办条目（#24：SidebarModel.todos 升级为结构化类型）
+core::todo::TodoItem make_todo(const std::string& content) {
+    core::todo::TodoItem item;
+    item.content = content;
+    return item;
+}
 
 /// @brief 把元素渲染到固定尺寸 Screen 并返回文本
 std::string render_elem(const ftxui::Element& e, int cols = 30, int rows = 24) {
@@ -153,7 +161,7 @@ TEST_CASE("sidebar tabs collapsible sections expanded by default", "[sidebar_tab
     SidebarTabsModel tabs = make_tabs();
     SidebarModel sidebar;
     sidebar.mcp_servers = {"server-a"};
-    sidebar.todos = {"todo-1"};
+    sidebar.todos = {make_todo("todo-1")};
     const auto text = render_elem(build_sidebar_tabs(tabs, sidebar));
     REQUIRE(text.find("MCP") != std::string::npos);
     REQUIRE(text.find("TODO") != std::string::npos);
@@ -167,7 +175,7 @@ TEST_CASE("sidebar tabs collapsible sections hide items when collapsed", "[sideb
     sidebar.mcp_expanded = false;
     sidebar.todo_expanded = false;
     sidebar.mcp_servers = {"server-a"};
-    sidebar.todos = {"todo-1"};
+    sidebar.todos = {make_todo("todo-1")};
     const auto text = render_elem(build_sidebar_tabs(tabs, sidebar));
     REQUIRE(text.find("MCP") != std::string::npos);   // 标题仍在
     REQUIRE(text.find("TODO") != std::string::npos);

@@ -10,6 +10,7 @@
 #include "agent/core/react_loop.h"
 #include "agent/message/types.h"
 #include "agent/tool/tool_kind.h"
+#include "agent/tool/TodoStore/todo_store.h"  // #24：待办清单持久化接线
 #include "agent/command/inclaude/command.h"
 #include "agent/command/inclaude/registry.h"
 #include "agent/skill/inclaude/conditional.h"
@@ -190,6 +191,9 @@ ChatSession::ChatSession(std::unique_ptr<ICompletionProvider> provider,
             return this->summarize_with_llm(middle);
         });
 
+    // #24：接线 TodoStore 事件总线（变更后发布 TodoUpdatedEvent → UI 侧边栏/StatusBar）
+    tool::TodoStore::instance().set_event_bus(&m_event_bus.get());
+
     subscribe_interrupt();
 }
 
@@ -290,6 +294,8 @@ void ChatSession::clear_history() {
     // 清理 conditional skills 会话级累积：过期 touch 不再触发激活
     m_touch_collector.clear();
     m_activated_skills.clear();
+    // #24：清空 TodoStore 该 session 状态（内存 + 持久化回调解绑）
+    tool::TodoStore::instance().clear_session(m_session_id);
 }
 
 void ChatSession::set_compactor_context_window(int32_t context_window_tokens) {
@@ -368,29 +374,54 @@ bool ChatSession::switch_session(const std::string& file_path) {    // 加载历
     // 从文件名提取 session_id（stem，如 "76e1b10d-...-...jsonl" → "76e1b10d-...-..."）
     std::string new_session_id = std::filesystem::path(file_path).stem().string();
 
-    std::lock_guard<std::mutex> lock(m_state_mutex);
-    // 1. 替换 session_id
-    m_session_id = new_session_id;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        // 1. 替换 session_id
+        m_session_id = new_session_id;
 
-    // 2. 清空消息历史，填入加载的历史消息
-    m_messages = std::move(messages);
+        // 2. 清空消息历史，填入加载的历史消息
+        m_messages = std::move(messages);
 
-    // 3. 关闭旧 SessionStore，创建新 SessionStore 指向历史文件
-    if (m_session_store) {
-        m_session_store->close();
-    }
-    auto new_store = std::make_shared<agent::session::SessionStore>(file_path, new_session_id);
-    if (!new_store->open()) {
-        return false;  // 打开失败，保留旧状态不变（messages 已替换但 store 为空，后续不持久化）
-    }
-    m_session_store = new_store;
-    // 不追加 session_start（会话进行中，只是换文件继续写）
+        // 3. 关闭旧 SessionStore，创建新 SessionStore 指向历史文件
+        if (m_session_store) {
+            m_session_store->close();
+        }
+        auto new_store = std::make_shared<agent::session::SessionStore>(file_path, new_session_id);
+        if (!new_store->open()) {
+            return false;  // 打开失败，保留旧状态不变（messages 已替换但 store 为空，后续不持久化）
+        }
+        m_session_store = new_store;
+        // 不追加 session_start（会话进行中，只是换文件继续写）
 
-    // 4. 重置压缩器和前缀形状基线（新会话上下文从零开始）
-    m_compactor.reset();
-    m_last_prefix_shape = PrefixShape{};
+        // 4. 重置压缩器和前缀形状基线（新会话上下文从零开始）
+        m_compactor.reset();
+        m_last_prefix_shape = PrefixShape{};
+    }  // 释放 m_state_mutex
+
+    // #24：恢复该会话待办清单（发布事件刷新 UI）+ 接线持久化回调。
+    // 必须在锁外执行：restore_todos 与 wire_todo_persistence 内部会再次加 m_state_mutex，
+    // 持锁调用会对非递归 mutex 二次锁定 → EDEADLK（resume 会话崩溃根因）。
+    auto todos = agent::session::SessionStore::load_todos(file_path);
+    tool::TodoStore::instance().restore_todos(new_session_id, std::move(todos));
+    wire_todo_persistence();
 
     return true;
+}
+
+void ChatSession::wire_todo_persistence() {
+    std::shared_ptr<agent::session::SessionStore> store;
+    std::string session_id;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        store = m_session_store;
+        session_id = m_session_id;
+    }
+    if (!store) return;
+    tool::TodoStore::instance().set_persist_callback(
+        session_id,
+        [store](const std::vector<core::todo::TodoItem>& todos) {
+            store->append_todo(todos);
+        });
 }
 
 bool ChatSession::rename_session(const std::string& title) {
@@ -450,6 +481,8 @@ void ChatSession::persist_message(const ChatMessage& msg) {
                 m_session_store = new_store;
             }
             store = new_store;
+            // #24：接线 TodoStore 持久化回调（新会话从空清单开始）
+            wire_todo_persistence();
         } catch (const std::exception&) {
             return;  // 创建失败，放弃持久化
         }

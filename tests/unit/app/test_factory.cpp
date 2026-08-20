@@ -95,12 +95,13 @@ TEST_CASE("register_builtin_tools registers expected tools", "[factory][tools]")
 
     auto tools = registry.get_all_tools();
 
-    // 基础工具数：13（Read/Write/Edit/Bash/Glob/Grep/AskUser/Skill/EnterPlanMode/
-    // ExitPlanModeV2/Agent/TaskOutput/TaskStop），Windows 额外注册 PowerShellTool
+    // 基础工具数：18（Read/Write/Edit/Bash/Glob/Grep/AskUser/Skill/EnterPlanMode/
+    // ExitPlanModeV2/Agent/TaskOutput/TaskStop + #24 TodoWrite/TaskCreate/TaskGet/
+    // TaskUpdate/TaskList），Windows 额外注册 PowerShellTool
 #ifdef _WIN32
-    constexpr size_t kExpectedCount = 14;
+    constexpr size_t kExpectedCount = 19;
 #else
-    constexpr size_t kExpectedCount = 13;
+    constexpr size_t kExpectedCount = 18;
 #endif
     REQUIRE(tools.size() == kExpectedCount);
 
@@ -118,6 +119,13 @@ TEST_CASE("register_builtin_tools registers expected tools", "[factory][tools]")
     REQUIRE(std::find(names.begin(), names.end(), "Grep") != names.end());
     REQUIRE(std::find(names.begin(), names.end(), "AskUser") != names.end());
     REQUIRE(std::find(names.begin(), names.end(), "Skill") != names.end());
+
+    // #24：待办清单工具（TodoWrite 全量 + TaskV2 细粒度 CRUD）
+    REQUIRE(std::find(names.begin(), names.end(), "TodoWrite") != names.end());
+    REQUIRE(std::find(names.begin(), names.end(), "TaskCreate") != names.end());
+    REQUIRE(std::find(names.begin(), names.end(), "TaskGet") != names.end());
+    REQUIRE(std::find(names.begin(), names.end(), "TaskUpdate") != names.end());
+    REQUIRE(std::find(names.begin(), names.end(), "TaskList") != names.end());
 
 #ifdef _WIN32
     // Windows 平台额外验证 PowerShellTool 已注册

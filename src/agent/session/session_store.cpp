@@ -163,6 +163,15 @@ bool SessionStore::append_title(const std::string& title) {
     return append_line(j);
 }
 
+bool SessionStore::append_todo(const std::vector<core::todo::TodoItem>& todos) {
+    nlohmann::json j;
+    j["type"] = "todo";
+    j["sessionId"] = m_session_id;
+    j["timestamp"] = now_iso();
+    j["todos"] = todos;
+    return append_line(j);
+}
+
 // ============================================================
 // 静态方法
 // ============================================================
@@ -309,6 +318,21 @@ std::optional<SessionMeta> SessionStore::load_meta(const std::string& file_path)
     }
 
     return meta;
+}
+
+std::vector<core::todo::TodoItem> SessionStore::load_todos(const std::string& file_path) {
+    auto events = read_all(file_path);
+    std::vector<core::todo::TodoItem> todos;
+    for (const auto& j : events) {
+        if (j.value("type", "") != "todo") continue;
+        todos.clear();  // 取最后一条 todo 事件（append-only 快照）
+        if (j.contains("todos") && j["todos"].is_array()) {
+            for (const auto& t : j["todos"]) {
+                todos.push_back(t.get<core::todo::TodoItem>());
+            }
+        }
+    }
+    return todos;
 }
 
 std::filesystem::path get_project_session_dir(const std::filesystem::path& config_dir,

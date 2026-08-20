@@ -30,6 +30,7 @@
 #include <nlohmann/json.hpp>
 
 #include "agent/api/chat_types.h"
+#include "core/todo/todo_item.h"  // #24：待办清单持久化
 
 namespace agent::session {
 
@@ -103,6 +104,11 @@ public:
     /// @details append-only：新 title 事件覆盖旧标题，读取时取最后一条
     bool append_title(const std::string& title);
 
+    /// @brief 追加 todo 事件（#24：待办清单全量快照）
+    /// @details append-only：每次变更追加一条完整快照，读取时取最后一条。
+    ///          空列表也写入（表示清空），保证恢复语义正确。
+    bool append_todo(const std::vector<core::todo::TodoItem>& todos);
+
     // ============================================================
     // 静态工具方法
     // ============================================================
@@ -121,6 +127,10 @@ public:
 
     /// @brief 从 JSONL 文件加载会话元信息
     static std::optional<SessionMeta> load_meta(const std::string& file_path);
+
+    /// @brief 从 JSONL 文件加载待办清单（#24：取最后一条 todo 事件）
+    /// @return 待办列表（无 todo 事件时返回空）
+    static std::vector<core::todo::TodoItem> load_todos(const std::string& file_path);
 
 private:
     std::string m_file_path;

@@ -134,6 +134,15 @@ void EventBridge::start() {
             });
         });
 
+    // #24：待办清单更新（TodoStore → 侧边栏 TODO 区块 / StatusBar 进度）
+    subscribe_typed<agent::TodoUpdatedEvent>(
+        [this](const agent::TodoUpdatedEvent& e) {
+            push(ActionTodoUpdate{
+                .session_id = e.session_id,
+                .todos = e.todos,
+            });
+        });
+
     subscribe_typed<agent::ShutdownEvent>(
         [this](const agent::ShutdownEvent&) { push(ActionShutdown{}); });
 }

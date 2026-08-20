@@ -101,6 +101,12 @@ target_sources(workx_agent PRIVATE
     tool/FileWriteTool/file_write_tool.cpp
     tool/FileWriteTool/diff.cpp
     tool/FileReadState/file_read_state.cpp
+    tool/TodoStore/todo_store.cpp
+    tool/TodoWriteTool/todo_write_tool.cpp
+    tool/TaskTools/task_create_tool.cpp
+    tool/TaskTools/task_get_tool.cpp
+    tool/TaskTools/task_update_tool.cpp
+    tool/TaskTools/task_list_tool.cpp
     tool/GlobTool/glob_tool.cpp
     tool/GrepTool/grep_tool.cpp
     tool/BashTool/bash_tool.cpp
