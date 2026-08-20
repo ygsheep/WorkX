@@ -23,6 +23,10 @@ namespace ftxtui {
 /// @brief 渲染整段 Markdown 为纵向元素
 ftxui::Element build_markdown(std::string_view text, int width);
 
+/// @brief 文件路径扩展名 → 语法高亮语言标签；未知返回空
+/// @details 供工具卡 / 文件查看器（/view）复用同一套扩展名映射
+std::string lang_from_path(const std::string& path);
+
 /// @brief 估算 Markdown 渲染行数（与 build_markdown 布局逐行一致；A3 单一布局源）
 /// @param width 正文折行的单行最大显示列宽；代码行/表格不折行
 int estimate_markdown_height(std::string_view text, int width);
@@ -51,8 +55,5 @@ ftxui::Element build_message(const MessageNode& msg,
                              int width,
                              std::size_t anim_frame = 0,
                              std::deque<CardHit>* card_hits = nullptr);
-
-/// @brief 侧栏进度条（上下文占用比例）
-ftxui::Element build_context_gauge(int used, int limit);
 
 }  // namespace ftxtui

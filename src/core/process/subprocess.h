@@ -62,4 +62,21 @@ struct ExecOptions {
 /// - Windows: 子进程输出按 CP_UTF8 解码，非 UTF-8 回退按当前 ACP 转换
 ResultV2<ExecOutput> exec(const std::string& cmd, const ExecOptions& opts);
 
+/// @brief 交互式子进程执行结果
+struct InteractiveExecResult {
+    int exit_code = 0;  ///< 退出码（启动失败时无意义）
+};
+
+/// @brief 同步执行交互式命令（继承终端 stdio，不捕获输出）
+/// @details 供内嵌外部交互程序使用（如 /edit 拉起 nvim）：
+///          - Windows: CreateProcessW 不设置 STARTF_USESTDHANDLES，子进程继承父进程控制台
+///          - POSIX:   fork + execvp 不重定向 stdio，子进程留在前台进程组（可接收终端信号）
+/// @param cmd  可执行文件路径（绝对路径或 PATH 中可找到的命令名）
+/// @param args 命令行参数（不含命令本身）
+/// @param cwd  工作目录（空表示继承父进程）
+/// @return ok: 子进程已执行并退出（含退出码）；err: 启动失败
+ResultV2<InteractiveExecResult> exec_interactive(const std::string& cmd,
+                                                 const std::vector<std::string>& args,
+                                                 const std::string& cwd = {});
+
 } // namespace agent::process

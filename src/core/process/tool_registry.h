@@ -56,6 +56,12 @@ public:
     /// @brief 清除缓存（主要用于测试）
     void clear_cache();
 
+    /// @brief 在 PATH 中查找可执行文件
+    /// @param name 命令名（如 "nvim" 或 "nvim.exe"）
+    /// @return 找到的绝对路径；未找到返回 nullopt
+    /// @note Windows 上自动尝试 .exe 扩展名（PATH 中常省略扩展名）
+    static std::optional<std::string> find_executable(const std::string& name);
+
 private:
     ToolRegistry() = default;
 

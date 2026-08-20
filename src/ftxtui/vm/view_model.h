@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "bridge/action.h"
+#include "core/utils/line_diff.h"
 #include "vm/message_node.h"
 
 namespace ftxtui {
@@ -23,7 +24,6 @@ struct SidebarModel {
     std::string model;          ///< 模型名
     std::string project;        ///< 项目名
     std::string branch;         ///< git 分支
-    std::string agent;          ///< agent 名
     int context_limit = 0;      ///< 上下文上限（token）
     int context_used = 0;       ///< 已用（token）
     double cost_usd = 0.0;      ///< 会话成本
@@ -38,6 +38,9 @@ struct SidebarModel {
     std::vector<std::string> mcp_servers;
     // 3.3 TODO 列表（agent 侧未实现，预留接口；当前为空）
     std::vector<std::string> todos;
+    // 可折叠区块展开状态（MCP / TODO 标题行点击切换）
+    bool mcp_expanded = true;
+    bool todo_expanded = true;
 };
 
 /// @brief 折叠卡片默认配置（新卡片创建时的展开/收起初始值）
@@ -46,11 +49,80 @@ struct CardDefaults {
     bool tool_expanded = false;      ///< 工具卡默认收起
 };
 
+/// @brief 侧边栏 tab 枚举
+enum class SidebarTab { kTasks = 0, kFiles, kChanges, kCount };
+
+/// @brief 子 Agent 聚合条目（任务调度 tab）
+struct SubAgentLite {
+    std::string task_id;
+    std::string status;        ///< "running" / "done" / "failed"
+    std::string current_step;  ///< 最近一步类型/摘要
+    int step_number = 0;
+    double duration_ms = 0.0;
+    std::size_t msg_index = 0; ///< 关联转录消息索引（跳转用）
+};
+
+/// @brief 后台任务条目（任务调度 tab）
+struct TaskLite {
+    std::string name;
+    std::string status;        ///< Pending/Running/Completed/Cancelled/Failed
+    float progress = 0.0f;
+};
+
+/// @brief 会话内一次文件修改（Edit/Write 工具调用，内联 diff 高亮数据源）
+struct FileChange {
+    std::string file_path;
+    std::string purpose;       ///< 修改目的（该步 reasoning 摘要，单行）
+    std::string reasoning;     ///< 完整 reasoning（变更记录 tab 按 e 展开）
+    std::string old_string;    ///< Edit 旧内容（Write 全量改写时为空）
+    std::string new_string;    ///< 新内容
+    int64_t timestamp = 0;
+    std::size_t msg_index = 0; ///< 关联转录消息索引（跳转用）
+    std::vector<agent::DiffLine> diff;  ///< 行级 diff（仅 Equal/Insert/Modify）
+    int new_start = 0;         ///< 修改区块在文件中的起始行（/view 打开时定位，1-based）
+};
+
+/// @brief 文件 tab 状态（/view 只读查看器）
+struct FileViewState {
+    std::string path;                ///< 当前查看文件（空=未打开）
+    std::vector<std::string> lines;  ///< 当前内容（按行）
+    std::string lang;                ///< 高亮语言（扩展名推断）
+    int scroll = 0;                  ///< 首行索引（虚拟化滚动）
+    bool dirty = false;              ///< /edit 后需重读（P6 联动）
+    std::vector<FileChange> changes; ///< 该文件会话内修改（内联高亮用）
+};
+
+/// @brief 变更记录 tab 状态
+struct ChangeViewState {
+    std::vector<FileChange> changes; ///< 会话内全部修改（按文件分组）
+    int selected = 0;                ///< 选中修改点（-1=无）
+    bool purpose_expanded = false;   ///< e 展开完整 reasoning
+};
+
+/// @brief 侧边栏 tab 模型（任务调度 | 变更记录 | 文件）
+struct SidebarTabsModel {
+    SidebarTab active = SidebarTab::kTasks;
+    bool changes_open = false;   ///< 变更记录 tab 是否打开（有 FileChange 时自动开）
+    bool file_open = false;      ///< 文件 tab 是否打开（/view 打开）
+    // —— 任务调度 ——
+    bool busy = false;
+    std::string current_tool;  ///< 当前执行中的工具名
+    int step_number = 0;
+    int total_steps = 0;
+    std::vector<SubAgentLite> sub_agents;
+    std::vector<TaskLite> background_tasks;
+    int sub_selected = -1;  ///< 选中子 Agent 索引（-1=无；方向键/Enter 交互）
+    // —— 文件 / 变更记录 ——
+    FileViewState file;      ///< 文件 tab 状态（/view 只读查看器）
+    ChangeViewState changes; ///< 变更记录 tab 状态（会话内全部修改）
+};
+
 /// @brief 顶层视图模型
 class ViewModel {
 public:
     std::vector<MessageNode> messages;
     SidebarModel sidebar;
+    SidebarTabsModel tabs;      ///< 侧边栏 tab 状态（任务调度 | 变更记录 | 文件）
     bool busy = false;          ///< 是否正在生成/忙碌
     std::string prompt_echo;    ///< 待显示的命令回显/提示
     bool pending_exit = false;  ///< 收到 /exit，UI 应退出
@@ -92,6 +164,9 @@ private:
     bool apply_variant(const ActionSessionsLoaded&);
     bool apply_variant(const ActionProviderSwitched&);
     bool apply_variant(const ActionProviderSwitchFailed&);
+
+    /// @brief 修改追踪：Edit/Write 工具调用 → FileChange（purpose + 行级 diff）
+    void track_file_change(const ActionBeginTool& a);
 };
 
 }  // namespace ftxtui

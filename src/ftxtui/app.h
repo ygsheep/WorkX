@@ -35,6 +35,7 @@
 #include "vm/view_model.h"
 #include "widgets/suggest_panel.h"
 #include "widgets/search_palette.h"
+#include "widgets/sidebar_tabs.h"
 #include "core/utils/file_index.h"  // agent::FileIndex::Entry
 
 namespace agent {
@@ -61,6 +62,7 @@ struct AppDeps {
     agent::IBackendAdmin* backend_admin = nullptr;
     agent::IEventBus* event_bus = nullptr;
     agent::IConfigManager* config_manager = nullptr;  ///< 配置（供应商列表 / 当前 provider）
+    agent::ITaskManager* task_manager = nullptr;      ///< 后台任务（任务调度 tab 只读查询）
     bool mock_mode = false;  ///< --mock：无后端演示（send_input 走本地 mock 流）
     bool smoke_mode = false; ///< --smoke：自动驱动一轮 mock 对话后退出（CI 冒烟）
     std::string model_name;
@@ -111,6 +113,14 @@ private:
     void start_mock_stream(const std::string& user_text);
     void cmd_resume(const std::string& args);
     void cmd_rename(const std::string& args);
+    /// @brief /view：打开文件只读查看器（读取 + 行号 + 虚拟化滚动）
+    void cmd_view(const std::string& args);
+    /// @brief /edit：内嵌 nvim 编辑文件（WithRestoredIO 全屏切换，返回后重读）
+    void cmd_edit(const std::string& args);
+    /// @brief /nvim：启动 nvim（当前目录，WithRestoredIO 全屏切换）
+    void cmd_nvim();
+    /// @brief 重读当前文件 tab 内容（/edit 返回后与磁盘保持一致）
+    void reload_file();
     /// @brief /Test:askuser：弹出 AskUser 提问弹窗（开发调试 TUI 渲染/交互用）
     void cmd_test_askuser();
     /// @brief 恢复指定会话（switch_session + 历史载入；cmd_resume 与搜索面板共用）
@@ -139,9 +149,13 @@ private:
     void update_suggest();
     /// @brief 提示面板移动选择（delta=±1；Tab 传 +1，到底循环回首）
     void suggest_move(int delta);
-    /// @brief 提示面板 Enter 确认（命令模式=运行；文件模式=插入路径）
+    /// @brief 提示面板确认（命令模式=补全；文件模式=插入 @路径 引用）
     /// @return true=已消费（不提交发送）
+    bool suggest_accept();
+    /// @brief 提示面板 Enter 确认（文件模式=插入 @路径 引用）
     bool suggest_enter();
+    /// @brief 提示面板 Ctrl+Enter 确认（文件模式=插入 @路径 引用）
+    bool suggest_enter_insert();
     /// @brief 关闭提示面板（Esc）
     void suggest_cancel();
     /// @brief 装配聚合搜索条目（功能/文件/会话/设置），会话未加载时触发后台加载
@@ -159,6 +173,16 @@ private:
     void on_selection_changed();
     /// @brief 重试指定助手消息：截断到其触发用户消息并重新生成
     void retry_message(int msg_idx);
+    /// @brief 关闭侧边栏可开合 tab（变更记录/文件），返回任务调度
+    void close_sidebar_tab(SidebarTab tab);
+    /// @brief 调整侧边栏宽度（Ctrl+← 减小 / Ctrl+→ 增大，钳制在 [20, 50]）
+    void adjust_sidebar_width(int delta);
+    /// @brief 跳转转录区到选中子 Agent 关联消息（任务调度 tab Menu Enter）
+    void jump_to_sub_agent();
+    /// @brief 跳转文件 tab 到选中修改点对应行（变更记录 tab Enter）
+    void jump_change_to_file();
+    /// @brief 刷新后台任务列表（渲染时只读查询 TaskManager，仅进行中/排队中）
+    void refresh_background_tasks();
 
     AppDeps m_deps;
     ViewModel m_vm;
@@ -238,6 +262,23 @@ private:
 
     // ---- 侧边栏布局 ----
     bool m_sidebar_left = false;                 ///< 侧边栏居中位置（false=右，true=左）
+    int m_sidebar_width = 30;                    ///< 侧边栏宽度（Ctrl+←/→ 调整，[20,50]）
+    /// @brief 侧边栏 tab 栏命中区（每帧由 build_sidebar_tabs 重建；鼠标点击用）
+    std::deque<TabHit> m_tab_hits;
+    /// @brief 侧栏可折叠区块命中区（MCP/TODO 标题行；每帧由 append_sidebar_info 重建）
+    std::deque<SectionHit> m_section_hits;
+
+    // ---- 子 Agent 菜单（任务调度 tab 可交互）----
+    std::vector<std::string> m_sub_entries;  ///< 菜单条目（每帧由 sub_agents 重建）
+    ftxui::Component m_sub_menu;             ///< 纵向 Menu（可聚焦；Enter 跳转转录）
+    ftxui::Box m_sub_box;                    ///< 菜单渲染 box（点击命中用；折叠时置空）
+
+    // ---- 变更记录组件（变更记录 tab 可交互）----
+    ftxui::Component m_change_viewer;        ///< 修改点 Menu + hunk + 目的展开
+    ftxui::Box m_change_box;                 ///< 组件渲染 box（点击命中用；折叠时置空）
+
+    // ---- 文件查看组件（文件 tab 可聚焦：↑↓/PgUp/PgDn/滚轮滚动）----
+    ftxui::Component m_file_viewer;          ///< 文件查看器（聚焦时接收滚动键）
 
     // ---- AskUser 模态（B3：多问题 + 选项 + 自定义输入 + cancel_flag）----
     struct AskQuestion {

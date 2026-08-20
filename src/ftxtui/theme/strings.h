@@ -27,7 +27,6 @@ inline constexpr std::string_view kMsgRetry         = "重试";
 inline constexpr std::string_view kSidebarNewSession = "新会话";
 inline constexpr std::string_view kSidebarProject    = "项目";
 inline constexpr std::string_view kSidebarBranch     = "分支";
-inline constexpr std::string_view kSidebarAgent      = "Agent";
 inline constexpr std::string_view kSidebarContext    = "上下文";
 inline constexpr std::string_view kSidebarCost       = "成本";
 inline constexpr std::string_view kSidebarModel      = "模型";
@@ -38,6 +37,60 @@ inline constexpr std::string_view kSidebarTODO       = "TODO";
 inline constexpr std::string_view kDash               = "—";
 inline constexpr std::string_view kSlash              = " / ";
 inline constexpr std::string_view kInfinity           = "∞";
+
+// ----------------------------------------------------------------------------
+// 侧边栏 tab（任务调度 | 变更记录 | 文件）
+// ----------------------------------------------------------------------------
+inline constexpr std::string_view kTabTasks           = "任务调度";
+inline constexpr std::string_view kTabChanges         = "变更记录";
+inline constexpr std::string_view kTabFiles           = "文件";
+inline constexpr std::string_view kTabClose           = "✕";
+inline constexpr std::string_view kTasksStatusBusy    = "● 生成中";
+inline constexpr std::string_view kTasksStatusIdle    = "空闲";
+inline constexpr std::string_view kTasksTool          = "当前工具";
+inline constexpr std::string_view kTasksSteps         = "步骤";
+inline constexpr std::string_view kTasksSubAgents     = "子 Agent";
+inline constexpr std::string_view kTasksBackground    = "后台任务";
+inline constexpr std::string_view kSubStatusDone      = "完成";
+inline constexpr std::string_view kSubStatusFailed     = "失败";
+inline constexpr std::string_view kSubStepLabel       = "步骤 ";
+inline constexpr std::string_view kTabFilesEmpty      = "暂无打开的文件（/view <file>）";
+inline constexpr std::string_view kTabChangesEmpty    = "暂无文件修改";
+
+// ----------------------------------------------------------------------------
+// 变更记录 tab（P5：修改点 Menu + hunk + 目的展开）
+// ----------------------------------------------------------------------------
+inline constexpr std::string_view kChangeCountSuffix   = " 处修改";
+inline constexpr std::string_view kChangeIcon          = "⚑ ";
+inline constexpr std::string_view kChangeNoPurpose     = "（无目的）";
+inline constexpr std::string_view kChangePurposeLabel  = "目的：";
+inline constexpr std::string_view kChangeHint          = "↑↓ 选择 · e 展开 · Enter 跳转 · Esc 关闭";
+
+// ----------------------------------------------------------------------------
+// 文件查看器（/view 只读）
+// ----------------------------------------------------------------------------
+inline constexpr std::string_view kCmdViewDesc       = "打开文件只读查看器";
+inline constexpr std::string_view kViewUsage         = "用法：`/view <file>`\n";
+inline constexpr std::string_view kViewNotFound      = "（文件不存在：";
+inline constexpr std::string_view kViewTooLarge      = "（文件过大，已截断显示）\n";
+inline constexpr std::string_view kViewLineSuffix    = " 行";
+inline constexpr std::string_view kViewLangSep       = " · ";
+inline constexpr std::string_view kViewScrollHint    = "↑↓ 滚动 · Esc 关闭";
+
+// ----------------------------------------------------------------------------
+// 内嵌 nvim 编辑（/edit 方案 B）
+// ----------------------------------------------------------------------------
+inline constexpr std::string_view kCmdEditDesc      = "用 nvim 编辑文件";
+inline constexpr std::string_view kCmdNvimDesc      = "启动 nvim（当前目录）";
+inline constexpr std::string_view kEditUsage        = "用法：`/edit <file>`\n";
+inline constexpr std::string_view kEditNoNvim       = "（未找到 nvim，请安装 Neovim 并加入 PATH）\n";
+inline constexpr std::string_view kEditIsDir        = "（不能编辑目录：";
+inline constexpr std::string_view kEditNewFile      = "（新建文件，nvim 保存后自动重读）\n";
+inline constexpr std::string_view kEditSaved        = "（编辑完成，已重读文件）\n";
+inline constexpr std::string_view kEditAborted      = "（编辑未正常保存，已按磁盘内容重读）\n";
+inline constexpr std::string_view kEditFailed       = "（编辑器启动失败，未重读文件）\n";
+inline constexpr std::string_view kEditChangePurpose = "手动编辑";
+inline constexpr std::string_view kEditChangeReason  = "用户通过 /edit 命令手动修改";
 
 // ----------------------------------------------------------------------------
 // 状态行

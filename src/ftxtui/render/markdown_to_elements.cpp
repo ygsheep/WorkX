@@ -87,32 +87,6 @@ std::string tool_file_path(std::string_view args_json) {
 // 工具结果特化渲染辅助（对齐 src/tui render_code_tool_result 的解析逻辑）
 // ============================================================================
 
-/// @brief 文件路径扩展名 → ftxtui 支持的语法高亮语言标签；未知返回空
-std::string lang_from_path(const std::string& path) {
-    if (path.empty()) return {};
-    const size_t slash = path.find_last_of("/\\");
-    const std::string name = slash == std::string::npos ? path : path.substr(slash + 1);
-    if (name == "CMakeLists.txt") return "cpp";
-    if (name == "Dockerfile") return "bash";
-    const size_t dot = name.find_last_of('.');
-    if (dot == std::string::npos || dot + 1 >= name.size()) return {};
-    std::string ext = name.substr(dot + 1);
-    for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (ext == "c" || ext == "h") return "c";
-    if (ext == "cc" || ext == "cpp" || ext == "cxx" || ext == "hpp" || ext == "hxx"
-        || ext == "ino") return "cpp";
-    if (ext == "py" || ext == "pyw" || ext == "pyi") return "python";
-    if (ext == "js" || ext == "jsx" || ext == "mjs" || ext == "cjs") return "js";
-    if (ext == "ts" || ext == "tsx") return "ts";
-    if (ext == "rs") return "rust";
-    if (ext == "go") return "go";
-    if (ext == "sh" || ext == "bash" || ext == "zsh" || ext == "ksh") return "bash";
-    if (ext == "json") return "json";
-    if (ext == "yaml" || ext == "yml") return "yaml";
-    if (ext == "sql") return "sql";
-    return {};
-}
-
 /// @brief 拆分 FileRead 行号行："  123→content" → 前缀 + 代码
 void split_fileread_line(const std::string& line,
                          std::string& line_prefix, std::string& code_part) {
@@ -665,6 +639,33 @@ int count_markdown_lines(const std::vector<std::string>& lines, int width) {
 
 }  // namespace
 
+/// @brief 文件路径扩展名 → ftxtui 支持的语法高亮语言标签；未知返回空
+/// @details 供工具卡 / 文件查看器（/view）复用同一套扩展名映射
+std::string lang_from_path(const std::string& path) {
+    if (path.empty()) return {};
+    const size_t slash = path.find_last_of("/\\");
+    const std::string name = slash == std::string::npos ? path : path.substr(slash + 1);
+    if (name == "CMakeLists.txt") return "cpp";
+    if (name == "Dockerfile") return "bash";
+    const size_t dot = name.find_last_of('.');
+    if (dot == std::string::npos || dot + 1 >= name.size()) return {};
+    std::string ext = name.substr(dot + 1);
+    for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (ext == "c" || ext == "h") return "c";
+    if (ext == "cc" || ext == "cpp" || ext == "cxx" || ext == "hpp" || ext == "hxx"
+        || ext == "ino") return "cpp";
+    if (ext == "py" || ext == "pyw" || ext == "pyi") return "python";
+    if (ext == "js" || ext == "jsx" || ext == "mjs" || ext == "cjs") return "js";
+    if (ext == "ts" || ext == "tsx") return "ts";
+    if (ext == "rs") return "rust";
+    if (ext == "go") return "go";
+    if (ext == "sh" || ext == "bash" || ext == "zsh" || ext == "ksh") return "bash";
+    if (ext == "json") return "json";
+    if (ext == "yaml" || ext == "yml") return "yaml";
+    if (ext == "sql") return "sql";
+    return {};
+}
+
 /// @brief 把一段文本按显示宽度折行并渲染为纵向块（每物理行一个行内元素）
 /// @param src    渲染源文本（含行内标记）
 /// @param wrap_w 单行最大显示列宽
@@ -1100,12 +1101,6 @@ int estimate_message_height(const MessageNode& msg, int width) {
     // 操作按钮栏（复制/重试）：仅正常回复（有正文），思考/工具调用专用消息不显示
     if (msg.role == MsgRole::Assistant && msg.sealed && !trim_copy(msg.text).empty()) ++h;
     return h;
-}
-
-Element build_context_gauge(int used, int limit) {
-    if (limit <= 0) return ftxui::text(std::string(str::kGaugeNA));
-    double ratio = std::clamp(static_cast<double>(used) / limit, 0.0, 1.0);
-    return ftxui::gaugeRight(static_cast<float>(ratio));
 }
 
 Element build_message(const MessageNode& msg, int width, std::size_t anim_frame,

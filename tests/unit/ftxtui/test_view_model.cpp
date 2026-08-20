@@ -305,3 +305,147 @@ TEST_CASE("ViewModel assembles a full multi-turn history", "[view_model][integra
     REQUIRE(vm.messages[2].role == MsgRole::User);
     REQUIRE(vm.messages[2].text == "Q2");
 }
+
+// ============================================================================
+// 子 Agent 聚合（任务调度 tab）
+// ============================================================================
+
+TEST_CASE("ViewModel sub agent progress aggregates by task_id", "[view_model][subagent]") {
+    ViewModel vm;
+    vm.apply(ActionSubAgentProgress{.task_id = "t1", .step_number = 1, .step_type = "thought"});
+    REQUIRE(vm.tabs.sub_agents.size() == 1);
+    REQUIRE(vm.tabs.sub_agents[0].task_id == "t1");
+    REQUIRE(vm.tabs.sub_agents[0].status == "running");
+    REQUIRE(vm.tabs.sub_agents[0].step_number == 1);
+    REQUIRE(vm.tabs.sub_agents[0].msg_index == 0);  // 指向刚 push 的消息
+
+    // 同一 task_id 再次进度：不新增条目，更新步骤
+    vm.apply(ActionSubAgentProgress{.task_id = "t1", .step_number = 2, .step_type = "action"});
+    REQUIRE(vm.tabs.sub_agents.size() == 1);
+    REQUIRE(vm.tabs.sub_agents[0].step_number == 2);
+    REQUIRE(vm.tabs.sub_agents[0].msg_index == 1);
+
+    // 新 task_id：新增条目
+    vm.apply(ActionSubAgentProgress{.task_id = "t2", .step_number = 1, .step_type = "thought"});
+    REQUIRE(vm.tabs.sub_agents.size() == 2);
+    REQUIRE(vm.tabs.sub_agents[1].task_id == "t2");
+    REQUIRE(vm.tabs.sub_agents[1].msg_index == 2);
+    REQUIRE(vm.messages.size() == 3);
+}
+
+TEST_CASE("ViewModel sub agent final step does not append message", "[view_model][subagent]") {
+    ViewModel vm;
+    vm.apply(ActionSubAgentProgress{.task_id = "t1", .step_number = 1, .step_type = "final"});
+    REQUIRE(vm.messages.empty());
+    REQUIRE(vm.tabs.sub_agents.empty());  // final 步不聚合，由 Completed 处理
+}
+
+TEST_CASE("ViewModel sub agent completed updates status and msg_index", "[view_model][subagent]") {
+    ViewModel vm;
+    vm.apply(ActionSubAgentProgress{.task_id = "t1", .step_number = 1, .step_type = "thought"});
+    vm.apply(ActionSubAgentCompleted{.task_id = "t1", .final_answer = "done", .was_error = false,
+                                     .duration_ms = 1500.0});
+    REQUIRE(vm.tabs.sub_agents.size() == 1);
+    REQUIRE(vm.tabs.sub_agents[0].status == "done");
+    REQUIRE(vm.tabs.sub_agents[0].duration_ms == 1500.0);
+    REQUIRE(vm.tabs.sub_agents[0].msg_index == 1);  // 指向完成消息
+
+    // 失败：状态为 failed
+    vm.apply(ActionSubAgentCompleted{.task_id = "t2", .was_error = true, .duration_ms = 500.0});
+    REQUIRE(vm.tabs.sub_agents.size() == 2);
+    REQUIRE(vm.tabs.sub_agents[1].status == "failed");
+    REQUIRE(vm.tabs.sub_agents[1].msg_index == 2);
+}
+
+// ============================================================================
+// 修改追踪（P4：Edit/Write → FileChange）
+// ============================================================================
+
+TEST_CASE("ViewModel edit tool tracks FileChange with diff", "[view_model][file_change]") {
+    ViewModel vm;
+    vm.apply(ActionReasoningDelta{.delta = "改用 bar() 计算 y\n"});
+    vm.apply(ActionBeginTool{
+        .tool_name = "Edit",
+        .call_id = "c1",
+        .arguments = R"JSON({"file_path": "src/main.cpp",
+                             "old_string": "auto y = foo();",
+                             "new_string": "auto y = bar();"})JSON"});
+
+    REQUIRE(vm.tabs.changes.changes.size() == 1);
+    const auto& ch = vm.tabs.changes.changes[0];
+    REQUIRE(ch.file_path == "src/main.cpp");
+    REQUIRE(ch.old_string == "auto y = foo();");
+    REQUIRE(ch.new_string == "auto y = bar();");
+    REQUIRE(ch.purpose == "改用 bar() 计算 y");  // reasoning 最后一行
+    REQUIRE(ch.msg_index == 0);                  // 工具调用所在消息
+    REQUIRE(ch.timestamp > 0);
+    REQUIRE(ch.diff.size() == 1);
+    REQUIRE(ch.diff[0].kind == agent::DiffKind::Modify);
+    REQUIRE(ch.diff[0].text == "auto y = bar();");
+    REQUIRE(ch.diff[0].line_no == 1);
+    REQUIRE(vm.tabs.changes_open);               // 首个修改自动打开变更记录 tab
+}
+
+TEST_CASE("ViewModel write tool tracks FileChange as all Insert", "[view_model][file_change]") {
+    ViewModel vm;
+    vm.apply(ActionBeginTool{
+        .tool_name = "Write",
+        .call_id = "c1",
+        .arguments = R"JSON({"file_path": "src/new.cpp",
+                             "content": "int main() {\n    return 0;\n}\n"})JSON"});
+
+    REQUIRE(vm.tabs.changes.changes.size() == 1);
+    const auto& ch = vm.tabs.changes.changes[0];
+    REQUIRE(ch.old_string.empty());              // Write 全量改写，无旧内容
+    REQUIRE(ch.new_string == "int main() {\n    return 0;\n}\n");
+    REQUIRE(ch.diff.size() == 3);
+    REQUIRE(ch.diff[0].kind == agent::DiffKind::Insert);
+    REQUIRE(ch.diff[1].kind == agent::DiffKind::Insert);
+    REQUIRE(ch.diff[2].kind == agent::DiffKind::Insert);
+    REQUIRE(ch.diff[2].line_no == 3);
+}
+
+TEST_CASE("ViewModel purpose falls back to new_string first line", "[view_model][file_change]") {
+    ViewModel vm;
+    // 无 reasoning 直接调工具（R1 回退）
+    vm.apply(ActionBeginTool{
+        .tool_name = "Edit",
+        .call_id = "c1",
+        .arguments = R"JSON({"file_path": "a.txt",
+                             "old_string": "x",
+                             "new_string": "y"})JSON"});
+    REQUIRE(vm.tabs.changes.changes.size() == 1);
+    REQUIRE(vm.tabs.changes.changes[0].purpose == "y");
+}
+
+TEST_CASE("ViewModel non-file tools do not track FileChange", "[view_model][file_change]") {
+    ViewModel vm;
+    vm.apply(ActionBeginTool{.tool_name = "Read", .call_id = "c1",
+                             .arguments = R"JSON({"file_path": "a.txt"})JSON"});
+    vm.apply(ActionBeginTool{.tool_name = "Bash", .call_id = "c2",
+                             .arguments = R"JSON({"command": "ls"})JSON"});
+    REQUIRE(vm.tabs.changes.changes.empty());
+    REQUIRE_FALSE(vm.tabs.changes_open);
+}
+
+TEST_CASE("ViewModel malformed arguments do not track FileChange", "[view_model][file_change]") {
+    ViewModel vm;
+    vm.apply(ActionBeginTool{.tool_name = "Edit", .call_id = "c1",
+                             .arguments = "not json"});
+    vm.apply(ActionBeginTool{.tool_name = "Edit", .call_id = "c2",
+                             .arguments = R"JSON({"old_string": "x"})JSON"});  // 缺 file_path
+    REQUIRE(vm.tabs.changes.changes.empty());
+}
+
+TEST_CASE("ViewModel multiple edits accumulate FileChanges", "[view_model][file_change]") {
+    ViewModel vm;
+    vm.apply(ActionBeginTool{
+        .tool_name = "Edit", .call_id = "c1",
+        .arguments = R"JSON({"file_path": "a.txt", "old_string": "1", "new_string": "2"})JSON"});
+    vm.apply(ActionBeginTool{
+        .tool_name = "Edit", .call_id = "c2",
+        .arguments = R"JSON({"file_path": "b.txt", "old_string": "3", "new_string": "4"})JSON"});
+    REQUIRE(vm.tabs.changes.changes.size() == 2);
+    REQUIRE(vm.tabs.changes.changes[0].file_path == "a.txt");
+    REQUIRE(vm.tabs.changes.changes[1].file_path == "b.txt");
+}

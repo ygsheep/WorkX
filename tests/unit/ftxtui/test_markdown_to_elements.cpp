@@ -182,20 +182,6 @@ TEST_CASE("build_markdown empty input renders empty", "[markdown][block]") {
 }
 
 // ============================================================================
-// 侧栏上下文进度条
-// ============================================================================
-
-TEST_CASE("build_context_gauge renders n/a when no limit", "[markdown][gauge]") {
-    auto text = render_text(build_context_gauge(0, 0));
-    REQUIRE(text.find("n/a") != std::string::npos);
-}
-
-TEST_CASE("build_context_gauge renders gauge when limit present", "[markdown][gauge]") {
-    auto text = render_text(build_context_gauge(5, 10));
-    REQUIRE(text.find("n/a") == std::string::npos);
-}
-
-// ============================================================================
 // 工具结果特化渲染（Read 预览 / Write/Edit diff）
 // ============================================================================
 

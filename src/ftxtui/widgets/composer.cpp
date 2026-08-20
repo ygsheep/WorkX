@@ -144,6 +144,13 @@ Component make_composer(ComposerOptions& opt) {
             if (opt.suggest_refresh) opt.suggest_refresh();
             return true;
         }
+        // Ctrl+Enter（Windows 补丁改写为 kitty 序列 \x1b[13;5u）：
+        // 面板激活时插入引用（@路径），否则不消费
+        if (e == ftxui::Event::Special("\x1b[13;5u")) {
+            if (suggest && opt.suggest_enter_insert && opt.suggest_enter_insert())
+                return true;
+            return false;
+        }
         if (e == Event::Tab) {
             if (suggest && opt.suggest_move) {
                 opt.suggest_move(+1);  // Tab = 向下循环选择

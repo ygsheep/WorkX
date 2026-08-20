@@ -39,6 +39,7 @@ target_sources(workx_core PRIVATE
     tool_kind.cpp
     utils/error.cpp
     utils/file_index.cpp
+    utils/line_diff.cpp
     utils/uuid.cpp
     utils/path_encoder.cpp
 )

@@ -118,6 +118,7 @@ int main(int argc, char** argv) {
     deps.backend_admin = backend_admin;
     deps.event_bus = &bus;
     deps.config_manager = &cfg;
+    deps.task_manager = &tm;
     deps.mock_mode = mock_mode;
     deps.smoke_mode = smoke_mode;
     deps.model_name = model_name;
