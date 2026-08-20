@@ -689,4 +689,143 @@ ResultV2<ExecOutput> exec(const std::string& cmd, const ExecOptions& opts) {
     return result;
 }
 
+// ============================================================
+// exec_interactive：交互式子进程（继承终端 stdio，不捕获输出）
+// ============================================================
+
+namespace {
+
+#ifdef _WIN32
+ResultV2<InteractiveExecResult> exec_interactive_windows(const std::string& cmd,
+                                                         const std::vector<std::string>& args,
+                                                         const std::string& cwd) {
+    std::string cmdline = escape_arg(cmd);
+    for (const auto& arg : args) {
+        cmdline += ' ';
+        cmdline += escape_arg(arg);
+    }
+    std::wstring wcmdline = utf8_to_wide(cmdline);
+    std::wstring wcwd = utf8_to_wide(cwd);
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+
+    // 不设置 STARTF_USESTDHANDLES → 子进程继承父进程控制台 stdio（nvim 需要交互式终端）
+    // 不设置 CREATE_NO_WINDOW → 子进程复用父进程控制台窗口
+    if (!CreateProcessW(
+            nullptr,
+            wcmdline.data(),
+            nullptr, nullptr,
+            TRUE,                          // bInheritHandles（继承标准句柄）
+            CREATE_UNICODE_ENVIRONMENT,
+            nullptr,
+            wcwd.empty() ? nullptr : wcwd.c_str(),
+            &si, &pi)) {
+        DWORD err = GetLastError();
+        return ResultV2<InteractiveExecResult>::err(Error::Code::ResourceNotFound,
+            "CreateProcessW failed for '" + cmd + "' (error " + std::to_string(err) + ")",
+            "subprocess::exec_interactive");
+    }
+    HandleGuard g_process(pi.hProcess), g_thread(pi.hThread);
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+
+    DWORD exit_code = 0;
+    if (GetExitCodeProcess(pi.hProcess, &exit_code)) {
+        return ResultV2<InteractiveExecResult>::ok(
+            InteractiveExecResult{static_cast<int>(exit_code)});
+    }
+    return ResultV2<InteractiveExecResult>::err(Error::Code::InternalError,
+        "GetExitCodeProcess failed", "subprocess::exec_interactive");
+}
+#else  // !_WIN32
+ResultV2<InteractiveExecResult> exec_interactive_posix(const std::string& cmd,
+                                                       const std::vector<std::string>& args,
+                                                       const std::string& cwd) {
+    // 子进程 → 父进程：execvp 失败时传递 errno，区分"命令不存在"与"退出码 127"
+    int err_pipe[2] = {-1, -1};
+    if (pipe(err_pipe) < 0) {
+        return ResultV2<InteractiveExecResult>::err(Error::Code::InternalError,
+            "pipe() failed: " + std::string(strerror(errno)), "subprocess::exec_interactive");
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(err_pipe[0]); close(err_pipe[1]);
+        return ResultV2<InteractiveExecResult>::err(Error::Code::InternalError,
+            "fork() failed: " + std::string(strerror(errno)), "subprocess::exec_interactive");
+    }
+
+    if (pid == 0) {
+        // 子进程：不重定向 stdio（继承父进程终端），留在前台进程组（可接收终端信号）
+        close(err_pipe[0]);  // 子进程只写
+        if (!cwd.empty()) {
+            if (chdir(cwd.c_str()) != 0) {
+                const int e = errno;
+                (void)!write(err_pipe[1], &e, sizeof(e));
+                _exit(127);
+            }
+        }
+        signal(SIGINT, SIG_DFL);
+        signal(SIGQUIT, SIG_DFL);
+        signal(SIGTERM, SIG_DFL);
+
+        std::vector<const char*> argv;
+        argv.reserve(args.size() + 2);
+        argv.push_back(cmd.c_str());
+        for (const auto& arg : args) {
+            argv.push_back(arg.c_str());
+        }
+        argv.push_back(nullptr);
+
+        execvp(cmd.c_str(), const_cast<char* const*>(argv.data()));
+        // execvp 失败（命令不存在等）：把 errno 传给父进程
+        const int e = errno;
+        (void)!write(err_pipe[1], &e, sizeof(e));
+        _exit(127);
+    }
+
+    close(err_pipe[1]);  // 父进程只读
+
+    int status = 0;
+    if (waitpid(pid, &status, 0) > 0) {
+        if (WIFEXITED(status)) {
+            const int code = WEXITSTATUS(status);
+            if (code == 127) {
+                // 子进程可能因 execvp/chdir 失败退出：读 errno 判断启动失败
+                int e = 0;
+                const ssize_t n = read(err_pipe[0], &e, sizeof(e));
+                close(err_pipe[0]);
+                if (n == static_cast<ssize_t>(sizeof(e))) {
+                    return ResultV2<InteractiveExecResult>::err(Error::Code::ResourceNotFound,
+                        "execvp failed for '" + cmd + "': " + std::string(strerror(e)),
+                        "subprocess::exec_interactive");
+                }
+                return ResultV2<InteractiveExecResult>::ok(InteractiveExecResult{code});
+            }
+            close(err_pipe[0]);
+            return ResultV2<InteractiveExecResult>::ok(InteractiveExecResult{code});
+        }
+        close(err_pipe[0]);
+        return ResultV2<InteractiveExecResult>::ok(InteractiveExecResult{-1});  // 被信号终止
+    }
+    close(err_pipe[0]);
+    return ResultV2<InteractiveExecResult>::err(Error::Code::InternalError,
+        "waitpid failed: " + std::string(strerror(errno)), "subprocess::exec_interactive");
+}
+#endif // _WIN32
+
+} // anonymous namespace
+
+ResultV2<InteractiveExecResult> exec_interactive(const std::string& cmd,
+                                                 const std::vector<std::string>& args,
+                                                 const std::string& cwd) {
+#ifdef _WIN32
+    return exec_interactive_windows(cmd, args, cwd);
+#else
+    return exec_interactive_posix(cmd, args, cwd);
+#endif
+}
+
 } // namespace agent::process

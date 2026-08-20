@@ -27,6 +27,7 @@ struct T {
     inline static const ftxui::Color Text      = ftxui::Color::RGB(0xF5, 0xF5, 0xF0);  // 主文字（米白）
     inline static const ftxui::Color TextDim   = ftxui::Color::RGB(0xC8, 0xC8, 0xC8);  // 次级文字（可读灰）
     inline static const ftxui::Color TextFaint = ftxui::Color::RGB(0x8E, 0x8E, 0x8E);  // 弱提示/时间戳/边框
+    inline static const ftxui::Color DiffAdd   = ftxui::Color::RGB(0x6a, 0xc4, 0x6a);  // diff 新增/修改行（绿）
 };
 
 // ============================================================================

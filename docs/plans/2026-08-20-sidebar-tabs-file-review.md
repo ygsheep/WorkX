@@ -1,6 +1,6 @@
 # 侧边栏 Tab 化 + 文件 Review 查看器规划
 
-> 状态：待确认（2026-08-20）
+> 状态：P1/P2/P3/P4/P5 已完成（2026-08-20）
 > 范围：`src/ftxtui`（本计划仅规划，未改代码）
 > 基线：`docs/plans/2026-08-17-ftxui-tui-design.md`、`docs/plans/2026-08-18-ftxui-maintainability-plan.md`
 > 前置探讨：`/edit` 内嵌 nvim（方案 B）与 `/view` 只读查看器（方案 A）——本计划聚焦 `/view` 的 tab 化落地
@@ -266,15 +266,15 @@ TaskManager（只读查询） ──────►  渲染时 getRunningTasks()
 
 | 文件 | 改动 |
 | --- | --- |
-| `core/utils/line_diff.h/.cpp` | **新增**：行级 LCS diff（纯函数，可单测） |
-| `widgets/sidebar_tabs.h/.cpp` | **新增**：tab 栏 + 任务调度视图（含子 Agent Menu） |
-| `widgets/file_viewer.h/.cpp` | **新增**：文件查看视图（行号 + 内联 diff 高亮 + 滚动） |
-| `widgets/change_viewer.h/.cpp` | **新增**：变更记录视图（修改点 Menu + hunk + 目的展开） |
-| `vm/view_model.h/.cpp` | 扩展 `SidebarTabsModel`；`apply_variant` 补修改追踪/子 Agent 聚合 |
-| `theme/strings.h` | 新增 tab 标签、查看器提示、diff 标记文案 |
-| `command/builtins.h/.cpp` | 新增 `on_view` 回调 + 注册 `/view` |
-| `render/transcript_layout.h` | 新增 `scroll_to_message` 辅助（或 App 侧直接算 `scroll_top`） |
-| `app.h/.cpp` | `cmd_view()`、tab 切换、`CatchEvent` 处理查看器按键、接线 |
+| `core/utils/line_diff.h/.cpp` | **新增**：行级 LCS diff（纯函数，可单测）✅ P4 |
+| `widgets/sidebar_tabs.h/.cpp` | **新增**：tab 栏 + 任务调度视图（含子 Agent Menu）✅ |
+| `widgets/file_viewer.h/.cpp` | **新增**：文件查看视图（行号 + 内联 diff 高亮 + 滚动）✅ P3/P4 |
+| `widgets/change_viewer.h/.cpp` | **新增**：变更记录视图（修改点 Menu + hunk + 目的展开）✅ P5 |
+| `vm/view_model.h/.cpp` | 扩展 `SidebarTabsModel`；`apply_variant` 补修改追踪/子 Agent 聚合 ✅（FileChange 追踪 P4） |
+| `theme/strings.h` | 新增 tab 标签、查看器提示、diff 标记文案 ✅ |
+| `command/builtins.h/.cpp` | 新增 `on_view` 回调 + 注册 `/view` ✅ |
+| `render/transcript_layout.h` | 新增 `scroll_to_message` 辅助（或 App 侧直接算 `scroll_top`）✅（jump_to_sub_agent 直接算） |
+| `app.h/.cpp` | `cmd_view()`、tab 切换、`CatchEvent` 处理查看器按键、接线 ✅ |
 
 ---
 
@@ -282,12 +282,12 @@ TaskManager（只读查询） ──────►  渲染时 getRunningTasks()
 
 | 阶段 | 目标 | 关键动作 | 验收 |
 | --- | --- | --- | --- |
-| P1 | 侧边栏 tab 化骨架 | `SidebarTabsModel` + 自绘 tab 栏（含 ✕ 关闭）+ 三 tab 空壳；原侧栏内容移入任务调度 tab 底部 | 启动默认任务调度，tab 可切换，✕ 可关闭变更记录/文件，原信息不丢 |
-| P2 | 任务调度 tab 数据 + 交互 | 聚合 busy/工具/步骤/子 Agent/后台任务；子 Agent Menu + Enter 跳转转录 | 生成中能看到当前工具与子 Agent；Enter 跳转正确 |
-| P3 | `/view` 打开 + 只读滚动 | `cmd_view()` + 文件读取 + 行号 + 虚拟化滚动 | `/view` 打开文件，行号/滚动正常 |
-| P4 | 修改追踪 + 内联 diff | `line_diff` + FileChange 追踪 + 文件 tab 内联高亮 | Edit/Write 后 `/view` 显示新增/修改行标记 |
-| P5 | 变更记录 tab | `change_viewer`：修改点 Menu + hunk + 目的展开 + Enter 跳转文件 tab | 变更记录列出全部修改，选中跳转正确 |
-| P6 | 收尾 | `/edit` 联动重读、Esc 关闭、文案入 strings、补测试 | 全流程可用 |
+| P1 | 侧边栏 tab 化骨架 | `SidebarTabsModel` + 自绘 tab 栏（含 ✕ 关闭）+ 三 tab 空壳；原侧栏内容移入任务调度 tab 底部 | ✅ 启动默认任务调度，tab 可切换，✕ 可关闭变更记录/文件，原信息不丢 |
+| P2 | 任务调度 tab 数据 + 交互 | 聚合 busy/工具/步骤/子 Agent/后台任务；子 Agent Menu + Enter 跳转转录 | ✅ 生成中能看到当前工具与子 Agent；Enter 跳转正确 |
+| P3 | `/view` 打开 + 只读滚动 | `cmd_view()` + 文件读取 + 行号 + 虚拟化滚动 | ✅ `/view` 打开文件，行号/滚动正常 |
+| P4 | 修改追踪 + 内联 diff | `line_diff` + FileChange 追踪 + 文件 tab 内联高亮 | ✅ Edit/Write 后 `/view` 显示新增/修改行标记 |
+| P5 | 变更记录 tab | `change_viewer`：修改点 Menu + hunk + 目的展开 + Enter 跳转文件 tab | ✅ 变更记录列出全部修改，选中跳转正确 |
+| P6 | 收尾 | Esc 关闭、文案入 strings、补测试（`/edit` 联动重读属方案 B 另行规划） | ✅ 全流程可用 |
 
 ---
 
@@ -313,6 +313,7 @@ TaskManager（只读查询） ──────►  渲染时 getRunningTasks()
 | R4 | `/view` 与 `/edit` 并发（编辑中打开查看器） | `/view` 读取前 `cancel_and_wait_current_task()` 或标记 dirty 延迟重读 |
 | R5 | 后台任务查询与 TaskManager 生命周期 | 渲染时 try 捕获；TaskManager 单例常驻，风险低 |
 | R6 | 变更记录跨文件跳转（文件 tab 需切换文件） | `cmd_view` 复用：跳转时若目标文件未打开则先读入再定位行 |
+| R7 | 3 个 CJK tab + 边框总宽约 36-40 列，超过 30 列侧栏 | 当前仅 1-2 tab 打开（P3 阶段），不溢出；P4/P5 实现后需加宽侧栏（如 34-36 列）或压缩 tab 宽度（待定） |
 
 ---
 

@@ -27,6 +27,9 @@ add_executable(codex
     render/markdown_to_elements.cpp
     render/syntax_highlight.cpp
     widgets/sidebar.cpp
+    widgets/sidebar_tabs.cpp
+    widgets/file_viewer.cpp
+    widgets/change_viewer.cpp
     widgets/composer.cpp
     widgets/status_line.cpp
     widgets/suggest_panel.cpp

@@ -1,8 +1,12 @@
 #include "vm/view_model.h"
 
+#include <algorithm>
+#include <chrono>
 #include <format>
 #include <string>
 #include <utility>
+
+#include <nlohmann/json.hpp>
 
 #include "theme/strings.h"
 
@@ -107,6 +111,11 @@ bool ViewModel::apply_variant(const ActionBeginTool& a) {
     t.text_pos = m.text.size();  // 记录正文插入点，供与正文交错渲染
     m.tool_calls.push_back(std::move(t));
     m.tool_use_ids.push_back(a.call_id);
+
+    // P4 修改追踪：Edit/Write 工具调用 → FileChange（内联 diff 高亮数据源）
+    if (a.tool_name == "Edit" || a.tool_name == "Write") {
+        track_file_change(a);
+    }
     return true;
 }
 
@@ -145,6 +154,7 @@ bool ViewModel::apply_variant(const ActionAgentDone& a) {
 
 bool ViewModel::apply_variant(const ActionSetBusy& a) {
     busy = a.busy;
+    tabs.busy = a.busy;
     if (a.busy) {
         // 为即将到来的流式 token 预留一条 assistant 消息
         (void)active_stream();
@@ -194,6 +204,19 @@ bool ViewModel::apply_variant(const ActionSubAgentProgress& a) {
         // final 步由 SubAgentCompleted 处理，这里不重复
         return false;
     }
+    // 聚合到任务调度 tab（按 task_id；msg_index 指向本消息将 push 到的索引）
+    auto it = std::find_if(tabs.sub_agents.begin(), tabs.sub_agents.end(),
+        [&](const SubAgentLite& s) { return s.task_id == a.task_id; });
+    if (it == tabs.sub_agents.end()) {
+        tabs.sub_agents.push_back(SubAgentLite{});
+        it = std::prev(tabs.sub_agents.end());
+        it->task_id = a.task_id;
+    }
+    it->status = "running";
+    it->step_number = a.step_number;
+    it->current_step = a.step_type;
+    it->msg_index = messages.size();
+
     MessageNode n;
     n.role = MsgRole::Assistant;
     n.text = prefix + (a.content.empty()
@@ -206,6 +229,18 @@ bool ViewModel::apply_variant(const ActionSubAgentProgress& a) {
 }
 
 bool ViewModel::apply_variant(const ActionSubAgentCompleted& a) {
+    // 聚合：更新状态/耗时，msg_index 指向完成消息
+    auto it = std::find_if(tabs.sub_agents.begin(), tabs.sub_agents.end(),
+        [&](const SubAgentLite& s) { return s.task_id == a.task_id; });
+    if (it == tabs.sub_agents.end()) {
+        tabs.sub_agents.push_back(SubAgentLite{});
+        it = std::prev(tabs.sub_agents.end());
+        it->task_id = a.task_id;
+    }
+    it->status = a.was_error ? "failed" : "done";
+    it->duration_ms = a.duration_ms;
+    it->msg_index = messages.size();
+
     MessageNode n;
     n.role = MsgRole::Assistant;
     std::string status = a.was_error ? std::string(str::kSubFailed) : std::string(str::kSubCompleted);
@@ -243,6 +278,96 @@ bool ViewModel::apply_variant(const ActionProviderSwitched&) {
 
 bool ViewModel::apply_variant(const ActionProviderSwitchFailed&) {
     return false;  // 由 App 消费（提示切换失败），ViewModel 不关心
+}
+
+namespace {
+
+/// @brief 按行切分（兼容 \r\n / \n），空串返回空列表
+std::vector<std::string> split_lines(const std::string& content) {
+    std::vector<std::string> lines;
+    if (content.empty()) return lines;
+    std::string cur;
+    for (const char c : content) {
+        if (c == '\n') {
+            lines.push_back(std::move(cur));
+            cur.clear();
+        } else if (c != '\r') {
+            cur += c;
+        }
+    }
+    if (!cur.empty()) lines.push_back(std::move(cur));
+    return lines;
+}
+
+/// @brief 截断到 max 字符（超长加省略号；回退到多字节边界避免切断 UTF-8）
+std::string truncate_utf8(std::string s, std::size_t max) {
+    if (s.size() <= max) return s;
+    s.resize(max);
+    // 去掉续字节回到字符首字节；若首字节是不完整多字节字符则一并去掉
+    while (!s.empty() && (static_cast<unsigned char>(s.back()) & 0xC0) == 0x80)
+        s.pop_back();
+    if (!s.empty() && (static_cast<unsigned char>(s.back()) & 0xC0) == 0xC0)
+        s.pop_back();
+    s += "…";
+    return s;
+}
+
+/// @brief 从 reasoning 提取修改目的：取最后一行（去空白 + 截断 40）
+std::string purpose_from_reasoning(const std::string& reasoning) {
+    if (reasoning.empty()) return {};
+    std::string last = reasoning;
+    while (!last.empty() && (last.back() == '\n' || last.back() == '\r'))
+        last.pop_back();  // 去掉末尾换行，避免取到空行
+    const std::size_t pos = last.find_last_of('\n');
+    if (pos != std::string::npos) last = last.substr(pos + 1);
+    const auto is_space = [](char c) {
+        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+    };
+    while (!last.empty() && is_space(last.front())) last.erase(last.begin());
+    while (!last.empty() && is_space(last.back())) last.pop_back();
+    return truncate_utf8(std::move(last), 40);
+}
+
+}  // namespace
+
+void ViewModel::track_file_change(const ActionBeginTool& a) {
+    nlohmann::json args;
+    try {
+        args = nlohmann::json::parse(a.arguments);
+    } catch (const std::exception&) {
+        return;
+    }
+    if (!args.contains("file_path") || !args["file_path"].is_string()) return;
+
+    FileChange ch;
+    ch.file_path = args["file_path"].get<std::string>();
+    if (a.tool_name == "Edit") {
+        if (args.contains("old_string") && args["old_string"].is_string())
+            ch.old_string = args["old_string"].get<std::string>();
+        if (args.contains("new_string") && args["new_string"].is_string())
+            ch.new_string = args["new_string"].get<std::string>();
+    } else if (a.tool_name == "Write") {
+        if (args.contains("content") && args["content"].is_string())
+            ch.new_string = args["content"].get<std::string>();
+    }
+    if (ch.new_string.empty() && ch.old_string.empty()) return;
+
+    // purpose：当前消息 reasoning 最后一行；空则回退 new_string 首行（R1）
+    const auto& m = active_stream();
+    ch.purpose = purpose_from_reasoning(m.reasoning);
+    ch.reasoning = m.reasoning;  // 完整 reasoning（变更记录 tab 按 e 展开）
+    if (ch.purpose.empty()) {
+        const auto new_lines = split_lines(ch.new_string);
+        if (!new_lines.empty()) ch.purpose = truncate_utf8(new_lines.front(), 40);
+    }
+
+    ch.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    ch.msg_index = messages.size() - 1;  // 工具调用所在消息索引
+    ch.diff = agent::line_diff(split_lines(ch.old_string), split_lines(ch.new_string), 1);
+
+    tabs.changes.changes.push_back(std::move(ch));
+    tabs.changes_open = true;
 }
 
 }  // namespace ftxtui

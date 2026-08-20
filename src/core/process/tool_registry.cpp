@@ -85,6 +85,19 @@ std::optional<std::string> ToolRegistry::find_in_path(const std::string& name) {
     return std::nullopt;
 }
 
+std::optional<std::string> ToolRegistry::find_executable(const std::string& name) {
+    if (auto found = find_in_path(name)) return found;
+#ifdef _WIN32
+    // Windows: PATH 中常省略 .exe 扩展名，自动补试一次
+    constexpr std::string_view kExeExt = ".exe";
+    if (name.size() < kExeExt.size()
+        || name.compare(name.size() - kExeExt.size(), kExeExt.size(), kExeExt) != 0) {
+        return find_in_path(name + std::string(kExeExt));
+    }
+#endif
+    return std::nullopt;
+}
+
 std::optional<std::string> ToolRegistry::resolve_tool(
     const std::string& tool_name,
     const std::string& bundled_relative_path,

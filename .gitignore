@@ -8,6 +8,7 @@ vcpkg_installed/
 
 example/cc/
 example/DeepSeek-Reasonix/
+example/deepseek-harness/
 
 # IDE and editor directories
 .idea/
