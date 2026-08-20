@@ -922,7 +922,9 @@ void App::reload_file() {
         if (fs::weakly_canonical(cp, ec2).string() != abs_path) continue;
         FileChange copy = ch;
         const int start = locate_block(lines, ch.new_string);
-        if (start >= 0) copy.new_start = start + 1;  // 1-based
+        // 内容已不存在（手动编辑删除/改写）→ 丢弃旧错位区块，避免高亮错行
+        if (start < 0) continue;
+        copy.new_start = start + 1;  // 1-based
         m_vm.tabs.file.changes.push_back(std::move(copy));
     }
 
