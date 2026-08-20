@@ -129,6 +129,12 @@ public:
         ++m_wait_task_count;
     }
 
+    void waitForTasks(const std::vector<std::shared_ptr<Task>>& /*tasks*/) override {
+        // M-2：Mock 不实际执行任务，waitForTasks 立即返回
+        std::lock_guard<std::mutex> lock(m_mutex);
+        ++m_wait_tasks_count;
+    }
+
     // === 测试辅助 API ===
 
     /// @brief create 调用次数
@@ -179,6 +185,12 @@ public:
         return m_wait_task_count;
     }
 
+    /// @brief waitForTasks 调用次数（M-2）
+    [[nodiscard]] size_t wait_tasks_count() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_wait_tasks_count;
+    }
+
     /// @brief 清空所有记录
     void clear_history() {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -191,6 +203,7 @@ public:
         m_wait_count = 0;
         m_cancel_all_count = 0;
         m_wait_task_count = 0;
+        m_wait_tasks_count = 0;
     }
 
 private:
@@ -204,6 +217,7 @@ private:
     size_t m_wait_count = 0;
     size_t m_cancel_all_count = 0;
     size_t m_wait_task_count = 0;
+    size_t m_wait_tasks_count = 0;
 };
 
 } // namespace agent::test

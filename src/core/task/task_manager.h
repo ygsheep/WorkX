@@ -231,6 +231,12 @@ public:
     /// @details 阻塞直到 task->isFinished() 为 true 或 30 秒兜底超时。
     ///          利用 Task::execute 结束时调用的 m_on_finished 回调通知 cv。
     virtual void wait(std::shared_ptr<Task> task) = 0;
+
+    /// @brief 并行等待一批任务结束（M-2：替代逐个 wait 的最坏 N×30s）
+    /// @param tasks 待等待的任务集合
+    /// @details 单一 30 秒兜底超时，任一任务结束时唤醒重新检查，
+    ///          全部 isFinished() 即返回。利用 m_on_finished 回调通知 cv。
+    virtual void waitForTasks(const std::vector<std::shared_ptr<Task>>& tasks) = 0;
 };
 
 // ============================================================
@@ -278,6 +284,7 @@ public:
     void waitForAll() override;
     void cancelAll() override;
     void wait(std::shared_ptr<Task> task) override;
+    void waitForTasks(const std::vector<std::shared_ptr<Task>>& tasks) override;
 
     /// @brief 工作线程数（诊断 / 测试用）
     [[nodiscard]] size_t worker_count() const noexcept { return m_pool.worker_count(); }

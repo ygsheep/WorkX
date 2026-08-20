@@ -2,7 +2,7 @@
  * @file agent_tool.h
  * @brief AgentTool — 子 Agent 调度工具
  * @details 启动子 Agent 执行复杂任务
- * @version 1.3.0
+ * @version 1.3.1
  * @date 2026-07
  */
 

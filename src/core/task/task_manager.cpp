@@ -268,6 +268,18 @@ void TaskManager::wait(std::shared_ptr<Task> task) {
     });
 }
 
+void TaskManager::waitForTasks(const std::vector<std::shared_ptr<Task>>& tasks) {
+    if (tasks.empty()) return;
+    // M-2：并行等待一批任务，单一 30s 兜底超时（替代逐个 wait 的最坏 N×30s）。
+    // 任一任务结束时 m_on_finished 通知 m_wait_cv，重新检查谓词。
+    std::unique_lock<std::mutex> lock(m_wait_mutex);
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    m_wait_cv.wait_until(lock, deadline, [&tasks]() {
+        return std::all_of(tasks.begin(), tasks.end(),
+            [](const std::shared_ptr<Task>& t) { return t->isFinished(); });
+    });
+}
+
 void TaskManager::cancelAll() {
     std::lock_guard<std::mutex> lock(m_tasks_mutex);
     for (auto& task : m_entries) {

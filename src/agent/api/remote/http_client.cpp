@@ -524,7 +524,7 @@ void HttpClient::async_post_stream(
 
     if (!session->easy_handle()) {
         // curl 初始化失败：主动 finish reader 让上层能收到错误，避免 next() 无限阻塞
-        // （调用方已把 reader 存入 m_active_reader，若不 finish 会永远等数据）
+        // （调用方已把 reader 存入 m_active_readers，若不 finish 会永远等数据）
         // finish_with_error 会同时触发 reader->finish 和 on_complete 回调
         LOG_ERROR("[http][stream] POST {} curl_easy_init failed", url);
         session->finish_with_error("Failed to initialize curl session");

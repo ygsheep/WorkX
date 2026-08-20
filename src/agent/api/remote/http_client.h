@@ -77,7 +77,35 @@ struct HttpResponse {
 
 class SSEStreamReader;
 
-class HttpClient {
+/// @brief HTTP 客户端抽象接口（M-1：可注入，便于 RemoteBackend 并发逻辑直接单测）
+/// @details RemoteBackend 通过本接口依赖 HttpClient，测试可注入 Fake 实现
+///          驱动 on_complete / cancel_stream 回调，验证多 reader 并发仲裁路径。
+class IHttpClient {
+public:
+    virtual ~IHttpClient() = default;
+
+    /// @brief 同步 GET 请求
+    /// @return 成功返回 HttpResponse（含 2xx/4xx/5xx 状态码）；
+    ///         失败返回 Error（仅限网络错误，HTTP 4xx/5xx 仍通过 HttpResponse 返回）
+    virtual ResultV2<HttpResponse> get(
+        const std::string& url,
+        const std::vector<std::pair<std::string, std::string>>& headers,
+        int timeout_ms = 15000) = 0;
+
+    virtual void async_post_stream(
+        const std::string& url,
+        const std::vector<std::pair<std::string, std::string>>& headers,
+        const std::string& body,
+        std::shared_ptr<SSEStreamReader> reader,
+        std::function<void()> on_complete,
+        int timeout_ms = 30000) const = 0;
+
+    virtual void cancel_stream(SSEStreamReader* reader) = 0;
+
+    virtual void shutdown() = 0;
+};
+
+class HttpClient : public IHttpClient {
 public:
     HttpClient();
     ~HttpClient();
@@ -85,26 +113,22 @@ public:
     HttpClient(const HttpClient&) = delete;
     HttpClient& operator=(const HttpClient&) = delete;
 
-    /// @brief 同步 GET 请求
-    /// @return 成功返回 HttpResponse（含 2xx/4xx/5xx 状态码）；
-    ///         失败返回 Error（仅限网络错误，HTTP 4xx/5xx 仍通过 HttpResponse 返回）
-    /// @details V2-2：签名从 HttpResponse 改为 ResultV2<HttpResponse>，
-    ///          网络错误（curl 失败、无法到达服务器）通过 Error 携带错误码；
-    ///          HTTP 4xx/5xx 仍通过 HttpResponse 返回，调用方可通过 is_http_error() 判断
-    ResultV2<HttpResponse> get(const std::string& url,
-                               const std::vector<std::pair<std::string, std::string>>& headers,
-                               int timeout_ms = 15000);
+    ResultV2<HttpResponse> get(
+        const std::string& url,
+        const std::vector<std::pair<std::string, std::string>>& headers,
+        int timeout_ms = 15000) override;
 
-    void async_post_stream(const std::string& url,
-                           const std::vector<std::pair<std::string, std::string>>& headers,
-                           const std::string& body,
-                           std::shared_ptr<SSEStreamReader> reader,
-                           std::function<void()> on_complete,
-                           int timeout_ms = 30000) const;
+    void async_post_stream(
+        const std::string& url,
+        const std::vector<std::pair<std::string, std::string>>& headers,
+        const std::string& body,
+        std::shared_ptr<SSEStreamReader> reader,
+        std::function<void()> on_complete,
+        int timeout_ms = 30000) const override;
 
-    void cancel_stream(SSEStreamReader *reader);
+    void cancel_stream(SSEStreamReader *reader) override;
 
-    void shutdown();
+    void shutdown() override;
 
     static ParsedUrl parse_url(const std::string& url);
 

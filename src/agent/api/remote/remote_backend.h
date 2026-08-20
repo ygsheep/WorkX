@@ -52,6 +52,13 @@ public:
     /// @details 替代原有的两个 bool 查询，单一原子读取保证状态一致快照
     [[nodiscard]] BackendState state() const noexcept { return m_state.load(std::memory_order_acquire); }
 
+    /// @brief 测试注入：替换内部 HTTP 客户端（M-1，须在 initialize 前调用）
+    /// @details 默认 initialize 内部创建真实 HttpClient；测试注入 Fake 实现
+    ///          以直接驱动 on_complete / cancel_stream，覆盖多 reader 并发仲裁路径。
+    void set_http_client_for_testing(std::unique_ptr<IHttpClient> client) {
+        m_http_client = std::move(client);
+    }
+
 private:
     BackendConfig m_config;
     // M-7：合并 m_ready / m_generating 两个 atomic<bool> 为单一 atomic<BackendState>，
@@ -66,8 +73,8 @@ private:
     /// @brief Provider 特定协议适配器
     std::unique_ptr<IProviderAdapter> m_adapter;
 
-    /// @brief HTTP 客户端
-    std::unique_ptr<HttpClient> m_http_client;
+    /// @brief HTTP 客户端（M-1：经 IHttpClient 接口依赖，测试可注入 Fake）
+    std::unique_ptr<IHttpClient> m_http_client;
 
     /// @brief 在飞请求的 reader 集合（v1.2.0 修复：支持并发在飞请求）
     /// @details 原单一 m_active_reader 仅允许一个在飞请求，与子 Agent 并行批量调度冲突

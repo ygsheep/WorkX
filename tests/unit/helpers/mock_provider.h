@@ -169,7 +169,11 @@ public:
         return reader;
     }
 
-    void interrupt() override { interrupt_count++; }
+    void interrupt() override {
+        // L-5：与 submit_count 同锁保护，避免并发中断时计数丢失
+        std::lock_guard<std::mutex> lock(mutex_);
+        interrupt_count++;
+    }
 
     bool is_generating() const override {
         std::lock_guard<std::mutex> lock(mutex_);

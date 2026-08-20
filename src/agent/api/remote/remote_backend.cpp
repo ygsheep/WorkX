@@ -64,7 +64,10 @@ ResultV2<void> RemoteBackend::initialize(const BackendConfig& config) {
     }
 
 #ifdef WORKX_HAS_CURL
-    m_http_client = std::make_unique<HttpClient>();
+    // M-1：测试注入的客户端优先保留，否则创建真实 HttpClient
+    if (!m_http_client) {
+        m_http_client = std::make_unique<HttpClient>();
+    }
     m_state.store(BackendState::Ready, std::memory_order_release);
 
     // H-1：通过 DI 注入的 m_event_bus 发布，不再调用 EventBus::instance()；

@@ -10,6 +10,8 @@
 
 #include <random>
 #include <format>
+#include <algorithm>
+#include <mutex>
 
 #include "agent/api/chat_types.h"
 #include "agent/core/react_loop.h"
@@ -28,7 +30,10 @@ constexpr const char* kAgentToolName = "Agent";
 std::string generate_task_id() {
     static constexpr char kAlphabet[] = "0123456789abcdefghijklmnopqrstuvwxyz";
     // 复用随机源（MSVC 上 std::random_device 每次构造开销大，批量调度场景明显）
+    // L-2：std::random_device 与 uniform_int_distribution 均非线程安全，加锁保护
+    static std::mutex s_mutex;
     static std::random_device rd;
+    std::lock_guard<std::mutex> lock(s_mutex);
     std::uniform_int_distribution<size_t> dist(0, sizeof(kAlphabet) - 2);
     std::string id = "a";
     id.reserve(9);
@@ -158,7 +163,8 @@ std::shared_ptr<agent::Task> launch_sub_agent(const SubAgentLaunchOptions& optio
                     // v1.2.0 子任务进度流式订阅：每个步骤增量推送结构化进度事件，
                     // 使订阅者按 task_id 实时跟踪子任务进度（无需轮询 TaskOutput）。
                     // 仅作增量通知，不注入父 LLM 上下文。
-                    if (options.event_bus != nullptr) {
+                    // L-3：空文本步骤不发布进度事件，避免空 content 噪音
+                    if (options.event_bus != nullptr && !line.empty()) {
                         options.event_bus->publish_async(SubAgentProgressEvent{
                             .task_id = options.task_id,
                             .step_number = step.step_number,
@@ -344,14 +350,13 @@ ResultV2<ToolResult> AgentTool::call(
         }));
     }
 
-    // 3. 同步模式：等待全部任务完成再返回。TaskManager::wait 内部已带 30s 兜底超时；
-    //    超时后返回但任务可能仍在运行，返回时明确提示，避免工具调用线程无限阻塞（评审 #3）
+    // 3. 同步模式：并行等待全部任务完成再返回（M-2：waitForTasks 单一 30s 兜底，
+    //    替代逐个 wait 的最坏 N×30s）。超时后返回但任务可能仍在运行，返回时明确提示，
+    //    避免工具调用线程无限阻塞（评审 #3）
     if (!run_in_background) {
-        bool all_finished = true;
-        for (auto& t : tasks) {
-            task_manager->wait(t);
-            if (!t->isFinished()) all_finished = false;
-        }
+        task_manager->waitForTasks(tasks);
+        const bool all_finished = std::all_of(tasks.begin(), tasks.end(),
+            [](const auto& t) { return t->isFinished(); });
         if (!all_finished) {
             std::string partial;
             for (size_t i = 0; i < tasks.size(); ++i) {
