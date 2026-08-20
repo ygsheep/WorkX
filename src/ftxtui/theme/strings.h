@@ -81,6 +81,7 @@ inline constexpr std::string_view kViewScrollHint    = "↑↓ 滚动 · Esc 关
 // 内嵌 nvim 编辑（/edit 方案 B）
 // ----------------------------------------------------------------------------
 inline constexpr std::string_view kCmdEditDesc      = "用 nvim 编辑文件";
+inline constexpr std::string_view kCmdNvimDesc      = "启动 nvim（当前目录）";
 inline constexpr std::string_view kEditUsage        = "用法：`/edit <file>`\n";
 inline constexpr std::string_view kEditNoNvim       = "（未找到 nvim，请安装 Neovim 并加入 PATH）\n";
 inline constexpr std::string_view kEditIsDir        = "（不能编辑目录：";

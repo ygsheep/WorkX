@@ -220,6 +220,7 @@ App::App(AppDeps deps)
         },
         .on_view = [this](const std::string& args) { cmd_view(args); },
         .on_edit = [this](const std::string& args) { cmd_edit(args); },
+        .on_nvim = [this] { cmd_nvim(); },
         .on_test_askuser = [this] { cmd_test_askuser(); },
     });
 
@@ -857,6 +858,31 @@ void App::cmd_edit(const std::string& args) {
     m_screen.RequestAnimationFrame();
 }
 
+/// @brief /nvim：在当前目录启动 nvim（WithRestoredIO 全屏切换，模态）
+void App::cmd_nvim() {
+    auto nvim = agent::process::ToolRegistry::instance().find_executable("nvim");
+    if (!nvim) {
+        m_vm.apply(ActionAppendMessage{.role = "assistant",
+            .text = std::string(str::kEditNoNvim)});
+        return;
+    }
+    // 暂停模型活动，避免后台写文件与手动编辑冲突
+    if (m_deps.session) m_deps.session->cancel_current_task();
+
+    bool launched = false;
+    auto edit = m_screen.WithRestoredIO([&] {
+        auto r = agent::process::exec_interactive(*nvim, {});
+        if (r.is_ok()) launched = true;
+    });
+    edit();
+
+    if (!launched) {
+        m_vm.apply(ActionAppendMessage{.role = "assistant",
+            .text = std::string(str::kEditFailed)});
+    }
+    m_screen.RequestAnimationFrame();
+}
+
 /// @brief 重读当前文件 tab 内容（/edit 返回后与磁盘保持一致）
 void App::reload_file() {
     if (!m_vm.tabs.file_open || m_vm.tabs.file.path.empty()) return;
@@ -1159,7 +1185,7 @@ void App::suggest_move(int delta) {
     if (m_suggest_selected < 0) m_suggest_selected += n;
 }
 
-bool App::suggest_accept(bool insert_file_ref) {
+bool App::suggest_accept() {
     if (m_suggest_mode == SuggestMode::None || m_suggest_selected < 0) return false;
     const auto& e = m_suggest_entries[static_cast<size_t>(m_suggest_selected)];
     if (m_suggest_mode == SuggestMode::Command) {
@@ -1176,29 +1202,22 @@ bool App::suggest_accept(bool insert_file_ref) {
             return false;
         }
         const auto& f = m_suggest_files[static_cast<size_t>(e.payload)];
-        if (insert_file_ref) {
-            // Ctrl+Enter：把 @query 替换为 @路径 + 一个空格（不发送消息，交回输入框）
-            const auto at = m_input_buffer.rfind('@');
-            if (at == std::string::npos) {
-                suggest_cancel();
-                return false;
-            }
-            m_input_buffer = m_input_buffer.substr(0, at + 1) + f.relative_path + " ";
-            m_composer_cursor = m_input_buffer.size();
-        } else {
-            // Enter：直接 nvim 打开选中文件（关闭面板后进入编辑）
+        // 输入框：@ 只插入文件引用（nvim 打开走搜索面板 @ 文件项）
+        const auto at = m_input_buffer.rfind('@');
+        if (at == std::string::npos) {
             suggest_cancel();
-            cmd_edit(f.relative_path);
-            return true;
+            return false;
         }
+        m_input_buffer = m_input_buffer.substr(0, at + 1) + f.relative_path + " ";
+        m_composer_cursor = m_input_buffer.size();
     }
     suggest_cancel();
     return true;
 }
 
-bool App::suggest_enter() { return suggest_accept(false); }
+bool App::suggest_enter() { return suggest_accept(); }
 
-bool App::suggest_enter_insert() { return suggest_accept(true); }
+bool App::suggest_enter_insert() { return suggest_accept(); }
 
 void App::suggest_cancel() {
     m_suggest_mode = SuggestMode::None;
@@ -1336,14 +1355,13 @@ void App::apply_search_entry(int index) {
             break;
         }
         case SearchCategory::File: {
-            // 插入 @路径 到输入框（不发送；用户回车发送）
+            // 打开 nvim 编辑选中文件（搜索面板 @ 搜索 → 直接编辑）
             auto& fi = agent::global_file_index();
             if (fi.is_ready()) {
                 const auto files = fi.search("", 15);
                 if (e.payload >= 0 && e.payload < static_cast<int>(files.size())) {
                     const auto& f = files[static_cast<size_t>(e.payload)];
-                    m_input_buffer += "@" + f.relative_path;
-                    m_composer_cursor = m_input_buffer.size();
+                    cmd_edit(f.relative_path);
                 }
             }
             break;
