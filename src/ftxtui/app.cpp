@@ -790,11 +790,13 @@ void App::cmd_edit(const std::string& args) {
     if (!p.is_absolute()) p = fs::current_path() / p;
 
     std::error_code ec;
-    if (!fs::is_regular_file(p, ec)) {
+    if (fs::is_directory(p, ec)) {
         m_vm.apply(ActionAppendMessage{.role = "assistant",
-            .text = std::string(str::kViewNotFound) + path + std::string(str::kCloseParenNl)});
+            .text = std::string(str::kEditIsDir) + path + std::string(str::kCloseParenNl)});
         return;
     }
+    // 允许不存在的路径：/edit 支持新建空文件（nvim 保存后自动重读）
+    const bool is_new = !fs::is_regular_file(p, ec);
 
     // 检测 nvim（PATH 查找；缺失则提示并中止，不进入编辑）
     auto nvim = agent::process::ToolRegistry::instance().find_executable("nvim");
@@ -807,8 +809,24 @@ void App::cmd_edit(const std::string& args) {
     // 暂停模型活动，避免后台写文件与手动编辑冲突
     if (m_deps.session) m_deps.session->cancel_current_task();
 
-    // 打开文件 tab 显示当前内容（复用 /view 读取 + 行号 + 内联 diff）
-    cmd_view(args);
+    if (is_new) {
+        // 新建文件：初始化空文件 tab（无磁盘内容可读）
+        m_vm.tabs.file.path = p.string();
+        m_vm.tabs.file.lines.clear();
+        m_vm.tabs.file.changes.clear();
+        m_vm.tabs.file.lang = lang_from_path(p.string());
+        m_vm.tabs.file.scroll = 0;
+        m_vm.tabs.file.dirty = false;
+        m_vm.tabs.file_open = true;
+        m_vm.tabs.active = SidebarTab::kFiles;
+    } else {
+        // 打开文件 tab 显示当前内容（复用 /view 读取 + 行号 + 内联 diff）
+        cmd_view(args);
+    }
+
+    if (is_new)
+        m_vm.apply(ActionAppendMessage{.role = "assistant",
+            .text = std::string(str::kEditNewFile)});
 
     // WithRestoredIO：临时卸载 FTXUI 终端钩子 → 全屏 nvim（模态）→ 恢复 TUI
     const std::string abs_path = fs::weakly_canonical(p, ec).string();
@@ -1124,7 +1142,7 @@ void App::suggest_move(int delta) {
     if (m_suggest_selected < 0) m_suggest_selected += n;
 }
 
-bool App::suggest_enter() {
+bool App::suggest_accept(bool insert_file_ref) {
     if (m_suggest_mode == SuggestMode::None || m_suggest_selected < 0) return false;
     const auto& e = m_suggest_entries[static_cast<size_t>(m_suggest_selected)];
     if (m_suggest_mode == SuggestMode::Command) {
@@ -1136,21 +1154,34 @@ bool App::suggest_enter() {
             m_input_buffer.clear();
         m_composer_cursor = m_input_buffer.size();
     } else if (m_suggest_mode == SuggestMode::File) {
-        // 文件面板：把 @query 替换为 @路径 + 一个空格（不发送消息，交回输入框）
-        const auto at = m_input_buffer.rfind('@');
-        if (at == std::string::npos ||
-            e.payload < 0 || e.payload >= static_cast<int>(m_suggest_files.size())) {
+        if (e.payload < 0 || e.payload >= static_cast<int>(m_suggest_files.size())) {
             suggest_cancel();
             return false;
         }
-        m_input_buffer = m_input_buffer.substr(0, at + 1)
-                         + m_suggest_files[static_cast<size_t>(e.payload)].relative_path
-                         + " ";
-        m_composer_cursor = m_input_buffer.size();
+        const auto& f = m_suggest_files[static_cast<size_t>(e.payload)];
+        if (insert_file_ref) {
+            // Ctrl+Enter：把 @query 替换为 @路径 + 一个空格（不发送消息，交回输入框）
+            const auto at = m_input_buffer.rfind('@');
+            if (at == std::string::npos) {
+                suggest_cancel();
+                return false;
+            }
+            m_input_buffer = m_input_buffer.substr(0, at + 1) + f.relative_path + " ";
+            m_composer_cursor = m_input_buffer.size();
+        } else {
+            // Enter：直接 nvim 打开选中文件（关闭面板后进入编辑）
+            suggest_cancel();
+            cmd_edit(f.relative_path);
+            return true;
+        }
     }
     suggest_cancel();
     return true;
 }
+
+bool App::suggest_enter() { return suggest_accept(false); }
+
+bool App::suggest_enter_insert() { return suggest_accept(true); }
 
 void App::suggest_cancel() {
     m_suggest_mode = SuggestMode::None;
@@ -1877,6 +1908,7 @@ void App::run() {
     comp_opt.suggest_active = [this] { return m_suggest_mode != SuggestMode::None; };
     comp_opt.suggest_move = [this](int delta) { suggest_move(delta); };
     comp_opt.suggest_enter = [this] { return suggest_enter(); };
+    comp_opt.suggest_enter_insert = [this] { return suggest_enter_insert(); };
     comp_opt.suggest_cancel = [this] { suggest_cancel(); };
     comp_opt.suggest_refresh = [this] { update_suggest(); };
 

@@ -1356,6 +1356,17 @@ size_t App::Internal::FetchTerminalEvents() {
           continue;
         }
         const wchar_t wc = key_event.uChar.UnicodeChar;
+        // Ctrl+Enter：Windows 控制台把 Enter 与 Ctrl+Enter 都报为 0x0D，
+        // 无法区分。改写为 kitty 键盘协议序列 \x1b[13;5u，上层按 Special 事件识别。
+        if (key_event.wVirtualKeyCode == VK_RETURN &&
+            (key_event.dwControlKeyState &
+             (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0) {
+          const std::string seq = "\x1b[13;5u";
+          for (char c : seq) {
+            terminal_input_parser.Add(c);
+          }
+          continue;
+        }
         wstring += wc;
         if (wc >= 0xd800 && wc <= 0xdbff) {
           // Wait for the Low Surrogate to arrive in the next record.

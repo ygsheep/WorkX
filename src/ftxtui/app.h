@@ -147,9 +147,13 @@ private:
     void update_suggest();
     /// @brief 提示面板移动选择（delta=±1；Tab 传 +1，到底循环回首）
     void suggest_move(int delta);
-    /// @brief 提示面板 Enter 确认（命令模式=运行；文件模式=插入路径）
+    /// @brief 提示面板确认（命令模式=补全；文件模式=insert_file_ref ? 插入 @路径 : 直接 nvim 打开）
     /// @return true=已消费（不提交发送）
+    bool suggest_accept(bool insert_file_ref);
+    /// @brief 提示面板 Enter 确认（文件模式=直接 nvim 打开）
     bool suggest_enter();
+    /// @brief 提示面板 Ctrl+Enter 确认（文件模式=插入 @路径 引用）
+    bool suggest_enter_insert();
     /// @brief 关闭提示面板（Esc）
     void suggest_cancel();
     /// @brief 装配聚合搜索条目（功能/文件/会话/设置），会话未加载时触发后台加载

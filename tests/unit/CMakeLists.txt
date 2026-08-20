@@ -83,6 +83,7 @@ if(WORKX_BUILD_FTX_TUI AND FTXTUI_TEST_SOURCES)
         ${WORKX_ROOT}/src/ftxtui/bridge/event_bridge.cpp
         ${WORKX_ROOT}/src/ftxtui/widgets/suggest_panel.cpp
         ${WORKX_ROOT}/src/ftxtui/widgets/search_palette.cpp
+        ${WORKX_ROOT}/src/ftxtui/widgets/composer.cpp
         ${WORKX_ROOT}/src/ftxtui/widgets/sidebar.cpp
         ${WORKX_ROOT}/src/ftxtui/widgets/sidebar_tabs.cpp
         ${WORKX_ROOT}/src/ftxtui/widgets/file_viewer.cpp
@@ -92,6 +93,9 @@ if(WORKX_BUILD_FTX_TUI AND FTXTUI_TEST_SOURCES)
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${WORKX_ROOT}/src
         ${WORKX_ROOT}/src/ftxtui
+        # FTXUI 内部头（terminal_input_parser.hpp 等）未随 imported target 导出，
+        # 测试需直接引用其源码目录；置于公共 include 之后避免头文件冲突
+        ${WORKX_ROOT}/third_party/ftxui/src
     )
     target_compile_definitions(ftxtui_unit_tests PRIVATE
         SOURCE_DIR="${CMAKE_SOURCE_DIR}")

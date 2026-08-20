@@ -27,6 +27,7 @@ struct ComposerOptions {
     std::function<bool()> suggest_active;   ///< 面板是否激活
     std::function<void(int)> suggest_move;  ///< 移动选择（±1；Tab 传 +1，App 循环）
     std::function<bool()> suggest_enter;    ///< Enter 确认面板动作
+    std::function<bool()> suggest_enter_insert;  ///< Ctrl+Enter：插入引用（@路径）
     std::function<void()> suggest_cancel;   ///< Esc 关闭面板
     std::function<void()> suggest_refresh;  ///< 字符 / 退格后刷新过滤
 };
