@@ -99,18 +99,25 @@ int main(int argc, char** argv) {
             model_catalog->store(std::make_shared<const agent::ModelCatalog>(std::move(cached.value())));
         }
         // 后台线程拉取（不阻塞启动）；24h 内已拉取过则跳过（离线命中）
+        // detach 安全性：model_catalog（shared_ptr）按值捕获保证生命周期；
+        // catalog_cache_path 按值捕获（静态路径 ~/.config/workx/），不依赖栈帧。
+        // try-catch 防止网络/文件异常未捕获导致 std::terminate。
         std::thread catalog_refresh_thread([model_catalog, catalog_cache_path]() {
-            constexpr auto kCacheTtl = std::chrono::hours(24);
-            std::error_code ec;
-            auto mtime = std::filesystem::last_write_time(catalog_cache_path, ec);
-            if (!ec && std::filesystem::file_time_type::clock::now() - mtime < kCacheTtl) return;
-            agent::HttpClient http;
-            auto resp = http.get("https://models.dev/api.json", {}, /*timeout_ms=*/30000);
-            if (resp.is_err() || !resp.value().is_success()) return;
-            auto parsed = agent::ModelCatalog::from_api_json(resp.value().body);
-            if (parsed.is_err()) return;
-            parsed.value().save_cache(catalog_cache_path);
-            model_catalog->store(std::make_shared<const agent::ModelCatalog>(std::move(parsed.value())));
+            try {
+                constexpr auto kCacheTtl = std::chrono::hours(24);
+                std::error_code ec;
+                auto mtime = std::filesystem::last_write_time(catalog_cache_path, ec);
+                if (!ec && std::filesystem::file_time_type::clock::now() - mtime < kCacheTtl) return;
+                agent::HttpClient http;
+                auto resp = http.get("https://models.dev/api.json", {}, /*timeout_ms=*/30000);
+                if (resp.is_err() || !resp.value().is_success()) return;
+                auto parsed = agent::ModelCatalog::from_api_json(resp.value().body);
+                if (parsed.is_err()) return;
+                parsed.value().save_cache(catalog_cache_path);
+                model_catalog->store(std::make_shared<const agent::ModelCatalog>(std::move(parsed.value())));
+            } catch (const std::exception&) {
+                // 后台刷新失败不影响启动；下次启动会重试
+            }
         });
         catalog_refresh_thread.detach();
 

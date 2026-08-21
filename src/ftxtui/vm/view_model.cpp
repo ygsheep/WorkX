@@ -429,7 +429,8 @@ void ViewModel::track_file_change(const ActionBeginTool& a) {
 
     ch.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
-    ch.msg_index = messages.size() - 1;  // 工具调用所在消息索引
+    // active_stream() 保证 messages 非空，但显式检查防止重构后下溢
+    ch.msg_index = messages.empty() ? 0 : messages.size() - 1;
     ch.diff = agent::line_diff(split_lines(ch.old_string), split_lines(ch.new_string), 1);
 
     tabs.changes.changes.push_back(std::move(ch));
