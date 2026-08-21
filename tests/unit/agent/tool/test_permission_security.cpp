@@ -20,6 +20,8 @@
 #include "agent/tool/BashTool/bash_tool.h"
 #include "agent/tool/FileReadTool/file_read_tool.h"
 #include "agent/tool/FileWriteTool/file_write_tool.h"
+#include "agent/tool/GlobTool/glob_tool.h"
+#include "agent/tool/GrepTool/grep_tool.h"
 #include "agent/tool/context.h"
 #include "agent/tool/path_validator.h"
 #include "agent/tool/permission_ask.h"
@@ -380,5 +382,138 @@ TEST_CASE("BashTool safe command allowed in default mode", "[tool][permission][b
 
     BashTool tool;
     auto perm = tool.check_permissions(R"({"command": "echo hello"})"_json, ctx);
+    REQUIRE(perm.is_ok());
+}
+
+// ============================================================
+// GrepTool — #60：路径边界校验
+// ============================================================
+
+TEST_CASE("GrepTool rejects path escaping cwd", "[tool][permission][grep]") {
+    TempDir tmp;
+    ToolContext ctx;
+    fill_ctx(ctx, tmp.path);
+
+    GrepTool tool;
+    auto perm = tool.check_permissions(
+        R"({"pattern": "foo", "path": "../secret"})"_json, ctx);
+    REQUIRE(perm.is_err());
+    REQUIRE(perm.error().code == Error::Code::PermissionDenied);
+}
+
+TEST_CASE("GrepTool rejects sensitive path", "[tool][permission][grep]") {
+    TempDir tmp;
+    ToolContext ctx;
+    fill_ctx(ctx, tmp.path);
+
+    GrepTool tool;
+    auto perm = tool.check_permissions(
+        R"({"pattern": "foo", "path": ".env"})"_json, ctx);
+    REQUIRE(perm.is_err());
+    REQUIRE(perm.error().code == Error::Code::PermissionDenied);
+}
+
+TEST_CASE("GrepTool allows path within cwd", "[tool][permission][grep]") {
+    TempDir tmp;
+    fs::path subdir = tmp.path / "src";
+    fs::create_directories(subdir);
+    { std::ofstream ofs(subdir / "a.cpp"); ofs << "needle\n"; }
+
+    ToolContext ctx;
+    fill_ctx(ctx, tmp.path);
+
+    GrepTool tool;
+    auto perm = tool.check_permissions(
+        R"({"pattern": "foo", "path": "src"})"_json, ctx);
+    REQUIRE(perm.is_ok());
+}
+
+TEST_CASE("GrepTool allows default cwd path", "[tool][permission][grep]") {
+    TempDir tmp;
+    ToolContext ctx;
+    fill_ctx(ctx, tmp.path);
+
+    GrepTool tool;
+    // path 未指定 → 默认 ctx.cwd，无需校验
+    auto perm = tool.check_permissions(
+        R"({"pattern": "foo"})"_json, ctx);
+    REQUIRE(perm.is_ok());
+}
+
+TEST_CASE("GrepTool bypass mode allows any path", "[tool][permission][grep]") {
+    TempDir tmp;
+    ToolContext ctx;
+    fill_ctx(ctx, tmp.path);
+    ctx.permission_mode = PermissionMode::BypassPermissions;
+
+    GrepTool tool;
+    auto perm = tool.check_permissions(
+        R"({"pattern": "foo", "path": "../outside"})"_json, ctx);
+    REQUIRE(perm.is_ok());
+}
+
+// ============================================================
+// GlobTool — #60：路径边界校验
+// ============================================================
+
+TEST_CASE("GlobTool rejects cwd escaping boundary", "[tool][permission][glob]") {
+    TempDir tmp;
+    ToolContext ctx;
+    fill_ctx(ctx, tmp.path);
+
+    GlobTool tool;
+    auto perm = tool.check_permissions(
+        R"({"pattern": "**/*", "cwd": "../outside"})"_json, ctx);
+    REQUIRE(perm.is_err());
+    REQUIRE(perm.error().code == Error::Code::PermissionDenied);
+}
+
+TEST_CASE("GlobTool rejects sensitive cwd", "[tool][permission][glob]") {
+    TempDir tmp;
+    ToolContext ctx;
+    fill_ctx(ctx, tmp.path);
+
+    GlobTool tool;
+    auto perm = tool.check_permissions(
+        R"({"pattern": "**/*", "cwd": ".env"})"_json, ctx);
+    REQUIRE(perm.is_err());
+    REQUIRE(perm.error().code == Error::Code::PermissionDenied);
+}
+
+TEST_CASE("GlobTool allows cwd within boundary", "[tool][permission][glob]") {
+    TempDir tmp;
+    fs::path subdir = tmp.path / "src";
+    fs::create_directories(subdir);
+
+    ToolContext ctx;
+    fill_ctx(ctx, tmp.path);
+
+    GlobTool tool;
+    auto perm = tool.check_permissions(
+        R"({"pattern": "**/*", "cwd": "src"})"_json, ctx);
+    REQUIRE(perm.is_ok());
+}
+
+TEST_CASE("GlobTool allows default cwd", "[tool][permission][glob]") {
+    TempDir tmp;
+    ToolContext ctx;
+    fill_ctx(ctx, tmp.path);
+
+    GlobTool tool;
+    // cwd 未指定 → 默认 ctx.cwd，无需校验
+    auto perm = tool.check_permissions(
+        R"({"pattern": "**/*"})"_json, ctx);
+    REQUIRE(perm.is_ok());
+}
+
+TEST_CASE("GlobTool bypass mode allows any cwd", "[tool][permission][glob]") {
+    TempDir tmp;
+    ToolContext ctx;
+    fill_ctx(ctx, tmp.path);
+    ctx.permission_mode = PermissionMode::BypassPermissions;
+
+    GlobTool tool;
+    auto perm = tool.check_permissions(
+        R"({"pattern": "**/*", "cwd": "../outside"})"_json, ctx);
     REQUIRE(perm.is_ok());
 }

@@ -31,6 +31,12 @@ public:
     /// @brief 只读工具（无副作用）
     bool is_read_only() const override { return true; }
 
+    /// @brief 权限检查（#60：路径边界校验，与 Read 工具一致）
+    PermissionResult check_permissions(
+        const nlohmann::json& input,
+        const ToolContext& ctx
+    ) const override;
+
     /// @brief 验证输入：pattern 不能为空
     ValidationResult validate_input(
         const nlohmann::json& input,
