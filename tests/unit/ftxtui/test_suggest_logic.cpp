@@ -56,10 +56,18 @@ TEST_CASE("parse_suggest_query bare slash gives empty query", "[suggest][parse]"
     REQUIRE(q.empty());
 }
 
-TEST_CASE("parse_suggest_query no mode without leading slash", "[suggest][parse]") {
+TEST_CASE("parse_suggest_query no mode without any slash", "[suggest][parse]") {
     std::string q;
     REQUIRE(parse_suggest_query("hello", q) == SuggestMode::None);
-    REQUIRE(parse_suggest_query("a/b", q) == SuggestMode::None);  // 仅行首生效
+}
+
+TEST_CASE("parse_suggest_query inline slash enters command mode", "[suggest][parse]") {
+    std::string q;
+    // "aaa/"：行内最后一个 "/"（无需行首）进入命令模式，空查询列出全部命令
+    REQUIRE(parse_suggest_query("aaa/", q) == SuggestMode::Command);
+    REQUIRE(q.empty());
+    REQUIRE(parse_suggest_query("aaa/model", q) == SuggestMode::Command);
+    REQUIRE(q == "model");
 }
 
 // ============================================================================
@@ -89,10 +97,11 @@ TEST_CASE("parse_suggest_query last at wins as query start", "[suggest][parse]")
     REQUIRE(q == "c");
 }
 
-TEST_CASE("parse_suggest_query leading slash beats inline at", "[suggest][parse]") {
+TEST_CASE("parse_suggest_query trailing at wins over slash", "[suggest][parse]") {
     std::string q;
-    REQUIRE(parse_suggest_query("/mod @x", q) == SuggestMode::Command);
-    REQUIRE(q == "mod @x");
+    // 命令路径含空格 → 命令模式放弃，最新 "@" 进入文件模式
+    REQUIRE(parse_suggest_query("/mod @x", q) == SuggestMode::File);
+    REQUIRE(q == "x");
 }
 
 // ============================================================================

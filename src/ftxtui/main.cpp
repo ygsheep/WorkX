@@ -19,10 +19,13 @@
 #include <liblogger/logger.h>
 
 #include "agent/api/i_backend_admin.h"
+#include "agent/api/remote/http_client.h"  // models.dev 目录后台刷新
 #include "agent/command/inclaude/registry.h"
 #include "agent/config/app_config.h"
 #include "agent/core/chat_session.h"
 #include "agent/factory.h"
+#include "agent/model/context_resolver.h"  // 上下文窗口解析（侧栏进度条分母）
+#include "agent/model/model_catalog.h"
 #include "agent/model/provider_preset.h"
 #include "agent/session/session_store.h"
 #include "core/config/config_manager.h"
@@ -67,6 +70,10 @@ int main(int argc, char** argv) {
     std::unique_ptr<agent::ChatSession> session;
     agent::IBackendAdmin* backend_admin = nullptr;
     auto command_registry = std::make_shared<agent::command::CommandRegistry>();
+    // 上下文窗口（token）：启动时经 resolve_context_length 解析，注入侧栏进度条分母
+    int32_t context_limit = 0;
+    // models.dev 目录：堆上原子指针，后台 detach 线程按值捕获，前台 load() 并发安全
+    auto model_catalog = std::make_shared<std::atomic<std::shared_ptr<const agent::ModelCatalog>>>();
 
     if (!mock_mode) {
         // B1：与 workx 主程序共用同一会话装配（全量工具集 + 系统提示词 + 持久化）
@@ -84,6 +91,43 @@ int main(int argc, char** argv) {
             session_dir = agent::session::get_project_session_dir(
                 config_dir, fs::current_path().string()).string();
         }
+
+        // 上下文窗口：统一通过 resolver 解析（provider→user cfg→catalog→capability→preset→default）
+        // 启动初始化时无 selector 返回值，sel_context_length 传 0；对齐 src/app/main.cpp
+        auto catalog_cache_path = agent::default_config_path().parent_path() / "models_cache.json";
+        if (auto cached = agent::ModelCatalog::load_cache(catalog_cache_path); cached.is_ok()) {
+            model_catalog->store(std::make_shared<const agent::ModelCatalog>(std::move(cached.value())));
+        }
+        // 后台线程拉取（不阻塞启动）；24h 内已拉取过则跳过（离线命中）
+        // detach 安全性：model_catalog（shared_ptr）按值捕获保证生命周期；
+        // catalog_cache_path 按值捕获（静态路径 ~/.config/workx/），不依赖栈帧。
+        // try-catch 防止网络/文件异常未捕获导致 std::terminate。
+        std::thread catalog_refresh_thread([model_catalog, catalog_cache_path]() {
+            try {
+                constexpr auto kCacheTtl = std::chrono::hours(24);
+                std::error_code ec;
+                auto mtime = std::filesystem::last_write_time(catalog_cache_path, ec);
+                if (!ec && std::filesystem::file_time_type::clock::now() - mtime < kCacheTtl) return;
+                agent::HttpClient http;
+                auto resp = http.get("https://models.dev/api.json", {}, /*timeout_ms=*/30000);
+                if (resp.is_err() || !resp.value().is_success()) return;
+                auto parsed = agent::ModelCatalog::from_api_json(resp.value().body);
+                if (parsed.is_err()) return;
+                parsed.value().save_cache(catalog_cache_path);
+                model_catalog->store(std::make_shared<const agent::ModelCatalog>(std::move(parsed.value())));
+            } catch (const std::exception&) {
+                // 后台刷新失败不影响启动；下次启动会重试
+            }
+        });
+        catalog_refresh_thread.detach();
+
+        auto resolution = agent::resolve_context_length(
+            model_name,
+            /*sel_context_length=*/0,
+            cfg.get_or<int>(agent::keys::CONTEXT_LENGTH, 0),
+            preset,
+            model_catalog->load());
+        context_limit = resolution.value;
     }
 
     // ---- 文件索引异步构建（@ 补全面板数据源）----
@@ -123,6 +167,8 @@ int main(int argc, char** argv) {
     deps.smoke_mode = smoke_mode;
     deps.model_name = model_name;
     deps.session_dir = session_dir;
+    deps.context_limit = context_limit;
+    deps.model_catalog = model_catalog;
     deps.command_registry = command_registry;
     deps.project = fs::current_path().filename().string();
     // B3：侧栏 Agent 显示真实会话 ID（非硬编码 "default"），

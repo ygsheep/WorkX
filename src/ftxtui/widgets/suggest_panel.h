@@ -33,9 +33,10 @@ struct SuggestEntry {
 
 /// @brief 命令条目（从 agent 命令注册表派生；UI 侧数据模型，命令/搜索面板共用）
 struct PaletteCommand {
-    std::string command;  ///< 实际执行命令，如 "/model"
-    std::string title;    ///< 显示标题，如 "切换模型"
-    std::string keywords; ///< 额外搜索关键词（中英文/别名），可空
+    std::string command;     ///< 实际执行命令，如 "/model"
+    std::string title;       ///< 命令名，如 "model"（副标题的降级提示语来源）
+    std::string description; ///< 命令描述（提示语），如 "切换模型"
+    std::string keywords;    ///< 额外搜索关键词（中英文/别名），可空
 };
 
 /// @brief 从输入行推导提示面板模式与过滤查询（对齐 src/tui bottom_bar 语义）

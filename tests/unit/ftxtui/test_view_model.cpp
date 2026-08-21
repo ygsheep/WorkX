@@ -151,7 +151,7 @@ TEST_CASE("ViewModel begin tool creates running block", "[view_model][tool]") {
     REQUIRE(t.tool_name == "Read");
     REQUIRE(t.call_id == "c1");
     REQUIRE(t.running);
-    REQUIRE(t.expanded == vm.card_defaults.tool_expanded);
+    REQUIRE(t.expanded);  // 任务开始：工具卡自动展开
     REQUIRE(vm.messages.back().tool_use_ids.size() == 1);
 }
 
@@ -317,20 +317,25 @@ TEST_CASE("ViewModel sub agent progress aggregates by task_id", "[view_model][su
     REQUIRE(vm.tabs.sub_agents[0].task_id == "t1");
     REQUIRE(vm.tabs.sub_agents[0].status == "running");
     REQUIRE(vm.tabs.sub_agents[0].step_number == 1);
-    REQUIRE(vm.tabs.sub_agents[0].msg_index == 0);  // 指向刚 push 的消息
+    // 第二层独立记录：步骤序列（不混入主转录区）
+    REQUIRE(vm.sub_records.size() == 1);
+    REQUIRE(vm.sub_records[0].steps.size() == 1);
+    REQUIRE(vm.sub_records[0].steps[0].step_type == "thought");
+    REQUIRE(vm.messages.empty());
 
     // 同一 task_id 再次进度：不新增条目，更新步骤
     vm.apply(ActionSubAgentProgress{.task_id = "t1", .step_number = 2, .step_type = "action"});
     REQUIRE(vm.tabs.sub_agents.size() == 1);
     REQUIRE(vm.tabs.sub_agents[0].step_number == 2);
-    REQUIRE(vm.tabs.sub_agents[0].msg_index == 1);
+    REQUIRE(vm.sub_records[0].steps.size() == 2);
+    REQUIRE(vm.sub_records[0].steps[1].step_type == "action");
 
     // 新 task_id：新增条目
     vm.apply(ActionSubAgentProgress{.task_id = "t2", .step_number = 1, .step_type = "thought"});
     REQUIRE(vm.tabs.sub_agents.size() == 2);
     REQUIRE(vm.tabs.sub_agents[1].task_id == "t2");
-    REQUIRE(vm.tabs.sub_agents[1].msg_index == 2);
-    REQUIRE(vm.messages.size() == 3);
+    REQUIRE(vm.sub_records.size() == 2);
+    REQUIRE(vm.messages.empty());
 }
 
 TEST_CASE("ViewModel sub agent final step does not append message", "[view_model][subagent]") {
@@ -340,7 +345,7 @@ TEST_CASE("ViewModel sub agent final step does not append message", "[view_model
     REQUIRE(vm.tabs.sub_agents.empty());  // final 步不聚合，由 Completed 处理
 }
 
-TEST_CASE("ViewModel sub agent completed updates status and msg_index", "[view_model][subagent]") {
+TEST_CASE("ViewModel sub agent completed updates status and final answer", "[view_model][subagent]") {
     ViewModel vm;
     vm.apply(ActionSubAgentProgress{.task_id = "t1", .step_number = 1, .step_type = "thought"});
     vm.apply(ActionSubAgentCompleted{.task_id = "t1", .final_answer = "done", .was_error = false,
@@ -348,13 +353,60 @@ TEST_CASE("ViewModel sub agent completed updates status and msg_index", "[view_m
     REQUIRE(vm.tabs.sub_agents.size() == 1);
     REQUIRE(vm.tabs.sub_agents[0].status == "done");
     REQUIRE(vm.tabs.sub_agents[0].duration_ms == 1500.0);
-    REQUIRE(vm.tabs.sub_agents[0].msg_index == 1);  // 指向完成消息
+    // 第二层：状态 + 最终答复
+    REQUIRE(vm.sub_records.size() == 1);
+    REQUIRE(vm.sub_records[0].status == "done");
+    REQUIRE(vm.sub_records[0].final_answer == "done");
+    REQUIRE(vm.sub_records[0].duration_ms == 1500.0);
 
     // 失败：状态为 failed
     vm.apply(ActionSubAgentCompleted{.task_id = "t2", .was_error = true, .duration_ms = 500.0});
     REQUIRE(vm.tabs.sub_agents.size() == 2);
     REQUIRE(vm.tabs.sub_agents[1].status == "failed");
-    REQUIRE(vm.tabs.sub_agents[1].msg_index == 2);
+    REQUIRE(vm.sub_records.size() == 2);
+    REQUIRE(vm.sub_records[1].status == "failed");
+}
+
+TEST_CASE("ViewModel sub agent action merges observation into tool card", "[view_model][subagent]") {
+    ViewModel vm;
+    vm.apply(ActionSubAgentProgress{
+        .task_id = "t1", .step_number = 1, .step_type = "thought",
+        .thought_text = "let me check", .duration_ms = 100.0});
+    vm.apply(ActionSubAgentProgress{
+        .task_id = "t1", .step_number = 2, .step_type = "action",
+        .tool_name = "Read", .tool_input = "{\"file_path\":\"a.txt\"}"});
+    vm.apply(ActionSubAgentProgress{
+        .task_id = "t1", .step_number = 3, .step_type = "observation",
+        .observation = "file content", .is_error = false});
+
+    REQUIRE(vm.sub_records.size() == 1);
+    const auto& rec = vm.sub_records[0];
+    // thought + action（observation 已合并到 action，不新增独立步骤）
+    REQUIRE(rec.steps.size() == 2);
+    REQUIRE(rec.steps[0].step_type == "thought");
+    REQUIRE(rec.steps[0].thought_text == "let me check");
+    REQUIRE(rec.steps[0].duration_ms == 100.0);
+    REQUIRE(rec.steps[0].expanded == true);
+    REQUIRE(rec.steps[1].step_type == "action");
+    REQUIRE(rec.steps[1].tool_name == "Read");
+    REQUIRE(rec.steps[1].tool_input == "{\"file_path\":\"a.txt\"}");
+    REQUIRE(rec.steps[1].done == true);
+    REQUIRE(rec.steps[1].observation == "file content");
+    REQUIRE(rec.steps[1].is_error == false);
+    REQUIRE(rec.steps[1].expanded == true);
+}
+
+TEST_CASE("ViewModel sub agent observation without action stays standalone", "[view_model][subagent]") {
+    ViewModel vm;
+    vm.apply(ActionSubAgentProgress{
+        .task_id = "t1", .step_number = 1, .step_type = "observation",
+        .observation = "orphan result", .is_error = true});
+    REQUIRE(vm.sub_records.size() == 1);
+    REQUIRE(vm.sub_records[0].steps.size() == 1);
+    REQUIRE(vm.sub_records[0].steps[0].step_type == "observation");
+    REQUIRE(vm.sub_records[0].steps[0].observation == "orphan result");
+    REQUIRE(vm.sub_records[0].steps[0].is_error == true);
+    REQUIRE(vm.sub_records[0].steps[0].done == true);
 }
 
 // ============================================================================

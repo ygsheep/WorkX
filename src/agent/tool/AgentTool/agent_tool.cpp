@@ -169,7 +169,16 @@ std::shared_ptr<agent::Task> launch_sub_agent(const SubAgentLaunchOptions& optio
                             .task_id = options.task_id,
                             .step_number = step.step_number,
                             .step_type = step_type_str(step.type),
-                            .content = line
+                            .content = line,
+                            // v1.3.0 结构化字段：第二层卡片渲染复用主会话 UI
+                            .thought_text = step.thought_text,
+                            .tool_name = step.tool_name,
+                            .tool_input = step.tool_input.is_null()
+                                              ? std::string{}
+                                              : step.tool_input.dump(),
+                            .observation = step.observation,
+                            .is_error = step.is_error,
+                            .duration_ms = step.duration_ms
                         });
                     }
                 });

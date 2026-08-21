@@ -38,13 +38,24 @@ const Color kBorderColor = theme::T::TextFaint;
 SuggestMode parse_suggest_query(const std::string& line, std::string& query) {
     query.clear();
     if (line.empty()) return SuggestMode::None;
-    // 命令模式：行首 "/"
-    if (line[0] == '/') {
-        query = line.substr(1);
-        return SuggestMode::Command;
+    // 命令模式：行内最后一个 "/"（不要求行首）——"/" 与其后的命令补全路径。
+    // 允许 "aaa/xxx"、独立 "/"、/model 等任意位置触发命令面板，避免
+    // "只有行首第一次输入才弹"的假象。
+    // 例外：若该 "/" 属于 "@路径"（其前存在 "@"），则是文件引用里的路径分隔符，
+    // 不应当成命令触发符——这类输入继续走文件模式。
+    const auto slash = line.rfind('/');
+    const auto at = line.rfind('@');
+    const bool slash_inside_at_path = (at != std::string::npos) &&
+                                      (slash != std::string::npos) &&
+                                      at < slash;
+    if (slash != std::string::npos && !slash_inside_at_path) {
+        const std::string cmd_after = line.substr(slash + 1);
+        if (cmd_after.find(' ') == std::string::npos) {
+            query = cmd_after;
+            return SuggestMode::Command;
+        }
     }
     // 文件模式：行内最后一个 "@"，其后无空格（对齐 src/tui bottom_bar_manager）
-    const auto at = line.rfind('@');
     if (at != std::string::npos) {
         const std::string after = line.substr(at + 1);
         if (after.find(' ') == std::string::npos) {

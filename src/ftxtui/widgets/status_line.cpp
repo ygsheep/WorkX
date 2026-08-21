@@ -1,5 +1,6 @@
 #include "widgets/status_line.h"
 
+#include <format>
 #include <string>
 #include <string_view>
 
@@ -32,7 +33,9 @@ const PermSpec kPermTable[] = {
 
 Element build_status_line(const std::string& model,
                           const std::string& permission,
-                          bool busy) {
+                          bool busy,
+                          int todo_done,
+                          int todo_total) {
     const PermSpec spec =
         (permission == "plan")   ? kPermTable[0]
         : (permission == "bypass") ? kPermTable[1]
@@ -51,6 +54,13 @@ Element build_status_line(const std::string& model,
         seg.push_back(ftxui::text("  "));
     }
     seg.push_back(ftxui::color(spec.color)(ftxui::text(perm_text)));
+
+    // #24：待办进度位（✓ X/Y，仅当有待办时显示）
+    if (todo_total > 0) {
+        seg.push_back(ftxui::text("  "));
+        const std::string todo_text = std::format("✓ {}/{}", todo_done, todo_total);
+        seg.push_back(ftxui::text(todo_text) | ftxui::color(theme::T::DiffAdd));
+    }
 
     if (!model.empty()) {
         seg.push_back(ftxui::text("  "));

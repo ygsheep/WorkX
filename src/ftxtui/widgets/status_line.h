@@ -17,8 +17,12 @@ namespace ftxtui {
 /// @param model 模型名
 /// @param permission 权限标签（"" / "plan" / "bypass"）
 /// @param busy 是否生成中
+/// @param todo_done 已完成待办数（#24：>0 时显示 ✓ X/Y）
+/// @param todo_total 待办总数
 ftxui::Element build_status_line(const std::string& model,
                                  const std::string& permission,
-                                 bool busy);
+                                 bool busy,
+                                 int todo_done = 0,
+                                 int todo_total = 0);
 
 }  // namespace ftxtui

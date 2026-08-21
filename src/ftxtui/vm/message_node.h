@@ -25,6 +25,7 @@ struct ToolCallNode {
     bool is_error = false;    ///< 出错
     bool expanded = false;    ///< 结果是否展开
     std::size_t text_pos = 0; ///< 该工具调用在正文 text 中的插入位置（字节偏移，用于与正文交错渲染）
+    std::string sub_task_id;  ///< 关联的子 Agent 任务 id（Agent 工具卡跳转第二层用；空=非子 Agent）
 };
 
 /// @brief 一条消息

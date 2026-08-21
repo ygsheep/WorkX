@@ -37,6 +37,45 @@ std::string now_iso() {
 } // anonymous namespace
 
 // ============================================================
+// SubAgentEvent 序列化
+// ============================================================
+
+void to_json(nlohmann::json& j, const SubAgentEvent& ev) {
+    j = nlohmann::json{
+        {"type", "sub_agent"},
+        {"subType", ev.type},
+        {"taskId", ev.task_id},
+        {"stepNumber", ev.step_number},
+        {"stepType", ev.step_type},
+        {"content", ev.content},
+        {"thoughtText", ev.thought_text},
+        {"toolName", ev.tool_name},
+        {"toolInput", ev.tool_input},
+        {"observation", ev.observation},
+        {"isError", ev.is_error},
+        {"durationMs", ev.duration_ms},
+        {"finalAnswer", ev.final_answer},
+        {"wasError", ev.was_error},
+    };
+}
+
+void from_json(const nlohmann::json& j, SubAgentEvent& ev) {
+    ev.type = j.value("subType", std::string{});
+    ev.task_id = j.value("taskId", std::string{});
+    ev.step_number = j.value("stepNumber", 0);
+    ev.step_type = j.value("stepType", std::string{});
+    ev.content = j.value("content", std::string{});
+    ev.thought_text = j.value("thoughtText", std::string{});
+    ev.tool_name = j.value("toolName", std::string{});
+    ev.tool_input = j.value("toolInput", std::string{});
+    ev.observation = j.value("observation", std::string{});
+    ev.is_error = j.value("isError", false);
+    ev.duration_ms = j.value("durationMs", 0.0);
+    ev.final_answer = j.value("finalAnswer", std::string{});
+    ev.was_error = j.value("wasError", false);
+}
+
+// ============================================================
 // 生命周期
 // ============================================================
 
@@ -160,6 +199,22 @@ bool SessionStore::append_title(const std::string& title) {
     j["sessionId"] = m_session_id;
     j["timestamp"] = now_iso();
     j["title"] = title;
+    return append_line(j);
+}
+
+bool SessionStore::append_todo(const std::vector<core::todo::TodoItem>& todos) {
+    nlohmann::json j;
+    j["type"] = "todo";
+    j["sessionId"] = m_session_id;
+    j["timestamp"] = now_iso();
+    j["todos"] = todos;
+    return append_line(j);
+}
+
+bool SessionStore::append_sub_agent(const SubAgentEvent& ev) {
+    nlohmann::json j = ev;
+    j["sessionId"] = m_session_id;
+    j["timestamp"] = now_iso();
     return append_line(j);
 }
 
@@ -309,6 +364,30 @@ std::optional<SessionMeta> SessionStore::load_meta(const std::string& file_path)
     }
 
     return meta;
+}
+
+std::vector<core::todo::TodoItem> SessionStore::load_todos(const std::string& file_path) {
+    auto events = read_all(file_path);
+    std::vector<core::todo::TodoItem> todos;
+    for (const auto& j : events) {
+        if (j.value("type", "") != "todo") continue;
+        todos.clear();  // 取最后一条 todo 事件（append-only 快照）
+        if (j.contains("todos") && j["todos"].is_array()) {
+            for (const auto& t : j["todos"]) {
+                todos.push_back(t.get<core::todo::TodoItem>());
+            }
+        }
+    }
+    return todos;
+}
+
+std::vector<SubAgentEvent> SessionStore::load_sub_agents(const std::string& file_path) {
+    std::vector<SubAgentEvent> events;
+    for (const auto& j : read_all(file_path)) {
+        if (j.value("type", "") != "sub_agent") continue;
+        events.push_back(j.get<SubAgentEvent>());
+    }
+    return events;
 }
 
 std::filesystem::path get_project_session_dir(const std::filesystem::path& config_dir,

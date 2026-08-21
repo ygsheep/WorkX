@@ -121,6 +121,13 @@ void EventBridge::start() {
                 .step_number = e.step_number,
                 .step_type = e.step_type,
                 .content = e.content,
+                // v1.3.0 结构化字段透传（第二层卡片渲染）
+                .thought_text = e.thought_text,
+                .tool_name = e.tool_name,
+                .tool_input = e.tool_input,
+                .observation = e.observation,
+                .is_error = e.is_error,
+                .duration_ms = e.duration_ms,
             });
         });
 
@@ -131,6 +138,15 @@ void EventBridge::start() {
                 .final_answer = e.final_answer,
                 .was_error = e.was_error,
                 .duration_ms = e.duration_ms,
+            });
+        });
+
+    // #24：待办清单更新（TodoStore → 侧边栏 TODO 区块 / StatusBar 进度）
+    subscribe_typed<agent::TodoUpdatedEvent>(
+        [this](const agent::TodoUpdatedEvent& e) {
+            push(ActionTodoUpdate{
+                .session_id = e.session_id,
+                .todos = e.todos,
             });
         });
 

@@ -4,10 +4,12 @@
 #include <cstdio>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <ftxui/dom/direction.hpp>
 
+#include "core/todo/todo_item.h"  // #24：待办状态图标渲染
 #include "theme/icons.h"
 #include "theme/strings.h"
 #include "theme/theme.h"
@@ -127,7 +129,7 @@ void append_context_info(Elements& rows, const SidebarModel& s) {
     }));
 }
 
-/// @brief 可折叠区块（MCP / TODO）：chevron 标题行可点击，展开显示条目
+/// @brief 可折叠区块（MCP）：chevron 标题行可点击，展开显示条目
 void append_collapsible_section(Elements& rows, const std::string_view& title,
                                 const std::vector<std::string>& items,
                                 bool expanded, SectionHit* hit) {
@@ -152,6 +154,49 @@ void append_collapsible_section(Elements& rows, const std::string_view& title,
         rows.push_back(ftxui::hbox({
             ftxui::text("  "),
             ftxui::flex(ftxui::text(it) | ftxui::color(theme::T::TextDim)),
+        }));
+    }
+}
+
+/// @brief 待办状态图标（#24：✓ 完成 / ▶ 进行中 / ○ 未开始）
+std::pair<std::string_view, Color> todo_status_icon(core::todo::TodoStatus s) {
+    switch (s) {
+        case core::todo::TodoStatus::Completed:
+            return {"✓", theme::T::DiffAdd};       // 绿
+        case core::todo::TodoStatus::InProgress:
+            return {"▶", theme::T::Accent};        // 蓝
+        default:
+            return {"○", theme::T::TextFaint};     // 灰
+    }
+}
+
+/// @brief TODO 区块（#24）：状态图标 + 内容，展开显示条目
+void append_todo_section(Elements& rows, const std::vector<core::todo::TodoItem>& todos,
+                         bool expanded, SectionHit* hit) {
+    Element header = ftxui::hbox({
+        ftxui::text(std::string(expanded ? theme::icon_chevron_down()
+                                         : theme::icon_chevron_right()))
+            | ftxui::color(theme::T::TextFaint),
+        ftxui::text(" "),
+        ftxui::text(std::string(str::kSidebarTODO)) | ftxui::color(kInfoText),
+    });
+    if (hit) header = header | ftxui::reflect(hit->box);
+    rows.push_back(header);
+    if (!expanded) return;
+    if (todos.empty()) {
+        rows.push_back(ftxui::hbox({
+            ftxui::text("  "),
+            ftxui::text(std::string(str::kDash)) | ftxui::color(theme::T::TextFaint),
+        }));
+        return;
+    }
+    for (const auto& t : todos) {
+        auto [icon, color] = todo_status_icon(t.status);
+        rows.push_back(ftxui::hbox({
+            ftxui::text("  "),
+            ftxui::text(std::string(icon)) | ftxui::color(color),
+            ftxui::text(" "),
+            ftxui::flex(ftxui::text(t.content) | ftxui::color(theme::T::TextDim)),
         }));
     }
 }
@@ -188,15 +233,14 @@ void append_sidebar_info(Elements& rows, const SidebarModel& s,
     append_collapsible_section(inner, str::kSidebarMCP, s.mcp_servers,
                                s.mcp_expanded, mcp_hit);
 
-    // TODO 列表（可折叠）
+    // TODO 列表（可折叠，#24：状态图标 + 内容）
     SectionHit* todo_hit = nullptr;
     if (section_hits) {
         section_hits->push_back(SectionHit{});
         section_hits->back().kind = SectionHit::Kind::kTODO;
         todo_hit = &section_hits->back();
     }
-    append_collapsible_section(inner, str::kSidebarTODO, s.todos,
-                               s.todo_expanded, todo_hit);
+    append_todo_section(inner, s.todos, s.todo_expanded, todo_hit);
 
     // 左侧内边距（2 格），与任务调度 tab 其他行对齐
     rows.push_back(ftxui::hbox({
