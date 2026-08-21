@@ -32,6 +32,68 @@ add_executable(workx
     widgets/search_palette.cpp
 )
 
+# ============================================================
+# workx 目标的应用图标与运行时资源打包
+# 注意：add_custom_command(TARGET workx POST_BUILD ...) 必须在 workx
+#       目标所在的目录调用（CMake 限制）。源/目标路径变量由根
+#       CMakeLists.txt / src/CMakeLists.txt 计算并通过普通变量传递。
+# ============================================================
+
+# --- Windows：通过 RC 资源文件嵌入 ICO ---
+if(WIN32 AND EXISTS "${WORKX_ICON_ICO}")
+    set(WORKX_RC_FILE "${CMAKE_CURRENT_BINARY_DIR}/workx_icon.rc")
+    # 使用数字 ID（1），Windows 资源管理器自动识别 exe 中的最低 ID ICON 资源
+    file(WRITE "${WORKX_RC_FILE}"
+        "1 ICON \"${WORKX_ICON_ICO}\"\n"
+    )
+    target_sources(workx PRIVATE "${WORKX_RC_FILE}")
+    message(STATUS "Icon: Windows ICO embedded via RC file")
+endif()
+
+# --- macOS：设置 Bundle 图标 ---
+if(APPLE)
+    if(EXISTS "${WORKX_ICON_ICNS}")
+        set_target_properties(workx PROPERTIES
+            MACOSX_BUNDLE TRUE
+            MACOSX_BUNDLE_ICON_FILE "icon.icns"
+        )
+        set_source_files_properties("${WORKX_ICON_ICNS}" PROPERTIES
+            MACOSX_PACKAGE_LOCATION "Resources"
+        )
+        target_sources(workx PRIVATE "${WORKX_ICON_ICNS}")
+        message(STATUS "Icon: macOS ICNS added to bundle Resources")
+    else()
+        message(WARNING "macOS build without icon: ${WORKX_ICON_ICNS} missing")
+    endif()
+endif()
+
+# --- Linux：拷贝 PNG 到输出目录 ---
+if(UNIX AND NOT APPLE AND EXISTS "${WORKX_ICON_PNG}")
+    add_custom_command(TARGET workx POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${WORKX_ICON_PNG}"
+            "$<TARGET_FILE_DIR:workx>/icon.png"
+        COMMENT "Copying application icon: icon.png"
+    )
+    message(STATUS "Icon: Linux PNG copied to output dir")
+endif()
+
+# --- vendor/ripgrep：构建时拷贝到 workx 输出目录的 tools/ 子目录 ---
+# 二进制由 scripts/fetch-ripgrep.py 下载到 vendor/ripgrep/<platform>/
+# 运行时由 ToolRegistry 从 <exe_dir>/tools/rg 查找
+# 缺失时自动回退 C++ 标准库实现，不报错
+if(WORKX_HAS_VENDOR_RIPGREP)
+    add_custom_command(TARGET workx POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:workx>/tools"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${WORKX_RG_SOURCE}"
+            "$<TARGET_FILE_DIR:workx>/tools/${WORKX_RG_DEST_NAME}"
+        COMMENT "Bundling ripgrep: ${WORKX_RG_DEST_NAME}"
+    )
+    target_compile_definitions(workx PRIVATE WORKX_HAS_BUNDLED_RIPGREP=1)
+endif()
+
 target_include_directories(workx PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${CMAKE_CURRENT_SOURCE_DIR}
