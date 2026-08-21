@@ -1,6 +1,6 @@
 # src/CMakeLists.txt
-# 分层库目标：workx_core（底层）→ workx_agent（Agent Harness，可安装）→ workx_tui（内部）
-# workx 可执行文件 = main.cpp + app 层源码 + workx_tui
+# 分层库目标：workx_core（底层）→ workx_agent（Agent Harness，可安装）→ workx_island
+# workx 可执行文件 = src/tui/main.cpp + FTXUI 渲染层 + workx_agent
 
 # ============================================================
 # 引入各分层（各自定义库目标）
@@ -9,23 +9,6 @@ add_subdirectory(core)
 add_subdirectory(agent)
 add_subdirectory(island)
 add_subdirectory(tui)
-add_subdirectory(app)
-# 实验 FTXUI TUI（与 workx_tui 隔离，默认关闭）
-if(WORKX_BUILD_FTX_TUI)
-    add_subdirectory(ftxtui)
-endif()
-
-# ============================================================
-# workx 可执行文件
-# ============================================================
-add_executable(workx app/main.cpp)
-target_link_libraries(workx PRIVATE workx_island workx_app)
-
-# ============================================================
-# choice_preview 可执行文件（ChoiceTool TUI 预览，依赖 app 工厂函数）
-# ============================================================
-#add_executable(choice_preview example/choice_preview.cpp)
-#target_link_libraries(choice_preview PRIVATE workx_app)
 
 # ============================================================
 # 应用图标：从 src/icon.png 生成各平台格式
@@ -128,7 +111,7 @@ endif()
 # ============================================================
 # 安装与包导出（M2 库化：外部工程可 find_package(workx)）
 # 参考 lib/liblogger 的 install/EXPORT 模板
-# 仅安装 workx_core + workx_agent（Agent Harness）；workx_tui 为内部目标
+# 仅安装 workx_core + workx_agent（Agent Harness）；workx (TUI) 为内部目标
 # ============================================================
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)

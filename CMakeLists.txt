@@ -45,9 +45,6 @@ find_package(CURL CONFIG REQUIRED)
 #       这样 vcpkg.json 不需要新增端口, 也不会因 vcpkg 缺少 tree-sitter port 导致 manifest 失败
 option(WORKX_WITH_TREE_SITTER "Enable tree-sitter based syntax highlighting" ON)
 option(WORKX_FETCH_GRAMMARS  "Fetch tree-sitter runtime + grammars via FetchContent (requires network at configure time)" ON)
-# 实验 TUI（FTXUI 双栏渲染器，见 docs/plans/2026-08-17-ftxui-tui-design.md）
-# 与 src/tui 完全隔离，默认关闭。目标：workx-ftx。
-option(WORKX_BUILD_FTX_TUI "Build the experimental FTXUI TUI (codex)" ON)
 
 set(WORKX_TS_RUNTIME_LIB "")
 set(WORKX_TS_GRAMMAR_LIBS "")
@@ -281,9 +278,5 @@ endif()
 
 option(WORKX_BUILD_EXAMPLES "Build examples" ON)
 if(WORKX_BUILD_EXAMPLES)
-    add_subdirectory(example/example_markdown)
-    add_subdirectory(example/example_code_highlight)
-    add_subdirectory(example/example_provider_form)
-    add_subdirectory(example/example_agent_card)
     add_subdirectory(example/example_dynamic_island)
 endif()

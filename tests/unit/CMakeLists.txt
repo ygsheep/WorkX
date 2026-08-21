@@ -7,9 +7,8 @@
 # 模块划分（与 src/ 分层对齐，每个目标只链接其依赖的最少库）：
 #   - core_unit_tests    : tests/unit/core/**    -> workx_core
 #   - agent_unit_tests   : tests/unit/agent/**   -> workx_agent (含 helpers 自测)
-#   - tui_unit_tests     : tests/unit/tui/**     -> workx_tui
 #   - island_unit_tests  : tests/unit/island/**  -> workx_island
-#   - app_unit_tests     : tests/unit/app/**     -> workx_app
+#   - tui_unit_tests     : tests/unit/tui/**     -> 直接编译 src/tui 无头源
 #
 # 常用命令：
 #   - 只构建某模块测试：  cmake --build build --target <模块>_unit_tests -j <N>
@@ -27,16 +26,9 @@ set(UNIT_TEST_COMMON ../test_main.cpp)
 # 按模块用 glob 收集测试源文件（CONFIGURE_DEPENDS：新增测试文件自动纳入，无需手改列表）
 file(GLOB_RECURSE CORE_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/core/*.cpp)
 file(GLOB_RECURSE AGENT_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/agent/*.cpp)
-file(GLOB_RECURSE TUI_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tui/*.cpp)
 file(GLOB_RECURSE ISLAND_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/island/*.cpp)
-file(GLOB_RECURSE APP_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/app/*.cpp)
 # helpers 自测（Mock 接口实现，依赖 agent 接口），归入 agent 目标
 file(GLOB HELPER_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/helpers/*.cpp)
-
-# test_command_system 物理位于 agent/command/，但依赖 app 层 register_system_commands
-# （builtin_commands.cpp），须归入 app 目标才能链接该符号
-list(REMOVE_ITEM AGENT_TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/agent/command/test_command_system.cpp)
-list(APPEND APP_TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/agent/command/test_command_system.cpp)
 
 # 为某模块创建独立测试可执行文件并注册到 ctest
 # 用法: workx_add_unit_target(<target> <链接库...> <源文件...>)
@@ -59,47 +51,41 @@ endfunction()
 
 workx_add_unit_target(core_unit_tests   workx_core   ${CORE_TEST_SOURCES})
 workx_add_unit_target(agent_unit_tests  workx_agent  ${AGENT_TEST_SOURCES} ${HELPER_TEST_SOURCES})
-workx_add_unit_target(tui_unit_tests    workx_tui    ${TUI_TEST_SOURCES})
 workx_add_unit_target(island_unit_tests workx_island ${ISLAND_TEST_SOURCES})
-workx_add_unit_target(app_unit_tests    workx_app    ${APP_TEST_SOURCES})
 
-# ---- ftxtui 无头单测（H1 修复：为实验 FTXUI TUI 建立回归网）----
-# 仅编译不依赖 ScreenInteractive 的无头源（view_model/message_node/markdown/
-# builtins），避免在测试链接中拖动整个 FTXUI 交互栈。
-# 依赖 codex 目标通过 WORKX_BUILD_FTX_TUI 打开的 ftxui::* imported targets。
-file(GLOB_RECURSE FTXTUI_TEST_SOURCES
-     CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/ftxtui/*.cpp)
-if(WORKX_BUILD_FTX_TUI AND FTXTUI_TEST_SOURCES)
-    add_executable(ftxtui_unit_tests
+# ---- TUI 无头单测 ----
+# 直接编译 src/tui 中不依赖 ScreenInteractive 的无头源（view_model/message_node/
+# markdown/builtins/event_bridge 等），避免在测试链接中拖动整个 FTXUI 交互栈。
+file(GLOB_RECURSE TUI_TEST_SOURCES
+     CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tui/*.cpp)
+if(TUI_TEST_SOURCES)
+    add_executable(tui_unit_tests
         ${UNIT_TEST_COMMON}
-        ${FTXTUI_TEST_SOURCES}
-        # 被测量 FTXUI 无头实现（直接编译源文件；与 codex 目标共享源码）
-        ${WORKX_ROOT}/src/ftxtui/render/markdown_to_elements.cpp
-        ${WORKX_ROOT}/src/ftxtui/render/syntax_highlight.cpp
-        ${WORKX_ROOT}/src/ftxtui/vm/message_node.cpp
-        ${WORKX_ROOT}/src/ftxtui/vm/view_model.cpp
-        ${WORKX_ROOT}/src/ftxtui/command/builtins.cpp
-        ${WORKX_ROOT}/src/ftxtui/bridge/action_queue.cpp
-        ${WORKX_ROOT}/src/ftxtui/bridge/event_bridge.cpp
-        ${WORKX_ROOT}/src/ftxtui/widgets/suggest_panel.cpp
-        ${WORKX_ROOT}/src/ftxtui/widgets/search_palette.cpp
-        ${WORKX_ROOT}/src/ftxtui/widgets/composer.cpp
-        ${WORKX_ROOT}/src/ftxtui/widgets/sidebar.cpp
-        ${WORKX_ROOT}/src/ftxtui/widgets/sidebar_tabs.cpp
-        ${WORKX_ROOT}/src/ftxtui/widgets/file_viewer.cpp
-        ${WORKX_ROOT}/src/ftxtui/widgets/change_viewer.cpp
+        ${TUI_TEST_SOURCES}
+        ${WORKX_ROOT}/src/tui/render/markdown_to_elements.cpp
+        ${WORKX_ROOT}/src/tui/render/syntax_highlight.cpp
+        ${WORKX_ROOT}/src/tui/vm/message_node.cpp
+        ${WORKX_ROOT}/src/tui/vm/view_model.cpp
+        ${WORKX_ROOT}/src/tui/command/builtins.cpp
+        ${WORKX_ROOT}/src/tui/bridge/action_queue.cpp
+        ${WORKX_ROOT}/src/tui/bridge/event_bridge.cpp
+        ${WORKX_ROOT}/src/tui/widgets/suggest_panel.cpp
+        ${WORKX_ROOT}/src/tui/widgets/search_palette.cpp
+        ${WORKX_ROOT}/src/tui/widgets/composer.cpp
+        ${WORKX_ROOT}/src/tui/widgets/sidebar.cpp
+        ${WORKX_ROOT}/src/tui/widgets/sidebar_tabs.cpp
+        ${WORKX_ROOT}/src/tui/widgets/file_viewer.cpp
+        ${WORKX_ROOT}/src/tui/widgets/change_viewer.cpp
     )
-    target_include_directories(ftxtui_unit_tests PRIVATE
+    target_include_directories(tui_unit_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${WORKX_ROOT}/src
-        ${WORKX_ROOT}/src/ftxtui
-        # FTXUI 内部头（terminal_input_parser.hpp 等）未随 imported target 导出，
-        # 测试需直接引用其源码目录；置于公共 include 之后避免头文件冲突
+        ${WORKX_ROOT}/src/tui
         ${WORKX_ROOT}/third_party/ftxui/src
     )
-    target_compile_definitions(ftxtui_unit_tests PRIVATE
+    target_compile_definitions(tui_unit_tests PRIVATE
         SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-    target_link_libraries(ftxtui_unit_tests PRIVATE
+    target_link_libraries(tui_unit_tests PRIVATE
         workx_agent
         workx_core
         ftxui::dom
@@ -108,9 +94,9 @@ if(WORKX_BUILD_FTX_TUI AND FTXTUI_TEST_SOURCES)
         Catch2::Catch2WithMain
     )
     if(nlohmann_json_FOUND)
-        target_link_libraries(ftxtui_unit_tests PRIVATE nlohmann_json::nlohmann_json)
+        target_link_libraries(tui_unit_tests PRIVATE nlohmann_json::nlohmann_json)
     endif()
-    catch_discover_tests(ftxtui_unit_tests
+    catch_discover_tests(tui_unit_tests
         ADD_TAGS_AS_LABELS ON
         DL_PATHS "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>"
     )

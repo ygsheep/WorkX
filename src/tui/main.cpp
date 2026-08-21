@@ -1,12 +1,8 @@
 /**
  * @file main.cpp
- * @brief codex 入口 — FTXUI 双栏实验 TUI
+ * @brief workx 入口 — FTXUI 双栏 TUI
  * @details 复用 workx_agent 的会话装配（agent::create_session，B1 统一）：
- *          与 workx 主程序共享同一工厂（Backend + 全量工具集 + 系统提示词 +
- *          会话持久化），不再各自维护 create_min_session 造成工具集漂移。
- *          不链接 workx_app（避免拖动 workx_tui）。见
- *          docs/plans/2026-08-17-ftxui-tui-design.md。
- * @version 0.1.0（实验）
+ *          Backend + 全量工具集 + 系统提示词 + 会话持久化。
  */
 
 #include <cstdlib>
