@@ -367,6 +367,48 @@ TEST_CASE("ViewModel sub agent completed updates status and final answer", "[vie
     REQUIRE(vm.sub_records[1].status == "failed");
 }
 
+TEST_CASE("ViewModel sub agent action merges observation into tool card", "[view_model][subagent]") {
+    ViewModel vm;
+    vm.apply(ActionSubAgentProgress{
+        .task_id = "t1", .step_number = 1, .step_type = "thought",
+        .thought_text = "let me check", .duration_ms = 100.0});
+    vm.apply(ActionSubAgentProgress{
+        .task_id = "t1", .step_number = 2, .step_type = "action",
+        .tool_name = "Read", .tool_input = "{\"file_path\":\"a.txt\"}"});
+    vm.apply(ActionSubAgentProgress{
+        .task_id = "t1", .step_number = 3, .step_type = "observation",
+        .observation = "file content", .is_error = false});
+
+    REQUIRE(vm.sub_records.size() == 1);
+    const auto& rec = vm.sub_records[0];
+    // thought + action（observation 已合并到 action，不新增独立步骤）
+    REQUIRE(rec.steps.size() == 2);
+    REQUIRE(rec.steps[0].step_type == "thought");
+    REQUIRE(rec.steps[0].thought_text == "let me check");
+    REQUIRE(rec.steps[0].duration_ms == 100.0);
+    REQUIRE(rec.steps[0].expanded == true);
+    REQUIRE(rec.steps[1].step_type == "action");
+    REQUIRE(rec.steps[1].tool_name == "Read");
+    REQUIRE(rec.steps[1].tool_input == "{\"file_path\":\"a.txt\"}");
+    REQUIRE(rec.steps[1].done == true);
+    REQUIRE(rec.steps[1].observation == "file content");
+    REQUIRE(rec.steps[1].is_error == false);
+    REQUIRE(rec.steps[1].expanded == true);
+}
+
+TEST_CASE("ViewModel sub agent observation without action stays standalone", "[view_model][subagent]") {
+    ViewModel vm;
+    vm.apply(ActionSubAgentProgress{
+        .task_id = "t1", .step_number = 1, .step_type = "observation",
+        .observation = "orphan result", .is_error = true});
+    REQUIRE(vm.sub_records.size() == 1);
+    REQUIRE(vm.sub_records[0].steps.size() == 1);
+    REQUIRE(vm.sub_records[0].steps[0].step_type == "observation");
+    REQUIRE(vm.sub_records[0].steps[0].observation == "orphan result");
+    REQUIRE(vm.sub_records[0].steps[0].is_error == true);
+    REQUIRE(vm.sub_records[0].steps[0].done == true);
+}
+
 // ============================================================================
 // 修改追踪（P4：Edit/Write → FileChange）
 // ============================================================================

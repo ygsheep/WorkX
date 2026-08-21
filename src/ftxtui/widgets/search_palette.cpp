@@ -202,7 +202,7 @@ public:
             }));
         }
 
-        // 顶部搜索行
+        // 顶部搜索行（面板聚焦时定位控制台光标到此，使 IME 候选框跟随输入框）
         Element input_field = hbox({
             text("⌕ ") | color(kAccent),
             m_search.empty()
@@ -210,6 +210,7 @@ public:
                 : hbox({text(m_search), text("▎") | color(kAccent)}),
             flex(text("")),
         });
+        if (Focused()) input_field = ftxui::focusCursorBar(std::move(input_field));
 
         // 列表（分组 + 滚动窗口，保证选中项可见）
         Elements list;
@@ -314,13 +315,17 @@ public:
         content_elems.push_back(text(std::string(str::kPaletteHint)) | color(theme::T::Text));
         auto content = vbox(std::move(content_elems));
 
-        // 内容四周留白，面板悬浮于主会话之上
+        // 宽度固定为终端宽度的 60%（小屏保留下限），高度按可见条目动态收束。
+        // 使用 ftxui::Terminal::Size()：app 每帧已用 CONOUT$ 校准 fallback 尺寸，
+        // 故此处取到的即为真实终端宽度。
+        const int term_w = ftxui::Terminal::Size().dimx;
+        const int panel_w = std::max(40, term_w * 60 / 100);
         auto panel = vbox({
                          text(" "),
                          hbox({ text("  "), content | flex, text("  ") }),
                          text(" "),
                      })
-                     | size(WIDTH, LESS_THAN, 70)
+                     | size(WIDTH, EQUAL, panel_w)
                      | size(HEIGHT, LESS_THAN, kMaxVisible + 6)
                      | bgcolor(kPanelBg)
                      | border;

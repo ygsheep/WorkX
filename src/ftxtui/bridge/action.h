@@ -18,6 +18,7 @@
 #include <vector>
 
 #include <nlohmann/json.hpp>
+#include "agent/api/backend_types.h"  // agent::ModelInfo（模型列表携带 context_length）
 #include "agent/api/i_completion_provider.h"
 #include "agent/model/provider_config.h"
 #include "core/events/agent_events.h"  // agent::AskUserResult
@@ -126,11 +127,19 @@ struct ActionCompactionPaused {
 };
 
 /// @brief 子 Agent 进度增量（AgentTool → 订阅者）
+/// @details v1.3.0：补充结构化字段，供第二层卡片渲染复用主会话 UI（思考卡/工具卡）。
 struct ActionSubAgentProgress {
     std::string task_id;
     int32_t step_number = 0;
     std::string step_type;              ///< "thought"/"action"/"observation"/"final"
     std::string content;
+    // --- v1.3.0 结构化字段（与 ReActStep 对应）---
+    std::string thought_text;           ///< thought/final 的 LLM 文本
+    std::string tool_name;              ///< action 的工具名
+    std::string tool_input;             ///< action 的工具参数 JSON 字符串
+    std::string observation;            ///< observation 的工具结果文本
+    bool is_error = false;              ///< 工具执行是否出错
+    double duration_ms = 0.0;           ///< 本步骤耗时（毫秒，思考卡标签展示用）
 };
 
 /// @brief 子 Agent 完成（AgentTool → 订阅者）
@@ -153,6 +162,7 @@ struct ActionToast {
 /// @brief 模型列表加载完成（App 后台线程 list_models 后入队）
 struct ActionModelsLoaded {
     std::vector<std::string> models;
+    std::vector<agent::ModelInfo> models_info;  ///< 完整模型信息（含 context_length，切换时解析窗口）
 };
 
 /// @brief 会话列表条目（UI 侧轻量拷贝，避免 action.h 依赖 SessionStore）

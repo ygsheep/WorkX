@@ -47,6 +47,8 @@ struct CardHit {
     int button = -1;     ///< >=0 = 消息操作按钮（0=复制，1=重试）；-1 = 非按钮
     /// @brief 面包屑导航目标：-1 = 非导航；0 = 主会话；1 = 子 Agent 记录
     int nav_target = -1;
+    /// @brief 第二层（子 Agent 记录）卡片命中的步骤索引（-1 = 思考卡；>=0 = steps 下标）
+    int sub_step = -1;
 };
 
 /// @brief 把一条消息渲染为元素（用户/助手/错误 + 思考折叠 + 工具块）

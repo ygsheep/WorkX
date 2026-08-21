@@ -58,6 +58,15 @@ Element cursor_block() {
     return ftxui::text(" ") | ftxui::bgcolor(Color::White);
 }
 
+/// @brief 把控制台/IME 光标锚定到给定元素所在单元（focused 时）。
+///        focusCursorBar 会接管本组件的 focused 游标节点，FTXUI 据此把
+///        真实控制台光标定位到该节点左上角。须只作用于"光标所在的那个字符
+///        单元"，而不是整条输入元素——否则锚定到行首第 0 列，Windows IME
+///        候选/拼音会显示在输入最前面而非输入点之后。
+Element mark_cursor(Element e) {
+    return ftxui::focusCursorBar(std::move(e));
+}
+
 /// @brief 渲染带块状光标的输入文本（focused 才显示光标）
 ///        空输入：光标块 + 灰色提示；非空：光标块覆盖当前字符
 Element render_with_cursor(const std::string& text, size_t cursor, bool focused) {
@@ -66,19 +75,19 @@ Element render_with_cursor(const std::string& text, size_t cursor, bool focused)
         Element ph = ftxui::text(std::string(str::kComposerPlaceholder)) |
                      ftxui::color(theme::T::Text);
         if (!focused) return ph;
-        return ftxui::hbox({cursor_block(), ph});
+        return ftxui::hbox({mark_cursor(cursor_block()), ph});
     }
     if (cursor >= text.size()) {
         Element e = ftxui::text(text) | ftxui::color(theme::T::Text);
         if (focused) {
-            return ftxui::hbox({e, cursor_block()});
+            return ftxui::hbox({e, mark_cursor(cursor_block())});
         }
         return e;
     }
     size_t clen = char_len_at(text, cursor);
     Element at = ftxui::text(text.substr(cursor, clen));
     if (focused) {
-        at |= ftxui::bgcolor(Color::White) | ftxui::color(Color::Black);
+        at = mark_cursor(at | ftxui::bgcolor(Color::White) | ftxui::color(Color::Black));
     } else {
         at |= ftxui::color(theme::T::Text);
     }
@@ -107,7 +116,12 @@ Component make_composer(ComposerOptions& opt) {
     auto paste = std::make_shared<PasteState>();
 
     auto renderer = ftxui::Renderer([&opt, &cursor](bool focused) {
-        return render_with_cursor(*opt.buffer, cursor, focused) | ftxui::bgcolor(kPanelBg);
+        Element body = render_with_cursor(*opt.buffer, cursor, focused)
+                       | ftxui::bgcolor(kPanelBg);
+        // 控制台/IME 光标的位置已由 render_with_cursor 中的 mark_cursor 锚定到
+        // 插入点所在字符单元（而非整条输入元素行首），Windows IME 候选框才会
+        // 跟随显示在真实插入位置。此处的 focusCursorBar 不再单独包裹。
+        return body;
     });
 
     Component wrapped = renderer | ftxui::CatchEvent(

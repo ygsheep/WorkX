@@ -27,6 +27,7 @@
 
 #include "core/events/agent_events.h"
 #include "agent/tool/context.h"  // tool::PermissionMode
+#include "agent/api/backend_types.h"  // agent::ModelInfo（模型切换 context_length）
 #include "agent/factory.h"       // agent::BackendCreateResult
 #include "agent/model/provider_config.h"  // agent::ProviderConfigEntry
 #include "bridge/action_queue.h"
@@ -44,6 +45,7 @@ class IBackendAdmin;
 class ICompletionProvider;
 class IEventBus;
 class IConfigManager;
+class ModelCatalog;
 }  // namespace agent
 
 namespace agent::command {
@@ -69,6 +71,10 @@ struct AppDeps {
     std::string project;
     std::string agent_name;
     std::string session_dir;  ///< 项目会话目录（/resume 列出历史用）
+    /// @brief 上下文窗口（token），启动时经 resolve_context_length 解析注入侧栏进度条分母
+    int context_limit = 0;
+    /// @brief models.dev 目录（原子指针，后台刷新；模型切换时重解析 context_length）
+    std::shared_ptr<std::atomic<std::shared_ptr<const agent::ModelCatalog>>> model_catalog;
     /// @brief 命令注册表（内置 + 用户命令；斜杠命令经统一命令执行路径）
     std::shared_ptr<agent::command::CommandRegistry> command_registry;
 
@@ -281,6 +287,17 @@ private:
     std::deque<CardHit> m_breadcrumb_hits;
     int m_sub_scroll = 0;       ///< 第二层（子 Agent 记录）独立滚动位置
     bool m_sub_follow = true;   ///< 第二层自动跟随最新记录
+    /// @brief 第二层卡片命中区（思考/工具卡；每帧由 build_sub_agent_view 重建）
+    std::deque<CardHit> m_sub_hits;
+
+    /// @brief 第二层（子 Agent 记录）虚拟化 + 缓存（与主转录区同机制）
+    // 复用 MsgCacheEntry：每虚拟消息（思考卡/工具卡/最终答复）一条缓存条目；
+    // 高度缓存 m_sub_height/m_sub_height_ver 同理。切换记录时整体失效重建。
+    std::vector<MsgCacheEntry> m_sub_cache;
+    std::vector<int> m_sub_height;
+    std::vector<std::uint64_t> m_sub_height_ver;
+    /// @brief m_sub_cache 当前所属记录 task_id（切换记录时失效重建）
+    std::string m_sub_cache_task;
 
     // ---- 子 Agent 菜单（任务调度 tab 可交互）----
     std::vector<std::string> m_sub_entries;  ///< 菜单条目（每帧由 sub_agents 重建）
@@ -316,6 +333,7 @@ private:
     bool m_ask_test_echo = false;
 
     std::vector<std::string> m_model_items;  ///< 模型列表（/model 面板）
+    std::vector<agent::ModelInfo> m_model_infos;  ///< list_models 完整信息（apply_model 取 context_length）
     int m_mock_perm_cycle = 0;   ///< mock 下 Shift+Tab 权限循环序号（""→plan→bypass）
 
     // 思考动画（busy 时推进帧并持续重绘）

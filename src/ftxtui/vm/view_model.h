@@ -67,7 +67,16 @@ struct SubAgentLite {
 struct SubAgentStep {
     int step_number = 0;
     std::string step_type;     ///< "thought"/"action"/"observation"/"final"
-    std::string content;
+    std::string content;       ///< 格式化行（保留，侧栏聚合/回退用）
+    // --- v1.3.0 结构化字段（与主会话卡片渲染对齐）---
+    std::string thought_text;  ///< thought/final 的 LLM 文本
+    std::string tool_name;     ///< action 的工具名
+    std::string tool_input;    ///< action 的工具参数 JSON 字符串
+    std::string observation;   ///< observation 的工具结果文本
+    bool is_error = false;     ///< 工具执行是否出错
+    bool done = false;         ///< action 是否已关联 observation
+    bool expanded = false;     ///< 卡片展开状态（思考卡/工具卡）
+    double duration_ms = 0.0;  ///< 本步骤耗时（毫秒，思考卡标签展示用）
 };
 
 /// @brief 子 Agent 完整记录（第二层：独立渲染，不混入主转录区）
@@ -78,6 +87,7 @@ struct SubAgentDetail {
     std::vector<SubAgentStep> steps;
     std::string final_answer;
     double duration_ms = 0.0;
+    bool reasoning_expanded = true;  ///< 思考卡展开状态（v1.3.0，点击切换）
 };
 
 /// @brief 输出区域层级（标题栏下子列表导航）

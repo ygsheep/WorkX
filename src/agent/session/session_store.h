@@ -34,6 +34,32 @@
 
 namespace agent::session {
 
+/// @brief 子 Agent 持久化事件（progress/completed 统一结构，subType 字段区分）
+/// @details 第二层（子 Agent 记录）持久化：ChatSession 订阅
+///          SubAgentProgressEvent/SubAgentCompletedEvent 后转为本结构追加到 JSONL，
+///          /resume 时按写入顺序重放恢复 sub_records（含观察合并语义）。
+struct SubAgentEvent {
+    std::string type;            ///< "progress" / "completed"
+    std::string task_id;
+    int32_t step_number = 0;
+    std::string step_type;       ///< progress: "thought"/"action"/"observation"
+    std::string content;
+    std::string thought_text;
+    std::string tool_name;
+    std::string tool_input;
+    std::string observation;
+    bool is_error = false;
+    double duration_ms = 0.0;
+    std::string final_answer;    ///< completed
+    bool was_error = false;      ///< completed
+};
+
+/// @brief 序列化到 JSON（SessionStore 持久化；外层 type 恒为 "sub_agent"）
+void to_json(nlohmann::json& j, const SubAgentEvent& ev);
+
+/// @brief 从 JSON 反序列化（缺省字段用默认值）
+void from_json(const nlohmann::json& j, SubAgentEvent& ev);
+
 /// @brief 会话元信息（用于列表展示）
 struct SessionMeta {
     std::string session_id;        ///< 会话 ID
@@ -109,6 +135,10 @@ public:
     ///          空列表也写入（表示清空），保证恢复语义正确。
     bool append_todo(const std::vector<core::todo::TodoItem>& todos);
 
+    /// @brief 追加子 Agent 事件（progress/completed，第二层记录持久化）
+    /// @details append-only：按事件发生顺序逐条追加，/resume 时按序重放恢复。
+    bool append_sub_agent(const SubAgentEvent& ev);
+
     // ============================================================
     // 静态工具方法
     // ============================================================
@@ -131,6 +161,10 @@ public:
     /// @brief 从 JSONL 文件加载待办清单（#24：取最后一条 todo 事件）
     /// @return 待办列表（无 todo 事件时返回空）
     static std::vector<core::todo::TodoItem> load_todos(const std::string& file_path);
+
+    /// @brief 从 JSONL 文件加载子 Agent 事件（按写入顺序）
+    /// @return 子 Agent 事件列表（无则空）
+    static std::vector<SubAgentEvent> load_sub_agents(const std::string& file_path);
 
 private:
     std::string m_file_path;

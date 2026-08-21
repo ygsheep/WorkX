@@ -215,11 +215,43 @@ bool ViewModel::apply_variant(const ActionSubAgentProgress& a) {
     }
     it->status = "running";
     it->step_number = a.step_number;
-    SubAgentStep st;
-    st.step_number = a.step_number;
-    st.step_type = a.step_type;
-    st.content = a.content;
-    it->steps.push_back(std::move(st));
+
+    if (a.step_type == "observation") {
+        // 观察结果合并到最近的 action 步骤（工具卡结果）；无匹配则独立记录
+        bool merged = false;
+        for (auto rit = it->steps.rbegin(); rit != it->steps.rend(); ++rit) {
+            if (rit->step_type == "action" && !rit->done) {
+                rit->observation = a.observation;
+                rit->is_error = a.is_error;
+                rit->done = true;
+                rit->expanded = true;  // 第二层详情视图默认展开（结果可见）
+                merged = true;
+                break;
+            }
+        }
+        if (!merged) {
+            SubAgentStep st;
+            st.step_number = a.step_number;
+            st.step_type = a.step_type;
+            st.content = a.content;
+            st.observation = a.observation;
+            st.is_error = a.is_error;
+            st.done = true;
+            st.expanded = true;
+            it->steps.push_back(std::move(st));
+        }
+    } else {
+        SubAgentStep st;
+        st.step_number = a.step_number;
+        st.step_type = a.step_type;
+        st.content = a.content;
+        st.thought_text = a.thought_text;
+        st.tool_name = a.tool_name;
+        st.tool_input = a.tool_input;
+        st.duration_ms = a.duration_ms;
+        st.expanded = true;  // 第二层详情视图默认展开（思考/工具内容可见）
+        it->steps.push_back(std::move(st));
+    }
 
     // 侧边栏任务调度 tab 聚合（轻量条目）
     auto lit = std::find_if(tabs.sub_agents.begin(), tabs.sub_agents.end(),

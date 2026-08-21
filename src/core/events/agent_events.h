@@ -155,11 +155,20 @@ struct SubAgentCompletedEvent {
 ///          使订阅者可按 task_id 实时跟踪子任务进度（无需轮询 TaskOutput）。
 ///          ⚠️ 仅作增量通知，不注入父 LLM 上下文（与 SubAgentCompletedEvent 同策略）。
 ///          完整输出仍通过 TaskOutputTool 按 task_id 读取。
+///          v1.3.0：补充结构化字段（thought_text/tool_name/tool_input/observation/is_error），
+///          供第二层卡片渲染复用主会话 UI（思考卡/工具卡），content 仍保留格式化行。
 struct SubAgentProgressEvent {
     std::string task_id;        ///< 子 Agent 任务 id（AgentTool 生成的 'a'+8 随机）
     int32_t step_number = 0;    ///< 当前步骤序号（1-based，与 ReActStep.step_number 对齐）
     std::string step_type;      ///< 步骤类型："thought" / "action" / "observation" / "final"
     std::string content;        ///< 步骤内容（与写入 Task 输出缓冲的格式化行相同，可为空）
+    // --- v1.3.0 结构化字段（与 ReActStep 对应）---
+    std::string thought_text;   ///< thought/final 的 LLM 文本
+    std::string tool_name;      ///< action 的工具名
+    std::string tool_input;     ///< action 的工具参数 JSON 字符串
+    std::string observation;    ///< observation 的工具结果文本
+    bool is_error = false;      ///< 工具执行是否出错
+    double duration_ms = 0.0;   ///< 本步骤耗时（毫秒，思考卡标签展示用）
 };
 
 /// @brief 待办清单更新事件（#24：TodoStore → TUI 侧边栏/StatusBar）

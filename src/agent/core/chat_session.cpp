@@ -195,9 +195,11 @@ ChatSession::ChatSession(std::unique_ptr<ICompletionProvider> provider,
     tool::TodoStore::instance().set_event_bus(&m_event_bus.get());
 
     subscribe_interrupt();
+    subscribe_sub_agent_persistence();
 }
 
 ChatSession::~ChatSession() {
+    unsubscribe_sub_agent_persistence();
     unsubscribe_interrupt();
     if (m_provider) {
         m_provider->interrupt();
@@ -1356,6 +1358,52 @@ void ChatSession::subscribe_interrupt() {
 
 void ChatSession::unsubscribe_interrupt() {
     m_event_bus.get().unsubscribe<InterruptEvent>(m_interrupt_token);
+}
+
+void ChatSession::subscribe_sub_agent_persistence() {
+    m_sub_progress_token = m_event_bus.get().subscribe<SubAgentProgressEvent>(
+        [this](const SubAgentProgressEvent& e) {
+            // final 步由 SubAgentCompletedEvent 承载，UI 不渲染，跳过持久化
+            if (e.step_type == "final") return;
+            agent::session::SubAgentEvent ev;
+            ev.type = "progress";
+            ev.task_id = e.task_id;
+            ev.step_number = e.step_number;
+            ev.step_type = e.step_type;
+            ev.content = e.content;
+            ev.thought_text = e.thought_text;
+            ev.tool_name = e.tool_name;
+            ev.tool_input = e.tool_input;
+            ev.observation = e.observation;
+            ev.is_error = e.is_error;
+            ev.duration_ms = e.duration_ms;
+            std::shared_ptr<agent::session::SessionStore> store;
+            {
+                std::lock_guard<std::mutex> lock(m_state_mutex);
+                store = m_session_store;
+            }
+            if (store) store->append_sub_agent(ev);
+        });
+    m_sub_completed_token = m_event_bus.get().subscribe<SubAgentCompletedEvent>(
+        [this](const SubAgentCompletedEvent& e) {
+            agent::session::SubAgentEvent ev;
+            ev.type = "completed";
+            ev.task_id = e.task_id;
+            ev.final_answer = e.final_answer;
+            ev.was_error = e.was_error;
+            ev.duration_ms = e.duration_ms;
+            std::shared_ptr<agent::session::SessionStore> store;
+            {
+                std::lock_guard<std::mutex> lock(m_state_mutex);
+                store = m_session_store;
+            }
+            if (store) store->append_sub_agent(ev);
+        });
+}
+
+void ChatSession::unsubscribe_sub_agent_persistence() {
+    m_event_bus.get().unsubscribe<SubAgentProgressEvent>(m_sub_progress_token);
+    m_event_bus.get().unsubscribe<SubAgentCompletedEvent>(m_sub_completed_token);
 }
 
 } // namespace agent

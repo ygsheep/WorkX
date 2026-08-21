@@ -315,6 +315,14 @@ private:
     /// @brief 取消中断订阅
     void unsubscribe_interrupt();
 
+    /// @brief 订阅子 Agent 进度/完成事件并持久化到 SessionStore
+    /// @details 第二层（子 Agent 记录）持久化：SubAgentProgressEvent/SubAgentCompletedEvent
+    ///          发布时追加 sub_agent 事件到当前 SessionStore，/resume 时按序重放恢复。
+    void subscribe_sub_agent_persistence();
+
+    /// @brief 取消子 Agent 事件持久化订阅
+    void unsubscribe_sub_agent_persistence();
+
     /// @brief DS_CACHE M-4：LLM 摘要回调（注入到 m_compactor）
     /// @param middle 待摘要的中段消息序列
     /// @return LLM 生成的摘要文本（失败时抛异常，由 compact_middle fallback 到机械折叠）
@@ -408,6 +416,10 @@ private:
 
     // 中断事件订阅
     EventToken m_interrupt_token;
+
+    // 子 Agent 事件持久化订阅（progress/completed）
+    EventToken m_sub_progress_token;
+    EventToken m_sub_completed_token;
 
     // 并发控制：保护 m_messages / m_system_prompt / m_tool_registry / m_current_task
     mutable std::mutex m_state_mutex;
