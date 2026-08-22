@@ -50,6 +50,9 @@ elseif(NOT WORKX_PYTHON_EXECUTABLE)
     message(WARNING "Icon: Python not found, skip icon conversion")
 endif()
 
+# workx 可执行文件（FTXUI TUI）。须在图标/ripgrep 变量设置之后引入，
+# 因为 src/tui/CMakeLists.txt 的 target-specific 操作依赖这些变量。
+add_subdirectory(tui)
 
 # ============================================================
 # 安装与包导出（M2 库化：外部工程可 find_package(workx)）
