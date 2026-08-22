@@ -30,6 +30,10 @@ struct ComposerOptions {
     std::function<bool()> suggest_enter_insert;  ///< Ctrl+Enter：插入引用（@路径）
     std::function<void()> suggest_cancel;   ///< Esc 关闭面板
     std::function<void()> suggest_refresh;  ///< 字符 / 退格后刷新过滤
+
+    // ---- 输入历史（上下箭头浏览；返回 true = 已消费）----
+    std::function<bool()> on_history_prev;  ///< ArrowUp 首行：上一条
+    std::function<bool()> on_history_next;  ///< ArrowDown 末行：下一条
 };
 
 /// @brief 构建 composer 组件

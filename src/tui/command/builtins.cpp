@@ -69,6 +69,16 @@ void register_ftx_builtins(CommandRegistry& registry,
     });
     registry.register_command(clear_cmd);
 
+    auto new_cmd =
+        agent::command::make_local_command("new", std::string(str::kCmdNewDesc));
+    new_cmd->set_argument_hint("/new");
+    new_cmd->set_call([on_new = cb.on_new](const std::string&,
+                                           const CommandContext&) -> CommandResult {
+        if (on_new) on_new();
+        return CommandResult::ok("");
+    });
+    registry.register_command(new_cmd);
+
     auto model_cmd =
         agent::command::make_local_command("model", std::string(str::kCmdModelDesc));
     model_cmd->set_argument_hint("/model");

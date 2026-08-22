@@ -31,6 +31,7 @@
 
 #include "app.h"
 #include "crash_reporter.h"
+#include "wizard.h"
 
 int main(int argc, char** argv) {
     crash::InstallHandlers();
@@ -48,8 +49,15 @@ int main(int argc, char** argv) {
 
     // 载入默认配置文件（存在则读）
     auto config_path = agent::default_config_path();
-    if (fs::exists(config_path)) agent::load_from_config_file(cfg, config_path);
+    const bool first_run = !fs::exists(config_path);
+    if (!first_run) agent::load_from_config_file(cfg, config_path);
     agent::load_from_env(cfg);
+
+    // 首次运行（#66）：配置文件不存在时启动设置向导（mock 模式跳过）。
+    // 向导直接写入 ConfigManager 内存并 save_to_file，无需重读。
+    if (first_run && !mock_mode) {
+        ftxtui::run_first_run_wizard(cfg, config_path);
+    }
 
     // 日志（Debug/Release 统一到 ~/.workx/logs）
     agent::log::Logger::get_instance().set_level(agent::log::LogLevel::LOG_INFO);

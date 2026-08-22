@@ -77,6 +77,19 @@ std::vector<size_t> filter_commands(const std::vector<std::string>& commands,
     return hits;
 }
 
+std::string apply_command_suggest(const std::string& line, const std::string& full) {
+    // 定位触发命令面板的最后一个 "/"（与 parse_suggest_query 一致：
+    // 非 @路径 内的最后一个 "/"），从该处起替换为完整命令。
+    const auto slash = line.rfind('/');
+    const auto at = line.rfind('@');
+    const bool slash_inside_at_path = (at != std::string::npos) &&
+                                      (slash != std::string::npos) &&
+                                      at < slash;
+    if (slash != std::string::npos && !slash_inside_at_path)
+        return line.substr(0, slash) + full + " ";
+    return line + full + " ";
+}
+
 Element render_suggest_panel(SuggestMode mode,
                              const std::vector<SuggestEntry>& entries,
                              int selected,

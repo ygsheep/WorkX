@@ -37,6 +37,7 @@
 #include "widgets/suggest_panel.h"
 #include "widgets/search_palette.h"
 #include "widgets/sidebar_tabs.h"
+#include "widgets/input_history.h"
 #include "core/utils/file_index.h"  // agent::FileIndex::Entry
 
 namespace agent {
@@ -119,6 +120,8 @@ private:
     void start_mock_stream(const std::string& user_text);
     void cmd_resume(const std::string& args);
     void cmd_rename(const std::string& args);
+    /// @brief /clear：删除当前会话文件并新建会话（设置面板 Clear 动作共用）
+    void cmd_clear();
     /// @brief /view：打开文件只读查看器（读取 + 行号 + 虚拟化滚动）
     void cmd_view(const std::string& args);
     /// @brief /edit：内嵌 nvim 编辑文件（WithRestoredIO 全屏切换，返回后重读）
@@ -131,6 +134,8 @@ private:
     void cmd_test_askuser();
     /// @brief 恢复指定会话（switch_session + 历史载入；cmd_resume 与搜索面板共用）
     void resume_session(const std::string& file_path, const std::string& title);
+    /// @brief 新建会话后重置 UI 状态（/clear 与 /new 共用：清空消息/子 Agent/变更/统计/标题）
+    void reset_vm_for_new_session();
     void open_model_selector();
     void apply_model(int index);
     /// @brief 从 m_model_items 重建 /model 面板条目（active = 当前模型）
@@ -241,6 +246,8 @@ private:
 
     // 输入缓冲与面板状态
     std::string m_input_buffer;
+    /// @brief 输入历史（上下箭头浏览 + JSON 落盘；路径 ~/.workx/history.json）
+    InputHistory m_input_history;
     std::chrono::steady_clock::time_point m_last_ctrl_c{};  ///< 上次 Ctrl+C 时刻（1s 内连按退出）
     bool m_ctrl_c_hint = false;              ///< 状态栏「再次按 Ctrl+C 退出」提示是否显示
     std::chrono::steady_clock::time_point m_ctrl_c_hint_until;  ///< 提示显示截止时刻

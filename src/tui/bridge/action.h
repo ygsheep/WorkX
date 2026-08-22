@@ -54,6 +54,9 @@ struct ActionTurnDone {
     int32_t prompt_tokens = 0;
     int32_t generated_tokens = 0;
     int32_t cache_read_input_tokens = 0;
+    // #65：DeepSeek 硬盘缓存命中/未命中（Anthropic adapter 留 0）
+    int32_t prompt_cache_hit_tokens = 0;
+    int32_t prompt_cache_miss_tokens = 0;
     double prompt_ms = 0.0;
     double generation_ms = 0.0;
     double reasoning_ms = 0.0;  ///< 思考阶段实际耗时（毫秒，思考折叠标签显示）

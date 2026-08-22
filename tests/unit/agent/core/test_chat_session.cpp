@@ -460,6 +460,39 @@ TEST_CASE("ChatSession set_session_store and session_store accessor", "[session]
     fs::remove(tmp);
 }
 
+TEST_CASE("ChatSession new_session clears messages and switches id", "[session][new_session]") {
+    MockConfigManager cfg;
+    namespace fs = std::filesystem;
+    auto tmp = fs::temp_directory_path() / "workx_test_new_session.jsonl";
+    fs::remove(tmp);
+
+    auto session = make_test_session(cfg);
+    const std::string old_id = session->session_id();
+    REQUIRE_FALSE(old_id.empty());
+
+    // 注入消息 + SessionStore（模拟已有会话）
+    session->commit_state({ChatMessage::user("hello"), ChatMessage::assistant("hi")}, "sys");
+    auto store = std::make_shared<agent::session::SessionStore>(tmp.string(), old_id);
+    REQUIRE(store->open());
+    store->append_session_start("/cwd", "model", "main");
+    store->append_user_message("u1", "", "hello", "t1");
+    store->close();
+    session->set_session_store(store);
+    REQUIRE(session->get_messages().size() == 2);
+
+    // new_session：清空消息 + 换 id + 关闭 store（新会话文件懒创建）
+    session->new_session();
+    REQUIRE(session->get_messages().empty());
+    REQUIRE_FALSE(session->session_id().empty());
+    REQUIRE(session->session_id() != old_id);
+    REQUIRE(session->session_store() == nullptr);
+
+    // 旧会话文件保留（/new 语义：不删除，由 /clear 调用方删除）
+    REQUIRE(fs::exists(tmp));
+
+    fs::remove(tmp);
+}
+
 TEST_CASE("ChatSession full restore cycle: write then restore", "[session][restore][e2e]") {
     // 端到端测试：通过 SessionStore 写入消息 → ChatSession 从文件恢复 → 验证消息一致
     MockConfigManager cfg;

@@ -31,9 +31,14 @@ struct SidebarModel {
     std::string permission;     ///< 权限模式标签 ""/"plan"/"bypass"
     bool visible = true;        ///< 侧栏是否可见（窄屏折叠）
 
-    // 3.1 统计指标（来自 ActionTurnDone 用量）
-    int32_t cache_read_tokens = 0;  ///< DS 缓存命中（读取）token
+    // 3.1 统计指标（来自 ActionTurnDone 用量，会话累计）
+    int32_t cache_read_tokens = 0;  ///< DS/Anthropic 缓存读取（命中）token
     int32_t total_tokens = 0;       ///< 会话累计 token
+    // #65：细粒度分项（会话累计）
+    int32_t prompt_tokens = 0;      ///< 会话累计 prompt token
+    int32_t generated_tokens = 0;   ///< 会话累计 generated token
+    int32_t cache_hit_tokens = 0;   ///< DS 缓存命中 token（累计）
+    int32_t cache_miss_tokens = 0;  ///< DS 缓存未命中 token（累计）
 
     // 3.2 MCP 列表（agent 侧未实现，预留接口；当前为空）
     std::vector<std::string> mcp_servers;

@@ -410,6 +410,36 @@ bool ChatSession::switch_session(const std::string& file_path) {    // 加载历
     return true;
 }
 
+void ChatSession::new_session() {
+    // 生成中安全：先取消并等待当前任务，避免与 ReActLoop 竞争 m_messages。
+    cancel_and_wait_current_task();
+    std::string new_session_id;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        // 1. 新会话 ID
+        new_session_id = core::util::generate_uuid();
+        m_session_id = new_session_id;
+        // 2. 清空消息历史
+        m_messages.clear();
+        // 3. 关闭旧 SessionStore 并置空（新会话文件懒创建：首条 user 消息时创建）
+        if (m_session_store) {
+            m_session_store->close();
+            m_session_store.reset();
+        }
+        // 4. 重置压缩器与前缀形状基线 + conditional skills 会话级累积
+        m_compactor.reset();
+        m_last_prefix_shape = PrefixShape{};
+        m_touch_collector.clear();
+        m_activated_skills.clear();
+        // 懒创建参数（m_store_configured 等）保持不变，复用启动时配置
+    }  // 释放 m_state_mutex
+
+    // 锁外：重置 TodoStore 到新会话空清单（restore_todos 内部会再加 m_state_mutex，
+    // 持锁调用会对非递归 mutex 二次锁定 → EDEADLK，与 switch_session 同理）。
+    tool::TodoStore::instance().restore_todos(new_session_id, {});
+    wire_todo_persistence();
+}
+
 void ChatSession::wire_todo_persistence() {
     std::shared_ptr<agent::session::SessionStore> store;
     std::string session_id;

@@ -125,6 +125,47 @@ TEST_CASE("sidebar tabs removes cost", "[sidebar_tabs][render]") {
     REQUIRE(text.find("成本") == std::string::npos);     // 成本已移除
 }
 
+TEST_CASE("sidebar tabs shows DS cache hit rate", "[sidebar_tabs][render]") {
+    SidebarTabsModel tabs = make_tabs();
+    SidebarModel sidebar;
+    sidebar.cache_hit_tokens = 8000;
+    sidebar.cache_miss_tokens = 2000;
+    const auto text = render_elem(build_sidebar_tabs(tabs, sidebar), 40, 24);
+    INFO("RENDERED:\n" << text);
+    REQUIRE(text.find("DS 缓存") != std::string::npos);
+    REQUIRE(text.find("命中") != std::string::npos);
+    REQUIRE(text.find("80%") != std::string::npos);   // 8000/10000
+    REQUIRE(text.find("8k/10k") != std::string::npos);
+}
+
+TEST_CASE("sidebar tabs hides hit rate when no cache data", "[sidebar_tabs][render]") {
+    SidebarTabsModel tabs = make_tabs();
+    SidebarModel sidebar;
+    const auto text = render_elem(build_sidebar_tabs(tabs, sidebar));
+    REQUIRE(text.find("命中") == std::string::npos);
+}
+
+TEST_CASE("sidebar tabs shows prompt and generated breakdown", "[sidebar_tabs][render]") {
+    SidebarTabsModel tabs = make_tabs();
+    SidebarModel sidebar;
+    sidebar.prompt_tokens = 12000;
+    sidebar.generated_tokens = 2000;
+    const auto text = render_elem(build_sidebar_tabs(tabs, sidebar), 40, 24);
+    INFO("RENDERED:\n" << text);
+    REQUIRE(text.find("Prompt") != std::string::npos);
+    REQUIRE(text.find("生成") != std::string::npos);
+    REQUIRE(text.find("12k") != std::string::npos);
+    REQUIRE(text.find("2k") != std::string::npos);
+}
+
+TEST_CASE("sidebar tabs hides breakdown when all zero", "[sidebar_tabs][render]") {
+    SidebarTabsModel tabs = make_tabs();
+    SidebarModel sidebar;
+    const auto text = render_elem(build_sidebar_tabs(tabs, sidebar));
+    REQUIRE(text.find("Prompt") == std::string::npos);
+    REQUIRE(text.find("生成") == std::string::npos);
+}
+
 // ============================================================================
 // 子 Agent 菜单：单行标签 + 菜单元素嵌入
 // ============================================================================

@@ -40,8 +40,13 @@ public:
             case InputType::Empty:
                 return {.should_query = false, .output_text = "", .messages = {}, .is_error = false};
 
-            case InputType::SlashCommand:
+            case InputType::SlashCommand: {
+                // 多命令支持："/skill1 + /skill2" 拆分逐个执行并合并结果
+                const auto parts = split_multi_commands(user_input);
+                if (parts.size() > 1)
+                    return process_multi_commands(parts, ctx);
                 return process_slash_command(*parsed.command, ctx);
+            }
 
             case InputType::BashCommand:
                 return process_bash_command(parsed.text);
@@ -55,6 +60,61 @@ public:
     }
 
 private:
+    /// @brief 拆分多命令输入："/skill1 + /skill2" → ["/skill1", "/skill2"]
+    /// @param input 以 "/" 开头的原始输入
+    /// @return 含 2+ 个以 "/" 开头的命令段时返回各段；否则返回空（走单命令路径）
+    /// @note 以 "+" 分隔；任一非 "/" 开头的段（如命令参数里的 "+"）视为非多命令
+    static std::vector<std::string> split_multi_commands(const std::string& input) {
+        std::vector<std::string> raw;
+        std::string cur;
+        for (char c : input) {
+            if (c == '+') {
+                raw.push_back(cur);
+                cur.clear();
+            } else {
+                cur += c;
+            }
+        }
+        raw.push_back(cur);
+
+        std::vector<std::string> parts;
+        for (const auto& s : raw) {
+            const auto b = s.find_first_not_of(" \t");
+            const auto en = s.find_last_not_of(" \t");
+            if (b == std::string::npos) continue;  // 空段跳过（如 "a ++ b"）
+            const std::string t = s.substr(b, en - b + 1);
+            if (t[0] != '/') return {};  // 任一非命令段 → 非多命令
+            parts.push_back(t);
+        }
+        return parts.size() > 1 ? parts : std::vector<std::string>{};
+    }
+
+    /// @brief 逐个执行多命令并合并结果（PromptCommand 的提示文本用空行分隔拼接）
+    ProcessResult process_multi_commands(const std::vector<std::string>& parts,
+                                         const command::CommandContext& ctx) {
+        ProcessResult combined;
+        for (const auto& part : parts) {
+            const auto result = m_command_executor->execute(part, ctx);
+            if (result.result.is_error) {
+                combined.is_error = true;
+                if (!combined.output_text.empty()) combined.output_text += "\n";
+                combined.output_text += result.result.text;
+                continue;
+            }
+            if (result.should_query) {
+                combined.should_query = true;
+                if (!result.result.text.empty()) {
+                    if (!combined.output_text.empty()) combined.output_text += "\n\n";
+                    combined.output_text += result.result.text;
+                }
+            } else if (!result.result.text.empty()) {
+                if (!combined.output_text.empty()) combined.output_text += "\n";
+                combined.output_text += result.result.text;
+            }
+        }
+        return combined;
+    }
+
     ProcessResult process_slash_command(const ParsedSlashCommand& cmd, const command::CommandContext& ctx)
     {
 

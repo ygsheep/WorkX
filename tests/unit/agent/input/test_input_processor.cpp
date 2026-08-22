@@ -261,3 +261,93 @@ TEST_CASE("InputProcessor reports missing image and skips it", "[input][processo
     }
     REQUIRE(found_error);
 }
+
+// ============================================================
+// 多命令支持："/skill1 + /skill2" 逐个执行并合并结果
+// ============================================================
+
+namespace {
+
+/// @brief 注册一个 PromptCommand（模拟 skill），提示文本为固定字符串
+std::shared_ptr<PromptCommand> make_skill_cmd(const std::string& name,
+                                              const std::string& prompt) {
+    auto cmd = make_prompt_command(name, "skill " + name);
+    cmd->set_prompt_generator([prompt](const std::string&,
+                                       const CommandContext&) {
+        return std::vector<PromptBlock>{PromptBlock{
+            .type = PromptBlockType::Text, .text = prompt, .image = {}}};
+    });
+    return cmd;
+}
+
+} // namespace
+
+TEST_CASE("InputProcessor executes multiple slash commands joined by +",
+          "[input][processor][multi_command]") {
+    auto loader = std::make_shared<InMemoryFileLoader>();
+    auto registry = std::make_shared<CommandRegistry>();
+    registry->register_command(make_skill_cmd("skill-001", "PROMPT_A"));
+    registry->register_command(make_skill_cmd("skill-002", "PROMPT_B"));
+    InputProcessor processor(registry, loader);
+
+    auto result = processor.process("/skill-001 + /skill-002", CommandContext{});
+
+    REQUIRE(result.should_query);
+    REQUIRE_FALSE(result.is_error);
+    // 两个 skill 的提示文本都合并进 output_text
+    REQUIRE(result.output_text.find("PROMPT_A") != std::string::npos);
+    REQUIRE(result.output_text.find("PROMPT_B") != std::string::npos);
+    REQUIRE(result.output_text.find("PROMPT_A") < result.output_text.find("PROMPT_B"));
+}
+
+TEST_CASE("InputProcessor single slash command unaffected by + splitting",
+          "[input][processor][multi_command]") {
+    auto loader = std::make_shared<InMemoryFileLoader>();
+    auto registry = std::make_shared<CommandRegistry>();
+    registry->register_command(make_skill_cmd("skill-001", "PROMPT_A"));
+    InputProcessor processor(registry, loader);
+
+    auto result = processor.process("/skill-001", CommandContext{});
+
+    REQUIRE(result.should_query);
+    REQUIRE(result.output_text.find("PROMPT_A") != std::string::npos);
+}
+
+TEST_CASE("InputProcessor treats + inside args as non-multi command",
+          "[input][processor][multi_command]") {
+    auto loader = std::make_shared<InMemoryFileLoader>();
+    auto registry = std::make_shared<CommandRegistry>();
+    // 记录被调用的命令名
+    std::vector<std::string> called;
+    auto cmd = make_prompt_command("skill-001", "skill");
+    cmd->set_prompt_generator([&called](const std::string& args,
+                                        const CommandContext&) {
+        called.push_back(args);
+        return std::vector<PromptBlock>{PromptBlock{
+            .type = PromptBlockType::Text, .text = "PROMPT", .image = {}}};
+    });
+    registry->register_command(cmd);
+    InputProcessor processor(registry, loader);
+
+    // "+ bar" 不是 "/" 开头 → 不按多命令拆分，整串作为单命令参数
+    auto result = processor.process("/skill-001 + bar", CommandContext{});
+
+    REQUIRE(result.should_query);
+    REQUIRE(called.size() == 1);
+    REQUIRE(called[0] == "+ bar");
+}
+
+TEST_CASE("InputProcessor multi command reports error for missing command",
+          "[input][processor][multi_command]") {
+    auto loader = std::make_shared<InMemoryFileLoader>();
+    auto registry = std::make_shared<CommandRegistry>();
+    registry->register_command(make_skill_cmd("skill-001", "PROMPT_A"));
+    InputProcessor processor(registry, loader);
+
+    auto result = processor.process("/skill-001 + /nope", CommandContext{});
+
+    // 存在的命令正常执行，缺失命令报错
+    REQUIRE(result.is_error);
+    REQUIRE(result.output_text.find("PROMPT_A") != std::string::npos);
+    REQUIRE(result.output_text.find("Command not found") != std::string::npos);
+}

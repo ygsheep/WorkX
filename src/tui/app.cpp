@@ -67,8 +67,16 @@ using ftxui::Elements;
 using ftxui::Event;
 
 namespace {
-/// @brief 输入区固定高度（行数）
-constexpr int kComposerHeight = 3;
+/// @brief 输入区内容行数（上限 5 行）
+constexpr size_t kComposerMaxLines = 5;
+/// @brief 输入区总高度 = 内容行数 + 上下内边距 2
+int composer_height(const std::string& input) {
+    size_t n = 1;
+    for (char c : input)
+        if (c == '\n') ++n;
+    if (n > kComposerMaxLines) n = kComposerMaxLines;
+    return static_cast<int>(n) + 2;
+}
 /// @brief 侧栏折叠宽度阈值：低于该列宽时不渲染右侧栏（窄屏保护内容区）
 constexpr int kSidebarCollapseWidth = 100;
 
@@ -242,17 +250,11 @@ App::App(AppDeps deps)
         .on_provider_select = [this] { open_provider_palette(); },
         .on_resume = [this](const std::string& args) { cmd_resume(args); },
         .on_rename = [this](const std::string& args) { cmd_rename(args); },
-        .on_clear = [this] {
-            if (m_deps.session) m_deps.session->clear_history();
-            m_vm.messages.clear();
-            invalidate_msg_cache();
-            m_vm.tabs.sub_agents.clear();
-            m_vm.tabs.sub_selected = -1;
-            m_vm.sub_records.clear();
-            m_vm.sub_active = -1;
-            m_vm.output_level = OutputLevel::Main;
-            m_vm.tabs.changes.changes.clear();
-            m_scroll = 0;
+        .on_clear = [this] { cmd_clear(); },
+        .on_new = [this] {
+            if (!m_deps.session) return;
+            m_deps.session->new_session();
+            reset_vm_for_new_session();
         },
         .on_view = [this](const std::string& args) { cmd_view(args); },
         .on_edit = [this](const std::string& args) { cmd_edit(args); },
@@ -278,6 +280,9 @@ App::App(AppDeps deps)
 
     m_bridge.set_wake_callback([this] { m_screen.PostEvent(Event::Custom); });
     m_bridge.start();
+
+    // 输入历史：启动时从配置目录加载（~/.workx/history.json）
+    m_input_history.load(agent::default_config_path().parent_path() / "history.json");
 
     // 拖拽选中：FTXUI 原生高亮选区（左键按下/移动/释放由 App::HandleSelection
     // 消费），选区文本变化时缓存，供鼠标释放时写入系统剪贴板。
@@ -763,12 +768,56 @@ void App::resume_session(const std::string& file_path, const std::string& title)
     m_vm.sidebar.context_used = estimated;
     m_vm.sidebar.total_tokens = estimated;
     m_vm.sidebar.cache_read_tokens = 0;
+    // #65：历史消息无法还原命中/分项，从 0 起累计（对齐 cache_read_tokens）
+    m_vm.sidebar.prompt_tokens = 0;
+    m_vm.sidebar.generated_tokens = 0;
+    m_vm.sidebar.cache_hit_tokens = 0;
+    m_vm.sidebar.cache_miss_tokens = 0;
 
     m_scroll = 0;
     m_follow = true;
     m_vm.sidebar.title = title;
     m_vm.apply(ActionAppendMessage{.role = "assistant",
         .text = std::string(str::kResumedPrefix) + title + std::string(str::kMdBoldEnd)});
+}
+
+void App::cmd_clear() {
+    if (!m_deps.session) return;
+    // 记录旧会话文件路径（new_session 会关闭 store 并更换 session_id）
+    std::filesystem::path old_file;
+    const std::string old_sid = m_deps.session->session_id();
+    if (!old_sid.empty())
+        old_file = std::filesystem::path(m_deps.session_dir) / (old_sid + ".jsonl");
+    // 新建会话（内部：取消任务 + 关闭旧 store + 清空 + 新 session_id）
+    m_deps.session->new_session();
+    // 删除旧会话文件（store 已关闭，Windows 下可删除）
+    if (!old_file.empty()) {
+        std::error_code ec;
+        std::filesystem::remove(old_file, ec);
+    }
+    reset_vm_for_new_session();
+}
+
+void App::reset_vm_for_new_session() {
+    m_vm.messages.clear();
+    invalidate_msg_cache();
+    m_vm.tabs.sub_agents.clear();
+    m_vm.tabs.sub_selected = -1;
+    m_vm.sub_records.clear();
+    m_vm.sub_active = -1;
+    m_vm.output_level = OutputLevel::Main;
+    m_vm.tabs.changes.changes.clear();
+    // 标题栏回退「新会话」；统计从零开始（新会话上下文）
+    m_vm.sidebar.title.clear();
+    m_vm.sidebar.context_used = 0;
+    m_vm.sidebar.total_tokens = 0;
+    m_vm.sidebar.prompt_tokens = 0;
+    m_vm.sidebar.generated_tokens = 0;
+    m_vm.sidebar.cache_read_tokens = 0;
+    m_vm.sidebar.cache_hit_tokens = 0;
+    m_vm.sidebar.cache_miss_tokens = 0;
+    m_scroll = 0;
+    m_follow = true;
 }
 
 void App::cmd_rename(const std::string& args) {
@@ -1291,12 +1340,14 @@ bool App::suggest_accept() {
     if (m_suggest_mode == SuggestMode::None || m_suggest_selected < 0) return false;
     const auto& e = m_suggest_entries[static_cast<size_t>(m_suggest_selected)];
     if (m_suggest_mode == SuggestMode::Command) {
-        // 命令面板：自动补全命令名 + 一个空格，关闭面板（不执行、不发送消息）
-        if (e.payload >= 0 && e.payload < static_cast<int>(m_palette_cmds.size()))
-            m_input_buffer =
-                m_palette_cmds[static_cast<size_t>(e.payload)].command + " ";
-        else
-            m_input_buffer.clear();
+        // 命令面板：把选中命令「追加」到输入栏（保留 "/" 之前已输入的内容），
+        // 关闭面板（不执行、不发送消息）。支持连续追加多个命令，如
+        // "/skill-001 + /skill002"。
+        if (e.payload >= 0 && e.payload < static_cast<int>(m_palette_cmds.size())) {
+            const std::string full =
+                m_palette_cmds[static_cast<size_t>(e.payload)].command;
+            m_input_buffer = apply_command_suggest(m_input_buffer, full);
+        }
         m_composer_cursor = m_input_buffer.size();
     } else if (m_suggest_mode == SuggestMode::File) {
         if (e.payload < 0 || e.payload >= static_cast<int>(m_suggest_files.size())) {
@@ -1513,12 +1564,7 @@ void App::run_setting(int action) {
             m_screen.RequestAnimationFrame();
             break;
         case SettingAction::Clear:
-            if (m_deps.session) m_deps.session->clear_history();
-            m_vm.messages.clear();
-            invalidate_msg_cache();
-            m_vm.tabs.sub_agents.clear();
-            m_vm.tabs.sub_selected = -1;
-            m_scroll = 0;
+            cmd_clear();
             break;
         case SettingAction::Exit:
             m_vm.apply(ActionShutdown{});
@@ -1528,6 +1574,12 @@ void App::run_setting(int action) {
 }
 
 void App::send_input(const std::string& text) {
+    // 输入历史：提交即追加并落盘（含斜杠命令，便于重复调用）
+    if (!text.empty()) {
+        m_input_history.push(text);
+        m_input_history.save();
+    }
+
     // 本地命令：不发送给模型
     if (!text.empty() && text[0] == '/') {
         // B2 统一命令：斜杠命令全部经 run_command 执行（单一命令路径）
@@ -1780,8 +1832,8 @@ Element App::build_transcript(int width) {
         prefix[i + 1] = prefix[i] + m_msg_height[i] + 1;
 
     int dimy = ftxui::Terminal::Size().dimy;
-    // 减去：标题 1 + 面包屑 1 + 输入区 kComposerHeight + 状态行 1 + 余量 2
-    int avail = std::max(1, dimy - (2 + 1 + kComposerHeight + 2));
+    // 减去：标题 1 + 面包屑 1 + 输入区 composer_height + 状态行 1 + 余量 2
+    int avail = std::max(1, dimy - (2 + 1 + composer_height(m_input_buffer) + 2));
     int content_h = prefix[n];
     int max_scroll = std::max(0, content_h - avail);
 
@@ -2046,7 +2098,7 @@ Element App::build_sub_agent_view(int width) {
 
     // 视口高度：与主转录区同公式，再减状态头 2 行（头 + 空行）
     int dimy = ftxui::Terminal::Size().dimy;
-    int avail = std::max(1, dimy - (2 + 1 + kComposerHeight + 2) - 2);
+    int avail = std::max(1, dimy - (2 + 1 + composer_height(m_input_buffer) + 2) - 2);
     int content_h = prefix[n];
     int max_scroll = std::max(0, content_h - avail);
 
@@ -2373,6 +2425,21 @@ void App::run() {
     comp_opt.suggest_enter_insert = [this] { return suggest_enter_insert(); };
     comp_opt.suggest_cancel = [this] { suggest_cancel(); };
     comp_opt.suggest_refresh = [this] { update_suggest(); };
+    // 输入历史：上下箭头在首/末行时浏览历史（替换输入缓冲）
+    comp_opt.on_history_prev = [this] {
+        std::string out;
+        if (!m_input_history.prev(m_input_buffer, out)) return false;
+        m_input_buffer = out;
+        m_composer_cursor = m_input_buffer.size();
+        return true;
+    };
+    comp_opt.on_history_next = [this] {
+        std::string out;
+        if (!m_input_history.next(out)) return false;
+        m_input_buffer = out;
+        m_composer_cursor = m_input_buffer.size();
+        return true;
+    };
 
     m_composer = make_composer(comp_opt);
 
@@ -2540,7 +2607,8 @@ void App::run() {
         Element left_col = ftxui::flex(output_elem)
             | ftxui::bgcolor(theme::T::Surface);
 
-        // 输入区：固定较高高度 + 上/下/左内边距（灰底由底部面板统一提供）
+        // 输入区：高度随内容行数增长（上限 5 行）+ 上/下/左内边距（灰底由底部面板统一提供）
+        const int comp_h = composer_height(m_input_buffer);
         Element input_body = ftxui::vbox({
             ftxui::text(" "),                       // 顶部内边距（占一行）
             ftxui::hbox({                           // 左侧内边距
@@ -2548,7 +2616,7 @@ void App::run() {
                 ftxui::flex(m_composer->Render()),
             }),
             ftxui::text(" "),                       // 底部内边距（占一行）
-        }) | ftxui::size(ftxui::HEIGHT, ftxui::EQUAL, kComposerHeight);
+        }) | ftxui::size(ftxui::HEIGHT, ftxui::EQUAL, comp_h);
 
         // 状态行内嵌在输入区下方，与输入区共用灰底与左侧边框（左缩进 2 格）
         Element status_elem = ftxui::hbox({
@@ -2566,7 +2634,7 @@ void App::run() {
 
         // 左侧高亮边框线贯穿整个底部面板（输入区 + 空白 + 状态行 + 空白）
         constexpr int kStatusHeight = 3;  // 状态行区域高度（含上下各 1 行空白）
-        constexpr int kPanelHeight = kComposerHeight + kStatusHeight;
+        const int kPanelHeight = comp_h + kStatusHeight;
         Elements border_lines;
         for (int i = 0; i < kPanelHeight; ++i)
             border_lines.push_back(ftxui::text("│"));
@@ -3056,7 +3124,7 @@ void App::run() {
         }
         // 滚一页（转录区可视高度），PageUp 翻回上页、PageDown 翻回下页
         const int scroll_page =
-            std::max(1, ftxui::Terminal::Size().dimy - (2 + 1 + kComposerHeight + 2));
+            std::max(1, ftxui::Terminal::Size().dimy - (2 + 1 + composer_height(m_input_buffer) + 2));
         if (e == Event::PageDown) {
             if (in_sub) m_sub_scroll += scroll_page;
             else m_scroll += scroll_page;

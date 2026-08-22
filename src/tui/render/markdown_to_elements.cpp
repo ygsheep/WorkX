@@ -697,12 +697,13 @@ Element build_markdown(std::string_view text, int width) {
     auto flush_code = [&]() {
         if (in_code && !code_lines.empty()) {
             // 代码块：深色背景块（#1e1e1e），无边框线；行内 flex 铺满消息宽度
+            const std::vector<Element> hl = highlight_code_block(code_lines, code_lang);
             Elements code_rows;
-            code_rows.reserve(code_lines.size());
-            for (const auto& cl : code_lines) {
+            code_rows.reserve(hl.size());
+            for (const auto& e : hl) {
                 code_rows.push_back(ftxui::hbox({
                     ftxui::text("  "),
-                    ftxui::flex(highlight_code_line(cl, code_lang)),
+                    ftxui::flex(e),
                 }));
             }
             auto code_elem = ftxui::vbox(std::move(code_rows));
@@ -882,11 +883,16 @@ Element render_tool_result(const ToolCallNode& t, int width) {
             max_line_num = std::max(max_line_num, n);
         }
         const int num_width = calc_line_num_width(max_line_num);
+        // diff 内容行整块送 tree-sitter 前景高亮，再叠加 +/- 背景色
+        std::vector<std::string> diff_contents;
+        diff_contents.reserve(diff.size());
+        for (const auto& dl : diff) diff_contents.push_back(dl.content);
+        const std::vector<Element> hl = highlight_code_block(diff_contents, lang);
         Elements code_rows;
         code_rows.reserve(diff.size());
         for (size_t i = 0; i < diff.size(); ++i) {
             const DiffLine& dl = diff[i];
-            Element content = highlight_code_line(dl.content, lang);
+            Element content = (i < hl.size()) ? hl[i] : highlight_code_line(dl.content, lang);
             if (dl.prefix == DiffPrefix::Add) {
                 content = content | ftxui::bgcolor(Color::RGB(0x00, 0x5f, 0x00));
             } else if (dl.prefix == DiffPrefix::Del) {
@@ -958,6 +964,7 @@ Element render_tool_result(const ToolCallNode& t, int width) {
         code_lines.push_back(std::move(code));
     }
     const int num_width = calc_line_num_width(max_line_num);
+    const std::vector<Element> hl = highlight_code_block(code_lines, lang);
     Elements code_rows;
     code_rows.reserve(code_lines.size());
     for (size_t i = 0; i < code_lines.size(); ++i) {
@@ -965,7 +972,8 @@ Element render_tool_result(const ToolCallNode& t, int width) {
         row.push_back(ftxui::text("  "));
         if (line_nums[i] > 0) row.push_back(line_num_prefix(line_nums[i], num_width));
         else row.push_back(ftxui::text(""));
-        row.push_back(ftxui::flex(highlight_code_line(code_lines[i], lang)));
+        row.push_back(ftxui::flex((i < hl.size()) ? hl[i]
+                                                  : highlight_code_line(code_lines[i], lang)));
         code_rows.push_back(ftxui::hbox(std::move(row)));
     }
     if (truncated) {

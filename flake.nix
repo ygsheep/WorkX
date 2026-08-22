@@ -78,7 +78,7 @@
         {
           default = pkgs.stdenv.mkDerivation {
             pname = "workx";
-            version = "0.5.0";
+            version = "0.5.1";
             src = pkgs.lib.cleanSource self;
             nativeBuildInputs = [ pkgs.cmake pkgs.ninja pkgs.pkg-config ];
             buildInputs = [ pkgs.nlohmann_json pkgs.curl ];

@@ -50,6 +50,13 @@ SuggestMode parse_suggest_query(const std::string& line, std::string& query);
 std::vector<size_t> filter_commands(const std::vector<std::string>& commands,
                                     const std::string& query);
 
+/// @brief 命令面板确认：把完整命令「追加」到输入行
+/// @param line 当前输入行（可能含 "/" 之前已输入的内容，如 "test /skill"）
+/// @param full 选中的完整命令（含前导 "/"，如 "/skill"）
+/// @return 追加后的输入行：保留最后一个 "/"（非 @路径内）之前的内容，
+///         从该 "/" 起替换为 full + " "；无 "/" 时直接追加 full + " "
+std::string apply_command_suggest(const std::string& line, const std::string& full);
+
 /// @brief 渲染输入框上方提示面板
 /// @param mode 面板模式（None 返回空元素）
 /// @param entries 已过滤的候选列表

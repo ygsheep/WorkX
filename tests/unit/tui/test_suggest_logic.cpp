@@ -141,6 +141,37 @@ TEST_CASE("filter_commands keeps source order", "[suggest][filter]") {
 }
 
 // ============================================================================
+// apply_command_suggest：命令面板确认追加（保留 "/" 之前已输入内容）
+// ============================================================================
+
+TEST_CASE("apply_command_suggest keeps prefix before slash", "[suggest][accept]") {
+    // "test /skill" + Enter 选中 "/skill" → 追加为 "test /skill "（不丢 "test "）
+    REQUIRE(apply_command_suggest("test /skill", "/skill") == "test /skill ");
+    REQUIRE(apply_command_suggest("test /skill", "/skill-001") == "test /skill-001 ");
+    REQUIRE(apply_command_suggest("test /skill", "/new") == "test /new ");
+}
+
+TEST_CASE("apply_command_suggest leading slash replaces tail", "[suggest][accept]") {
+    REQUIRE(apply_command_suggest("/mod", "/model") == "/model ");
+    REQUIRE(apply_command_suggest("/", "/help") == "/help ");
+}
+
+TEST_CASE("apply_command_suggest empty line appends", "[suggest][accept]") {
+    REQUIRE(apply_command_suggest("", "/help") == "/help ");
+}
+
+TEST_CASE("apply_command_suggest slash inside at path appends", "[suggest][accept]") {
+    // "@src/core" 中的 "/" 是文件路径分隔符，不当作命令触发符 → 直接追加
+    REQUIRE(apply_command_suggest("看 @src/core", "/clear") == "看 @src/core/clear ");
+}
+
+TEST_CASE("apply_command_suggest supports multi command chain", "[suggest][accept]") {
+    // 连续追加：输入 "/skill-001 /skill002"（末尾无空格触发命令面板）后
+    // Enter 选中 "/skill002" → "/skill-001 /skill002 "
+    REQUIRE(apply_command_suggest("/skill-001 /skill002", "/skill002") == "/skill-001 /skill002 ");
+}
+
+// ============================================================================
 // filter_search_entries：聚合搜索过滤
 // ============================================================================
 

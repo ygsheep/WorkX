@@ -139,6 +139,36 @@ TEST_CASE("ViewModel turn done keeps existing streamed text", "[view_model][turn
     REQUIRE(vm.messages.back().text == "streamed");
 }
 
+TEST_CASE("ViewModel turn done accumulates fine-grained token stats", "[view_model][turn_done]") {
+    ViewModel vm;
+    vm.apply(ActionTurnDone{.full_content = "a", .prompt_tokens = 10, .generated_tokens = 20,
+                            .cache_read_input_tokens = 5,
+                            .prompt_cache_hit_tokens = 30, .prompt_cache_miss_tokens = 10});
+    vm.apply(ActionTurnDone{.full_content = "b", .prompt_tokens = 4, .generated_tokens = 6,
+                            .cache_read_input_tokens = 2,
+                            .prompt_cache_hit_tokens = 20, .prompt_cache_miss_tokens = 5});
+    // 会话累计：prompt 14 / generated 26 / cache_read 7 / hit 50 / miss 15
+    REQUIRE(vm.sidebar.prompt_tokens == 14);
+    REQUIRE(vm.sidebar.generated_tokens == 26);
+    REQUIRE(vm.sidebar.cache_read_tokens == 7);
+    REQUIRE(vm.sidebar.cache_hit_tokens == 50);
+    REQUIRE(vm.sidebar.cache_miss_tokens == 15);
+    // total_tokens 累计（保留 resume 后历史）：35 + 12 = 47
+    REQUIRE(vm.sidebar.total_tokens == 47);
+    // context_used 始终为最新一轮 prompt（当前上下文占用）
+    REQUIRE(vm.sidebar.context_used == 4);
+}
+
+TEST_CASE("ViewModel turn done zero cache stats stay zero", "[view_model][turn_done]") {
+    ViewModel vm;
+    vm.apply(ActionTurnDone{.full_content = "a", .prompt_tokens = 10, .generated_tokens = 5});
+    REQUIRE(vm.sidebar.cache_hit_tokens == 0);
+    REQUIRE(vm.sidebar.cache_miss_tokens == 0);
+    REQUIRE(vm.sidebar.cache_read_tokens == 0);
+    REQUIRE(vm.sidebar.prompt_tokens == 10);
+    REQUIRE(vm.sidebar.generated_tokens == 5);
+}
+
 // ============================================================================
 // 工具调用
 // ============================================================================

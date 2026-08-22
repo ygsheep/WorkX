@@ -30,6 +30,8 @@ void EventBridge::start() {
                 .prompt_tokens = e.prompt_tokens,
                 .generated_tokens = e.generated_tokens,
                 .cache_read_input_tokens = e.cache_read_input_tokens,
+                .prompt_cache_hit_tokens = e.prompt_cache_hit_tokens,
+                .prompt_cache_miss_tokens = e.prompt_cache_miss_tokens,
                 .prompt_ms = e.prompt_ms,
                 .generation_ms = e.generation_ms,
                 .reasoning_ms = e.reasoning_ms,

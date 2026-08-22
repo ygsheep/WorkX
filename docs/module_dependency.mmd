@@ -1,0 +1,22 @@
+flowchart TD
+    subgraph G_TUI["终端界面层 src/tui"]
+        N_TUI["src/tui<br/>(workx 可执行文件)"]
+    end
+
+    subgraph G_AGENT["Agent 核心层 src/agent"]
+        N_AGENT["src/agent<br/>(Agent Harness)"]
+    end
+
+    subgraph G_CORE["核心基础设施层 src/core"]
+        N_CORE["src/core"]
+    end
+
+    subgraph G_ISLAND["独立模块 src/island"]
+        N_ISLAND["src/island"]
+    end
+
+    N_TUI --> N_AGENT
+    N_TUI --> N_CORE
+    N_AGENT --> N_CORE
+    N_ISLAND --> N_AGENT
+    N_ISLAND --> N_CORE

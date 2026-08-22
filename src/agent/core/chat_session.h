@@ -180,6 +180,17 @@ public:
     ///          加载的消息不会触发持久化（避免回环）。
     bool restore_from_file(const std::string& file_path);
 
+    /// @brief 新建会话（/new 与 /clear 共用）：清空消息并切换到新 session_id
+    /// @details 保留旧会话文件（/new 语义）；/clear 由调用方在切换后删除旧文件。
+    ///          生成中安全（先取消并等待当前任务）：
+    ///          1. 生成新 session_id（core::util::generate_uuid）
+    ///          2. 清空 m_messages
+    ///          3. 关闭旧 SessionStore 并置空（新会话文件懒创建：首条 user 消息时
+    ///             以新 session_id 创建 JSONL，复用启动时 configure_session_store 参数）
+    ///          4. 重置压缩器与前缀形状基线 + conditional skills 会话级累积
+    ///          锁外重置 TodoStore 到新会话空清单（restore_todos 内部再加 m_state_mutex）。
+    void new_session();
+
     /// @brief 切换到历史会话（/resume 命令调用）
     /// @param file_path 历史会话 JSONL 文件路径
     /// @return true=切换成功

@@ -38,10 +38,16 @@ ROOT = Path(__file__).resolve().parent.parent
 #   aliases  : 注册到语法高亮器的语言标签 (第一个为主标签)
 # ============================================================================
 GRAMMARS = [
-    ("bash",		"https://github.com/tree-sitter/tree-sitter-bash",		"a06c2e4415e9bc0346c6b86d401879ffb44058f7",		"",		["bash"]),
+    ("bash",		"https://github.com/tree-sitter/tree-sitter-bash",		"a06c2e4415e9bc0346c6b86d401879ffb44058f7",		"",		["bash", "sh", "shell", "zsh"]),
     ("c",		"https://github.com/tree-sitter/tree-sitter-c",		"b780e47fc780ddc8da13afa35a3f4ed5c157823d",		"",		["c"]),
-    ("cpp",		"https://github.com/tree-sitter/tree-sitter-cpp",		"8b5b49eb196bec7040441bee33b2c9a4838d6967",		"",		["cpp", "c++"]),
+    ("cpp",		"https://github.com/tree-sitter/tree-sitter-cpp",		"8b5b49eb196bec7040441bee33b2c9a4838d6967",		"",		["cpp", "c++", "cxx", "cc", "h", "hpp"]),
+    ("go",		"https://github.com/tree-sitter/tree-sitter-go",		"v0.25.0",		"",		["go", "golang"]),
+    ("javascript",		"https://github.com/tree-sitter/tree-sitter-javascript",		"v0.25.0",		"",		["javascript", "js", "jsx"]),
     ("json",		"https://github.com/tree-sitter/tree-sitter-json",		"254c42a6476413b776221e03982ac8ae159eeb72",		"",		["json"]),
+    ("python",		"https://github.com/tree-sitter/tree-sitter-python",		"v0.25.0",		"",		["python", "py"]),
+    ("rust",		"https://github.com/tree-sitter/tree-sitter-rust",		"v0.24.2",		"",		["rust", "rs"]),
+    ("tsx",		"https://github.com/tree-sitter/tree-sitter-typescript",		"v0.23.2",		"tsx/src",		["tsx"]),
+    ("typescript",		"https://github.com/tree-sitter/tree-sitter-typescript",		"v0.23.2",		"typescript/src",		["typescript", "ts"]),
 ]
 
 # 生成产物路径

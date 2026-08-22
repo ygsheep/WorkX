@@ -27,9 +27,11 @@ add_executable(workx
     widgets/file_viewer.cpp
     widgets/change_viewer.cpp
     widgets/composer.cpp
+    widgets/input_history.cpp
     widgets/status_line.cpp
     widgets/suggest_panel.cpp
     widgets/search_palette.cpp
+    wizard.cpp
 )
 
 # ============================================================
@@ -109,6 +111,15 @@ target_link_libraries(workx PRIVATE
 
 if(nlohmann_json_FOUND)
     target_link_libraries(workx PRIVATE nlohmann_json::nlohmann_json)
+endif()
+
+# ---- Tree-sitter 语法高亮（可选）----
+# WORKX_TS_GRAMMAR_LIBS/DEFS 由根 CMakeLists.txt 收集（FetchContent 或 vcpkg），
+# 这里统一链接到 workx 目标；WORKX_TS_<NAME> 宏用于语法高亮器按需注册 grammar。
+if(WORKX_HAS_TREE_SITTER)
+    target_link_libraries(workx PRIVATE ${WORKX_TS_RUNTIME_LIB} ${WORKX_TS_GRAMMAR_LIBS})
+    target_compile_definitions(workx PRIVATE WORKX_HAS_TREE_SITTER=1 ${WORKX_TS_GRAMMAR_DEFS})
+    message(STATUS "workx: tree-sitter syntax highlighting enabled (${WORKX_TS_GRAMMAR_LIBS})")
 endif()
 
 if(WIN32)

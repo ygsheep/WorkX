@@ -84,8 +84,13 @@ bool ViewModel::apply_variant(const ActionTurnDone& a) {
     m.reasoning_ms = a.reasoning_ms;
     total_tokens = a.prompt_tokens + a.generated_tokens + a.cache_read_input_tokens;
     sidebar.context_used = a.prompt_tokens;
-    sidebar.cache_read_tokens = a.cache_read_input_tokens;
-    sidebar.total_tokens = total_tokens;
+    // #65：细粒度分项累计（保留 resume 后历史，避免覆盖丢失）
+    sidebar.prompt_tokens += a.prompt_tokens;
+    sidebar.generated_tokens += a.generated_tokens;
+    sidebar.cache_read_tokens += a.cache_read_input_tokens;
+    sidebar.cache_hit_tokens += a.prompt_cache_hit_tokens;
+    sidebar.cache_miss_tokens += a.prompt_cache_miss_tokens;
+    sidebar.total_tokens += total_tokens;
     busy = false;
     return true;
 }

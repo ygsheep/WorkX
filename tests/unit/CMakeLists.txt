@@ -72,10 +72,12 @@ if(TUI_TEST_SOURCES)
         ${WORKX_ROOT}/src/tui/widgets/suggest_panel.cpp
         ${WORKX_ROOT}/src/tui/widgets/search_palette.cpp
         ${WORKX_ROOT}/src/tui/widgets/composer.cpp
+        ${WORKX_ROOT}/src/tui/widgets/input_history.cpp
         ${WORKX_ROOT}/src/tui/widgets/sidebar.cpp
         ${WORKX_ROOT}/src/tui/widgets/sidebar_tabs.cpp
         ${WORKX_ROOT}/src/tui/widgets/file_viewer.cpp
         ${WORKX_ROOT}/src/tui/widgets/change_viewer.cpp
+        ${WORKX_ROOT}/src/tui/wizard.cpp
     )
     target_include_directories(tui_unit_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
@@ -95,6 +97,13 @@ if(TUI_TEST_SOURCES)
     )
     if(nlohmann_json_FOUND)
         target_link_libraries(tui_unit_tests PRIVATE nlohmann_json::nlohmann_json)
+    endif()
+    # 启用 tree-sitter：让 tui_unit_tests 走真实 AST 高亮路径（与 workx 主程序一致）
+    if(WORKX_HAS_TREE_SITTER)
+        target_link_libraries(tui_unit_tests PRIVATE
+            ${WORKX_TS_RUNTIME_LIB} ${WORKX_TS_GRAMMAR_LIBS})
+        target_compile_definitions(tui_unit_tests PRIVATE
+            WORKX_HAS_TREE_SITTER=1 ${WORKX_TS_GRAMMAR_DEFS})
     endif()
     catch_discover_tests(tui_unit_tests
         ADD_TAGS_AS_LABELS ON

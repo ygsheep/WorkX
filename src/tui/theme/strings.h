@@ -32,6 +32,9 @@ inline constexpr std::string_view kSidebarCost       = "成本";
 inline constexpr std::string_view kSidebarModel      = "模型";
 inline constexpr std::string_view kSidebarCache      = "DS 缓存";
 inline constexpr std::string_view kSidebarToken      = "Token";
+inline constexpr std::string_view kSidebarPrompt     = "Prompt";
+inline constexpr std::string_view kSidebarGenerated  = "生成";
+inline constexpr std::string_view kSidebarHitRate    = "命中";
 inline constexpr std::string_view kSidebarMCP        = "MCP";
 inline constexpr std::string_view kSidebarTODO       = "TODO";
 inline constexpr std::string_view kDash               = "—";
@@ -198,7 +201,8 @@ inline constexpr std::string_view kCmdHelpDesc     = "显示可用命令列表";
 inline constexpr std::string_view kHelpIntro        = "可用命令：\n";
 inline constexpr std::string_view kCmdExitDesc     = "退出程序";
 inline constexpr std::string_view kCmdQuitDesc     = "退出程序（别名）";
-inline constexpr std::string_view kCmdClearDesc    = "清空会话";
+inline constexpr std::string_view kCmdClearDesc    = "删除当前会话并新建";
+inline constexpr std::string_view kCmdNewDesc      = "新建会话并切换";
 inline constexpr std::string_view kCmdModelDesc    = "切换模型";
 inline constexpr std::string_view kCmdProviderDesc = "切换供应商";
 inline constexpr std::string_view kCmdResumeDesc   = "恢复历史会话";
@@ -229,6 +233,31 @@ inline constexpr std::string_view kSubStepClose     = ")";
 inline constexpr std::string_view kSubFailed        = "✗ 子任务失败";
 inline constexpr std::string_view kSubCompleted     = "✓ 子任务完成";
 inline constexpr std::string_view kSubDuration      = " ({:.1f}s)";
+
+// ----------------------------------------------------------------------------
+// 首次运行设置向导（#66）
+// ----------------------------------------------------------------------------
+inline constexpr std::string_view kWizardTitle        = "首次运行设置向导";
+inline constexpr std::string_view kWizardStepPrefix   = "步骤 ";
+inline constexpr std::string_view kWizardStepSep      = " / ";
+inline constexpr std::string_view kWizardStepProvider = "选择服务提供商";
+inline constexpr std::string_view kWizardStepApiKey   = "填写 API Key";
+inline constexpr std::string_view kWizardStepContext  = "确认上下文长度";
+inline constexpr std::string_view kWizardWelcome      = "欢迎使用 WorkX！首次运行需要配置 LLM 服务。";
+inline constexpr std::string_view kWizardProviderLabel = "服务提供商：";
+inline constexpr std::string_view kWizardApiKeyLabel   = "API Key：";
+inline constexpr std::string_view kWizardApiKeyHint    = "粘贴 API Key（留空可稍后在 /provider 中设置）";
+inline constexpr std::string_view kWizardUrlLabel      = "API 地址：";
+inline constexpr std::string_view kWizardUrlHint       = "自定义 URL 的完整 API 端点";
+inline constexpr std::string_view kWizardContextLabel  = "上下文长度（token）：";
+inline constexpr std::string_view kWizardContextHint   = "留空使用预设默认值";
+inline constexpr std::string_view kWizardModelPreview  = "默认模型：";
+inline constexpr std::string_view kWizardBtnNext       = "下一步";
+inline constexpr std::string_view kWizardBtnFinish     = "完成";
+inline constexpr std::string_view kWizardBtnSkip       = "跳过";
+inline constexpr std::string_view kWizardHint          = "↑↓ 选择 · Enter 下一步 · Shift+Tab 上一步 · Esc 跳过";
+inline constexpr std::string_view kWizardDone          = "配置已保存，即将启动 WorkX…";
+inline constexpr std::string_view kWizardSkipped       = "已跳过配置，可稍后使用 /provider 设置";
 
 // ----------------------------------------------------------------------------
 // 输出区域层级（标题栏下子列表导航）

@@ -53,6 +53,54 @@ size_t prev_char(const std::string& s, size_t pos) {
     return 0;
 }
 
+/// @brief 文本总行数（空文本视为 1 行）
+size_t line_count(const std::string& s) {
+    if (s.empty()) return 1;
+    size_t n = 1;
+    for (char c : s)
+        if (c == '\n') ++n;
+    return n;
+}
+
+/// @brief 第 line_idx 行的字节区间 [start, end)（end 不含换行符）
+std::pair<size_t, size_t> line_range(const std::string& s, size_t line_idx) {
+    size_t start = 0, line = 0;
+    for (size_t i = 0; i <= s.size(); ++i) {
+        if (i == s.size() || s[i] == '\n') {
+            if (line == line_idx) return {start, i};
+            start = i + 1;
+            ++line;
+        }
+    }
+    return {s.size(), s.size()};
+}
+
+/// @brief 光标所在行号
+size_t cursor_line(const std::string& s, size_t cursor) {
+    size_t line = 0;
+    for (size_t i = 0; i < cursor && i < s.size(); ++i)
+        if (s[i] == '\n') ++line;
+    return line;
+}
+
+/// @brief [start, cursor) 区间内的字符数（UTF-8 安全，用作列位置）
+size_t utf8_col(const std::string& s, size_t start, size_t cursor) {
+    size_t col = 0;
+    for (size_t i = start; i < cursor; ++i)
+        if ((static_cast<unsigned char>(s[i]) & 0xC0) != 0x80) ++col;
+    return col;
+}
+
+/// @brief 从 start 起第 col 个字符的字节位置（不超过 end）
+size_t byte_pos_at_col(const std::string& s, size_t start, size_t col, size_t end) {
+    size_t i = start, c = 0;
+    while (i < end && c < col) {
+        i += char_len_at(s, i);
+        ++c;
+    }
+    return std::min(i, end);
+}
+
 /// @brief 块状光标（白色实心单元）
 Element cursor_block() {
     return ftxui::text(" ") | ftxui::bgcolor(Color::White);
@@ -67,8 +115,35 @@ Element mark_cursor(Element e) {
     return ftxui::focusCursorBar(std::move(e));
 }
 
-/// @brief 渲染带块状光标的输入文本（focused 才显示光标）
-///        空输入：光标块 + 灰色提示；非空：光标块覆盖当前字符
+/// @brief 渲染单行带块状光标的文本（focused 才显示光标）
+///        空行：光标块；非空：光标块覆盖当前字符
+Element render_line_with_cursor(const std::string& line, size_t col, bool focused) {
+    col = std::min(col, line.size());
+    if (line.empty()) {
+        if (!focused) return ftxui::text(" ");
+        return mark_cursor(cursor_block());
+    }
+    if (col >= line.size()) {
+        Element e = ftxui::text(line) | ftxui::color(theme::T::Text);
+        if (focused) return ftxui::hbox({e, mark_cursor(cursor_block())});
+        return e;
+    }
+    size_t clen = char_len_at(line, col);
+    Element at = ftxui::text(line.substr(col, clen));
+    if (focused) {
+        at = mark_cursor(at | ftxui::bgcolor(Color::White) | ftxui::color(Color::Black));
+    } else {
+        at |= ftxui::color(theme::T::Text);
+    }
+    return ftxui::hbox({
+        ftxui::text(line.substr(0, col)) | ftxui::color(theme::T::Text),
+        at,
+        ftxui::text(line.substr(col + clen)) | ftxui::color(theme::T::Text),
+    });
+}
+
+/// @brief 渲染带块状光标的输入文本（多行；focused 才显示光标）
+///        空输入：光标块 + 灰色提示；非空：按 \n 拆行，光标所在行显示块状光标
 Element render_with_cursor(const std::string& text, size_t cursor, bool focused) {
     cursor = std::min(cursor, text.size());
     if (text.empty()) {
@@ -77,25 +152,19 @@ Element render_with_cursor(const std::string& text, size_t cursor, bool focused)
         if (!focused) return ph;
         return ftxui::hbox({mark_cursor(cursor_block()), ph});
     }
-    if (cursor >= text.size()) {
-        Element e = ftxui::text(text) | ftxui::color(theme::T::Text);
-        if (focused) {
-            return ftxui::hbox({e, mark_cursor(cursor_block())});
-        }
-        return e;
+    const size_t nlines = line_count(text);
+    const size_t cline = cursor_line(text, cursor);
+    std::vector<Element> rows;
+    rows.reserve(nlines);
+    for (size_t li = 0; li < nlines; ++li) {
+        const auto [start, end] = line_range(text, li);
+        const std::string line = text.substr(start, end - start);
+        if (li == cline)
+            rows.push_back(render_line_with_cursor(line, cursor - start, focused));
+        else
+            rows.push_back(ftxui::text(line) | ftxui::color(theme::T::Text));
     }
-    size_t clen = char_len_at(text, cursor);
-    Element at = ftxui::text(text.substr(cursor, clen));
-    if (focused) {
-        at = mark_cursor(at | ftxui::bgcolor(Color::White) | ftxui::color(Color::Black));
-    } else {
-        at |= ftxui::color(theme::T::Text);
-    }
-    return ftxui::hbox({
-        ftxui::text(text.substr(0, cursor)) | ftxui::color(theme::T::Text),
-        at,
-        ftxui::text(text.substr(cursor + clen)) | ftxui::color(theme::T::Text),
-    });
+    return ftxui::vbox(std::move(rows));
 }
 }  // namespace
 
@@ -114,6 +183,7 @@ Component make_composer(ComposerOptions& opt) {
         int paste_burst = 0;
     };
     auto paste = std::make_shared<PasteState>();
+    size_t desired_col = 0;  ///< 跨行移动时保持的目标列（字符数）
 
     auto renderer = ftxui::Renderer([&opt, &cursor](bool focused) {
         Element body = render_with_cursor(*opt.buffer, cursor, focused)
@@ -125,7 +195,7 @@ Component make_composer(ComposerOptions& opt) {
     });
 
     Component wrapped = renderer | ftxui::CatchEvent(
-        [&opt, &cursor, paste, renderer](Event e) {
+        [&opt, &cursor, paste, &desired_col, renderer](Event e) {
         try {
         std::string& text = *opt.buffer;
         cursor = std::min(cursor, text.size());
@@ -134,14 +204,14 @@ Component make_composer(ComposerOptions& opt) {
         const bool suggest = opt.suggest_active && opt.suggest_active();
 
         if (e == Event::Return) {
-            // 粘贴多行里的换行（\r\n → \n → Return）：不提交，转为一个空格。
+            // 粘贴多行里的换行（\r\n → \n → Return）：不提交，插入真实换行。
             // 判定条件：刚从连续快速字符插入（粘贴脉冲）中收到 Return。
             const bool is_paste_newline =
                 paste->paste_burst >= 2 && paste->last_insert != std::chrono::steady_clock::time_point{} &&
                 (std::chrono::steady_clock::now() - paste->last_insert) <=
                     std::chrono::milliseconds(150);
             if (is_paste_newline) {
-                text.insert(cursor, " ");
+                text.insert(cursor, "\n");
                 cursor += 1;
                 if (opt.suggest_refresh) opt.suggest_refresh();
                 return true;
@@ -155,6 +225,13 @@ Component make_composer(ComposerOptions& opt) {
             if (opt.on_submit) opt.on_submit(trimmed);
             text.clear();
             cursor = 0;
+            if (opt.suggest_refresh) opt.suggest_refresh();
+            return true;
+        }
+        // Shift+Enter（Windows 补丁改写为 kitty 序列 \x1b[13;2u）：插入换行
+        if (e == ftxui::Event::Special("\x1b[13;2u")) {
+            text.insert(cursor, "\n");
+            cursor += 1;
             if (opt.suggest_refresh) opt.suggest_refresh();
             return true;
         }
@@ -181,10 +258,30 @@ Component make_composer(ComposerOptions& opt) {
         }
         if (e == Event::ArrowUp) {
             if (suggest && opt.suggest_move) { opt.suggest_move(-1); return true; }
+            const size_t cline = cursor_line(text, cursor);
+            if (cline > 0) {
+                const auto [start, end] = line_range(text, cline);
+                const auto [pstart, pend] = line_range(text, cline - 1);
+                desired_col = utf8_col(text, start, cursor);
+                cursor = byte_pos_at_col(text, pstart, desired_col, pend);
+                return true;
+            }
+            // 已在第一行：优先历史回退（App 侧），否则交给 App 全局处理
+            if (opt.on_history_prev && opt.on_history_prev()) return true;
             return false;
         }
         if (e == Event::ArrowDown) {
             if (suggest && opt.suggest_move) { opt.suggest_move(+1); return true; }
+            const size_t cline = cursor_line(text, cursor);
+            if (cline + 1 < line_count(text)) {
+                const auto [start, end] = line_range(text, cline);
+                const auto [nstart, nend] = line_range(text, cline + 1);
+                desired_col = utf8_col(text, start, cursor);
+                cursor = byte_pos_at_col(text, nstart, desired_col, nend);
+                return true;
+            }
+            // 已在最后一行：优先历史前进（App 侧），否则交给 App 全局处理
+            if (opt.on_history_next && opt.on_history_next()) return true;
             return false;
         }
 
@@ -212,11 +309,11 @@ Component make_composer(ComposerOptions& opt) {
             return true;
         }
         if (e == Event::Home) {
-            cursor = 0;
+            cursor = line_range(text, cursor_line(text, cursor)).first;
             return true;
         }
         if (e == Event::End) {
-            cursor = text.size();
+            cursor = line_range(text, cursor_line(text, cursor)).second;
             return true;
         }
         if (e == Event::TabReverse) {  // Shift+Tab：提示面板激活时向上循环，否则切换权限
@@ -238,11 +335,11 @@ Component make_composer(ComposerOptions& opt) {
             return true;
         }
         if (is_ctrl(0x01)) {  // Ctrl+A 行首
-            cursor = 0;
+            cursor = line_range(text, cursor_line(text, cursor)).first;
             return true;
         }
         if (is_ctrl(0x05)) {  // Ctrl+E 行尾
-            cursor = text.size();
+            cursor = line_range(text, cursor_line(text, cursor)).second;
             return true;
         }
         if (e.is_character()) {

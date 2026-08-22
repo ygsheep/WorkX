@@ -127,6 +127,37 @@ void append_context_info(Elements& rows, const SidebarModel& s) {
         ftxui::text(fmt_k(s.total_tokens)) | ftxui::color(theme::T::TextDim),
         ftxui::text(cache_str) | ftxui::color(theme::T::TextFaint),
     }));
+
+    // #65：DS 缓存命中率行：`DS 缓存 命中 80% (8k/10k)`
+    const int64_t cache_total = static_cast<int64_t>(s.cache_hit_tokens) + s.cache_miss_tokens;
+    if (cache_total > 0) {
+        const int hit_pct = static_cast<int>(
+            (static_cast<int64_t>(s.cache_hit_tokens) * 100 + cache_total / 2) / cache_total);
+        char hit_buf[16];
+        snprintf(hit_buf, sizeof(hit_buf), "%d%%", hit_pct);
+        const std::string hit_str = std::string(str::kSidebarHitRate) + " " + hit_buf;
+        const std::string detail_str = " (" + fmt_k(s.cache_hit_tokens) + "/"
+                                       + fmt_k(static_cast<int32_t>(cache_total)) + ")";
+        rows.push_back(ftxui::hbox({
+            ftxui::text(std::string(str::kSidebarCache)) | ftxui::color(kInfoText),
+            ftxui::text(" "),
+            ftxui::text(hit_str) | ftxui::color(theme::T::TextDim),
+            ftxui::text(detail_str) | ftxui::color(theme::T::TextFaint),
+        }));
+    }
+
+    // #65：Prompt/生成分项行：`Prompt 10k · 生成 2k`
+    if (s.prompt_tokens > 0 || s.generated_tokens > 0) {
+        std::string gen_str;
+        if (s.generated_tokens > 0)
+            gen_str = " · " + std::string(str::kSidebarGenerated) + " " + fmt_k(s.generated_tokens);
+        rows.push_back(ftxui::hbox({
+            ftxui::text(std::string(str::kSidebarPrompt)) | ftxui::color(kInfoText),
+            ftxui::text(" "),
+            ftxui::text(fmt_k(s.prompt_tokens)) | ftxui::color(theme::T::TextDim),
+            ftxui::text(gen_str) | ftxui::color(theme::T::TextFaint),
+        }));
+    }
 }
 
 /// @brief 可折叠区块（MCP）：chevron 标题行可点击，展开显示条目
