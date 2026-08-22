@@ -169,9 +169,18 @@ target_sources(workx_agent PRIVATE
     tool/Task/task_output_tool.cpp
     tool/Task/task_stop_tool.cpp
     tool/MCPTool/mcp_tool.cpp
+    tool/ListMcpResourcesTool/list_mcp_resources_tool.cpp
+    tool/ReadMcpResourceTool/read_mcp_resource_tool.cpp
     tool/WebFetchTool/web_fetch_tool.cpp
     tool/WebSearchTool/web_search_tool.cpp
     tool/SkillTool/skill_tool.cpp
+
+    # mcp: MCP client 基础设施（Issue #27）
+    mcp/mcp_config.cpp
+    mcp/mcp_stdio_process.cpp
+    mcp/mcp_transport.cpp
+    mcp/mcp_client.cpp
+    mcp/mcp_client_manager.cpp
 
     # input: 头文件（显式列入以便 IDE 导航）
     input/parser.h

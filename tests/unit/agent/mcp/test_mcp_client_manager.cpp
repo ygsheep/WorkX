@@ -1,0 +1,92 @@
+/**
+ * @file test_mcp_client_manager.cpp
+ * @brief McpClientManager 单元测试（Issue #27）
+ * @details 覆盖空配置加载、get_client/clients/server_names/describe_servers/empty，
+ *          以及端到端连接（假 stdio server）后的工具清单预取。
+ */
+
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
+#include <filesystem>
+#include <fstream>
+#include <string>
+
+#include "agent/mcp/mcp_client_manager.h"
+
+using namespace agent;
+using namespace agent::mcp;
+using namespace Catch::Matchers;
+
+namespace {
+
+std::string fake_server_path() {
+    return (std::filesystem::path(SOURCE_DIR) /
+            "tests" / "unit" / "agent" / "mcp" / "fake_mcp_server.py")
+        .string();
+}
+
+/// 写一个仅含假 server 的 .mcp.json 到临时目录
+std::filesystem::path make_project_config(const std::string& mode) {
+    auto dir = std::filesystem::temp_directory_path() /
+               ("workx_mcp_mgr_" + std::to_string(::rand()));
+    std::filesystem::create_directories(dir);
+    // JSON 字符串中反斜杠需转义，改用正斜杠（Windows 路径兼容）
+    std::string script = fake_server_path();
+    std::replace(script.begin(), script.end(), '\\', '/');
+    std::ofstream ofs(dir / ".mcp.json");
+    ofs << R"({"mcpServers":{"fake":{"command":"python","args":[")"
+        << script
+        << R"("],"env":{"FAKE_MCP_MODE":")" << mode
+        << R"(","PYTHONHASHSEED":"0"}}}})";
+    return dir;
+}
+
+} // namespace
+
+TEST_CASE("McpClientManager 空配置加载后为空", "[mcp_manager][empty]") {
+    auto dir = std::filesystem::temp_directory_path() /
+               ("workx_mcp_mgr_empty_" + std::to_string(::rand()));
+    std::filesystem::create_directories(dir);
+
+    McpClientManager manager;
+    manager.load_and_connect(dir, dir);
+    REQUIRE(manager.empty());
+    REQUIRE(manager.server_names().empty());
+    REQUIRE(manager.clients().empty());
+    REQUIRE(manager.describe_servers().empty());
+    REQUIRE(manager.get_client("anything") == nullptr);
+
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("McpClientManager 连接假 server 后预取工具清单", "[mcp_manager][connect]") {
+    auto dir = make_project_config("discover");
+
+    McpClientManager manager;
+    manager.load_and_connect(dir, dir);
+
+    REQUIRE_FALSE(manager.empty());
+    REQUIRE(manager.server_names().size() == 1);
+    REQUIRE(manager.server_names()[0] == "fake");
+
+    auto client = manager.get_client("fake");
+    REQUIRE(client != nullptr);
+    REQUIRE(client->is_connected());
+
+    auto desc = manager.describe_servers();
+    REQUIRE_THAT(desc, ContainsSubstring("fake"));
+    REQUIRE_THAT(desc, ContainsSubstring("echo"));
+    REQUIRE_THAT(desc, ContainsSubstring("add"));
+
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("McpClientManager get_client 未知名返回 nullptr", "[mcp_manager][get]") {
+    auto dir = make_project_config("discover");
+    McpClientManager manager;
+    manager.load_and_connect(dir, dir);
+
+    REQUIRE(manager.get_client("ghost") == nullptr);
+
+    std::filesystem::remove_all(dir);
+}

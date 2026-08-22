@@ -19,6 +19,7 @@
 
 namespace agent { namespace tool { class ToolRegistry; } }
 namespace agent::session { class SessionStore; }
+namespace agent::mcp { class McpClientManager; }
 
 namespace agent {
 
@@ -80,8 +81,12 @@ SessionResult create_session(IConfigManager& cfg,
 /// @brief 注册内置工具到 ToolRegistry（全量工具集，单一来源）
 /// @details 注册 FileRead/FileWrite/FileEdit/SkillTool/Bash/Glob/Grep/AskUser/
 ///          PlanMode/AgentTool/TaskOutput/TaskStop；Windows 额外含 PowerShellTool。
+///          #27：MCP 三件套（MCPTool/ListMcpResourcesTool/ReadMcpResourceTool）。
 ///          新增工具只需在此处维护，各宿主（workx / codex）自动同步。
-void register_builtin_tools(tool::ToolRegistry& registry);
+/// @param registry 目标工具注册表
+/// @param mcp_manager MCP 连接管理器（可为空，空则 MCP 工具返回"未连接"）
+void register_builtin_tools(tool::ToolRegistry& registry,
+                            std::shared_ptr<mcp::McpClientManager> mcp_manager = nullptr);
 
 /// @brief 拼接系统提示词（含环境上下文、项目记忆和工具 prompt）
 /// @param user_prompt 用户配置的系统提示词（可为空）

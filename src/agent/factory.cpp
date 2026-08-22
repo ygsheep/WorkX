@@ -29,6 +29,7 @@
 #include "agent/api/i_backend_admin.h"  // C-2：dynamic_cast 到 IBackendAdmin*
 #include "agent/config/app_config.h"  // keys:: / default_config_path()
 #include "agent/core/chat_session.h"
+#include "agent/mcp/mcp_client_manager.h"
 #include "agent/model/provider_preset.h"
 #include "agent/prompt/memory.h"  // 项目记忆加载（CLAUDE.md / AGENT.md）
 #include "agent/session/session_store.h"  // 项目会话恢复
@@ -44,7 +45,10 @@
 #include "agent/tool/FileWriteTool/file_write_tool.h"
 #include "agent/tool/GlobTool/glob_tool.h"
 #include "agent/tool/GrepTool/grep_tool.h"
+#include "agent/tool/ListMcpResourcesTool/list_mcp_resources_tool.h"
+#include "agent/tool/MCPTool/mcp_tool.h"
 #include "agent/tool/PowerShellTool/powershell_tool.h"
+#include "agent/tool/ReadMcpResourceTool/read_mcp_resource_tool.h"
 #include "agent/tool/ShellTool/shell_detector.h"
 #include "agent/tool/SkillTool/skill_tool.h"
 #include "agent/tool/TodoWriteTool/todo_write_tool.h"
@@ -164,8 +168,12 @@ SessionResult create_session(IConfigManager& cfg,
     }
 
     // 注册内置工具（B1：单一来源 register_builtin_tools，各宿主工具集同步）
+    // #27：创建 MCP 连接管理器并连接（单个 server 失败不阻断会话）
+    auto mcp_manager = std::make_shared<mcp::McpClientManager>();
+    mcp_manager->load_and_connect(default_config_path().parent_path(),
+                                  std::filesystem::current_path());
     auto tool_registry = std::make_shared<tool::ToolRegistry>();
-    register_builtin_tools(*tool_registry);
+    register_builtin_tools(*tool_registry, mcp_manager);
     result.session->set_tool_registry(tool_registry);
 
     // 宿主接线：FileWriteTool 写文件后失效 TUI @ 补全索引（mark_dirty 仅原子置位）
@@ -225,7 +233,8 @@ SessionResult create_session(IConfigManager& cfg,
 // register_builtin_tools
 // ============================================================
 
-void register_builtin_tools(tool::ToolRegistry& registry) {
+void register_builtin_tools(tool::ToolRegistry& registry,
+                            std::shared_ptr<mcp::McpClientManager> mcp_manager) {
     registry.register_tool(std::make_shared<tool::FileReadTool>());
     registry.register_tool(std::make_shared<tool::FileWriteTool>());
     registry.register_tool(std::make_shared<tool::FileEditTool>());
@@ -253,6 +262,11 @@ void register_builtin_tools(tool::ToolRegistry& registry) {
     // #25：网页搜索 + 网页抓取（P0 简化版；P1 迁移到 MCP 搜索 Provider 以获得多引擎/去重/摘要能力）
     registry.register_tool(std::make_shared<tool::WebSearchTool>());
     registry.register_tool(std::make_shared<tool::WebFetchTool>());
+
+    // #27：MCP 三件套（调用 MCP 工具 + 读取 MCP 资源）
+    registry.register_tool(std::make_shared<tool::MCPTool>(mcp_manager));
+    registry.register_tool(std::make_shared<tool::ListMcpResourcesTool>(mcp_manager));
+    registry.register_tool(std::make_shared<tool::ReadMcpResourceTool>(mcp_manager));
 
     // Windows 平台额外注册 PowerShellTool（对齐 Claude Code 的条件注册策略）
     // BashTool（cmd.exe）和 PowerShellTool 并存，由模型根据任务特征自行选用
