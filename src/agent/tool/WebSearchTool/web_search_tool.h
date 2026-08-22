@@ -54,6 +54,10 @@ public:
         const std::string& base_url,
         const std::string& query);
 
+    /// @brief 校验 SearXNG 实例 URL 安全性（#25 P1-1/P2-2）
+    /// @return true = 安全：仅 https scheme 且 host 未解析到内网/回环/链路本地
+    static bool is_safe_searxng_url(const std::string& url);
+
     /// @brief 构造 Bing HTML 搜索 URL（免 Key 兜底）
     static std::string build_bing_url(
         const std::string& base_url,

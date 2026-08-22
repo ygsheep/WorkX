@@ -116,7 +116,14 @@ flowchart TD
 - **SearXNG**：`GET {url}/search?q={query}&format=json&safesearch=0`，query 做百分号 URL 编码（UTF-8），响应 `results[]` 结构与 Tavily 兼容，复用同一格式化逻辑
 - **Bing**：`GET https://www.bing.com/search?q={query}&count={n}&setlang=zh-hans&mkt=zh-CN`，解析 HTML 结果页
 
-### 2. Bing HTML 结果解析
+### 2. SearXNG URL 安全校验（#25 P1-1/P2-2）
+
+SearXNG 实例地址来自可写配置 `web.search.searxng_url` / 环境变量 `WORKX_SEARXNG_URL`，可能被攻击者篡改指向内网，因此强制防护：
+
+- `resolve_searxng_url()` 校验 `is_safe_searxng_url()`：**仅允许 https scheme**，且 host 不得解析到内网/回环/链路本地（复用 `host_resolves_to_private`）；非法配置记录警告并回退默认实例
+- `search_searxng()` 强制 `client.set_block_private_ips(true)`：即使 URL 绕过预检，连接层钩子仍拦截内网目标（覆盖重定向）
+
+### 3. Bing HTML 结果解析
 
 - 定位 `<li class="b_algo">` 块，块内 `<h2><a href="...">标题</a></h2>` 取标题 + URL，`<p>` 取摘要
 - 标题/摘要先剥离 HTML 标签，再解码实体（`&#NNN;` / `&#xHH;` / 常见命名实体如 `&amp;` `&ensp;` `&middot;`）
@@ -133,7 +140,7 @@ flowchart TD
 
 敏感关键词覆盖两类：
 
-- **内网地址/路径**：`10.` `192.168.` `172.16-19.` `127.0.0.1` `localhost` `169.254.` `内网`
+- **内网地址/路径**：完整网段词边界匹配（`10.x.x.x` `192.168.x.x` `172.16-31.x.x` `127.0.0.1` `169.254.x.x` `localhost` `内网`），避免 "top 10 devices" 之类误触
 - **凭据/敏感信息**：`password` `passwd` `secret` `token` `api_key` `apikey` `private key` `ssh key` `credential` `密码` `密钥` `口令`
 
 ### 4. 纯函数（便于单测）
@@ -144,6 +151,7 @@ flowchart TD
 | `parse_tavily_response` | Tavily JSON → 文本（answer 置顶、跳过脏条目、摘要截断） |
 | `parse_searxng_response` | SearXNG JSON → 文本（复用 Tavily 格式化） |
 | `build_searxng_url` | 构造 SearXNG 查询 URL（query URL 编码） |
+| `is_safe_searxng_url` | 校验 SearXNG 实例 URL：仅 https 且 host 未解析到内网 |
 | `build_bing_url` | 构造 Bing 查询 URL（query URL 编码 + count/mkt） |
 | `parse_bing_response` | Bing HTML → 文本（b_algo 解析 + 实体解码） |
 
@@ -230,6 +238,7 @@ ConfigManager::instance().set(keys::WEB_SEARCH_TAVILY_KEY, std::string("tvly-xxx
 | 输出纯文本 `[index] 标题 · URL` | 与 Tavily/SearXNG/Bing 三 Provider 统一，LLM 易解析，后续可 WebFetch 跟进 |
 | 摘要截断 600 字符 | 避免单条撑爆上下文 |
 | 敏感词 AskUser | 搜索本身只读安全，仅当关键词疑似内网/凭据时确认，防信息泄露 |
+| SearXNG 强制 SSRF 防护 | 实例 URL 来自可写配置/环境变量，预检（仅 https + 内网拦截）+ 连接层钩子双保险，非法配置回退默认实例 |
 | `additionalProperties: false` | 严格 schema 校验，防止 LLM 传入未定义字段 |
 | 纯函数静态化 | 便于无网络单测（URL 构造、响应解析） |
 | Bing 正则用自定义原始串分隔符 | 模式内 `([^"]+)"` 含 `)"` 会提前终止 `R"(...)"`，改用 `R"_h2(...)_h2"` |

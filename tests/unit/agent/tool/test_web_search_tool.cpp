@@ -275,3 +275,48 @@ TEST_CASE("register_config_defaults 注册 web.search 配置键", "[web_search][
     REQUIRE(ConfigManager::instance().get_or<std::string>(keys::WEB_SEARCH_TAVILY_KEY, "") == "tvly-test");
     ConfigManager::instance().clear();
 }
+
+// ============================================================================
+// 6. SearXNG URL 安全校验（#25 P1-1/P2-2）
+// ============================================================================
+
+TEST_CASE("is_safe_searxng_url 仅允许 https 且不得指向内网", "[web_search][searxng][ssrf]") {
+    // 安全：公网 https（IP 字面量，不依赖 DNS）
+    REQUIRE(WebSearchTool::is_safe_searxng_url("https://8.8.8.8"));
+    // 非 https scheme
+    REQUIRE_FALSE(WebSearchTool::is_safe_searxng_url("http://8.8.8.8"));
+    // 非 http(s) scheme
+    REQUIRE_FALSE(WebSearchTool::is_safe_searxng_url("file:///etc/passwd"));
+    REQUIRE_FALSE(WebSearchTool::is_safe_searxng_url("gopher://8.8.8.8"));
+    // 内网/回环/链路本地/元数据 IP
+    REQUIRE_FALSE(WebSearchTool::is_safe_searxng_url("https://127.0.0.1"));
+    REQUIRE_FALSE(WebSearchTool::is_safe_searxng_url("https://10.0.0.1"));
+    REQUIRE_FALSE(WebSearchTool::is_safe_searxng_url("https://192.168.1.1"));
+    REQUIRE_FALSE(WebSearchTool::is_safe_searxng_url("https://169.254.169.254"));
+    REQUIRE_FALSE(WebSearchTool::is_safe_searxng_url("https://172.16.0.1"));
+    // 空/畸形 URL
+    REQUIRE_FALSE(WebSearchTool::is_safe_searxng_url(""));
+    REQUIRE_FALSE(WebSearchTool::is_safe_searxng_url("not-a-url"));
+}
+
+// ============================================================================
+// 7. 敏感搜索词词边界匹配（#25 P3-3）
+// ============================================================================
+
+TEST_CASE("WebSearch 敏感词检测 词边界匹配避免误触", "[web_search][perm]") {
+    WebSearchTool t;
+    ToolContext ctx;  // 无 event_bus → ask_user_confirm 返回 false
+    // 完整内网 IP 仍拒绝
+    auto r1 = t.check_permissions({{"query", "192.168.1.1 配置"}}, ctx);
+    REQUIRE(r1.is_err());
+    auto r2 = t.check_permissions({{"query", "172.20.0.1 配置"}}, ctx);
+    REQUIRE(r2.is_err());
+    // 非完整 IP 片段不误触（旧逻辑 "172.2" 子串会误触版本号）
+    auto r3 = t.check_permissions({{"query", "172.2 版本"}}, ctx);
+    REQUIRE(r3.is_ok());
+    // 公网 IP / 普通词不误触
+    auto r4 = t.check_permissions({{"query", "8.8.8.8 dns"}}, ctx);
+    REQUIRE(r4.is_ok());
+    auto r5 = t.check_permissions({{"query", "top 10 devices"}}, ctx);
+    REQUIRE(r5.is_ok());
+}

@@ -6,7 +6,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <string>
 
+#include "agent/api/remote/http_client.h"
 #include "agent/api/remote/ssrf.h"
+#include "core/utils/error.h"
 
 using namespace agent;
 
@@ -126,4 +128,32 @@ TEST_CASE("host_resolves_to_private 拦截回环/内网字面量", "[ssrf][host]
     REQUIRE(host_resolves_to_private("localhost"));
     // 公网字面量放行
     REQUIRE_FALSE(host_resolves_to_private("8.8.8.8"));
+}
+
+// ============================================================================
+// HttpClient SSRF 预检（#25 P3-1）：开启防护时在 DNS/连接前拒绝内网目标
+// ============================================================================
+
+TEST_CASE("HttpClient block_private_ips 预检拒绝内网目标", "[ssrf][http]") {
+    HttpClient client;
+    client.set_block_private_ips(true);
+    // 预检在 curl_easy_perform 之前返回，无需真实网络
+    auto r = client.get("https://127.0.0.1/", {}, 1000);
+    REQUIRE(r.is_err());
+    REQUIRE(r.error().code == Error::Code::PermissionDenied);
+    auto r2 = client.get("https://169.254.169.254/latest/meta-data/", {}, 1000);
+    REQUIRE(r2.is_err());
+    REQUIRE(r2.error().code == Error::Code::PermissionDenied);
+    auto r3 = client.get("https://10.0.0.1/", {}, 1000);
+    REQUIRE(r3.is_err());
+    REQUIRE(r3.error().code == Error::Code::PermissionDenied);
+}
+
+TEST_CASE("HttpClient 默认不开启 SSRF 预检", "[ssrf][http]") {
+    HttpClient client;  // 默认 m_block_private_ips = false
+    // 不预检：内网 URL 不会因 SSRF 预检被拒（实际连接结果取决于本地环境，不断言）
+    auto r = client.get("https://127.0.0.1/", {}, 500);
+    if (r.is_err()) {
+        REQUIRE(r.error().code != Error::Code::PermissionDenied);
+    }
 }

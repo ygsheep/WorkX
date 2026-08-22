@@ -19,6 +19,7 @@
 #include <nlohmann/json.hpp>
 
 #include "agent/api/remote/http_client.h"
+#include "agent/api/remote/ssrf.h"
 #include "agent/config/app_config.h"
 #include "agent/tool/permission_ask.h"
 #include "core/config/i_config_manager.h"
@@ -70,14 +71,20 @@ std::string resolve_provider(const ToolContext& ctx) {
 }
 
 std::string resolve_searxng_url(const ToolContext& ctx) {
+    std::string url;
     if (ctx.config_manager_ptr) {
-        std::string u = ctx.config_manager_ptr->get_or<std::string>(
+        url = ctx.config_manager_ptr->get_or<std::string>(
             keys::WEB_SEARCH_SEARXNG_URL, WebSearchTool::kDefaultSearxngUrl);
-        if (!u.empty()) return u;
     }
-    std::string u = get_env("WORKX_SEARXNG_URL");
-    if (!u.empty()) return u;
-    return WebSearchTool::kDefaultSearxngUrl;
+    if (url.empty()) url = get_env("WORKX_SEARXNG_URL");
+    if (url.empty()) url = WebSearchTool::kDefaultSearxngUrl;
+    // #25 P1-1/P2-2：仅允许 https 且 host 不得指向内网，非法配置回退默认实例
+    if (!WebSearchTool::is_safe_searxng_url(url)) {
+        LOG_WARN("[WebSearch] 配置的 SearXNG URL '{}' 非法（仅允许 https 且不得指向内网/回环），"
+                 "回退默认实例 {}", url, WebSearchTool::kDefaultSearxngUrl);
+        url = WebSearchTool::kDefaultSearxngUrl;
+    }
+    return url;
 }
 
 // ============================================================
@@ -165,15 +172,19 @@ bool contains_sensitive_search(const std::string& query) {
     std::string lower = query;
     std::transform(lower.begin(), lower.end(), lower.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    static const char* kPatterns[] = {
-        // 内网地址/路径
-        "10.", "192.168.", "172.16.", "172.17.", "172.18.", "172.19.",
-        "172.2", "172.3", "127.0.0.1", "localhost", "169.254.", "内网",
-        // 凭据/敏感信息
+    // 内网 IP / 主机名：词边界 + 完整网段匹配，避免 "top 10 devices" 之类误触
+    // 覆盖 10/8、192.168/16、172.16/12、127.0.0.1、169.254/16、localhost
+    static const std::regex kPrivateNetRe(
+        R"((\b10\.\d+\.\d+\.\d+)|(\b192\.168\.\d+\.\d+)|(\b172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)|(\b127\.0\.0\.1)|(\b169\.254\.\d+\.\d+)|(\blocalhost\b))",
+        std::regex::icase);
+    if (std::regex_search(lower, kPrivateNetRe)) return true;
+    if (lower.find("内网") != std::string::npos) return true;
+    // 凭据/敏感信息（子串匹配，词本身即敏感）
+    static const char* kCredentialPatterns[] = {
         "password", "passwd", "secret", "token", "api_key", "apikey",
         "private key", "ssh key", "credential", "密码", "密钥", "口令",
     };
-    for (const char* p : kPatterns) {
+    for (const char* p : kCredentialPatterns) {
         if (lower.find(p) != std::string::npos) return true;
     }
     return false;
@@ -308,6 +319,14 @@ std::string WebSearchTool::build_searxng_url(
     std::string base = base_url;
     while (!base.empty() && base.back() == '/') base.pop_back();
     return base + "/search?q=" + url_encode(query) + "&format=json&safesearch=0";
+}
+
+bool WebSearchTool::is_safe_searxng_url(const std::string& url) {
+    const ParsedUrl parsed = HttpClient::parse_url(url);
+    if (parsed.scheme.empty() || parsed.host.empty()) return false;
+    if (parsed.scheme != "https") return false;
+    if (host_resolves_to_private(parsed.host)) return false;
+    return true;
 }
 
 std::string WebSearchTool::build_bing_url(
@@ -457,6 +476,8 @@ ResultV2<ToolResult> search_searxng(
         int num_results) {
     const std::string url = WebSearchTool::build_searxng_url(base_url, query);
     HttpClient client;
+    // #25 P1-1：SearXNG 实例 URL 来自可写配置/环境变量，强制开启 SSRF 防护
+    client.set_block_private_ips(true);
     auto http = client.get(url, {}, WebSearchTool::kDefaultTimeoutMs);
     if (!http.is_ok()) {
         return ResultV2<ToolResult>::err(

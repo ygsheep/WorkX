@@ -144,14 +144,13 @@ static size_t write_cb(void* ptr, size_t size, size_t nmemb, void* userdata) {
 // 相比"仅预检输入 URL"，本钩子同时覆盖 3xx 重定向后的最终目标。
 static curl_socket_t ssrf_opensocket_cb(void* /*clientp*/, curlsocktype /*purpose*/,
                                         struct sockaddr* addr) {
-    if (addr) {
-        if (addr->sa_family == AF_INET) {
-            auto* a = reinterpret_cast<struct sockaddr_in*>(addr);
-            if (is_private_ipv4(ntohl(a->sin_addr.s_addr))) return CURL_SOCKET_BAD;
-        } else if (addr->sa_family == AF_INET6) {
-            auto* a = reinterpret_cast<struct sockaddr_in6*>(addr);
-            if (is_private_ipv6(a->sin6_addr.s6_addr)) return CURL_SOCKET_BAD;
-        }
+    if (!addr) return CURL_SOCKET_BAD;
+    if (addr->sa_family == AF_INET) {
+        auto* a = reinterpret_cast<struct sockaddr_in*>(addr);
+        if (is_private_ipv4(ntohl(a->sin_addr.s_addr))) return CURL_SOCKET_BAD;
+    } else if (addr->sa_family == AF_INET6) {
+        auto* a = reinterpret_cast<struct sockaddr_in6*>(addr);
+        if (is_private_ipv6(a->sin6_addr.s6_addr)) return CURL_SOCKET_BAD;
     }
     return socket(addr->sa_family, SOCK_STREAM, IPPROTO_TCP);
 }
@@ -164,6 +163,19 @@ ResultV2<HttpResponse> HttpClient::get(const std::string& url,
                                        const std::vector<std::pair<std::string, std::string>>& headers,
                                        int timeout_ms) {
     LOG_DEBUG("[http] GET {} timeout={}ms", url, timeout_ms);
+    // #25 P3-1：SSRF 预检（防御纵深）——开启防护时先解析 URL，命中内网直接拒绝，
+    // 提供比连接钩子更清晰的错误信息（连接钩子仍兜底重定向后的最终目标）
+    if (m_block_private_ips) {
+        const ParsedUrl parsed = parse_url(url);
+        if (!parsed.scheme.empty() && !parsed.host.empty() &&
+            host_resolves_to_private(parsed.host)) {
+            LOG_WARN("[http] GET {} 目标解析到内网/回环/链路本地地址，SSRF 防护拒绝", url);
+            return ResultV2<HttpResponse>::err(
+                Error::Code::PermissionDenied,
+                "SSRF 防护：目标主机解析到内网/回环/链路本地地址，已拒绝请求",
+                url);
+        }
+    }
     CURL* curl = curl_easy_init();
     if (!curl) {
         LOG_ERROR("[http] GET {} curl_easy_init failed", url);
@@ -242,6 +254,18 @@ ResultV2<HttpResponse> HttpClient::post(
         int timeout_ms) {
     LOG_DEBUG("[http] POST {} body_len={} timeout={}ms",
               url, body.size(), timeout_ms);
+    // #25 P3-1：SSRF 预检（防御纵深），与 get() 一致
+    if (m_block_private_ips) {
+        const ParsedUrl parsed = parse_url(url);
+        if (!parsed.scheme.empty() && !parsed.host.empty() &&
+            host_resolves_to_private(parsed.host)) {
+            LOG_WARN("[http] POST {} 目标解析到内网/回环/链路本地地址，SSRF 防护拒绝", url);
+            return ResultV2<HttpResponse>::err(
+                Error::Code::PermissionDenied,
+                "SSRF 防护：目标主机解析到内网/回环/链路本地地址，已拒绝请求",
+                url);
+        }
+    }
     CURL* curl = curl_easy_init();
     if (!curl) {
         LOG_ERROR("[http] POST {} curl_easy_init failed", url);
@@ -322,7 +346,8 @@ public:
                  const std::string& body,
                  std::shared_ptr<SSEStreamReader> reader,
                  std::function<void()> on_complete,
-                 const int timeout_ms)
+                 const int timeout_ms,
+                 const bool block_private_ips)
         : m_body(body)
         , m_reader(std::move(reader))
         , m_on_complete(std::move(on_complete))
@@ -364,6 +389,15 @@ public:
         // H-1：关联 CURLSH 共享连接缓存
         if (auto* sh = shared_curl_share()) {
             curl_easy_setopt(m_curl, CURLOPT_SHARE, sh);
+        }
+        // #25 P2-1：SSRF 防护（可选开启）——流式会话同样拦截内网目标并限制协议
+        if (block_private_ips) {
+            curl_easy_setopt(m_curl, CURLOPT_OPENSOCKETFUNCTION, ssrf_opensocket_cb);
+            curl_easy_setopt(m_curl, CURLOPT_OPENSOCKETDATA, nullptr);
+            curl_easy_setopt(m_curl, CURLOPT_REDIR_PROTOCOLS,
+                             CURLPROTO_HTTP | CURLPROTO_HTTPS);
+            curl_easy_setopt(m_curl, CURLOPT_PROTOCOLS,
+                             CURLPROTO_HTTP | CURLPROTO_HTTPS);
         }
 
         for (const auto& [k, v] : headers)
@@ -628,7 +662,8 @@ void HttpClient::async_post_stream(
     auto* key = reader.get();
 
     const auto session = std::make_shared<StreamSession>(
-        parsed, headers, body, reader, std::move(on_complete), timeout_ms);
+        parsed, headers, body, reader, std::move(on_complete), timeout_ms,
+        m_block_private_ips);
 
     if (!session->easy_handle()) {
         // curl 初始化失败：主动 finish reader 让上层能收到错误，避免 next() 无限阻塞
