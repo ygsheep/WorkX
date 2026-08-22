@@ -1,5 +1,6 @@
 #include "agent/api/remote/http_client.h"
 #include "agent/api/remote/sse_stream_reader.h"
+#include "agent/api/remote/ssrf.h"
 
 #include <curl/curl.h>
 
@@ -136,6 +137,26 @@ static size_t write_cb(void* ptr, size_t size, size_t nmemb, void* userdata) {
 }
 
 // ============================================================
+// SSRF 连接钩子（#25）：建立连接前拦截内网/回环/链路本地目标
+// ============================================================
+// 通过 CURLOPT_OPENSOCKETFUNCTION 在 libcurl 真正 connect 前拿到解析后的
+// sockaddr，命中内网地址返回 CURL_SOCKET_BAD 让 curl 以连接失败中止。
+// 相比"仅预检输入 URL"，本钩子同时覆盖 3xx 重定向后的最终目标。
+static curl_socket_t ssrf_opensocket_cb(void* /*clientp*/, curlsocktype /*purpose*/,
+                                        struct sockaddr* addr) {
+    if (addr) {
+        if (addr->sa_family == AF_INET) {
+            auto* a = reinterpret_cast<struct sockaddr_in*>(addr);
+            if (is_private_ipv4(ntohl(a->sin_addr.s_addr))) return CURL_SOCKET_BAD;
+        } else if (addr->sa_family == AF_INET6) {
+            auto* a = reinterpret_cast<struct sockaddr_in6*>(addr);
+            if (is_private_ipv6(a->sin6_addr.s6_addr)) return CURL_SOCKET_BAD;
+        }
+    }
+    return socket(addr->sa_family, SOCK_STREAM, IPPROTO_TCP);
+}
+
+// ============================================================
 // Sync GET（V2-2：返回 ResultV2<HttpResponse>）
 // ============================================================
 
@@ -169,6 +190,15 @@ ResultV2<HttpResponse> HttpClient::get(const std::string& url,
     if (auto* sh = shared_curl_share()) {
         curl_easy_setopt(curl, CURLOPT_SHARE, sh);
     }
+    // #25：SSRF 防护（可选开启）——连接钩子拦截内网目标，并限制重定向协议
+    if (m_block_private_ips) {
+        curl_easy_setopt(curl, CURLOPT_OPENSOCKETFUNCTION, ssrf_opensocket_cb);
+        curl_easy_setopt(curl, CURLOPT_OPENSOCKETDATA, nullptr);
+        curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS,
+                         CURLPROTO_HTTP | CURLPROTO_HTTPS);
+        curl_easy_setopt(curl, CURLOPT_PROTOCOLS,
+                         CURLPROTO_HTTP | CURLPROTO_HTTPS);
+    }
 
     struct curl_slist* hl = nullptr;
     for (const auto& [k, v] : headers)
@@ -195,6 +225,84 @@ ResultV2<HttpResponse> HttpClient::get(const std::string& url,
         LOG_WARN("[http] GET {} returned HTTP {} body_len={}", url, code, resp.body.size());
     } else {
         LOG_DEBUG("[http] GET {} -> {} bytes={}", url, code, resp.body.size());
+    }
+    if (hl) curl_slist_free_all(hl);
+    curl_easy_cleanup(curl);
+    return ResultV2<HttpResponse>::ok(std::move(resp));
+}
+
+// ============================================================
+// Sync POST（同步 body，返回 HttpResponse）
+// ============================================================
+
+ResultV2<HttpResponse> HttpClient::post(
+        const std::string& url,
+        const std::vector<std::pair<std::string, std::string>>& headers,
+        const std::string& body,
+        int timeout_ms) {
+    LOG_DEBUG("[http] POST {} body_len={} timeout={}ms",
+              url, body.size(), timeout_ms);
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        LOG_ERROR("[http] POST {} curl_easy_init failed", url);
+        return ResultV2<HttpResponse>::err(
+            Error::Code::InternalError,
+            "curl_easy_init failed",
+            url);
+    }
+
+    std::string out_body;
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out_body);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, static_cast<long>(timeout_ms));
+    long connect_to = (std::min)(10000L, static_cast<long>(timeout_ms));
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, connect_to);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
+    if (auto* sh = shared_curl_share()) {
+        curl_easy_setopt(curl, CURLOPT_SHARE, sh);
+    }
+    // #25：SSRF 防护（可选开启）——连接钩子拦截内网目标，并限制重定向协议
+    if (m_block_private_ips) {
+        curl_easy_setopt(curl, CURLOPT_OPENSOCKETFUNCTION, ssrf_opensocket_cb);
+        curl_easy_setopt(curl, CURLOPT_OPENSOCKETDATA, nullptr);
+        curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS,
+                         CURLPROTO_HTTP | CURLPROTO_HTTPS);
+        curl_easy_setopt(curl, CURLOPT_PROTOCOLS,
+                         CURLPROTO_HTTP | CURLPROTO_HTTPS);
+    }
+
+    struct curl_slist* hl = nullptr;
+    for (const auto& [k, v] : headers)
+        hl = curl_slist_append(hl, (k + ": " + v).c_str());
+    if (hl) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hl);
+
+    CURLcode rc = curl_easy_perform(curl);
+    if (rc != CURLE_OK) {
+        // V2-2：网络错误通过 Error 携带错误码
+        std::string err_msg = curl_easy_strerror(rc);
+        LOG_ERROR("[http] POST {} failed: {} (rc={})", url, err_msg, static_cast<int>(rc));
+        if (hl) curl_slist_free_all(hl);
+        curl_easy_cleanup(curl);
+        return ResultV2<HttpResponse>::err(
+            Error::from_curl_code(static_cast<int>(rc), url));
+    }
+
+    HttpResponse resp;
+    long code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+    resp.status_code = static_cast<unsigned int>(code);
+    resp.body = std::move(out_body);
+    if (code >= 400) {
+        LOG_WARN("[http] POST {} returned HTTP {} body_len={}", url, code, resp.body.size());
+    } else {
+        LOG_DEBUG("[http] POST {} -> {} bytes={}", url, code, resp.body.size());
     }
     if (hl) curl_slist_free_all(hl);
     curl_easy_cleanup(curl);

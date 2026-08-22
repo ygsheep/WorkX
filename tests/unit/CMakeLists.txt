@@ -20,6 +20,13 @@
 
 include(Catch)
 
+# Windows GBK 控制台下 CMake 捕获中文测试名会转码成 mojibake 导致 JSON 解析失败，
+# 用本地补丁版 CatchAddTests.cmake（捕获前先 chcp 65001 切 UTF-8 代码页）覆盖默认脚本。
+set(_CATCH_DISCOVER_TESTS_SCRIPT
+  ${WORKX_ROOT}/cmake/CatchAddTests_utf8.cmake
+  CACHE INTERNAL "Catch2 full path to CatchAddTests.cmake helper file"
+)
+
 # Catch2 提供 main()；每个目标都需这一个编译占位
 set(UNIT_TEST_COMMON ../test_main.cpp)
 
@@ -52,6 +59,13 @@ endfunction()
 workx_add_unit_target(core_unit_tests   workx_core   ${CORE_TEST_SOURCES})
 workx_add_unit_target(agent_unit_tests  workx_agent  ${AGENT_TEST_SOURCES} ${HELPER_TEST_SOURCES})
 workx_add_unit_target(island_unit_tests workx_island ${ISLAND_TEST_SOURCES})
+
+# ---- 国内站点 WebFetch/WebSearch 实测探针（手动运行，不入 ctest）----
+# .cxx 扩展避免被上面 agent/*.cpp glob 收进 agent_unit_tests；
+# 依赖真实外网，仅用于人工验证"搜索 + 文章转 md"，不参与 CI。
+add_executable(web_live_probe ${CMAKE_CURRENT_SOURCE_DIR}/agent/tool/web_live_probe.cxx)
+target_include_directories(web_live_probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(web_live_probe PRIVATE workx_agent)
 
 # ---- TUI 无头单测 ----
 # 直接编译 src/tui 中不依赖 ScreenInteractive 的无头源（view_model/message_node/

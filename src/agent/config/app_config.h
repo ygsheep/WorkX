@@ -73,6 +73,14 @@ namespace keys {
     constexpr const char* AUDIT_FILE           = "audit.file";
     constexpr const char* AUDIT_MAX_SIZE_MB    = "audit.max_size_mb";
     constexpr const char* AUDIT_RETENTION_DAYS = "audit.retention_days";
+
+    // Web（#25 WebSearchTool / WebFetchTool）
+    /// 搜索 Provider：tavily（默认）/ serper / searxng（P1 链式 fallback 预留）
+    constexpr const char* WEB_SEARCH_PROVIDER     = "web.search.provider";
+    /// Tavily API Key（env TAVILY_API_KEY 覆盖）
+    constexpr const char* WEB_SEARCH_TAVILY_KEY   = "web.search.tavily_api_key";
+    /// SearXNG 实例地址（免 Key 兜底；默认公共实例，可换自建）
+    constexpr const char* WEB_SEARCH_SEARXNG_URL  = "web.search.searxng_url";
 }
 
 /// @brief 注册所有配置项的结构化 Schema（类型/默认值/范围/枚举/环境变量映射）

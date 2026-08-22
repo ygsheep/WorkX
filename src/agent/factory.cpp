@@ -48,6 +48,8 @@
 #include "agent/tool/ShellTool/shell_detector.h"
 #include "agent/tool/SkillTool/skill_tool.h"
 #include "agent/tool/TodoWriteTool/todo_write_tool.h"
+#include "agent/tool/WebFetchTool/web_fetch_tool.h"
+#include "agent/tool/WebSearchTool/web_search_tool.h"
 #include "agent/tool/TaskTools/task_create_tool.h"
 #include "agent/tool/TaskTools/task_get_tool.h"
 #include "agent/tool/TaskTools/task_update_tool.h"
@@ -247,6 +249,10 @@ void register_builtin_tools(tool::ToolRegistry& registry) {
     registry.register_tool(std::make_shared<tool::TaskGetTool>());
     registry.register_tool(std::make_shared<tool::TaskUpdateTool>());
     registry.register_tool(std::make_shared<tool::TaskListTool>());
+
+    // #25：网页搜索 + 网页抓取（P0 简化版；P1 迁移到 MCP 搜索 Provider 以获得多引擎/去重/摘要能力）
+    registry.register_tool(std::make_shared<tool::WebSearchTool>());
+    registry.register_tool(std::make_shared<tool::WebFetchTool>());
 
     // Windows 平台额外注册 PowerShellTool（对齐 Claude Code 的条件注册策略）
     // BashTool（cmd.exe）和 PowerShellTool 并存，由模型根据任务特征自行选用

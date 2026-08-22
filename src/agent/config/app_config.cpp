@@ -217,6 +217,31 @@ void register_config_defaults(ConfigManager& cfg) {
         .default_value = 7.2,
         .type = ConfigSchema::Type::Double
     });
+
+    // === Web（#25 WebSearchTool / WebFetchTool）===
+    cfg.register_schema({
+        .key = keys::WEB_SEARCH_PROVIDER,
+        .description = "Web search provider: tavily (default) / serper / searxng "
+                       "(P1 chained fallback reserved)",
+        .default_value = std::string("tavily"),
+        .type = ConfigSchema::Type::String,
+        .env_var = "WORKX_SEARCH_PROVIDER"
+    });
+    cfg.register_schema({
+        .key = keys::WEB_SEARCH_TAVILY_KEY,
+        .description = "Tavily API key for WebSearchTool (env TAVILY_API_KEY overrides)",
+        .default_value = std::string(""),
+        .type = ConfigSchema::Type::String,
+        .env_var = "TAVILY_API_KEY"
+    });
+    cfg.register_schema({
+        .key = keys::WEB_SEARCH_SEARXNG_URL,
+        .description = "SearXNG instance URL for keyless search fallback "
+                       "(default public instance; set your own for stability)",
+        .default_value = std::string("https://searx.be"),
+        .type = ConfigSchema::Type::String,
+        .env_var = "WORKX_SEARXNG_URL"
+    });
 }
 
 void load_from_env(ConfigManager& cfg) {

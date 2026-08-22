@@ -1,11 +1,16 @@
 #pragma once
 
+#include <algorithm>
+#include <cctype>
+#include <cstring>
 #include <string>
 #include <vector>
 #include <utility>
 #include <functional>
 #include <memory>
 #include <chrono>
+
+#include <nlohmann/json.hpp>
 
 #include "core/utils/result.h"          // 旧 Result（过渡期保留）
 #include "core/utils/result_v2.h"       // V2-2：新 ResultV2
@@ -92,6 +97,39 @@ public:
         const std::vector<std::pair<std::string, std::string>>& headers,
         int timeout_ms = 15000) = 0;
 
+    /// @brief 同步 POST（原始 body）
+    /// @details Content-Type 等需要通过 headers 自行设置
+    virtual ResultV2<HttpResponse> post(
+        const std::string& url,
+        const std::vector<std::pair<std::string, std::string>>& headers,
+        const std::string& body,
+        int timeout_ms = 15000) = 0;
+
+    /// @brief 同步 POST JSON（自动追加 Content-Type: application/json）
+    /// @param json_body 待发送的 JSON 对象
+    ResultV2<HttpResponse> post_json(
+        const std::string& url,
+        const std::vector<std::pair<std::string, std::string>>& headers,
+        const nlohmann::json& json_body,
+        int timeout_ms = 15000) {
+        auto copy = headers;
+        const auto ieq = [](const std::string& a, const char* b) {
+            if (a.size() != std::strlen(b)) return false;
+            for (size_t i = 0; i < a.size(); ++i) {
+                if (std::tolower(static_cast<unsigned char>(a[i])) !=
+                    std::tolower(static_cast<unsigned char>(b[i])))
+                    return false;
+            }
+            return true;
+        };
+        bool has_ct = false;
+        for (const auto& [k, v] : copy) {
+            if (ieq(k, "Content-Type")) { has_ct = true; break; }
+        }
+        if (!has_ct) copy.emplace_back("Content-Type", "application/json");
+        return post(url, std::move(copy), json_body.dump(), timeout_ms);
+    }
+
     virtual void async_post_stream(
         const std::string& url,
         const std::vector<std::pair<std::string, std::string>>& headers,
@@ -118,6 +156,12 @@ public:
         const std::vector<std::pair<std::string, std::string>>& headers,
         int timeout_ms = 15000) override;
 
+    ResultV2<HttpResponse> post(
+        const std::string& url,
+        const std::vector<std::pair<std::string, std::string>>& headers,
+        const std::string& body,
+        int timeout_ms = 15000) override;
+
     void async_post_stream(
         const std::string& url,
         const std::vector<std::pair<std::string, std::string>>& headers,
@@ -132,9 +176,17 @@ public:
 
     static ParsedUrl parse_url(const std::string& url);
 
+    /// @brief 启用 SSRF 防护（#25）：连接目标解析到内网/回环/链路本地地址时拒绝连接
+    /// @details 通过 CURLOPT_OPENSOCKETFUNCTION 在建立连接前拦截，
+    ///          覆盖重定向（3xx 跟随）后的最终目标地址。默认关闭，
+    ///          不影响本地模型服务等内网通信场景；WebFetch 等面向公网的工具开启。
+    void set_block_private_ips(bool block) noexcept { m_block_private_ips = block; }
+    bool block_private_ips() const noexcept { return m_block_private_ips; }
+
 private:
     struct Impl;
     std::unique_ptr<Impl> m_impl;
+    bool m_block_private_ips = false;
 };
 
 } // namespace agent

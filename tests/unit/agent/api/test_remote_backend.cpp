@@ -48,6 +48,14 @@ public:
         return ResultV2<HttpResponse>::ok(HttpResponse{});
     }
 
+    ResultV2<HttpResponse> post(
+        const std::string&,
+        const std::vector<std::pair<std::string, std::string>>&,
+        const std::string&,
+        int) override {
+        return ResultV2<HttpResponse>::ok(HttpResponse{});
+    }
+
     void async_post_stream(
         const std::string&,
         const std::vector<std::pair<std::string, std::string>>&,
