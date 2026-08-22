@@ -8,7 +8,6 @@
 add_subdirectory(core)
 add_subdirectory(agent)
 add_subdirectory(island)
-add_subdirectory(tui)
 
 # ============================================================
 # 应用图标：从 src/icon.png 生成各平台格式
@@ -16,6 +15,10 @@ add_subdirectory(tui)
 #   macOS:   src/icon.icns → 作为 MACOSX_BUNDLE 资源
 #   Linux:   src/icon.png  → 拷贝到输出目录（供 .desktop 文件引用）
 # 转换脚本：scripts/convert_icon.py（缺失 Pillow 时自动安装）
+#
+# 注意：icon/ripgrep 相关变量需在 add_subdirectory(tui) 之前设置，
+#       因为 add_custom_command(TARGET workx ...) 必须在 workx
+#       目标所在的目录（src/tui/CMakeLists.txt）调用（CMake 限制）。
 # ============================================================
 set(WORKX_ICON_PNG "${CMAKE_CURRENT_SOURCE_DIR}/icon.png")
 set(WORKX_ICON_ICO "${CMAKE_CURRENT_SOURCE_DIR}/icon.ico")
@@ -46,6 +49,7 @@ if(WORKX_PYTHON_EXECUTABLE AND EXISTS "${WORKX_ICON_PNG}")
 elseif(NOT WORKX_PYTHON_EXECUTABLE)
     message(WARNING "Icon: Python not found, skip icon conversion")
 endif()
+
 
 # ============================================================
 # 安装与包导出（M2 库化：外部工程可 find_package(workx)）

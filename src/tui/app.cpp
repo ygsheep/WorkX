@@ -2343,15 +2343,7 @@ void App::run() {
         m_deps.mock_mode = true;
         start_smoke_driver();
     }
-    // 状态行 / 侧栏：直接构建 Element（装饰性，非聚焦组件）
-    auto build_sidebar_elem = [this](const ftxui::Element& sub_menu_elem,
-                                     const ftxui::Element& change_viewer_elem) {
-        return build_sidebar_tabs(m_vm.tabs, m_vm.sidebar, &m_tab_hits, &m_section_hits,
-                                  sub_menu_elem, change_viewer_elem)
-            | ftxui::size(ftxui::WIDTH, ftxui::EQUAL, m_sidebar_width)
-            | ftxui::yflex
-            | ftxui::bgcolor(theme::T::Panel);
-    };
+    // 状态行：直接构建 Element（装饰性，非聚焦组件）
     auto build_status_elem = [this] {
         // #24：待办进度位（✓ X/Y）
         int todo_done = 0, todo_total = 0;
@@ -2555,13 +2547,21 @@ void App::run() {
 #endif
         int width = ftxui::Terminal::Size().dimx;
 
-        // 输出区可用宽度 = 终端宽 − 侧栏（30+1 分隔空格，窄屏折叠则不减）；
-        // 再减每行左侧 2 格缩进，作为正文折行的列宽。→ 消息按此宽度折行，
-        // 终端 resize 时 width 变化触发元素/高度缓存失效并重排。
+        // 侧边栏宽度 = 终端宽度 × m_sidebar_width%（m_sidebar_width 现为百分比值）
         const bool show_sidebar_body = width >= kSidebarCollapseWidth;
-        const int sidebar_used = show_sidebar_body ? (m_sidebar_width + 1) : 0;
+        const int sidebar_cols = show_sidebar_body ? (width * m_sidebar_width / 100) : 0;
+        const int sidebar_used = sidebar_cols > 0 ? (sidebar_cols + 1) : 0;
         const int content_w = std::max(24, width - sidebar_used);
         const int msg_width = std::max(1, content_w - 2);
+
+        auto build_sidebar_elem = [this, sidebar_cols](const ftxui::Element& sub_menu_elem,
+                                          const ftxui::Element& change_viewer_elem) {
+            return build_sidebar_tabs(m_vm.tabs, m_vm.sidebar, &m_tab_hits, &m_section_hits,
+                                      sub_menu_elem, change_viewer_elem)
+                | ftxui::size(ftxui::WIDTH, ftxui::EQUAL, sidebar_cols)
+                | ftxui::yflex
+                | ftxui::bgcolor(theme::T::Panel);
+        };
 
         // 子 Agent 菜单条目重建 + 选中钳制（Menu 组件每帧渲染，box 供点击命中）
         m_sub_entries.clear();
@@ -3268,10 +3268,10 @@ void App::close_sidebar_tab(SidebarTab tab) {
     }
 }
 
-/// @brief 调整侧边栏宽度（Ctrl+← 减小 / Ctrl+→ 增大，钳制在 [20, 50]）
+/// @brief 调整侧边栏宽度百分比（Ctrl+← 减小 / Ctrl+→ 增大，钳制在 [20, 80]）
 void App::adjust_sidebar_width(int delta) {
     constexpr int kMinSidebarWidth = 20;
-    constexpr int kMaxSidebarWidth = 50;
+    constexpr int kMaxSidebarWidth = 80;
     m_sidebar_width = std::clamp(m_sidebar_width + delta, kMinSidebarWidth, kMaxSidebarWidth);
     m_screen.RequestAnimationFrame();
 }

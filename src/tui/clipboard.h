@@ -103,14 +103,14 @@ inline bool write_clipboard(const std::string& text) {
     if (text.empty()) return false;
     FILE* pipe = nullptr;
     switch (clipboard_detail::probe_tool()) {
-        case 1: pipe = std::popen("pbcopy", "w"); break;
-        case 2: pipe = std::popen("xclip -selection clipboard", "w"); break;
-        case 3: pipe = std::popen("xsel --clipboard --input", "w"); break;
+        case 1: pipe = popen("pbcopy", "w"); break;
+        case 2: pipe = popen("xclip -selection clipboard", "w"); break;
+        case 3: pipe = popen("xsel --clipboard --input", "w"); break;
         default: return false;
     }
     if (!pipe) return false;
     const size_t written = std::fwrite(text.data(), 1, text.size(), pipe);
-    const int rc = std::pclose(pipe);
+    const int rc = pclose(pipe);
     return written == text.size() && rc == 0;
 }
 
