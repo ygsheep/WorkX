@@ -34,6 +34,8 @@ struct McpServerConfig {
     // http 传输（type=http）
     std::string url;
     std::map<std::string, std::string> headers;
+    /// 允许连接内网/回环地址（本地 MCP server 用；默认 false = 启用 SSRF 防护）
+    bool allow_private = false;
 
     /// 是否为 http 传输（否则为 stdio）
     bool is_http() const { return !url.empty(); }

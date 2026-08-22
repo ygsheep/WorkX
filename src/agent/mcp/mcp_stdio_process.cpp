@@ -284,7 +284,7 @@ void McpStdioProcess::stop() {
         m_stopped = true;
     }
 
-    // 关闭 stdin 写端，让子进程读到 EOF
+    // 关闭 stdin 写端，让子进程读到 EOF（stdio server 会因此退出）
 #ifdef _WIN32
     if (m_h_stdin_write) {
         CloseHandle(static_cast<HANDLE>(m_h_stdin_write));
@@ -297,12 +297,9 @@ void McpStdioProcess::stop() {
     }
 #endif
 
-    // 等待读线程退出（最多 2s）
-    if (m_reader.joinable()) {
-        m_reader.join();
-    }
-
-    // 终止进程
+    // 先终止进程再 join 读线程：若子进程不读 stdin（如 HTTP server），
+    // 关闭 stdin 不会让其退出，stdout 写端仍打开，读线程阻塞在 ReadFile/read，
+    // 此时 join 会永久死锁。必须先等进程退出（或强杀）关闭写端，读线程才会返回。
 #ifdef _WIN32
     if (m_h_process) {
         HANDLE h = static_cast<HANDLE>(m_h_process);
@@ -312,10 +309,6 @@ void McpStdioProcess::stop() {
         }
         CloseHandle(h);
         m_h_process = nullptr;
-    }
-    if (m_h_stdout_read) {
-        CloseHandle(static_cast<HANDLE>(m_h_stdout_read));
-        m_h_stdout_read = nullptr;
     }
 #else
     if (m_pid > 0) {
@@ -335,6 +328,19 @@ void McpStdioProcess::stop() {
         }
         m_pid = -1;
     }
+#endif
+
+    // 进程已退出/被杀 → stdout 写端已关闭 → 读线程 ReadFile/read 返回 → join 可返回
+    if (m_reader.joinable()) {
+        m_reader.join();
+    }
+
+#ifdef _WIN32
+    if (m_h_stdout_read) {
+        CloseHandle(static_cast<HANDLE>(m_h_stdout_read));
+        m_h_stdout_read = nullptr;
+    }
+#else
     if (m_stdout_fd >= 0) {
         close(m_stdout_fd);
         m_stdout_fd = -1;

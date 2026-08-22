@@ -58,8 +58,11 @@ ResultV2<void> McpClient::connect(const McpServerConfig& cfg, int timeout_ms) {
     if (start.is_err()) return start;
 
     // ① server/discover（2.0 可选 RPC）
+    // 注意：transport 层成功（is_ok）不代表 RPC 成功——JSON-RPC error 响应
+    // （如 MethodNotFound）同样以 ok 返回，必须排除含 error 字段的响应，
+    // 否则 1.x server 会被误判为 2.0 无状态模式。
     auto discover = raw_request("server/discover", nlohmann::json::object(), timeout_ms);
-    if (discover.is_ok()) {
+    if (discover.is_ok() && !discover.value().contains("error")) {
         const auto& result = discover.value().value("result", nlohmann::json::object());
         m_protocol_version = result.value("protocolVersion", kProtocolVersion2026_07_28);
         m_stateless = true;

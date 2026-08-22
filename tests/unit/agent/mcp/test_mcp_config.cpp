@@ -83,6 +83,22 @@ TEST_CASE("parse_mcp_config_json 解析 http server", "[mcp_config][parse]") {
     REQUIRE(servers[0].headers.at("Authorization") == "Bearer x");
     REQUIRE(servers[0].is_http());
     REQUIRE(servers[0].valid());
+    REQUIRE_FALSE(servers[0].allow_private);  // 默认 SSRF 防护开启
+}
+
+TEST_CASE("parse_mcp_config_json 解析 allowPrivate 放行本地", "[mcp_config][parse]") {
+    nlohmann::json j = {
+        {"mcpServers", {
+            {"local", {
+                {"type", "http"},
+                {"url", "http://127.0.0.1:8080/mcp"},
+                {"allowPrivate", true}
+            }}
+        }}
+    };
+    auto servers = parse_mcp_config_json(j);
+    REQUIRE(servers.size() == 1);
+    REQUIRE(servers[0].allow_private);
 }
 
 TEST_CASE("parse_mcp_config_json 跳过无效条目", "[mcp_config][parse]") {

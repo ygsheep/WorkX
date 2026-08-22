@@ -42,6 +42,8 @@ struct HttpResponse {
     unsigned int status_code = 0;
     std::string body;
     std::string error;
+    /// 响应头（键已转小写，供 Content-Type / Mcp-Session-Id 等读取）
+    std::vector<std::pair<std::string, std::string>> headers;
 
     /// @brief 是否成功（HTTP 2xx）
     bool is_success() const noexcept {

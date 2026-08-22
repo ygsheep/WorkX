@@ -57,6 +57,7 @@ bool parse_one_server(const std::string& name, const nlohmann::json& obj,
                 }
             }
         }
+        out.allow_private = obj.value("allowPrivate", false);
         return out.valid();
     }
 

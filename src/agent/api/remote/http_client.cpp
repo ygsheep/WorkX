@@ -136,6 +136,25 @@ static size_t write_cb(void* ptr, size_t size, size_t nmemb, void* userdata) {
     return size * nmemb;
 }
 
+/// @brief 响应头回调：收集响应头（键转小写，供 Content-Type / Mcp-Session-Id 读取）
+static size_t header_cb(char* buffer, size_t size, size_t nitems, void* userdata) {
+    auto* headers = static_cast<std::vector<std::pair<std::string, std::string>>*>(userdata);
+    const size_t total = size * nitems;
+    std::string line(buffer, total);
+    while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
+    const auto colon = line.find(':');
+    if (colon != std::string::npos) {
+        std::string key = line.substr(0, colon);
+        std::string value = line.substr(colon + 1);
+        const auto start = value.find_first_not_of(" \t");
+        if (start != std::string::npos) value = value.substr(start);
+        std::transform(key.begin(), key.end(), key.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        headers->emplace_back(std::move(key), std::move(value));
+    }
+    return total;
+}
+
 // ============================================================
 // SSRF 连接钩子（#25）：建立连接前拦截内网/回环/链路本地目标
 // ============================================================
@@ -174,9 +193,12 @@ ResultV2<HttpResponse> HttpClient::get(const std::string& url,
     }
 
     std::string body;
+    std::vector<std::pair<std::string, std::string>> resp_headers;
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header_cb);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &resp_headers);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, static_cast<long>(timeout_ms));
     // C.7：补连接超时，防止 DNS/TCP 阶段挂死耗尽总超时
     // 默认 10s 连接超时（若 timeout_ms < 10s 则跟随总超时）
@@ -221,6 +243,7 @@ ResultV2<HttpResponse> HttpClient::get(const std::string& url,
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
     resp.status_code = static_cast<unsigned int>(code);
     resp.body = std::move(body);
+    resp.headers = std::move(resp_headers);
     if (code >= 400) {
         LOG_WARN("[http] GET {} returned HTTP {} body_len={}", url, code, resp.body.size());
     } else {
@@ -252,9 +275,12 @@ ResultV2<HttpResponse> HttpClient::post(
     }
 
     std::string out_body;
+    std::vector<std::pair<std::string, std::string>> resp_headers;
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out_body);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header_cb);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &resp_headers);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, static_cast<long>(timeout_ms));
     long connect_to = (std::min)(10000L, static_cast<long>(timeout_ms));
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, connect_to);
@@ -299,6 +325,7 @@ ResultV2<HttpResponse> HttpClient::post(
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
     resp.status_code = static_cast<unsigned int>(code);
     resp.body = std::move(out_body);
+    resp.headers = std::move(resp_headers);
     if (code >= 400) {
         LOG_WARN("[http] POST {} returned HTTP {} body_len={}", url, code, resp.body.size());
     } else {

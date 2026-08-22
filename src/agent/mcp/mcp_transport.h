@@ -12,9 +12,11 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
+#include "agent/api/remote/http_client.h"
 #include "agent/mcp/mcp_config.h"
 #include "agent/mcp/mcp_stdio_process.h"
 #include "core/utils/result_v2.h"
@@ -60,9 +62,38 @@ private:
     bool m_started = false;
 };
 
+/// @brief Streamable HTTP 传输：POST JSON-RPC 到 server URL（MCP 2.0 / 1.x）
+/// @details
+/// - 复用 HttpClient（同步 POST），SSRF 防护默认开启（allow_private=true 时放行内网）
+/// - 响应支持 application/json 与 text/event-stream 两种 Content-Type
+/// - 1.x 会话：捕获响应头 Mcp-Session-Id 并在后续请求回传
+class HttpMcpTransport : public McpTransport {
+public:
+    explicit HttpMcpTransport(McpServerConfig cfg);
+    ~HttpMcpTransport() override;
+
+    ResultV2<void> start() override;
+    void stop() override;
+    ResultV2<nlohmann::json> send_request(
+        const nlohmann::json& msg, int timeout_ms) override;
+    ResultV2<void> send_notification(const nlohmann::json& msg) override;
+
+private:
+    /// 构造请求头（Content-Type / Accept / 会话头 / 用户配置头）
+    std::vector<std::pair<std::string, std::string>> build_headers() const;
+    /// 解析响应体（JSON 或 SSE），返回 JSON-RPC 消息
+    static nlohmann::json parse_response_body(const std::string& body,
+                                              const std::string& content_type);
+    /// 解析 SSE 事件流，返回其中所有 JSON 消息
+    static std::vector<nlohmann::json> parse_sse(const std::string& body);
+
+    McpServerConfig m_cfg;
+    HttpClient m_http;
+    std::string m_session_id;  ///< 1.x 会话头（Mcp-Session-Id）
+    bool m_started = false;
+};
+
 /// @brief 创建传输实例（按配置选择 stdio/http）
-/// @param cfg server 配置
-/// @return 传输实例（http 传输在 M3 实现，当前仅 stdio）
 std::unique_ptr<McpTransport> create_transport(const McpServerConfig& cfg);
 
 } // namespace agent::mcp

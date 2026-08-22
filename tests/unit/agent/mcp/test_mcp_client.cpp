@@ -120,7 +120,8 @@ TEST_CASE("McpClient connect 回退 1.x initialize 握手", "[mcp_client][legacy
     auto ok = client.connect(make_stdio_cfg("fake", "legacy"), 15000);
     REQUIRE(ok.is_ok());
     REQUIRE(client.is_connected());
-    REQUIRE_FALSE(client.protocol_version().empty());
+    // discover 返回 MethodNotFound 时必须回退 1.x，协议版本为 1.x 而非 2.0 默认值
+    REQUIRE(client.protocol_version() == "2025-11-25");
 
     // 回退模式下工具调用同样可用
     auto result = client.call_tool("echo", {{"text", "legacy"}});
