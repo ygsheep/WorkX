@@ -23,7 +23,8 @@ src/agent/tool/
 ├── AgentTool/                # 子 Agent 调度
 ├── AskUser/                  # 向用户提问（TUI 选择面板，阻塞 + 超时）
 ├── MCPTool/                  # MCP 外部工具调用
-└── WebFetchTool/             # 网页抓取（HTML → Markdown）
+├── WebFetchTool/             # 网页抓取（HTML → Markdown）
+└── WebSearchTool/            # 网页搜索（Tavily / SearXNG / Bing 免 Key 兜底）
 ```
 
 ## 核心组件
@@ -166,6 +167,7 @@ sequenceDiagram
 |------|--------|------|------|
 | `BashTool/` | `Bash` | 执行 shell 命令 | `command`, `cwd`, `timeout` |
 | `WebFetchTool/` | `WebFetch` | 抓取 URL 并转为 Markdown | `url`, `prompt` |
+| `WebSearchTool/` | `WebSearch` | 搜索互联网（Tavily / SearXNG / Bing 免 Key 兜底） | `query`, `num_results`, `search_depth` |
 
 ### Phase 2 — 高级调度
 
