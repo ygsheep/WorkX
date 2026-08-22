@@ -8,7 +8,6 @@
 add_subdirectory(core)
 add_subdirectory(agent)
 add_subdirectory(island)
-add_subdirectory(tui)
 
 # ============================================================
 # 应用图标：从 src/icon.png 生成各平台格式
@@ -16,6 +15,10 @@ add_subdirectory(tui)
 #   macOS:   src/icon.icns → 作为 MACOSX_BUNDLE 资源
 #   Linux:   src/icon.png  → 拷贝到输出目录（供 .desktop 文件引用）
 # 转换脚本：scripts/convert_icon.py（缺失 Pillow 时自动安装）
+#
+# 注意：icon/ripgrep 相关变量需在 add_subdirectory(tui) 之前设置，
+#       因为 add_custom_command(TARGET workx ...) 必须在 workx
+#       目标所在的目录（src/tui/CMakeLists.txt）调用（CMake 限制）。
 # ============================================================
 set(WORKX_ICON_PNG "${CMAKE_CURRENT_SOURCE_DIR}/icon.png")
 set(WORKX_ICON_ICO "${CMAKE_CURRENT_SOURCE_DIR}/icon.ico")
@@ -47,66 +50,25 @@ elseif(NOT WORKX_PYTHON_EXECUTABLE)
     message(WARNING "Icon: Python not found, skip icon conversion")
 endif()
 
-# --- Windows：通过 RC 资源文件嵌入 ICO ---
+# --- Windows：生成 RC 资源文件（实际 target_sources 在 src/tui/ 中）---
 if(WIN32 AND EXISTS "${WORKX_ICON_ICO}")
     set(WORKX_RC_FILE "${CMAKE_CURRENT_BINARY_DIR}/workx_icon.rc")
-    # 使用数字 ID（1），Windows 资源管理器自动识别 exe 中的最低 ID ICON 资源
     file(WRITE "${WORKX_RC_FILE}"
         "1 ICON \"${WORKX_ICON_ICO}\"\n"
     )
-    target_sources(workx PRIVATE "${WORKX_RC_FILE}")
-    message(STATUS "Icon: Windows ICO embedded via RC file")
+    message(STATUS "Icon: Windows ICO RC file prepared")
 endif()
 
-# --- macOS：设置 Bundle 图标 ---
-if(APPLE)
-    if(EXISTS "${WORKX_ICON_ICNS}")
-        set_target_properties(workx PROPERTIES
-            MACOSX_BUNDLE TRUE
-            MACOSX_BUNDLE_ICON_FILE "icon.icns"
-        )
-        set_source_files_properties("${WORKX_ICON_ICNS}" PROPERTIES
-            MACOSX_PACKAGE_LOCATION "Resources"
-        )
-        target_sources(workx PRIVATE "${WORKX_ICON_ICNS}")
-        message(STATUS "Icon: macOS ICNS added to bundle Resources")
-    else()
-        message(WARNING "macOS build without icon: ${WORKX_ICON_ICNS} missing")
-    endif()
+# --- Windows/图标：设置 macOS Bundle 相关属性变量 ---
+if(APPLE AND EXISTS "${WORKX_ICON_ICNS}")
+    set(WORKX_MACOS_BUNDLE TRUE)
+    set(WORKX_MACOS_BUNDLE_ICON_FILE "icon.icns")
+    message(STATUS "Icon: macOS ICNS prepared for bundle")
+elseif(APPLE)
+    message(WARNING "macOS build without icon: ${WORKX_ICON_ICNS} missing")
 endif()
 
-# --- Linux：拷贝 PNG 到输出目录 ---
-if(UNIX AND NOT APPLE AND EXISTS "${WORKX_ICON_PNG}")
-    add_custom_command(TARGET workx POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${WORKX_ICON_PNG}"
-            "$<TARGET_FILE_DIR:workx>/icon.png"
-        COMMENT "Copying application icon: icon.png"
-    )
-    message(STATUS "Icon: Linux PNG copied to output dir")
-endif()
-
-# ============================================================
-# vendor/ripgrep: 构建时拷贝到 workx 输出目录的 tools/ 子目录
-# 二进制由 scripts/fetch-ripgrep.py 下载到 vendor/ripgrep/<platform>/
-# 运行时由 ToolRegistry 从 <exe_dir>/tools/rg 查找
-# 缺失时自动回退 C++ 标准库实现，不报错
-#
-# 注意：add_custom_command(TARGET workx POST_BUILD ...) 必须在 workx
-#       目标所在的目录调用（CMake 限制）。源/目标路径变量由根
-#       CMakeLists.txt 计算并通过普通变量传递（父作用域可见）。
-# ============================================================
-if(WORKX_HAS_VENDOR_RIPGREP)
-    add_custom_command(TARGET workx POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_FILE_DIR:workx>/tools"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${WORKX_RG_SOURCE}"
-            "$<TARGET_FILE_DIR:workx>/tools/${WORKX_RG_DEST_NAME}"
-        COMMENT "Bundling ripgrep: ${WORKX_RG_DEST_NAME}"
-    )
-    target_compile_definitions(workx PRIVATE WORKX_HAS_BUNDLED_RIPGREP=1)
-endif()
+add_subdirectory(tui)
 
 # ============================================================
 # 安装与包导出（M2 库化：外部工程可 find_package(workx)）

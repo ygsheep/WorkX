@@ -276,7 +276,7 @@ private:
 
     // ---- 侧边栏布局 ----
     bool m_sidebar_left = false;                 ///< 侧边栏居中位置（false=右，true=左）
-    int m_sidebar_width = 30;                    ///< 侧边栏宽度（Ctrl+←/→ 调整，[20,50]）
+    int m_sidebar_width = 35;                    ///< 侧边栏宽度百分比（Ctrl+←/→ 调整，[20,80]）
     /// @brief 侧边栏 tab 栏命中区（每帧由 build_sidebar_tabs 重建；鼠标点击用）
     std::deque<TabHit> m_tab_hits;
     /// @brief 侧栏可折叠区块命中区（MCP/TODO 标题行；每帧由 append_sidebar_info 重建）
