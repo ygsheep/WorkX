@@ -23,6 +23,13 @@
 
 namespace agent::mcp {
 
+/// @brief 已连接 server 状态快照（#27 M4：供 UI 侧栏展示）
+struct McpServerStatus {
+    std::string name;       ///< server 名
+    std::string protocol;   ///< 协商协议版本（"2026-07-28" / "2025-11-25"）
+    int tool_count = 0;     ///< 已预取工具数
+};
+
 /// @brief MCP 连接管理器（生命周期 = 会话）
 class McpClientManager {
 public:
@@ -41,6 +48,9 @@ public:
 
     /// @brief 已连接 server 名列表
     std::vector<std::string> server_names() const;
+
+    /// @brief 已连接 server 状态快照（#27 M4：UI 侧栏展示）
+    std::vector<McpServerStatus> server_status() const;
 
     /// @brief 已连接 server 的工具清单快照（供 MCPTool prompt 注入）
     /// @details 形如 "- github（工具：create_issue, list_pulls）\n- notion（...）"

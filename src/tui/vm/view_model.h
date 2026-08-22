@@ -206,6 +206,7 @@ private:
     bool apply_variant(const ActionProviderSwitched&);
     bool apply_variant(const ActionProviderSwitchFailed&);
     bool apply_variant(const ActionTodoUpdate&);
+    bool apply_variant(const ActionMcpStatus&);
 
     /// @brief 修改追踪：Edit/Write 工具调用 → FileChange（purpose + 行级 diff）
     void track_file_change(const ActionBeginTool& a);

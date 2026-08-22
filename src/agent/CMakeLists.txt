@@ -181,6 +181,7 @@ target_sources(workx_agent PRIVATE
     mcp/mcp_transport.cpp
     mcp/mcp_client.cpp
     mcp/mcp_client_manager.cpp
+    mcp/mcp_oauth.cpp
 
     # input: 头文件（显式列入以便 IDE 导航）
     input/parser.h

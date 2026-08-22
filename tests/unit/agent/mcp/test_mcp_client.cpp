@@ -112,6 +112,73 @@ TEST_CASE("McpClient list_resources / read_resource", "[mcp_client][resource]") 
 }
 
 // ============================================================================
+// M4：资源模板 + 提示词（stdio）
+// ============================================================================
+
+TEST_CASE("McpClient list_resource_templates", "[mcp_client][templates]") {
+    McpClient client;
+    REQUIRE(client.connect(make_stdio_cfg("fake", "discover"), 15000).is_ok());
+
+    auto templates = client.list_resource_templates();
+    REQUIRE(templates.is_ok());
+    REQUIRE(templates.value().size() == 1);
+    REQUIRE(templates.value()[0].uri_template == "git:///{owner}/{repo}/blob/{sha}");
+    REQUIRE(templates.value()[0].name == "blob");
+    REQUIRE(templates.value()[0].mime_type == "text/plain");
+
+    client.disconnect();
+}
+
+TEST_CASE("McpClient list_prompts / get_prompt", "[mcp_client][prompts]") {
+    McpClient client;
+    REQUIRE(client.connect(make_stdio_cfg("fake", "discover"), 15000).is_ok());
+
+    auto prompts = client.list_prompts();
+    REQUIRE(prompts.is_ok());
+    REQUIRE(prompts.value().size() == 1);
+    REQUIRE(prompts.value()[0].name == "summarize");
+    REQUIRE(prompts.value()[0].arguments.size() == 2);
+    REQUIRE(prompts.value()[0].arguments[0].name == "topic");
+    REQUIRE(prompts.value()[0].arguments[0].required);
+    REQUIRE_FALSE(prompts.value()[0].arguments[1].required);
+
+    auto messages = client.get_prompt("summarize", {{"topic", "MCP"}});
+    REQUIRE(messages.is_ok());
+    REQUIRE(messages.value().size() == 1);
+    REQUIRE(messages.value()[0].role == "user");
+    REQUIRE_THAT(messages.value()[0].content.value("text", ""),
+                 ContainsSubstring("MCP"));
+
+    auto missing = client.get_prompt("nope", nlohmann::json::object());
+    REQUIRE(missing.is_err());
+
+    client.disconnect();
+}
+
+// ============================================================================
+// M4：2.0 缓存（stdio，cache 模式）
+// ============================================================================
+
+TEST_CASE("McpClient 2.0 缓存：第二次 list_tools 命中缓存", "[mcp_client][cache]") {
+    McpClient client;
+    REQUIRE(client.connect(make_stdio_cfg("fake", "cache"), 15000).is_ok());
+
+    // 首次：从 server 拉取（返回 _meta.ttlMs=60000 写入缓存）
+    auto first = client.list_tools();
+    REQUIRE(first.is_ok());
+    REQUIRE(first.value().size() == 1);
+    REQUIRE(first.value()[0].name == "echo");
+
+    // 第二次：server 会返回错误，命中缓存则仍成功（证明未再次请求 server）
+    auto second = client.list_tools();
+    REQUIRE(second.is_ok());
+    REQUIRE(second.value().size() == 1);
+    REQUIRE(second.value()[0].name == "echo");
+
+    client.disconnect();
+}
+
+// ============================================================================
 // 1.x 回退模式（server/discover 返回 MethodNotFound → initialize 握手）
 // ============================================================================
 

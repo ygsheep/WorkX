@@ -41,11 +41,20 @@ namespace mcp_error {
 inline constexpr int UnsupportedProtocolVersion = -32602;
 } // namespace mcp_error
 
+/// @brief 2.0 缓存元数据（响应 _meta.ttlMs / _meta.cacheScope）
+/// @details ttl_ms > 0 表示客户端可在该时长内缓存响应；cache_scope 取值
+///          "session"（会话内共享）或 "shared"（跨会话共享）。
+struct McpCacheMeta {
+    int64_t ttl_ms = 0;        ///< 缓存有效期（毫秒，0=不缓存）
+    std::string cache_scope;   ///< 缓存作用域（"session" / "shared" / 空）
+};
+
 /// @brief MCP server 暴露的工具信息（tools/list 响应项）
 struct McpToolInfo {
     std::string name;
     std::string description;
     nlohmann::json input_schema;  ///< JSON Schema（2.0 支持 2020-12 全词汇表）
+    McpCacheMeta cache;           ///< 2.0 响应缓存元数据（无则 ttl_ms=0）
 };
 
 /// @brief MCP server 暴露的资源信息（resources/list 响应项）
@@ -54,6 +63,7 @@ struct McpResourceInfo {
     std::string name;
     std::string mime_type;
     std::string description;
+    McpCacheMeta cache;           ///< 2.0 响应缓存元数据（无则 ttl_ms=0）
 };
 
 /// @brief 资源内容（resources/read 响应项）
@@ -62,6 +72,35 @@ struct McpResourceContent {
     std::string mime_type;
     std::string text;  ///< 文本内容
     std::string blob;  ///< 二进制内容（base64 编码）
+    McpCacheMeta cache;           ///< 2.0 响应缓存元数据（无则 ttl_ms=0）
+};
+
+/// @brief 资源模板信息（resources/templates/list 响应项，M4）
+struct McpResourceTemplateInfo {
+    std::string uri_template;  ///< 模板（如 "git:///{owner}/{repo}/blob/{sha}"）
+    std::string name;
+    std::string description;
+    std::string mime_type;
+};
+
+/// @brief 提示词参数定义（prompts/list 响应项 arguments[] 项，M4）
+struct McpPromptArgument {
+    std::string name;
+    std::string description;
+    bool required = false;
+};
+
+/// @brief 提示词信息（prompts/list 响应项，M4）
+struct McpPromptInfo {
+    std::string name;
+    std::string description;
+    std::vector<McpPromptArgument> arguments;
+};
+
+/// @brief 提示词消息（prompts/get 响应 messages[] 项，M4）
+struct McpPromptMessage {
+    std::string role;      ///< user / assistant
+    nlohmann::json content;  ///< 内容块（text / image / resource）
 };
 
 /// @brief 工具调用结果内容块（tools/call 响应 content[] 项）

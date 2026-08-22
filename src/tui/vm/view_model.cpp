@@ -351,6 +351,21 @@ bool ViewModel::apply_variant(const ActionTodoUpdate& a) {
     return true;
 }
 
+bool ViewModel::apply_variant(const ActionMcpStatus& a) {
+    // 格式化为侧栏条目：`name · protocol · N 工具`
+    std::vector<std::string> lines;
+    lines.reserve(a.servers.size());
+    for (const auto& s : a.servers) {
+        std::string line = s.name;
+        if (!s.protocol.empty()) line += " · " + s.protocol;
+        if (s.tool_count > 0) line += " · " + std::to_string(s.tool_count) + " 工具";
+        lines.push_back(std::move(line));
+    }
+    if (sidebar.mcp_servers == lines) return false;  // 无变化，避免无谓重绘
+    sidebar.mcp_servers = std::move(lines);
+    return true;
+}
+
 namespace {
 
 /// @brief 按行切分（兼容 \r\n / \n），空串返回空列表

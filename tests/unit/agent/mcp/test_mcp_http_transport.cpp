@@ -156,6 +156,55 @@ TEST_CASE("HttpMcpTransport 解析 text/event-stream 响应", "[mcp_http][sse]")
 }
 
 // ============================================================================
+// M4：资源模板 + 提示词 + 2.0 缓存（HTTP）
+// ============================================================================
+
+TEST_CASE("HttpMcpTransport 资源模板与提示词", "[mcp_http][m4]") {
+    std::shared_ptr<McpStdioProcess> proc;
+    const std::string url = start_fake_http_server("discover", proc);
+
+    McpClient client;
+    REQUIRE(client.connect(make_http_cfg("fake-http", url), 15000).is_ok());
+
+    auto templates = client.list_resource_templates();
+    REQUIRE(templates.is_ok());
+    REQUIRE(templates.value().size() == 1);
+    REQUIRE(templates.value()[0].uri_template == "git:///{owner}/{repo}/blob/{sha}");
+
+    auto prompts = client.list_prompts();
+    REQUIRE(prompts.is_ok());
+    REQUIRE(prompts.value().size() == 1);
+    REQUIRE(prompts.value()[0].name == "summarize");
+
+    auto messages = client.get_prompt("summarize", {{"topic", "http"}});
+    REQUIRE(messages.is_ok());
+    REQUIRE_THAT(messages.value()[0].content.value("text", ""),
+                 ContainsSubstring("http"));
+
+    client.disconnect();
+}
+
+TEST_CASE("HttpMcpTransport 2.0 缓存命中", "[mcp_http][cache]") {
+    std::shared_ptr<McpStdioProcess> proc;
+    const std::string url = start_fake_http_server("cache", proc);
+
+    McpClient client;
+    REQUIRE(client.connect(make_http_cfg("fake-http", url), 15000).is_ok());
+
+    // 首次：从 server 拉取（返回 _meta.ttlMs=60000 写入缓存）
+    auto first = client.list_tools();
+    REQUIRE(first.is_ok());
+    REQUIRE(first.value().size() == 1);
+
+    // 第二次：server 返回错误，命中缓存则仍成功
+    auto second = client.list_tools();
+    REQUIRE(second.is_ok());
+    REQUIRE(second.value().size() == 1);
+
+    client.disconnect();
+}
+
+// ============================================================================
 // 错误路径
 // ============================================================================
 

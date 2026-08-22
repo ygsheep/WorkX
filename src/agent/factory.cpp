@@ -172,6 +172,7 @@ SessionResult create_session(IConfigManager& cfg,
     auto mcp_manager = std::make_shared<mcp::McpClientManager>();
     mcp_manager->load_and_connect(default_config_path().parent_path(),
                                   std::filesystem::current_path());
+    result.mcp_manager = mcp_manager;  // #27 M4：暴露给 UI 层展示 server 状态
     auto tool_registry = std::make_shared<tool::ToolRegistry>();
     register_builtin_tools(*tool_registry, mcp_manager);
     result.session->set_tool_registry(tool_registry);

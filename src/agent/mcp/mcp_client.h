@@ -11,6 +11,8 @@
 
 #pragma once
 
+#include <chrono>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -56,6 +58,14 @@ public:
     ResultV2<std::vector<McpResourceInfo>> list_resources();
     ResultV2<std::vector<McpResourceContent>> read_resource(const std::string& uri);
 
+    // === 资源模板（M4：resources/templates/list）===
+    ResultV2<std::vector<McpResourceTemplateInfo>> list_resource_templates();
+
+    // === 提示词（M4：prompts/list、prompts/get）===
+    ResultV2<std::vector<McpPromptInfo>> list_prompts();
+    ResultV2<std::vector<McpPromptMessage>> get_prompt(
+        const std::string& name, const nlohmann::json& arguments);
+
 private:
     /// @brief 发送请求并解析 result（error 转为 Error）
     ResultV2<nlohmann::json> request(const std::string& method,
@@ -71,12 +81,28 @@ private:
     /// @brief 1.x initialize 握手
     ResultV2<nlohmann::json> do_initialize(const std::string& version, int timeout_ms);
 
+    /// @brief 带 2.0 缓存语义的请求：命中未过期缓存直接返回，否则请求并按
+    ///        result._meta.ttlMs 写入缓存（M4）
+    ResultV2<nlohmann::json> request_cached(const std::string& method,
+                                            const nlohmann::json& params,
+                                            int timeout_ms);
+    /// @brief 从响应 result 提取 2.0 缓存元数据（_meta.ttlMs / _meta.cacheScope）
+    static McpCacheMeta extract_cache_meta(const nlohmann::json& result);
+
+    /// @brief 2.0 缓存条目
+    struct CacheEntry {
+        nlohmann::json result;
+        std::chrono::steady_clock::time_point expires_at;
+    };
+
     std::unique_ptr<McpTransport> m_transport;
     std::string m_name;
     std::string m_protocol_version;
     bool m_connected = false;
     bool m_stateless = false;  ///< 2.0 无状态模式（每请求 _meta 带版本）
     int m_next_id = 1;
+    /// @brief 2.0 响应缓存（key = method|params，TTL 过期自动失效）
+    std::map<std::string, CacheEntry> m_cache;
 };
 
 } // namespace agent::mcp

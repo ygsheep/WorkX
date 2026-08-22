@@ -13,6 +13,9 @@ import sys
 
 MODE = os.environ.get("FAKE_MCP_MODE", "discover")
 
+# cache 模式：tools/list 首次返回 _meta.ttlMs，后续返回错误（验证客户端缓存）
+_tools_list_count = 0
+
 
 def send(obj):
     sys.stdout.write(json.dumps(obj) + "\n")
@@ -51,6 +54,20 @@ def handle(req):
         return  # notifications carry no id -> no response
 
     if method == "tools/list":
+        if MODE == "cache":
+            global _tools_list_count
+            _tools_list_count += 1
+            if _tools_list_count == 1:
+                rpc_result(req, {"tools": [
+                    {"name": "echo",
+                     "description": "Echo text back",
+                     "inputSchema": {"type": "object",
+                                     "properties": {"text": {"type": "string"}},
+                                     "required": ["text"]}},
+                ], "_meta": {"ttlMs": 60000, "cacheScope": "session"}})
+            else:
+                rpc_error(req, -32603, "tools/list 应命中客户端缓存")
+            return
         rpc_result(req, {"tools": [
             {"name": "echo",
              "description": "Echo text back",
@@ -105,6 +122,37 @@ def handle(req):
             ]})
         else:
             rpc_result(req, {"contents": []})
+        return
+
+    if method == "resources/templates/list":
+        rpc_result(req, {"resourceTemplates": [
+            {"uriTemplate": "git:///{owner}/{repo}/blob/{sha}",
+             "name": "blob", "description": "Git blob",
+             "mimeType": "text/plain"},
+        ]})
+        return
+
+    if method == "prompts/list":
+        rpc_result(req, {"prompts": [
+            {"name": "summarize",
+             "description": "Summarize a document",
+             "arguments": [
+                 {"name": "topic", "description": "Topic", "required": True},
+                 {"name": "lang", "description": "Language"},
+             ]},
+        ]})
+        return
+
+    if method == "prompts/get":
+        name = params.get("name", "")
+        if name == "summarize":
+            rpc_result(req, {"messages": [
+                {"role": "user",
+                 "content": {"type": "text",
+                             "text": "Summarize: " + str(params.get("arguments", {}).get("topic", ""))}},
+            ]})
+        else:
+            rpc_error(req, -32602, "Unknown prompt: " + name)
         return
 
     rpc_error(req, -32601, "Method not found: " + method)

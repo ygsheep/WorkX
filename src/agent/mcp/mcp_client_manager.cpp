@@ -74,6 +74,23 @@ std::vector<std::string> McpClientManager::server_names() const {
     return result;
 }
 
+std::vector<McpServerStatus> McpClientManager::server_status() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::vector<McpServerStatus> result;
+    result.reserve(m_clients.size());
+    for (const auto& [name, client] : m_clients) {
+        McpServerStatus st;
+        st.name = name;
+        st.protocol = client->protocol_version();
+        auto it = m_tool_names.find(name);
+        if (it != m_tool_names.end()) {
+            st.tool_count = static_cast<int>(it->second.size());
+        }
+        result.push_back(std::move(st));
+    }
+    return result;
+}
+
 std::string McpClientManager::describe_servers() const {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_clients.empty()) return "";

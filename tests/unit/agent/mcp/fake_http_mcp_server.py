@@ -18,6 +18,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 MODE = os.environ.get("FAKE_MCP_HTTP_MODE", "discover")
 PORT = int(os.environ.get("FAKE_MCP_HTTP_PORT", "0"))
 
+# cache 模式：tools/list 首次返回 _meta.ttlMs，后续返回错误（验证客户端缓存）
+_tools_list_count = 0
+
 
 def make_result(req, result):
     return {"jsonrpc": "2.0", "id": req.get("id"), "result": result}
@@ -48,6 +51,17 @@ def handle(req):
         return None  # notifications carry no id -> no response
 
     if method == "tools/list":
+        if MODE == "cache":
+            global _tools_list_count
+            _tools_list_count += 1
+            if _tools_list_count == 1:
+                return make_result(req, {"tools": [
+                    {"name": "echo", "description": "Echo text back",
+                     "inputSchema": {"type": "object",
+                                     "properties": {"text": {"type": "string"}},
+                                     "required": ["text"]}},
+                ], "_meta": {"ttlMs": 60000, "cacheScope": "session"}})
+            return make_error(req, -32603, "tools/list 应命中客户端缓存")
         return make_result(req, {"tools": [
             {"name": "echo", "description": "Echo text back",
              "inputSchema": {"type": "object",
@@ -92,6 +106,33 @@ def handle(req):
                 {"uri": uri, "mimeType": "text/markdown",
                  "text": "# Fake Readme\nHello"}]})
         return make_result(req, {"contents": []})
+
+    if method == "resources/templates/list":
+        return make_result(req, {"resourceTemplates": [
+            {"uriTemplate": "git:///{owner}/{repo}/blob/{sha}",
+             "name": "blob", "description": "Git blob",
+             "mimeType": "text/plain"},
+        ]})
+
+    if method == "prompts/list":
+        return make_result(req, {"prompts": [
+            {"name": "summarize",
+             "description": "Summarize a document",
+             "arguments": [
+                 {"name": "topic", "description": "Topic", "required": True},
+                 {"name": "lang", "description": "Language"},
+             ]},
+        ]})
+
+    if method == "prompts/get":
+        name = params.get("name", "")
+        if name == "summarize":
+            return make_result(req, {"messages": [
+                {"role": "user",
+                 "content": {"type": "text",
+                             "text": "Summarize: " + str(params.get("arguments", {}).get("topic", ""))}},
+            ]})
+        return make_error(req, -32602, "Unknown prompt: " + name)
 
     return make_error(req, -32601, "Method not found: " + method)
 

@@ -113,7 +113,7 @@ ResultV2<std::vector<McpToolInfo>> McpClient::list_tools() {
         return ResultV2<std::vector<McpToolInfo>>::err(Error::Code::NetworkDisconnected,
             "MCP server 未连接: " + m_name, "McpClient::list_tools");
     }
-    auto result = request("tools/list", nlohmann::json::object(), 15000);
+    auto result = request_cached("tools/list", nlohmann::json::object(), 15000);
     if (result.is_err()) return result.error();
 
     std::vector<McpToolInfo> tools;
@@ -124,6 +124,7 @@ ResultV2<std::vector<McpToolInfo>> McpClient::list_tools() {
         info.name = t.at("name").get<std::string>();
         info.description = t.value("description", "");
         info.input_schema = t.value("inputSchema", nlohmann::json::object());
+        info.cache = extract_cache_meta(t);
         tools.push_back(std::move(info));
     }
     return ResultV2<std::vector<McpToolInfo>>::ok(std::move(tools));
@@ -162,7 +163,7 @@ ResultV2<std::vector<McpResourceInfo>> McpClient::list_resources() {
         return ResultV2<std::vector<McpResourceInfo>>::err(Error::Code::NetworkDisconnected,
             "MCP server 未连接: " + m_name, "McpClient::list_resources");
     }
-    auto result = request("resources/list", nlohmann::json::object(), 15000);
+    auto result = request_cached("resources/list", nlohmann::json::object(), 15000);
     if (result.is_err()) return result.error();
 
     std::vector<McpResourceInfo> resources;
@@ -174,6 +175,7 @@ ResultV2<std::vector<McpResourceInfo>> McpClient::list_resources() {
         info.name = r.value("name", "");
         info.mime_type = r.value("mimeType", "");
         info.description = r.value("description", "");
+        info.cache = extract_cache_meta(r);
         resources.push_back(std::move(info));
     }
     return ResultV2<std::vector<McpResourceInfo>>::ok(std::move(resources));
@@ -186,7 +188,7 @@ ResultV2<std::vector<McpResourceContent>> McpClient::read_resource(const std::st
             "MCP server 未连接: " + m_name, "McpClient::read_resource");
     }
     nlohmann::json params = {{"uri", uri}};
-    auto result = request("resources/read", params, 15000);
+    auto result = request_cached("resources/read", params, 15000);
     if (result.is_err()) return result.error();
 
     std::vector<McpResourceContent> contents;
@@ -198,9 +200,96 @@ ResultV2<std::vector<McpResourceContent>> McpClient::read_resource(const std::st
         item.mime_type = c.value("mimeType", "");
         item.text = c.value("text", "");
         item.blob = c.value("blob", "");
+        item.cache = extract_cache_meta(c);
         contents.push_back(std::move(item));
     }
     return ResultV2<std::vector<McpResourceContent>>::ok(std::move(contents));
+}
+
+// ============================================================
+// 资源模板（M4）
+// ============================================================
+
+ResultV2<std::vector<McpResourceTemplateInfo>> McpClient::list_resource_templates() {
+    if (!m_connected) {
+        return ResultV2<std::vector<McpResourceTemplateInfo>>::err(
+            Error::Code::NetworkDisconnected,
+            "MCP server 未连接: " + m_name, "McpClient::list_resource_templates");
+    }
+    auto result = request_cached("resources/templates/list", nlohmann::json::object(), 15000);
+    if (result.is_err()) return result.error();
+
+    std::vector<McpResourceTemplateInfo> templates;
+    const auto& arr = result.value().value("resourceTemplates", nlohmann::json::array());
+    for (const auto& t : arr) {
+        if (!t.is_object() || !t.contains("uriTemplate")) continue;
+        McpResourceTemplateInfo info;
+        info.uri_template = t.at("uriTemplate").get<std::string>();
+        info.name = t.value("name", "");
+        info.description = t.value("description", "");
+        info.mime_type = t.value("mimeType", "");
+        templates.push_back(std::move(info));
+    }
+    return ResultV2<std::vector<McpResourceTemplateInfo>>::ok(std::move(templates));
+}
+
+// ============================================================
+// 提示词（M4）
+// ============================================================
+
+ResultV2<std::vector<McpPromptInfo>> McpClient::list_prompts() {
+    if (!m_connected) {
+        return ResultV2<std::vector<McpPromptInfo>>::err(Error::Code::NetworkDisconnected,
+            "MCP server 未连接: " + m_name, "McpClient::list_prompts");
+    }
+    auto result = request_cached("prompts/list", nlohmann::json::object(), 15000);
+    if (result.is_err()) return result.error();
+
+    std::vector<McpPromptInfo> prompts;
+    const auto& arr = result.value().value("prompts", nlohmann::json::array());
+    for (const auto& p : arr) {
+        if (!p.is_object() || !p.contains("name")) continue;
+        McpPromptInfo info;
+        info.name = p.at("name").get<std::string>();
+        info.description = p.value("description", "");
+        const auto& args = p.value("arguments", nlohmann::json::array());
+        for (const auto& a : args) {
+            if (!a.is_object() || !a.contains("name")) continue;
+            McpPromptArgument arg;
+            arg.name = a.at("name").get<std::string>();
+            arg.description = a.value("description", "");
+            arg.required = a.value("required", false);
+            info.arguments.push_back(std::move(arg));
+        }
+        prompts.push_back(std::move(info));
+    }
+    return ResultV2<std::vector<McpPromptInfo>>::ok(std::move(prompts));
+}
+
+ResultV2<std::vector<McpPromptMessage>> McpClient::get_prompt(
+    const std::string& name, const nlohmann::json& arguments) {
+    if (!m_connected) {
+        return ResultV2<std::vector<McpPromptMessage>>::err(
+            Error::Code::NetworkDisconnected,
+            "MCP server 未连接: " + m_name, "McpClient::get_prompt");
+    }
+    nlohmann::json params = {{"name", name}};
+    if (arguments.is_object() && !arguments.empty()) {
+        params["arguments"] = arguments;
+    }
+    auto result = request("prompts/get", params, 15000);
+    if (result.is_err()) return result.error();
+
+    std::vector<McpPromptMessage> messages;
+    const auto& arr = result.value().value("messages", nlohmann::json::array());
+    for (const auto& m : arr) {
+        if (!m.is_object()) continue;
+        McpPromptMessage msg;
+        msg.role = m.value("role", "user");
+        msg.content = m.value("content", nlohmann::json::object());
+        messages.push_back(std::move(msg));
+    }
+    return ResultV2<std::vector<McpPromptMessage>>::ok(std::move(messages));
 }
 
 // ============================================================
@@ -257,6 +346,40 @@ ResultV2<void> McpClient::notify(const std::string& method,
         msg["params"] = params;
     }
     return m_transport->send_notification(msg);
+}
+
+McpCacheMeta McpClient::extract_cache_meta(const nlohmann::json& result) {
+    McpCacheMeta meta;
+    if (!result.is_object()) return meta;
+    const auto& m = result.value("_meta", nlohmann::json::object());
+    if (m.is_object()) {
+        meta.ttl_ms = m.value("ttlMs", 0);
+        meta.cache_scope = m.value("cacheScope", "");
+    }
+    return meta;
+}
+
+ResultV2<nlohmann::json> McpClient::request_cached(const std::string& method,
+                                                   const nlohmann::json& params,
+                                                   int timeout_ms) {
+    const std::string key = method + "|" + params.dump();
+    const auto now = std::chrono::steady_clock::now();
+    auto it = m_cache.find(key);
+    if (it != m_cache.end() && it->second.expires_at > now) {
+        return ResultV2<nlohmann::json>::ok(it->second.result);
+    }
+
+    auto resp = request(method, params, timeout_ms);
+    if (resp.is_err()) return resp.error();
+
+    // 2.0 缓存：响应 result._meta.ttlMs > 0 时写入缓存（cacheScope 记录但不区分）
+    const auto& result = resp.value();
+    const auto meta = extract_cache_meta(result);
+    if (meta.ttl_ms > 0) {
+        m_cache[key] = CacheEntry{
+            result, now + std::chrono::milliseconds(meta.ttl_ms)};
+    }
+    return resp;
 }
 
 ResultV2<nlohmann::json> McpClient::do_initialize(const std::string& version,

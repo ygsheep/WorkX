@@ -90,3 +90,17 @@ TEST_CASE("McpClientManager get_client 未知名返回 nullptr", "[mcp_manager][
 
     std::filesystem::remove_all(dir);
 }
+
+TEST_CASE("McpClientManager server_status 返回协议与工具数", "[mcp_manager][status]") {
+    auto dir = make_project_config("discover");
+    McpClientManager manager;
+    manager.load_and_connect(dir, dir);
+
+    auto status = manager.server_status();
+    REQUIRE(status.size() == 1);
+    REQUIRE(status[0].name == "fake");
+    REQUIRE(status[0].protocol == "2026-07-28");
+    REQUIRE(status[0].tool_count == 2);  // echo + add
+
+    std::filesystem::remove_all(dir);
+}
