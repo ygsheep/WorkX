@@ -5,28 +5,145 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "core/process/exec_output.h"
 #include "core/process/subprocess.h"
 #include "liblogger/logger.h"
 
+namespace fs = std::filesystem;
+
 namespace agent {
 
 namespace {
 
-/// @brief 去首尾空白并转小写（供目标串前缀匹配）
-std::string trimmed_lower(std::string_view s) {
-    std::string out(s);
+/// @brief 去掉首尾空白的原始串
+std::string trimmed(std::string_view s) {
     const auto not_space = [](unsigned char c) { return !std::isspace(c); };
-    auto first = std::find_if(out.begin(), out.end(), not_space);
-    auto last = std::find_if(out.rbegin(), out.rend(), not_space).base();
+    auto first = std::find_if(s.begin(), s.end(), not_space);
+    auto last = std::find_if(s.rbegin(), s.rend(), not_space).base();
     if (first >= last) {
-        out.clear();  // 全空白：避免 std::string(first, last) 用 first>last 构造（UB）
-        return out;
+        return {};  // 全空白/空串：避免用 first>last 构造（UB）
     }
-    out = std::string(first, last);
+    return std::string(first, last);
+}
+
+/// @brief 去首尾空白并转小写（仅供目标类型前缀匹配，不用于取值）
+/// @details P2-3：类型前缀判定需大小写不敏感，但 file_exists:<path> / cmd:<cmd>
+///          的"值"必须保留原样（Linux 文件路径大小写敏感），故本函数只用于
+///          判断 v == type 或 starts_with(prefix)，取值一律走 trimmed() 原文。
+std::string lowered_trim(std::string_view s) {
+    std::string out = trimmed(s);
     std::transform(out.begin(), out.end(), out.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return out;
+}
+
+// ============================================================
+// P1-1：cmd: 命令白名单 — 阻止任意 shell 命令执行
+// ============================================================
+// 威胁模型：agent.goal / goal.command 来自应用级配置（用户自担风险），
+// 但若项目级 .mcp.json 或恶意 skill 能污染配置值，裸 `sh -c <config>` /
+// `cmd.exe /d /s /c <config>` 即构成 RCE。深度防御：仅放行已知构建/测试
+// 工具，并在包装 shell（cmd/sh）后递归校验真正落地的命令 token。
+
+/// @brief 拆出命令串中"将真实执行"的 token（去掉 shell 包装层）
+/// @details 处理：
+///           - 前导空白 / 引号包裹的"名称"（"cmake" / 'g++'）
+///           - 包装 shell：cmd /C|/S /d|/D ...、sh -c ... → 跳过其 flag，
+///             返回后一个真正命令 token。
+std::string command_exec_token(std::string_view line) {
+    // 按空白切 token（命令串第一段通常无 shell 元字符；dock 到 /;&&| 之前）
+    std::vector<std::string> tokens;
+    std::string cur;
+    for (char c : line) {
+        if (std::isspace(static_cast<unsigned char>(c))) {
+            if (!cur.empty()) {
+                tokens.push_back(cur);
+                cur.clear();
+                if (tokens.size() >= 4) break;  // 最多看几个 token 就够
+            }
+        } else if (c == ';' || c == '&' || c == '|' || c == '>' || c == '<' || c == '`') {
+            if (!cur.empty()) {
+                tokens.push_back(cur);
+                cur.clear();
+            }
+            break;  // 出现 shell 元字符：只信任前面的命令段，其余先按整体拒
+        } else {
+            cur.push_back(c);
+        }
+    }
+    if (!cur.empty()) tokens.push_back(cur);
+
+    const auto strip_quote = [](std::string t) {
+        if (t.size() >= 2 &&
+            (t.front() == '"' || t.front() == '\'') && t.back() == t.front()) {
+            t = t.substr(1, t.size() - 2);
+        }
+        return t;
+    };
+
+    const std::string first = tokens.empty() ? "" : strip_quote(tokens[0]);
+    if (first.empty()) return {};
+
+    // 包装 shell：跳过其启动 flag，返回真实命令 token
+    if (first == "cmd" || first == "cmd.exe" || first == "sh" || first == "bash" ||
+        first == "powershell" || first == "pwsh" || first == "zsh" || first == "dash") {
+        for (size_t i = 1; i < tokens.size(); ++i) {
+            const std::string t = strip_quote(tokens[i]);
+            if (t.empty()) continue;
+            if (t.front() == '-' || t.front() == '/') {
+                continue;  // -c / -Command / /C / /d / /s ... 均跳过
+            }
+            return t;
+        }
+        return first;  // 只有包装层本身（如 `sh`）→ 保守放行纯包装
+    }
+    return first;
+}
+
+/// @brief 命令是否在白名单内（仅校验真实落地的 exec token）
+bool is_command_allowed(std::string_view line) noexcept {
+    // P1-1：构建/测试/包管理/常见脚本工具白名单。默认命令（kTestCmd/kBuildCmd
+    //       等）是项目硬编码的可信串，不在此校验范围内；此处只拦截 goal.command
+    //       里的任意命令。
+    static constexpr std::string_view kAllowed[] = {
+        // 构建
+        "cmake", "ctest", "ninja", "make", "nmake", "msbuild", "dotnet",
+        "cargo", "go", "gcc", "g++", "clang", "clang++", "cl",
+        // 包管理
+        "npm", "npx", "yarn", "pnpm", "pip", "pip3", "conan", "vcpkg",
+        "mvn", "gradle",
+        // 脚本/语言运行
+        "python", "python3", "py", "pytest", "node",
+        // 版本控制
+        "git",
+        // 基础 shell 元命令（褪去包装层后的落点，如 `cmd /C exit 0`）
+        "echo", "true", "false", "exit", "test",
+    };
+    const std::string tok = command_exec_token(line);
+    if (tok.empty()) return false;
+    for (auto a : kAllowed) {
+        if (tok == a) return true;
+    }
+    return false;
+}
+
+/// @brief P2-2：detail 字符串清洗——不原样回显命令/路径，防二次注入到 TUI/LLM
+std::string sanitize_detail(std::string_view raw) noexcept {
+    // 只截断长度 + 剔除控制字符；命令/路径内容不嵌入 detail，改由退出码/状态表达
+    std::string out;
+    out.reserve(raw.size());
+    for (char c : raw) {
+        if (static_cast<unsigned char>(c) < 0x20 && c != '\n' && c != '\t') {
+            continue;  // 丢弃非可打印控制字符
+        }
+        out.push_back(c);
+    }
+    if (out.size() > 120) {
+        out.resize(120);
+        out += "...";
+    }
     return out;
 }
 
@@ -62,11 +179,27 @@ const char* kTestCmd = "ctest --output-on-failure";
 /// 默认编译（Windows 用 cmake --build；非 Windows 同，CMake 跨平台）
 const char* kBuildCmd = "cmake --build . --config Debug";
 
+/// @brief 校验一条待执行命令（默认命令白名单直通；覆盖命令需在白名单内）
+/// @return 允许则返回原命令；被拦截则返回空
+///
+/// P1-1：goal.command 来自配置，若被污染即可任意执行 shell 命令（RCE）。
+///        默认命令（kTestCmd 等）是项目硬编码的可信串→放行；
+///        非空覆盖命令→必须在白名单内，否则拒绝执行（返回 Failed）。
+std::string guard_command(const std::string& cmd) {
+    if (is_command_allowed(cmd)) {
+        return cmd;
+    }
+    return {};
+}
+
 Verdict checker_tests(const AgentGoal& goal, const std::string& cwd) {
-    const std::string cmd = goal.command.empty() ? kTestCmd : goal.command;
+    const std::string cmd = guard_command(goal.command.empty() ? kTestCmd : goal.command);
+    if (cmd.empty()) {
+        return {GoalStatus::Failed, "test command rejected (not in allowlist)"};
+    }
     const int code = run_exit_code(cmd, cwd);
     if (code < 0) {
-        return {GoalStatus::Failed, std::format("test command failed to start: {}", cmd)};
+        return {GoalStatus::Failed, "test command failed to start"};
     }
     if (code == 0) {
         return {GoalStatus::Achieved, "all tests pass"};
@@ -75,10 +208,13 @@ Verdict checker_tests(const AgentGoal& goal, const std::string& cwd) {
 }
 
 Verdict checker_build(const AgentGoal& goal, const std::string& cwd) {
-    const std::string cmd = goal.command.empty() ? kBuildCmd : goal.command;
+    const std::string cmd = guard_command(goal.command.empty() ? kBuildCmd : goal.command);
+    if (cmd.empty()) {
+        return {GoalStatus::Failed, "build command rejected (not in allowlist)"};
+    }
     const int code = run_exit_code(cmd, cwd);
     if (code < 0) {
-        return {GoalStatus::Failed, std::format("build command failed to start: {}", cmd)};
+        return {GoalStatus::Failed, "build command failed to start"};
     }
     if (code == 0) {
         return {GoalStatus::Achieved, "build clean (zero errors)"};
@@ -86,11 +222,19 @@ Verdict checker_build(const AgentGoal& goal, const std::string& cwd) {
     return {GoalStatus::Pending, std::format("build has errors (exit={})", code)};
 }
 
+namespace {
+/// @brief lint 默认命令（纯 echo 落 0 退出，避免含 shell 元字符的默认值过白名单）
+constexpr const char* kLintCmd = "echo 'no lint config'";
+}
+
 Verdict checker_lint(const AgentGoal& goal, const std::string& cwd) {
-    const std::string cmd = goal.command.empty() ? "echo 'no lint config'; exit 0" : goal.command;
+    const std::string cmd = guard_command(goal.command.empty() ? kLintCmd : goal.command);
+    if (cmd.empty()) {
+        return {GoalStatus::Failed, "lint command rejected (not in allowlist)"};
+    }
     const int code = run_exit_code(cmd, cwd);
     if (code < 0) {
-        return {GoalStatus::Failed, std::format("lint command failed to start: {}", cmd)};
+        return {GoalStatus::Failed, "lint command failed to start"};
     }
     if (code == 0) {
         return {GoalStatus::Achieved, "lint zero warnings"};
@@ -98,28 +242,64 @@ Verdict checker_lint(const AgentGoal& goal, const std::string& cwd) {
     return {GoalStatus::Pending, std::format("lint has warnings (exit={})", code)};
 }
 
-Verdict checker_file_exists(const AgentGoal& goal, const std::string& /*cwd*/) {
+Verdict checker_file_exists(const AgentGoal& goal, const std::string& cwd) {
     if (goal.path.empty()) {
         return {GoalStatus::Failed, "file_exists goal requires path"};
     }
+    // P2-1：路径规范化 + 隔离检查——把相对/绝对路径都解析为基于 cwd 的绝对形式，
+    //        再用"父子包含"判定是否逃逸出 cwd（防 file_exists:../../.ssh/id_rsa 探测
+    //        任意文件）。P2-3：路径大小写保持原名，不做 lowered。
     std::error_code ec;
-    const bool ok = std::filesystem::exists(goal.path, ec);
+    const fs::path base = fs::weakly_canonical(fs::path(cwd), ec);       // cwd 规范化
     if (ec) {
-        return {GoalStatus::Failed, std::format("cannot stat '{}': {}", goal.path, ec.message())};
+        return {GoalStatus::Failed, "cannot resolve working directory"};
+    }
+    // 绝对路径：按字面规范化（仍须落在 cwd 内才会通过父关系判定）
+    fs::path target = fs::path(goal.path);
+    if (target.is_relative()) {
+        target = base / target;
+    }
+    const fs::path canon = fs::weakly_canonical(target, ec);
+    if (ec) {
+        return {GoalStatus::Failed, sanitize_detail(std::format("cannot resolve path: {}", goal.path))};
+    }
+    // 判定 canon 是否在 base 子树内（自身或位于 base 之下）
+    const std::string base_s = base.lexically_normal().string();
+    const std::string canon_s = canon.lexically_normal().string();
+    bool inside = false;
+    if (!base_s.empty() && !canon_s.empty()) {
+        if (canon_s == base_s) {
+            inside = true;
+        } else {
+            const std::string prefix = base_s + std::string(1, fs::path::preferred_separator);
+            inside = canon_s.rfind(prefix, 0) == 0;
+        }
+    }
+    if (!inside) {
+        return {GoalStatus::Failed, "file_exists: path escapes working directory"};
+    }
+    const bool ok = fs::exists(canon, ec);
+    if (ec) {
+        return {GoalStatus::Failed, std::format("cannot stat target: {}", ec.message())};
     }
     if (ok) {
-        return {GoalStatus::Achieved, std::format("file exists: {}", goal.path)};
+        return {GoalStatus::Achieved, "file exists"};
     }
-    return {GoalStatus::Pending, std::format("file missing: {}", goal.path)};
+    return {GoalStatus::Pending, "file missing"};
 }
 
 Verdict checker_custom(const AgentGoal& goal, const std::string& cwd) {
     if (goal.command.empty()) {
         return {GoalStatus::Failed, "custom_script goal requires command"};
     }
-    const int code = run_exit_code(goal.command, cwd);
+    // P1-1：自定义命令同样受白名单约束
+    const std::string cmd = guard_command(goal.command);
+    if (cmd.empty()) {
+        return {GoalStatus::Failed, "custom script rejected (not in allowlist)"};
+    }
+    const int code = run_exit_code(cmd, cwd);
     if (code < 0) {
-        return {GoalStatus::Failed, std::format("custom script failed to start: {}", goal.command)};
+        return {GoalStatus::Failed, "custom script failed to start"};
     }
     if (code == 0) {
         return {GoalStatus::Achieved, "custom script exited 0"};
@@ -164,31 +344,34 @@ bool starts_with(std::string_view v, std::string_view prefix) noexcept {
 } // namespace
 
 AgentGoal parse_goal(std::string_view spec) noexcept {
-    const std::string v = trimmed_lower(spec);
+    // P2-3：类型前缀判定大小写不敏感（lowered_trim），但 file_exists:/cmd: 的
+    //       值用 trimmed 原文提取，保留文件路径 / 命令的原始大小写（Linux 需要）。
+    const std::string v_low = lowered_trim(spec);
     AgentGoal goal;
-    if (v.empty()) {
+    if (v_low.empty()) {
         return goal;  // None
     }
-    if (v == "tests_pass" || v == "tests" || v == "test" || v == "ctest") {
+    if (v_low == "tests_pass" || v_low == "tests" || v_low == "test" || v_low == "ctest") {
         goal.type = AgentGoal::TestsPass;
         return goal;
     }
-    if (v == "build_clean" || v == "build" || v == "compile") {
+    if (v_low == "build_clean" || v_low == "build" || v_low == "compile") {
         goal.type = AgentGoal::BuildClean;
         return goal;
     }
-    if (v == "lint_zero" || v == "lint") {
+    if (v_low == "lint_zero" || v_low == "lint") {
         goal.type = AgentGoal::LintZero;
         return goal;
     }
-    if (starts_with(v, "file_exists:")) {
+    if (starts_with(v_low, "file_exists:")) {
         goal.type = AgentGoal::FileExists;
-        goal.path = v.substr(std::string_view("file_exists:").size());
+        // 取值用原文（仅去掉原始首尾空白），保留大小写
+        goal.path = trimmed(spec).substr(std::string_view("file_exists:").size());
         return goal;
     }
-    if (starts_with(v, "cmd:")) {
+    if (starts_with(v_low, "cmd:")) {
         goal.type = AgentGoal::CustomScript;
-        goal.command = v.substr(std::string_view("cmd:").size());
+        goal.command = trimmed(spec).substr(std::string_view("cmd:").size());
         return goal;
     }
     // 无法识别 → None（不抛异常，避免配置错误崩会话）

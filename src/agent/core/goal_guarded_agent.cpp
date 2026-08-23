@@ -63,13 +63,30 @@ ReActResult GoalGuardedAgent::run(
         m_deps.event_bus->publish_async(std::move(event));
     };
 
+    // P1-2：check_goal 可能因 filesystem::exists / exec 抛异常，若沿调用链上抛
+    //        会直接崩掉整个会话（仅剩最外层 Fatal catch）。这里收敛为 Failed
+    //        Verdict，让 GoalGuarded 循环安全继续/退出，而不是带崩会话。
+    const auto safe_check_goal = [&](const AgentGoal& g, int attempt) -> Verdict {
+        Verdict v;
+        try {
+            v = check_goal(g, m_deps.cwd);
+        } catch (const std::exception& e) {
+            v = Verdict{GoalStatus::Failed, std::format("checker error: {}", e.what())};
+            LOG_ERROR("[goal_guarded] check_goal threw at attempt={}: {}", attempt, e.what());
+        } catch (...) {
+            v = Verdict{GoalStatus::Failed, "checker error: unknown exception"};
+            LOG_ERROR("[goal_guarded] check_goal threw unknown at attempt={}", attempt);
+        }
+        emit_verdict(v, attempt);
+        return v;
+    };
+
     // 无目标：退化为单轮 ReAct，直接返回（不循环）
     if (!goal.has_goal()) {
         return ReActLoopFactory::make_one_step(m_deps)->run(
             messages, system_prompt, tools_schema, should_cancel, observer);
     }
 
-    const std::string cwd = m_deps.cwd;
     ReActResult result;             // 累积：last 轮的步骤/token + 最终 final_answer
     bool achieved = false;
 
@@ -82,8 +99,7 @@ ReActResult GoalGuardedAgent::run(
         }
 
         // 先验：测试/文件类目标可能初始即达成，避免多余 ReAct
-        Verdict pre = check_goal(goal, cwd);
-        emit_verdict(pre, attempt);
+        Verdict pre = safe_check_goal(goal, attempt);
         if (pre.status == GoalStatus::Achieved) {
             result = ReActLoopFactory::make_one_step(m_deps)->run(  // 让 LLM 给结语
                 messages, system_prompt, tools_schema, should_cancel, observer);
@@ -98,14 +114,23 @@ ReActResult GoalGuardedAgent::run(
             messages, system_prompt, tools_schema, should_cancel, observer);
         result = step;  // 保留最后一轮（历史/token/步骤都挂到 result）
         if (step.was_interrupted || step.was_error) {
-            // 流式错误/中断：不重试，向上透传错误状态
+            // 流式错误/中断：不重试，向上透传错误状态。
+            // P2-4：此处 break 前也要记入调用链，避免 error/interrupt 场景下
+            //       tracker 只有 pre 记录而缺失终态（调用链断裂）。
             LOG_WARN("[goal_guarded] step error/interrupt, attempt={}", attempt);
+            if (m_deps.tracker) {
+                const std::string d = step.was_interrupted
+                    ? "interrupted before action completed"
+                    : step.error_message.empty()
+                        ? "agent step error"
+                        : step.error_message;
+                m_deps.tracker->record_verdict(GoalStatus::Failed, d);
+            }
             break;
         }
 
         // 观察后验证（关键：即使 LLM 主观 FinalAnswer 也算未达成）
-        Verdict post = check_goal(goal, cwd);
-        emit_verdict(post, attempt);
+        Verdict post = safe_check_goal(goal, attempt);
         if (post.status == GoalStatus::Achieved) {
             achieved = true;
             LOG_INFO("[goal_guarded] achieved after action, attempt={}", attempt);

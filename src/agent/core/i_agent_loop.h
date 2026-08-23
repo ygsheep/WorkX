@@ -25,13 +25,17 @@ namespace agent {
 
 /// @brief 一次 Agent 循环的输入（与 ChatSession run_completion 对齐）
 struct AgentRunContext {
-    std::vector<ChatMessage>* messages = nullptr;   ///< 会话历史（读写）
+    /// P2-5：裸指针仅作视图，不拥有；生命周期契约——
+    ///       调用方须保证该 vector 在 run() 返回前一直有效（含其内部元素），
+    ///       Agent 循环会在目标场景下往末尾追加"继续"提示，故不得为 const，
+    ///       且调用期间不能被并发改队列（由宿主持有消息锁）。
+    std::vector<ChatMessage>* messages = nullptr;   ///< 会话历史（读写，见上契约）
     std::string system_prompt;
     nlohmann::json tools_schema;
-    const std::atomic<bool>* should_cancel = nullptr;
+    const std::atomic<bool>* should_cancel = nullptr;  ///< 空 = 永不取消；须 run 期间有效
     AgentGoal goal;                                ///< 空 = 无目标守卫
     std::string goal_spec;                         ///< agent.goal 原文（展示/事件透传用）
-    IReActObserver* observer = nullptr;
+    IReActObserver* observer = nullptr;            ///< 空 = 不发布流式事件
 };
 
 /// @brief 一次 Agent 循环的结果

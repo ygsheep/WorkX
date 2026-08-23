@@ -171,3 +171,70 @@ TEST_CASE("verdict: 缺少验证器/错误配置 → Failed", "[agent][verify]")
     no_cmd.type = AgentGoal::CustomScript;
     REQUIRE(check_goal(no_cmd, ".").status == GoalStatus::Failed);
 }
+
+// ============================================================
+// P1-1 / P2-1 安全加固验证（review R1 注入场景）
+// ============================================================
+
+TEST_CASE("P1-1: 白名单外的危险命令被拒绝执行", "[agent][verify][security]") {
+    const std::string dir = test_dir();
+    fs::create_directories(dir);
+
+    // rm -rf /：不在白名单 → 直接拒绝，不得执行
+    AgentGoal rm;
+    rm.type = AgentGoal::CustomScript;
+    rm.command = "rm -rf /";
+    Verdict v_rm = check_goal(rm, dir);
+    REQUIRE(v_rm.status == GoalStatus::Failed);
+    REQUIRE(v_rm.detail.find("rejected") != std::string::npos);  // 提示被拒绝
+
+    // del / s 等 Windows 危险命令同理
+    AgentGoal del;
+    del.type = AgentGoal::CustomScript;
+    del.command = "del /f /q C:\\";
+    Verdict v_del = check_goal(del, dir);
+    REQUIRE(v_del.status == GoalStatus::Failed);
+
+    fs::remove_all(dir);
+}
+
+TEST_CASE("P1-1: 白名单内命令仍可执行", "[agent][verify][security]") {
+    const std::string dir = test_dir();
+    fs::create_directories(dir);
+#ifdef _WIN32
+    const std::string ok_cmd = "cmd /C exit 0";   // 包装 shell 褪去后落点 exit ∈ whitelist
+#else
+    const std::string ok_cmd = "true";
+#endif
+    AgentGoal ok;
+    ok.type = AgentGoal::CustomScript;
+    ok.command = ok_cmd;
+    REQUIRE(check_goal(ok, dir).status == GoalStatus::Achieved);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("P2-1: file_exists 路径逃逸目录被拒绝", "[agent][verify][security]") {
+    const std::string dir = test_dir();
+    fs::create_directories(dir);
+    // 逃逸 cwd 的路径（不管文件是否存在）→ 一律 Failed，防任意文件探测
+    AgentGoal escape;
+    escape.type = AgentGoal::FileExists;
+    escape.path = "../../.ssh/id_rsa";   // 相对逃逸
+    REQUIRE(check_goal(escape, dir).status == GoalStatus::Failed);
+    // 绝对路径但指向 cwd 外
+    AgentGoal abs_escape;
+    abs_escape.type = AgentGoal::FileExists;
+    abs_escape.path = "/etc/passwd";
+    REQUIRE(check_goal(abs_escape, dir).status == GoalStatus::Failed);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("P2-3: file_exists 路径保留原始大小写", "[agent][goal][verify]") {
+    // 前缀大小写不敏感，但路径值大小写原样保留（P2-3）
+    AgentGoal g_mixed = parse_goal("FILE_EXISTS:Algo.Txt");
+    REQUIRE(g_mixed.type == AgentGoal::FileExists);
+    REQUIRE(g_mixed.path == "Algo.Txt");
+    AgentGoal g_cmd = parse_goal("CMD:ctest --output-on-failure");
+    REQUIRE(g_cmd.type == AgentGoal::CustomScript);
+    REQUIRE(g_cmd.command == "ctest --output-on-failure");
+}
