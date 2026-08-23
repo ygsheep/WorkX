@@ -80,6 +80,20 @@ CURLSH* shared_curl_share() {
     return sh;
 }
 
+/// @brief 限制允许的协议（含重定向），兼容新旧 curl
+/// @details libcurl 7.85.0 起 CURLOPT_PROTOCOLS/REDIR_PROTOCOLS 被弃用，
+///          改用 *_STR 字符串形式；按编译期版本选择，避免 -Werror 下
+///          -Wdeprecated-declarations 升级为错误导致 Linux 编译失败。
+void restrict_allowed_protocols(CURL* curl) {
+#if LIBCURL_VERSION_NUM >= 0x075500   // 7.85.0
+    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+    curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
+#else
+    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+    curl_easy_setopt(curl, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+#endif
+}
+
 } // anonymous namespace
 
 // ============================================================
@@ -228,10 +242,7 @@ ResultV2<HttpResponse> HttpClient::get(const std::string& url,
     if (m_block_private_ips) {
         curl_easy_setopt(curl, CURLOPT_OPENSOCKETFUNCTION, ssrf_opensocket_cb);
         curl_easy_setopt(curl, CURLOPT_OPENSOCKETDATA, nullptr);
-        curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS,
-                         CURLPROTO_HTTP | CURLPROTO_HTTPS);
-        curl_easy_setopt(curl, CURLOPT_PROTOCOLS,
-                         CURLPROTO_HTTP | CURLPROTO_HTTPS);
+        restrict_allowed_protocols(curl);
     }
 
     struct curl_slist* hl = nullptr;
@@ -322,10 +333,7 @@ ResultV2<HttpResponse> HttpClient::post(
     if (m_block_private_ips) {
         curl_easy_setopt(curl, CURLOPT_OPENSOCKETFUNCTION, ssrf_opensocket_cb);
         curl_easy_setopt(curl, CURLOPT_OPENSOCKETDATA, nullptr);
-        curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS,
-                         CURLPROTO_HTTP | CURLPROTO_HTTPS);
-        curl_easy_setopt(curl, CURLOPT_PROTOCOLS,
-                         CURLPROTO_HTTP | CURLPROTO_HTTPS);
+        restrict_allowed_protocols(curl);
     }
 
     struct curl_slist* hl = nullptr;
@@ -421,10 +429,7 @@ public:
         if (block_private_ips) {
             curl_easy_setopt(m_curl, CURLOPT_OPENSOCKETFUNCTION, ssrf_opensocket_cb);
             curl_easy_setopt(m_curl, CURLOPT_OPENSOCKETDATA, nullptr);
-            curl_easy_setopt(m_curl, CURLOPT_REDIR_PROTOCOLS,
-                             CURLPROTO_HTTP | CURLPROTO_HTTPS);
-            curl_easy_setopt(m_curl, CURLOPT_PROTOCOLS,
-                             CURLPROTO_HTTP | CURLPROTO_HTTPS);
+            restrict_allowed_protocols(m_curl);
         }
 
         for (const auto& [k, v] : headers)
