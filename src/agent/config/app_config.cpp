@@ -172,6 +172,41 @@ void register_config_defaults(ConfigManager& cfg) {
         .type = ConfigSchema::Type::String,
         .env_var = "WORKX_LOG_FILE"
     });
+    cfg.register_schema({
+        .key = keys::LOG_RETENTION_DAYS,
+        .description = "Retention days for run logs (0 = keep all)",
+        .default_value = 7,
+        .type = ConfigSchema::Type::Int,
+        .int_range = std::make_pair<int64_t, int64_t>(0, 3650)
+    });
+
+    // === Audit（#37 审计日志：大小轮转 + 天数清理）===
+    cfg.register_schema({
+        .key = keys::AUDIT_ENABLED,
+        .description = "Enable audit logging (tool invoke / security events)",
+        .default_value = true,
+        .type = ConfigSchema::Type::Bool
+    });
+    cfg.register_schema({
+        .key = keys::AUDIT_FILE,
+        .description = "Audit log file path (empty = logs/audit.jsonl)",
+        .default_value = std::string(""),
+        .type = ConfigSchema::Type::String
+    });
+    cfg.register_schema({
+        .key = keys::AUDIT_MAX_SIZE_MB,
+        .description = "Audit log rotation size in MB",
+        .default_value = 10,
+        .type = ConfigSchema::Type::Int,
+        .int_range = std::make_pair<int64_t, int64_t>(1, 1024)
+    });
+    cfg.register_schema({
+        .key = keys::AUDIT_RETENTION_DAYS,
+        .description = "Audit log retention days (rotated files)",
+        .default_value = 30,
+        .type = ConfigSchema::Type::Int,
+        .int_range = std::make_pair<int64_t, int64_t>(1, 3650)
+    });
 
     // === Tool — FileReadTool ===
     cfg.register_schema({
@@ -322,6 +357,41 @@ std::filesystem::path default_log_path() {
 // 所有构建（Debug/Release）：日志统一写入用户配置目录 ~/.workx/logs/
     // 便于在多启动实例间集中管理日志，避免散落于 exe 同目录
     return get_config_dir() / "logs" / log_filename;
+}
+
+std::filesystem::path log_dir() {
+    return get_config_dir() / "logs";
+}
+
+void cleanup_expired_logs(int retention_days) {
+    if (retention_days <= 0) return;
+
+    std::error_code ec;
+    auto dir = get_config_dir() / "logs";
+    if (!std::filesystem::is_directory(dir, ec)) return;
+
+    auto now = std::chrono::system_clock::now();
+    auto cutoff = now - std::chrono::hours(24LL * retention_days);
+
+    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+        if (ec) break;
+        if (!entry.is_regular_file()) continue;
+
+        // 仅清理运行日志 workx_*.log，不影响 audit.jsonl / crash.log / codex_run.log
+        const std::string name = entry.path().filename().string();
+        if (name.rfind("workx_", 0) != 0 || name.size() < 5 ||
+            name.compare(name.size() - 4, 4, ".log") != 0) {
+            continue;
+        }
+
+        auto mtime = std::filesystem::last_write_time(entry.path(), ec);
+        if (ec) continue;
+        auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+            mtime - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
+        if (sctp < cutoff) {
+            std::filesystem::remove(entry.path(), ec);
+        }
+    }
 }
 
 } // namespace agent
