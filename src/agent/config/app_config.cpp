@@ -156,6 +156,15 @@ void register_config_defaults(ConfigManager& cfg) {
         .type = ConfigSchema::Type::String
     });
 
+    // 0.6.x：#31 目标导向 Agent 的目标声明（agent.active=goal-guarded/verify 时生效）
+    cfg.register_schema({
+        .key = keys::AGENT_GOAL,
+        .description = "Goal for goal-guarded agent: tests_pass / build_clean / "
+                       "lint_zero / file_exists:<path> / cmd:<command> (empty = no goal)",
+        .default_value = std::string(""),
+        .type = ConfigSchema::Type::String
+    });
+
     // === Logging ===
     cfg.register_schema({
         .key = keys::LOG_LEVEL,

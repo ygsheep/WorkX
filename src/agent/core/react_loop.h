@@ -25,6 +25,7 @@
 #include "agent/tool/registry.h"
 #include "agent/tool/executor.h"
 #include "agent/tool/context.h"
+#include "agent/core/goal_verdict.h"  // GoalStatus（#31：目标导向 Agent 结果）
 
 namespace agent {
 
@@ -119,6 +120,9 @@ struct ReActResult {
     bool was_interrupted = false;                 ///< 用户中断
     bool was_error = false;                       ///< 发生错误（流式错误/提交失败/超迭代数）
     std::string error_message;                    ///< 错误信息（was_error=true 时有效）
+
+    // --- 0.6.x：#31 目标验证状态（普通对话恒为 Unknown）---
+    GoalStatus goal_status = GoalStatus::Unknown;
 
     // --- 部分输出（中断/错误时可能有部分内容）---
     std::string partial_content;                  ///< 中断时的部分文本

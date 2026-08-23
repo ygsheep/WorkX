@@ -117,6 +117,11 @@ target_sources(workx_agent PRIVATE
     # core
     core/chat_session.cpp
     core/react_loop.cpp
+    core/agent_type.cpp      # 0.6.x：AgentType 枚举 + 别名解析
+    core/verdict.cpp         # 0.6.x：#31 目标验证器（verdict.h）
+    core/goal_guarded_agent.cpp  # 0.6.x：#31 目标导向 Agent（goal_guarded_agent.h）
+    core/agent_loop_adapters.cpp # 0.6.x：#33 IAgentLoop 适配器（ReActAdapter / GoalGuardedAdapter）
+    core/query_engine.cpp    # 0.6.x：QueryEngine 编排器落地（query_engine.h）
 
     # session
     session/session_store.cpp

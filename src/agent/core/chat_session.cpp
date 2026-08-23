@@ -8,6 +8,8 @@
 
 #include "agent/core/chat_session.h"
 #include "agent/core/react_loop.h"
+#include "agent/core/agent_type.h"          // 0.6.x：#31 AgentType 路由
+#include "agent/core/goal_guarded_agent.h"  // 0.6.x：#31 GoalGuardedAgent + parse_goal
 #include "agent/message/types.h"
 #include "agent/tool/tool_kind.h"
 #include "agent/tool/TodoStore/todo_store.h"  // #24：待办清单持久化接线
@@ -911,6 +913,14 @@ void ChatSession::run_completion(const std::string& user_text,
             // ReActEventPublisher 内部完成 ReActStep → IEventBus 事件转换
             ReActEventPublisher publisher(m_event_bus, m_session_id);
 
+            // ---- 0.6.x：#31 目标导向 Agent 路由 ----
+            // agent.active 解析为 GoalGuarded 时，用 GoalGuardedAgent 驱动；
+            // 否则走现有 ReActLoop（普通对话，行为不变）。目标来自 agent.goal。
+            const auto active_agent_conf =
+                m_config_manager.get().get_or<std::string>(agent::keys::AGENT_ACTIVE, "");
+            const bool is_goal_guarded =
+                parse_agent_type(active_agent_conf) == agent::AgentType::GoalGuarded;
+
             // ---- DS_CACHE: 捕获前缀形状（用于本轮结束后的缓存劣化归因）----
             // H-2：cur_shape 在 run() 后二次捕获，以传入压缩器 rewrite_version。
             //      prev_shape 从上一轮 m_last_prefix_shape 读取（含上轮的 rewrite_version）。
@@ -929,11 +939,34 @@ void ChatSession::run_completion(const std::string& user_text,
                 m_last_prefix_shape = cur_shape_baseline;
             }
 
-            // ---- 执行 ReAct 循环 ----
-            ReActResult react_result = loop.run(
-                m_messages, m_system_prompt, tools_schema,
-                should_cancel, &publisher
-            );
+            // ---- 执行 Agent 循环（ReAct 或 GoalGuarded）----
+            ReActResult react_result;
+            if (is_goal_guarded) {
+                // 目标导向：以目标达成为终止条件。依赖注入与上方 ReActLoop 同源
+                // （provider/compactor/event_bus 跨轮持久）。
+                GoalAgentDeps gdeps{
+                    .provider = m_provider.get(),
+                    .registry = m_tool_registry,
+                    .config_manager = &m_config_manager.get(),
+                    .task_manager = &m_task_manager.get(),
+                    .cwd = m_cwd,
+                    .external_compactor = &m_compactor,
+                    .event_bus = &m_event_bus.get(),
+                    .touch_collector = &m_touch_collector,
+                    .file_index_invalidator = m_file_index_invalidator,
+                    .session_id = m_session_id,
+                };
+                const auto goal_spec =
+                    m_config_manager.get().get_or<std::string>(agent::keys::AGENT_GOAL, "");
+                GoalGuardedAgent ga(std::move(gdeps));
+                react_result = ga.run(
+                    m_messages, m_system_prompt, tools_schema,
+                    should_cancel, parse_goal(goal_spec), &publisher);
+            } else {
+                react_result = loop.run(
+                    m_messages, m_system_prompt, tools_schema,
+                    should_cancel, &publisher);
+            }
 
             // 思考时长回填：reasoning_ms（本 turn 所有 Thought 阶段实际耗时）仅在流式结束后可知，
             // 持久化前回填到本轮最后一条 assistant 消息（写入 JSONL 的 reasoningMs 字段）
