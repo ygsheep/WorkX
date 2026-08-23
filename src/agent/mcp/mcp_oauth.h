@@ -60,7 +60,9 @@ public:
 
     /// @brief 用授权码换取 token（authorization_code 流程）
     /// @param code 回调收到的授权码
-    ResultV2<void> exchange_code(const std::string& code);
+    /// @param state 回调收到的 state；必须与 build_authorization_url 生成的一致，
+    ///              否则拒绝（RFC 6749 10.12 CSRF 防护）
+    ResultV2<void> exchange_code(const std::string& code, const std::string& state);
 
     bool configured() const { return m_configured; }
 
@@ -83,12 +85,18 @@ private:
     bool m_configured = false;
 };
 
-/// @brief 在回环地址监听一次 HTTP 回调，提取授权码（authorization_code 流程）
+/// @brief 回环回调解析结果（authorization_code 流程）
+struct OAuthCallback {
+    std::string code;   ///< 授权码
+    std::string state;  ///< CSRF state（须与发起授权时一致）
+};
+
+/// @brief 在回环地址监听一次 HTTP 回调，提取授权码与 state（authorization_code 流程）
 /// @param port 监听端口（0=自动分配，经 out_port 返回实际端口）
 /// @param out_port 输出实际监听端口（port=0 时）
 /// @param timeout_ms 等待超时（毫秒）
-/// @return ok: 提取到授权码；err: 超时/监听失败
+/// @return ok: 回调参数（code + state）；err: 超时/监听失败
 /// @details 返回前已向浏览器返回成功页面并关闭连接。
-ResultV2<std::string> oauth_loopback_listen(int port, int& out_port, int timeout_ms);
+ResultV2<OAuthCallback> oauth_loopback_listen(int port, int& out_port, int timeout_ms);
 
 } // namespace agent::mcp

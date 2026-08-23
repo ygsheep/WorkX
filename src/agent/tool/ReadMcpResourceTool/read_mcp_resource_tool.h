@@ -32,6 +32,12 @@ public:
         const ToolContext& ctx
     ) const override;
 
+    /// @brief 读取外部 MCP 资源需用户确认（P2-7：Default 模式不静默读取）
+    PermissionResult check_permissions(
+        const nlohmann::json& input,
+        const ToolContext& ctx
+    ) const override;
+
 private:
     std::shared_ptr<mcp::McpClientManager> m_manager;
 };

@@ -196,7 +196,53 @@ TEST_CASE("ReadMcpResourceTool 未连接 server 返回 ResourceNotFound", "[mcp_
     ReadMcpResourceTool tool(manager);
     ToolContext ctx;
     make_ctx(ctx);
-    auto result = tool.call(R"({"server":"ghost","uri":"file:///x"})"_json, ctx);
+    auto result = tool.call(R"({"server":"ghost","uri":"https://example.com/resource"})"_json, ctx);
     REQUIRE(result.is_err());
     REQUIRE(result.error().code == Error::Code::ResourceNotFound);
+}
+
+TEST_CASE("ReadMcpResourceTool 危险 URI 拒绝（SSRF/本地文件）", "[mcp_resource][call][ssrf]") {
+    auto manager = std::make_shared<mcp::McpClientManager>();
+    ReadMcpResourceTool tool(manager);
+    ToolContext ctx;
+    make_ctx(ctx);
+
+    // file:// 本地文件读取
+    auto file_uri = tool.call(R"({"server":"ghost","uri":"file:///etc/passwd"})"_json, ctx);
+    REQUIRE(file_uri.is_err());
+    REQUIRE(file_uri.error().code == Error::Code::PermissionDenied);
+
+    // gopher:// 内网探测
+    auto gopher_uri = tool.call(R"({"server":"ghost","uri":"gopher://169.254.169.254:80/"})"_json, ctx);
+    REQUIRE(gopher_uri.is_err());
+    REQUIRE(gopher_uri.error().code == Error::Code::PermissionDenied);
+
+    // 内网 http 地址（SSRF）
+    auto private_uri = tool.call(R"({"server":"ghost","uri":"http://169.254.169.254/latest/meta-data/"})"_json, ctx);
+    REQUIRE(private_uri.is_err());
+    REQUIRE(private_uri.error().code == Error::Code::PermissionDenied);
+}
+
+TEST_CASE("ReadMcpResourceTool check_permissions（P2-7）", "[mcp_resource][perm]") {
+    auto manager = std::make_shared<mcp::McpClientManager>();
+    ReadMcpResourceTool tool(manager);
+
+    // Bypass 模式放行
+    ToolContext ctx_bypass;
+    make_ctx(ctx_bypass, PermissionMode::BypassPermissions);
+    auto bypass = tool.check_permissions(
+        R"({"server":"ghost","uri":"https://example.com/r"})"_json, ctx_bypass);
+    REQUIRE(bypass.is_ok());
+
+    // Default 模式无确认通道 → fail-closed 拒绝
+    ToolContext ctx;
+    make_ctx(ctx);
+    auto denied = tool.check_permissions(
+        R"({"server":"ghost","uri":"https://example.com/r"})"_json, ctx);
+    REQUIRE(denied.is_err());
+    REQUIRE(denied.error().code == Error::Code::PermissionDenied);
+
+    // 缺 server 放行
+    auto no_server = tool.check_permissions(R"({"uri":"https://example.com/r"})"_json, ctx);
+    REQUIRE(no_server.is_ok());
 }

@@ -118,6 +118,29 @@ ResultV2<ToolResult> MCPTool::call(
             }());
     }
 
+    // P1-6：工具存在性校验（LLM 可能调用已移除/隐藏的工具）
+    if (!m_manager->has_tool(server, tool)) {
+        return ResultV2<ToolResult>::err(
+            Error::Code::ResourceNotFound,
+            "MCP server '" + server + "' 未暴露工具 '" + tool + "'",
+            "可用工具: " + [this, server] {
+                std::string names;
+                for (const auto& n : m_manager->server_names()) {
+                    (void)n;
+                }
+                if (auto c = m_manager->get_client(server)) {
+                    auto tools = c->list_tools();
+                    if (tools.is_ok()) {
+                        for (const auto& t : tools.value()) {
+                            if (!names.empty()) names += ", ";
+                            names += t.name;
+                        }
+                    }
+                }
+                return names.empty() ? "无" : names;
+            }());
+    }
+
     auto result = client->call_tool(tool, args);
     if (result.is_err()) {
         return ResultV2<ToolResult>::err(

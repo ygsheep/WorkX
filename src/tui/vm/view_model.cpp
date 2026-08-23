@@ -352,17 +352,16 @@ bool ViewModel::apply_variant(const ActionTodoUpdate& a) {
 }
 
 bool ViewModel::apply_variant(const ActionMcpStatus& a) {
-    // 格式化为侧栏条目：`name · protocol · N 工具`
-    std::vector<std::string> lines;
-    lines.reserve(a.servers.size());
+    // 结构化存储：状态点 + 失败错误信息（#27 M4）
+    std::vector<McpServerEntry> entries;
+    entries.reserve(a.servers.size());
     for (const auto& s : a.servers) {
-        std::string line = s.name;
-        if (!s.protocol.empty()) line += " · " + s.protocol;
-        if (s.tool_count > 0) line += " · " + std::to_string(s.tool_count) + " 工具";
-        lines.push_back(std::move(line));
+        entries.push_back(McpServerEntry{
+            s.name, s.protocol, s.tool_count, s.state, s.error,
+        });
     }
-    if (sidebar.mcp_servers == lines) return false;  // 无变化，避免无谓重绘
-    sidebar.mcp_servers = std::move(lines);
+    if (sidebar.mcp_servers == entries) return false;  // 无变化，避免无谓重绘
+    sidebar.mcp_servers = std::move(entries);
     return true;
 }
 

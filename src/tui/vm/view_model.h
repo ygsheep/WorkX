@@ -19,6 +19,16 @@
 
 namespace ftxtui {
 
+/// @brief MCP server 侧栏条目（#27 M4：状态点 + 失败错误信息）
+struct McpServerEntry {
+    std::string name;       ///< server 名
+    std::string protocol;   ///< 协商协议版本（"2026-07-28" / "2025-11-25"）
+    int tool_count = 0;     ///< 已预取工具数
+    int state = 0;          ///< 0=连接中 1=已连接 2=失败
+    std::string error;      ///< 失败原因（state==2 时）
+    bool operator==(const McpServerEntry&) const = default;
+};
+
 /// @brief 侧栏模型
 struct SidebarModel {
     std::string title;          ///< 会话标题
@@ -40,8 +50,8 @@ struct SidebarModel {
     int32_t cache_hit_tokens = 0;   ///< DS 缓存命中 token（累计）
     int32_t cache_miss_tokens = 0;  ///< DS 缓存未命中 token（累计）
 
-    // 3.2 MCP 列表（agent 侧未实现，预留接口；当前为空）
-    std::vector<std::string> mcp_servers;
+    // 3.2 MCP 列表（#27 M4：后台连接状态驱动，含状态点 + 失败错误信息）
+    std::vector<McpServerEntry> mcp_servers;
     // 3.3 TODO 列表（#24：TodoStore 事件驱动，含状态供图标渲染）
     std::vector<core::todo::TodoItem> todos;
     // 可折叠区块展开状态（MCP / TODO 标题行点击切换）

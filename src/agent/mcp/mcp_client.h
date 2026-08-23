@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <map>
 #include <memory>
@@ -98,7 +99,7 @@ private:
     std::unique_ptr<McpTransport> m_transport;
     std::string m_name;
     std::string m_protocol_version;
-    bool m_connected = false;
+    std::atomic<bool> m_connected{false};  ///< 跨线程读写（P2-6 数据竞争防护）
     bool m_stateless = false;  ///< 2.0 无状态模式（每请求 _meta 带版本）
     int m_next_id = 1;
     /// @brief 2.0 响应缓存（key = method|params，TTL 过期自动失效）

@@ -42,6 +42,14 @@ bool is_unsupported_protocol_version(const nlohmann::json& err) {
         || message.find("protocolVersion") != std::string::npos;
 }
 
+/// @brief 是否受支持的 MCP 协议版本（P2-8：拒绝未知/降级版本）
+bool is_supported_protocol_version(const std::string& v) {
+    return v == kProtocolVersion2026_07_28
+        || v == kProtocolVersion2025_11_25
+        || v == kProtocolVersion2025_03_26
+        || v == kProtocolVersion2024_11_05;
+}
+
 } // anonymous namespace
 
 McpClient::McpClient() = default;
@@ -64,7 +72,14 @@ ResultV2<void> McpClient::connect(const McpServerConfig& cfg, int timeout_ms) {
     auto discover = raw_request("server/discover", nlohmann::json::object(), timeout_ms);
     if (discover.is_ok() && !discover.value().contains("error")) {
         const auto& result = discover.value().value("result", nlohmann::json::object());
-        m_protocol_version = result.value("protocolVersion", kProtocolVersion2026_07_28);
+        const std::string ver = result.value("protocolVersion", kProtocolVersion2026_07_28);
+        if (!is_supported_protocol_version(ver)) {
+            m_transport->stop();
+            m_transport.reset();
+            return ResultV2<void>::err(Error::Code::NetworkDisconnected,
+                "MCP server 返回不支持的协议版本: " + ver, "McpClient::connect");
+        }
+        m_protocol_version = ver;
         m_stateless = true;
         m_connected = true;
         return ResultV2<void>::ok();
@@ -75,7 +90,14 @@ ResultV2<void> McpClient::connect(const McpServerConfig& cfg, int timeout_ms) {
     for (const char* version : versions) {
         auto init = do_initialize(version, timeout_ms);
         if (init.is_ok()) {
-            m_protocol_version = init.value().value("protocolVersion", version);
+            const std::string ver = init.value().value("protocolVersion", version);
+            if (!is_supported_protocol_version(ver)) {
+                m_transport->stop();
+                m_transport.reset();
+                return ResultV2<void>::err(Error::Code::NetworkDisconnected,
+                    "MCP server 返回不支持的协议版本: " + ver, "McpClient::connect");
+            }
+            m_protocol_version = ver;
             m_stateless = false;
             m_connected = true;
             (void)notify("notifications/initialized", nlohmann::json::object());

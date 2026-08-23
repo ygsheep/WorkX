@@ -17,9 +17,37 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 
+#include "liblogger/logger.h"
+
 namespace agent::mcp {
 
 namespace {
+
+/// @brief 校验 stdio command 安全性（P1-4 命令注入防护）
+/// @details 拒绝控制字符与相对路径穿越（../、./）；允许裸命令名（PATH 解析，
+///          如 npx/python）与绝对路径。参数由 CreateProcessW/execvp 直接传入，
+///          不经 shell，故仅需拦截控制字符与路径穿越。
+bool is_safe_stdio_command(const std::string& cmd) {
+    if (cmd.empty()) return false;
+    for (unsigned char c : cmd) {
+        if (c < 0x20 || c == 0x7F) return false;  // 控制字符（含换行/制表符）
+    }
+    // 相对路径穿越（POSIX / Windows 分隔符）
+    if (cmd.find("../") != std::string::npos ||
+        cmd.find("..\\") != std::string::npos ||
+        cmd.starts_with("./") || cmd.starts_with(".\\")) {
+        return false;
+    }
+    return true;
+}
+
+/// @brief 校验 stdio 参数安全性：仅拦截控制字符（换行等）
+bool is_safe_stdio_arg(const std::string& arg) {
+    for (unsigned char c : arg) {
+        if (c < 0x20 || c == 0x7F) return false;
+    }
+    return true;
+}
 
 /// 解析单个 server 条目；无效条目返回 false
 bool parse_one_server(const std::string& name, const nlohmann::json& obj,
@@ -31,9 +59,16 @@ bool parse_one_server(const std::string& name, const nlohmann::json& obj,
     // stdio：command + args + env
     if (obj.contains("command") && obj.at("command").is_string()) {
         out.command = obj.at("command").get<std::string>();
+        if (!is_safe_stdio_command(out.command)) {
+            return false;  // 命令含控制字符/路径穿越，拒绝该条目
+        }
         if (obj.contains("args") && obj.at("args").is_array()) {
             for (const auto& a : obj.at("args")) {
-                if (a.is_string()) out.args.push_back(a.get<std::string>());
+                if (a.is_string()) {
+                    const std::string arg = a.get<std::string>();
+                    if (!is_safe_stdio_arg(arg)) return false;
+                    out.args.push_back(arg);
+                }
             }
         }
         if (obj.contains("env") && obj.at("env").is_object()) {
@@ -46,9 +81,9 @@ bool parse_one_server(const std::string& name, const nlohmann::json& obj,
         return out.valid();
     }
 
-    // http：type=http + url + headers
-    const std::string type = obj.value("type", "");
-    if (type == "http" && obj.contains("url") && obj.at("url").is_string()) {
+    // http：url（type=http 或省略 type 均可，兼容仅写 url 的配置）
+    // 注意：command 优先（stdio）；仅含 url 时视为 http 传输
+    if (obj.contains("url") && obj.at("url").is_string()) {
         out.url = obj.at("url").get<std::string>();
         if (obj.contains("headers") && obj.at("headers").is_object()) {
             for (auto it = obj.at("headers").begin(); it != obj.at("headers").end(); ++it) {
@@ -122,6 +157,12 @@ ResultV2<std::vector<McpServerConfig>> load_mcp_configs(
     auto project_result = load_from_file(cwd / ".mcp.json");
     if (project_result.is_err()) return project_result;
     for (auto& cfg : project_result.value()) {
+        // P2-4：项目级配置禁止启用 allowPrivate（防恶意仓库静默禁用 SSRF 防护）
+        if (cfg.allow_private) {
+            LOG_WARN("[mcp] 项目级 .mcp.json 为 server '{}' 设置 allowPrivate=true，"
+                     "已忽略（仅用户级配置可启用）", cfg.name);
+            cfg.allow_private = false;
+        }
         bool replaced = false;
         for (auto& existing : merged) {
             if (existing.name == cfg.name) {

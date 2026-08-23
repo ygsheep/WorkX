@@ -17,7 +17,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
-#include <random>
+#include <vector>
 
 #include "agent/compact/sha256.h"
 
@@ -27,8 +27,11 @@
 #endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <bcrypt.h>
 #pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "bcrypt.lib")
 #else
+#define _DEFAULT_SOURCE  // getentropy
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -38,6 +41,61 @@
 namespace agent::mcp {
 
 namespace {
+
+/// @brief 平台 CSPRNG 填充缓冲区（Windows BCryptGenRandom / POSIX getentropy）
+/// @return false 表示 CSPRNG 不可用（调用方应拒绝生成安全随机数）
+bool fill_random_bytes(uint8_t* buf, size_t n) {
+#ifdef _WIN32
+    return BCryptGenRandom(nullptr, buf, static_cast<ULONG>(n),
+                           BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0;
+#else
+    // getentropy 单次上限 256 字节，循环填充
+    size_t done = 0;
+    while (done < n) {
+        const size_t chunk = std::min<size_t>(n - done, 256);
+        if (getentropy(buf + done, chunk) != 0) return false;
+        done += chunk;
+    }
+    return true;
+#endif
+}
+
+/// @brief URL 解码（%XX → 字节；+ → 空格）
+std::string url_decode(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '%' && i + 2 < s.size()) {
+            auto hex = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                return -1;
+            };
+            const int hi = hex(s[i + 1]);
+            const int lo = hex(s[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out += static_cast<char>((hi << 4) | lo);
+                i += 2;
+                continue;
+            }
+        }
+        out += s[i] == '+' ? ' ' : s[i];
+    }
+    return out;
+}
+
+/// @brief 是否回环主机（127.0.0.1 / localhost / ::1 / [::1]）
+bool is_loopback_host(const std::string& host) {
+    if (host == "localhost") return true;
+    std::string h = host;
+    if (h.size() >= 2 && h.front() == '[' && h.back() == ']') {
+        h = h.substr(1, h.size() - 2);
+    }
+    if (h == "::1") return true;
+    if (h.rfind("127.", 0) == 0) return true;
+    return false;
+}
 
 /// @brief 从 JSON 响应解析 token 字段并填充成员
 /// @return ok: 已填充；err: 响应缺少 access_token
@@ -67,6 +125,24 @@ ResultV2<void> McpOAuthClient::configure(const McpOAuthConfig& cfg) {
             "OAuth 配置无效：需要 tokenEndpoint + clientId"
             "（authorization_code 还需 authEndpoint）",
             "McpOAuthClient::configure");
+    }
+    // P2-1：redirect_uri 必须为回环地址（授权码经本地回调，防泄露到外部）
+    if (cfg.flow == "authorization_code" && !cfg.redirect_uri.empty()) {
+        const auto purl = HttpClient::parse_url(cfg.redirect_uri);
+        if (purl.host.empty() || !is_loopback_host(purl.host)) {
+            return ResultV2<void>::err(Error::Code::ConfigInvalid,
+                "OAuth redirect_uri 必须为回环地址（127.0.0.1/localhost/::1）",
+                "redirect_uri=" + cfg.redirect_uri);
+        }
+    }
+    // P2-3：token_endpoint 必须 HTTPS（回环地址允许 http，用于本地测试）
+    {
+        const auto purl = HttpClient::parse_url(cfg.token_endpoint);
+        if (purl.scheme != "https" && !is_loopback_host(purl.host)) {
+            return ResultV2<void>::err(Error::Code::ConfigInvalid,
+                "OAuth token_endpoint 必须使用 HTTPS（回环地址除外）",
+                "token_endpoint=" + cfg.token_endpoint);
+        }
     }
     m_cfg = cfg;
     m_configured = true;
@@ -137,10 +213,17 @@ ResultV2<std::string> McpOAuthClient::build_authorization_url() {
     return ResultV2<std::string>::ok(std::move(url));
 }
 
-ResultV2<void> McpOAuthClient::exchange_code(const std::string& code) {
+ResultV2<void> McpOAuthClient::exchange_code(const std::string& code,
+                                             const std::string& state) {
     if (!m_configured || m_cfg.flow != "authorization_code") {
         return ResultV2<void>::err(Error::Code::ConfigInvalid,
             "authorization_code 流程未配置", "McpOAuthClient::exchange_code");
+    }
+    // RFC 6749 10.12：state 必须与发起授权时一致，否则拒绝（CSRF 防护）
+    if (m_state.empty() || state != m_state) {
+        return ResultV2<void>::err(Error::Code::PermissionDenied,
+            "OAuth 回调 state 不匹配，拒绝换取 token（可能的 CSRF 攻击）",
+            "McpOAuthClient::exchange_code");
     }
     return fetch_token("authorization_code", {
         {"code", code},
@@ -219,12 +302,23 @@ std::string McpOAuthClient::url_encode(const std::string& s) {
 std::string McpOAuthClient::random_string(size_t n) {
     static const char* chars =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<size_t> dist(0, std::strlen(chars) - 1);
+    const size_t chars_len = std::strlen(chars);
+    // 拒绝采样消除取模偏差（chars_len=66 不整除 256）
+    const uint8_t limit = static_cast<uint8_t>(256 - (256 % chars_len));
+    std::vector<uint8_t> buf(n * 2);  // 预留余量，避免频繁重填
+    if (!fill_random_bytes(buf.data(), buf.size())) return {};
     std::string out;
     out.reserve(n);
-    for (size_t i = 0; i < n; ++i) out += chars[dist(gen)];
+    size_t j = 0;
+    while (out.size() < n) {
+        if (j >= buf.size()) {
+            if (!fill_random_bytes(buf.data(), buf.size())) return {};
+            j = 0;
+        }
+        const uint8_t b = buf[j++];
+        if (b >= limit) continue;  // 拒绝，消除偏差
+        out += chars[b % chars_len];
+    }
     return out;
 }
 
@@ -263,25 +357,25 @@ std::string McpOAuthClient::base64url_encode(const std::string& in) {
 // 回环回调监听（authorization_code 流程）
 // ============================================================
 
-ResultV2<std::string> oauth_loopback_listen(int port, int& out_port, int timeout_ms) {
+ResultV2<OAuthCallback> oauth_loopback_listen(int port, int& out_port, int timeout_ms) {
 #ifdef _WIN32
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
-        return ResultV2<std::string>::err(Error::Code::InternalError,
+        return ResultV2<OAuthCallback>::err(Error::Code::InternalError,
             "WSAStartup 失败", "oauth_loopback_listen");
     }
     auto cleanup_wsa = [&] { WSACleanup(); };
     const int fd = static_cast<int>(socket(AF_INET, SOCK_STREAM, 0));
     if (fd == -1) {
         cleanup_wsa();
-        return ResultV2<std::string>::err(Error::Code::InternalError,
+        return ResultV2<OAuthCallback>::err(Error::Code::InternalError,
             "创建 socket 失败", "oauth_loopback_listen");
     }
     auto close_fd = [&] { closesocket(static_cast<SOCKET>(fd)); };
 #else
     const int fd = static_cast<int>(socket(AF_INET, SOCK_STREAM, 0));
     if (fd < 0) {
-        return ResultV2<std::string>::err(Error::Code::InternalError,
+        return ResultV2<OAuthCallback>::err(Error::Code::InternalError,
             "创建 socket 失败", "oauth_loopback_listen");
     }
     auto close_fd = [&] { ::close(fd); };
@@ -296,7 +390,7 @@ ResultV2<std::string> oauth_loopback_listen(int port, int& out_port, int timeout
 #ifdef _WIN32
         cleanup_wsa();
 #endif
-        return ResultV2<std::string>::err(Error::Code::InternalError,
+        return ResultV2<OAuthCallback>::err(Error::Code::InternalError,
             "绑定回环端口失败", "oauth_loopback_listen");
     }
     if (listen(fd, 1) != 0) {
@@ -304,7 +398,7 @@ ResultV2<std::string> oauth_loopback_listen(int port, int& out_port, int timeout
 #ifdef _WIN32
         cleanup_wsa();
 #endif
-        return ResultV2<std::string>::err(Error::Code::InternalError,
+        return ResultV2<OAuthCallback>::err(Error::Code::InternalError,
             "监听失败", "oauth_loopback_listen");
     }
 
@@ -328,7 +422,7 @@ ResultV2<std::string> oauth_loopback_listen(int port, int& out_port, int timeout
 #ifdef _WIN32
         cleanup_wsa();
 #endif
-        return ResultV2<std::string>::err(Error::Code::NetworkTimeout,
+        return ResultV2<OAuthCallback>::err(Error::Code::NetworkTimeout,
             "等待 OAuth 回调超时", "oauth_loopback_listen");
     }
 
@@ -342,7 +436,7 @@ ResultV2<std::string> oauth_loopback_listen(int port, int& out_port, int timeout
 #ifdef _WIN32
         cleanup_wsa();
 #endif
-        return ResultV2<std::string>::err(Error::Code::InternalError,
+        return ResultV2<OAuthCallback>::err(Error::Code::InternalError,
             "接受回调连接失败", "oauth_loopback_listen");
     }
     auto close_client = [&] {
@@ -363,24 +457,28 @@ ResultV2<std::string> oauth_loopback_listen(int port, int& out_port, int timeout
         if (request.find("\r\n\r\n") != std::string::npos) break;
     }
 
-    // 提取 code 查询参数
-    std::string code;
+    // 提取 code / state 查询参数（URL 解码）
+    OAuthCallback cb;
     const auto qpos = request.find('?');
     if (qpos != std::string::npos) {
         const auto sp = request.find(' ', qpos);
         const std::string query = request.substr(qpos + 1, sp == std::string::npos
             ? std::string::npos : sp - qpos - 1);
-        // 简单解析 code=<urlencoded>
-        const auto cpos = query.find("code=");
-        if (cpos != std::string::npos) {
-            const auto end = query.find('&', cpos + 5);
-            code = query.substr(cpos + 5, end == std::string::npos
-                ? std::string::npos : end - cpos - 5);
-        }
+        auto query_value = [&query](const std::string& key) -> std::string {
+            const std::string needle = key + "=";
+            const auto kpos = query.find(needle);
+            if (kpos == std::string::npos) return {};
+            const auto end = query.find('&', kpos + needle.size());
+            const std::string raw = query.substr(kpos + needle.size(),
+                end == std::string::npos ? std::string::npos : end - kpos - needle.size());
+            return url_decode(raw);
+        };
+        cb.code = query_value("code");
+        cb.state = query_value("state");
     }
 
     // 返回成功页面
-    const std::string ok = code.empty()
+    const std::string ok = cb.code.empty()
         ? "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         : "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
           "Connection: close\r\n\r\n"
@@ -395,11 +493,11 @@ ResultV2<std::string> oauth_loopback_listen(int port, int& out_port, int timeout
     cleanup_wsa();
 #endif
 
-    if (code.empty()) {
-        return ResultV2<std::string>::err(Error::Code::InvalidInput,
+    if (cb.code.empty()) {
+        return ResultV2<OAuthCallback>::err(Error::Code::InvalidInput,
             "OAuth 回调缺少 code 参数", "oauth_loopback_listen");
     }
-    return ResultV2<std::string>::ok(std::move(code));
+    return ResultV2<OAuthCallback>::ok(std::move(cb));
 }
 
 } // namespace agent::mcp

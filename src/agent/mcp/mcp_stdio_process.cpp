@@ -21,6 +21,8 @@
 
 #include <chrono>
 #include <cstring>
+#include <cwctype>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -126,17 +128,72 @@ bool needs_quotes(const std::string& s) {
 }
 
 /// 转义单个参数（CommandLineToArgvW 规则）
+/// @details 引号前的反斜杠需加倍（2n+1 个 \ 后跟 " 表示 n 个字面 \ + 字面 "）；
+///          末尾反斜杠在引号内也需加倍，避免与闭合引号组合成转义引号。
 std::string escape_arg(const std::string& arg) {
     if (!needs_quotes(arg)) return arg;
     std::string result;
     result.reserve(arg.size() + 4);
     result += '"';
+    size_t backslashes = 0;
     for (char c : arg) {
-        if (c == '"') result += "\\\"";
-        else result += c;
+        if (c == '\\') {
+            ++backslashes;
+            continue;
+        }
+        if (c == '"') {
+            result.append(backslashes * 2 + 1, '\\');
+            result += '"';
+            backslashes = 0;
+            continue;
+        }
+        result.append(backslashes, '\\');
+        backslashes = 0;
+        result += c;
     }
+    result.append(backslashes * 2, '\\');
     result += '"';
     return result;
+}
+
+/// 解析命令为完整路径（PATH 搜索 + 扩展名补全）
+/// @param cmd 配置中的命令（如 "npx"）
+/// @param out_full 输出解析后的完整路径（UTF-16）
+/// @return true=解析成功；false=未找到
+/// @details 裸命令名按 PATHEXT 常见扩展名依次搜索（npx → npx.cmd 等）；
+///          跳过无扩展名命中（PATH 中可能存在同名 shell 脚本，CreateProcessW
+///          无法执行）；含路径分隔符的命令直接使用（相对/绝对路径）。
+bool resolve_command(const std::string& cmd, std::wstring& out_full) {
+    const std::wstring wcmd = utf8_to_wide(cmd);
+    if (cmd.find('/') != std::string::npos || cmd.find('\\') != std::string::npos) {
+        out_full = wcmd;
+        return true;
+    }
+    static const wchar_t* kExts[] = {L".exe", L".cmd", L".bat", L".com"};
+    std::vector<wchar_t> buf(32768);
+    for (const wchar_t* ext : kExts) {
+        DWORD n = SearchPathW(nullptr, wcmd.c_str(), ext,
+                              static_cast<DWORD>(buf.size()), buf.data(), nullptr);
+        if (n > 0 && n < buf.size()) {
+            out_full.assign(buf.data(), n);
+            return true;
+        }
+    }
+    return false;
+}
+
+/// 是否批处理脚本（.cmd/.bat；CreateProcessW 无法直接执行，需经 cmd.exe /c）
+bool is_batch_script(const std::wstring& path) {
+    auto ends_with_ci = [&path](const wchar_t* suffix) {
+        const size_t sl = std::wcslen(suffix);
+        if (path.size() < sl) return false;
+        for (size_t i = 0; i < sl; ++i) {
+            if (std::towlower(path[path.size() - sl + i]) !=
+                std::towlower(suffix[i])) return false;
+        }
+        return true;
+    };
+    return ends_with_ci(L".cmd") || ends_with_ci(L".bat");
 }
 #endif // _WIN32
 
@@ -153,15 +210,43 @@ ResultV2<void> McpStdioProcess::start(
     const std::vector<std::string>& args,
     const std::map<std::string, std::string>& env) {
 #ifdef _WIN32
-    // 1. 构建命令行
-    std::string cmdline = escape_arg(cmd);
-    for (const auto& arg : args) {
-        cmdline += ' ';
-        cmdline += escape_arg(arg);
+    // 1. 解析命令为完整路径（PATH 搜索 + 扩展名补全，如 npx → npx.cmd）
+    std::wstring resolved;
+    if (!resolve_command(cmd, resolved)) {
+        return ResultV2<void>::err(Error::Code::ResourceNotFound,
+            "无法在 PATH 中找到命令 '" + cmd + "'", "McpStdioProcess::start");
     }
-    std::wstring wcmdline = utf8_to_wide(cmdline);
 
-    // 2. 创建管道：stdin（子进程读端继承）、stdout（子进程写端继承）
+    // 2. 构建命令行：批处理脚本（.cmd/.bat）CreateProcessW 无法直接执行，需经 cmd.exe /c
+    std::wstring app_name;
+    std::wstring cmdline;
+    if (is_batch_script(resolved)) {
+        std::wstring comspec(MAX_PATH, L'\0');
+        const DWORD cs = GetEnvironmentVariableW(L"ComSpec", comspec.data(),
+                                                 static_cast<DWORD>(comspec.size()));
+        if (cs == 0 || cs >= comspec.size()) {
+            app_name = L"cmd.exe";  // 兜底：依赖 PATH 解析
+        } else {
+            comspec.resize(cs);
+            app_name = comspec;
+        }
+        // cmd.exe /c 引号规则：整条命令外层再包一对引号，避免首尾引号被剥离
+        cmdline = L"/c \"\"" + resolved + L"\"";
+        for (const auto& arg : args) {
+            cmdline += L' ';
+            cmdline += utf8_to_wide(escape_arg(arg));
+        }
+        cmdline += L"\"";
+    } else {
+        app_name = resolved;
+        cmdline = utf8_to_wide(escape_arg(cmd));
+        for (const auto& arg : args) {
+            cmdline += L' ';
+            cmdline += utf8_to_wide(escape_arg(arg));
+        }
+    }
+
+    // 3. 创建管道：stdin（子进程读端继承）、stdout（子进程写端继承）
     HANDLE stdin_parent = INVALID_HANDLE_VALUE, stdin_child = INVALID_HANDLE_VALUE;
     HANDLE stdout_parent = INVALID_HANDLE_VALUE, stdout_child = INVALID_HANDLE_VALUE;
     if (!create_pipe(&stdin_parent, &stdin_child, /*child_reads=*/true)) {
@@ -175,7 +260,7 @@ ResultV2<void> McpStdioProcess::start(
     }
     HandleGuard g_stdout_parent(stdout_parent), g_stdout_child(stdout_child);
 
-    // 3. 启动子进程
+    // 4. 启动子进程
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES;
@@ -186,8 +271,8 @@ ResultV2<void> McpStdioProcess::start(
 
     std::wstring env_block = build_environment_block(env);
     if (!CreateProcessW(
-            nullptr,
-            wcmdline.data(),
+            app_name.c_str(),
+            cmdline.data(),
             nullptr, nullptr,
             TRUE,   // bInheritHandles（继承管道句柄）
             CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
@@ -201,7 +286,7 @@ ResultV2<void> McpStdioProcess::start(
     }
     HandleGuard g_process(pi.hProcess), g_thread(pi.hThread);
 
-    // 4. 保存父进程持有的端，释放子进程持有的端
+    // 5. 保存父进程持有的端，释放子进程持有的端
     m_h_process = pi.hProcess;
     m_h_stdin_write = stdin_parent;
     m_h_stdout_read = stdout_parent;
@@ -210,7 +295,7 @@ ResultV2<void> McpStdioProcess::start(
     g_stdout_parent.release();
     // 子进程持有的端由 HandleGuard 关闭（父进程侧副本）
 
-    // 5. 启动读线程
+    // 6. 启动读线程
     m_stopped = false;
     m_eof = false;
     m_reader = std::thread(&McpStdioProcess::reader_thread_main, this);

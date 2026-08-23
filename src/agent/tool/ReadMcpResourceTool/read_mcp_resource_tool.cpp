@@ -10,9 +10,59 @@
 
 #include "agent/tool/ReadMcpResourceTool/read_mcp_resource_tool.h"
 
+#include <algorithm>
+#include <cctype>
+#include <format>
 #include <sstream>
+#include <unordered_set>
+
+#include "agent/api/remote/http_client.h"
+#include "agent/api/remote/ssrf.h"
+#include "agent/tool/permission_ask.h"
 
 namespace agent::tool {
+
+namespace {
+
+/// @brief 校验 MCP 资源 URI 安全性（SSRF / 本地文件读取防护）
+/// @details 拒绝危险 scheme（file/gopher/data 等）与解析到内网/回环的 http(s) 地址；
+///          自定义 scheme（docs://、repo:// 等）由 MCP server 解释，不构成客户端 SSRF。
+ResultV2<void> validate_resource_uri(const std::string& uri) {
+    const auto colon = uri.find(':');
+    if (colon == std::string::npos || colon == 0) {
+        return ResultV2<void>::err(Error::Code::InvalidInput,
+            "MCP 资源 URI 缺少合法 scheme", "uri=" + uri);
+    }
+    std::string scheme = uri.substr(0, colon);
+    std::transform(scheme.begin(), scheme.end(), scheme.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    static const std::unordered_set<std::string> kDangerousSchemes = {
+        "file", "gopher", "data", "javascript", "vbscript", "ftp",
+        "dict", "ldap", "jar", "ws", "wss", "telnet", "ssh", "smb",
+    };
+    if (kDangerousSchemes.count(scheme) > 0) {
+        return ResultV2<void>::err(Error::Code::PermissionDenied,
+            "MCP 资源 URI scheme 被禁止: " + scheme, "uri=" + uri);
+    }
+
+    // http(s)：校验主机不解析到内网/回环/链路本地（SSRF）
+    if (scheme == "http" || scheme == "https") {
+        const auto purl = HttpClient::parse_url(uri);
+        if (purl.host.empty()) {
+            return ResultV2<void>::err(Error::Code::InvalidInput,
+                "MCP 资源 URI 缺少主机名", "uri=" + uri);
+        }
+        if (host_resolves_to_private(purl.host)) {
+            return ResultV2<void>::err(Error::Code::PermissionDenied,
+                "MCP 资源 URI 解析到内网/回环/链路本地地址，已拦截（SSRF）",
+                "uri=" + uri);
+        }
+    }
+    return ResultV2<void>::ok();
+}
+
+} // namespace
 
 ReadMcpResourceTool::ReadMcpResourceTool(
     std::shared_ptr<mcp::McpClientManager> manager)
@@ -49,6 +99,27 @@ nlohmann::json ReadMcpResourceTool::input_schema() const {
     };
 }
 
+PermissionResult ReadMcpResourceTool::check_permissions(
+    const nlohmann::json& input,
+    const ToolContext& ctx
+) const {
+    if (is_bypass_mode(ctx.permission_mode)) {
+        return PermissionResult::ok();
+    }
+    if (!input.contains("server") || !input.at("server").is_string()) {
+        return PermissionResult::ok();
+    }
+    const std::string server = input.at("server").get<std::string>();
+    if (ask_user_confirm(ctx, std::format(
+            "需要从 MCP server '{}' 读取资源，请确认：\n\n"
+            "允许读取该 MCP server 的资源？", server))) {
+        return PermissionResult::ok();
+    }
+    return PermissionResult::err(
+        Error::Code::PermissionDenied,
+        "用户拒绝读取 MCP server: " + server);
+}
+
 ResultV2<ToolResult> ReadMcpResourceTool::call(
     const nlohmann::json& input,
     const ToolContext& /*ctx*/
@@ -68,6 +139,15 @@ ResultV2<ToolResult> ReadMcpResourceTool::call(
 
     const std::string server = input.at("server").get<std::string>();
     const std::string uri = input.at("uri").get<std::string>();
+
+    // SSRF/本地文件读取防护：校验 URI scheme 与 http(s) 主机
+    auto uri_check = validate_resource_uri(uri);
+    if (uri_check.is_err()) {
+        return ResultV2<ToolResult>::err(
+            Error::Code::PermissionDenied,
+            "ReadMcpResourceTool 拒绝读取不安全资源: " + uri_check.error().message,
+            "server=" + server + "; uri=" + uri);
+    }
 
     auto client = m_manager->get_client(server);
     if (!client) {

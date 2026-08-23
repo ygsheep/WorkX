@@ -168,8 +168,9 @@ SessionResult create_session(IConfigManager& cfg,
     }
 
     // 注册内置工具（B1：单一来源 register_builtin_tools，各宿主工具集同步）
-    // #27：创建 MCP 连接管理器并连接（单个 server 失败不阻断会话）
-    auto mcp_manager = std::make_shared<mcp::McpClientManager>();
+    // #27：创建 MCP 连接管理器并后台连接（单个 server 失败不阻断会话；
+    //      事件总线用于发布连接状态变化，UI 侧栏实时刷新）
+    auto mcp_manager = std::make_shared<mcp::McpClientManager>(&event_bus);
     mcp_manager->load_and_connect(default_config_path().parent_path(),
                                   std::filesystem::current_path());
     result.mcp_manager = mcp_manager;  // #27 M4：暴露给 UI 层展示 server 状态

@@ -158,8 +158,15 @@ ResultV2<nlohmann::json> HttpMcpTransport::send_request(
     }
 
     // 捕获 1.x 会话头（Mcp-Session-Id），后续请求回传
+    // P2-5：校验格式，拒绝含 CRLF/控制字符的会话 ID（防 header 注入）
     for (const auto& [k, v] : r.headers) {
-        if (k == "mcp-session-id") m_session_id = v;
+        if (k == "mcp-session-id") {
+            bool safe = !v.empty();
+            for (unsigned char c : v) {
+                if (c < 0x20 || c == 0x7F) { safe = false; break; }
+            }
+            m_session_id = safe ? v : std::string();
+        }
     }
 
     std::string content_type;

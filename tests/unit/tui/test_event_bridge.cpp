@@ -40,6 +40,7 @@ size_t bridge_subscriber_count(MockEventBus& bus) {
     n += bus.subscriber_count_typed<agent::SubAgentProgressEvent>();
     n += bus.subscriber_count_typed<agent::SubAgentCompletedEvent>();
     n += bus.subscriber_count_typed<agent::TodoUpdatedEvent>();  // #24：待办清单更新
+    n += bus.subscriber_count_typed<agent::McpStatusChangedEvent>();  // #27 M4：MCP 状态
     n += bus.subscriber_count_typed<agent::ShutdownEvent>();
     return n;
 }
@@ -52,8 +53,8 @@ TEST_CASE("EventBridge start subscribes all UI events", "[event_bridge][start]")
     EventBridge bridge(bus, queue);
     bridge.start();
 
-    REQUIRE(bridge_subscriber_count(bus) == 17);
-    REQUIRE(bus.total_subscriber_count() == 17);
+    REQUIRE(bridge_subscriber_count(bus) == 18);
+    REQUIRE(bus.total_subscriber_count() == 18);
 }
 
 TEST_CASE("EventBridge stop unsubscribes every registered event", "[event_bridge][stop]") {
@@ -125,4 +126,28 @@ TEST_CASE("EventBridge dispatch maps events to actions", "[event_bridge][dispatc
         .is_thinking = false, .token_count = 1,
     });
     REQUIRE(queue.empty());
+}
+
+TEST_CASE("EventBridge dispatch maps McpStatusChangedEvent to ActionMcpStatus",
+          "[event_bridge][dispatch][mcp]") {
+    MockEventBus bus;
+    ActionQueue queue;
+    EventBridge bridge(bus, queue);
+    bridge.start();
+    bus.set_dispatch_enabled(true);
+
+    bus.publish(agent::McpStatusChangedEvent{{
+        {"github", "2026-07-28", 3, 1, ""},
+        {"broken", "", 0, 2, "spawn failed"},
+    }});
+    auto actions = queue.drain();
+    REQUIRE(actions.size() == 1);
+    const auto* status = std::get_if<ActionMcpStatus>(&actions[0]);
+    REQUIRE(status != nullptr);
+    REQUIRE(status->servers.size() == 2);
+    REQUIRE(status->servers[0].name == "github");
+    REQUIRE(status->servers[0].state == 1);
+    REQUIRE(status->servers[1].name == "broken");
+    REQUIRE(status->servers[1].state == 2);
+    REQUIRE(status->servers[1].error == "spawn failed");
 }

@@ -286,7 +286,8 @@ App::App(AppDeps deps)
     if (m_deps.mcp_manager) {
         std::vector<McpServerLite> servers;
         for (const auto& st : m_deps.mcp_manager->server_status()) {
-            servers.push_back(McpServerLite{st.name, st.protocol, st.tool_count});
+            servers.push_back(McpServerLite{st.name, st.protocol, st.tool_count,
+                                            static_cast<int>(st.state), st.error});
         }
         m_queue.push(ActionMcpStatus{std::move(servers)});
     }

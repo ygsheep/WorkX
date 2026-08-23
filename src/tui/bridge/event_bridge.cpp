@@ -152,6 +152,19 @@ void EventBridge::start() {
             });
         });
 
+    // #27 M4：MCP 后台连接状态变化 → 侧栏状态点刷新
+    subscribe_typed<agent::McpStatusChangedEvent>(
+        [this](const agent::McpStatusChangedEvent& e) {
+            std::vector<McpServerLite> servers;
+            servers.reserve(e.servers.size());
+            for (const auto& s : e.servers) {
+                servers.push_back(McpServerLite{
+                    s.name, s.protocol, s.tool_count, s.state, s.error,
+                });
+            }
+            push(ActionMcpStatus{std::move(servers)});
+        });
+
     subscribe_typed<agent::ShutdownEvent>(
         [this](const agent::ShutdownEvent&) { push(ActionShutdown{}); });
 }

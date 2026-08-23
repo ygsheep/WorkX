@@ -71,6 +71,40 @@ TEST_CASE("McpOAuthClient authorization_code 缺 authEndpoint 拒绝", "[mcp_oau
     REQUIRE(r.is_err());
 }
 
+TEST_CASE("McpOAuthClient redirect_uri 非回环拒绝（P2-1）", "[mcp_oauth][config]") {
+    McpOAuthClient client;
+    McpOAuthConfig cfg;
+    cfg.flow = "authorization_code";
+    cfg.client_id = "cid";
+    cfg.token_endpoint = "http://127.0.0.1:1/token";
+    cfg.auth_endpoint = "https://auth.example.com/authorize";
+    cfg.redirect_uri = "https://evil.example.com/callback";  // 非回环
+    auto r = client.configure(cfg);
+    REQUIRE(r.is_err());
+    REQUIRE(r.error().code == Error::Code::ConfigInvalid);
+}
+
+TEST_CASE("McpOAuthClient token_endpoint 非 HTTPS 拒绝（P2-3）", "[mcp_oauth][config]") {
+    McpOAuthClient client;
+    McpOAuthConfig cfg;
+    cfg.flow = "client_credentials";
+    cfg.client_id = "cid";
+    cfg.token_endpoint = "http://token.example.com/token";  // 非回环 + 非 HTTPS
+    auto r = client.configure(cfg);
+    REQUIRE(r.is_err());
+    REQUIRE(r.error().code == Error::Code::ConfigInvalid);
+}
+
+TEST_CASE("McpOAuthClient 回环 http token_endpoint 放行", "[mcp_oauth][config]") {
+    McpOAuthClient client;
+    McpOAuthConfig cfg;
+    cfg.flow = "client_credentials";
+    cfg.client_id = "cid";
+    cfg.token_endpoint = "http://127.0.0.1:1/token";  // 回环 http 允许（本地测试）
+    auto r = client.configure(cfg);
+    REQUIRE(r.is_ok());
+}
+
 // ============================================================================
 // client_credentials 流程
 // ============================================================================
@@ -130,12 +164,43 @@ TEST_CASE("McpOAuthClient authorization_code 生成授权 URL 并换 token", "[m
     REQUIRE_THAT(url.value(), ContainsSubstring("state="));
     REQUIRE_THAT(url.value(), ContainsSubstring("scope=mcp%20read"));
 
+    // 提取 state（CSRF 校验用）
+    const std::string& auth_url = url.value();
+    const auto sp = auth_url.find("state=");
+    REQUIRE(sp != std::string::npos);
+    const auto se = auth_url.find('&', sp + 6);
+    const std::string state = auth_url.substr(sp + 6, se == std::string::npos
+        ? std::string::npos : se - sp - 6);
+    REQUIRE_FALSE(state.empty());
+
     // 用授权码换 token（fake server 校验 code_verifier 非空）
-    auto exchanged = client.exchange_code("auth-code-1");
+    auto exchanged = client.exchange_code("auth-code-1", state);
     REQUIRE(exchanged.is_ok());
     auto token = client.access_token();
     REQUIRE(token.is_ok());
     REQUIRE(token.value() == "ac-token");
+}
+
+TEST_CASE("McpOAuthClient exchange_code state 不匹配拒绝（CSRF）", "[mcp_oauth][ac]") {
+    std::shared_ptr<McpStdioProcess> proc;
+    const std::string base = start_fake_oauth(proc);
+
+    McpOAuthClient client;
+    McpOAuthConfig cfg;
+    cfg.flow = "authorization_code";
+    cfg.client_id = "cid";
+    cfg.token_endpoint = base + "/token";
+    cfg.auth_endpoint = "https://auth.example.com/authorize";
+    cfg.redirect_uri = "http://127.0.0.1:0/callback";
+    REQUIRE(client.configure(cfg).is_ok());
+
+    auto url = client.build_authorization_url();
+    REQUIRE(url.is_ok());
+
+    // 攻击者注入错误 state → 拒绝换取 token
+    auto exchanged = client.exchange_code("auth-code-1", "attacker-controlled-state");
+    REQUIRE(exchanged.is_err());
+    REQUIRE(exchanged.error().code == Error::Code::PermissionDenied);
 }
 
 // ============================================================================

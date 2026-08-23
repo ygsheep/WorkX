@@ -51,5 +51,7 @@ inline std::string_view icon_manual() { return icon("\uF256", "?"); }
 inline std::string_view icon_copy() { return icon("\uF0C5", "C"); }
 /// @brief 重试（nf-fa-rotate-right）→ "R"
 inline std::string_view icon_retry() { return icon("\uF2F9", "R"); }
+/// @brief 状态点（nf-cod-circle_small_filled，小实心点）→ "·"（MCP 连接状态：绿/红/灰）
+inline std::string_view icon_dot() { return icon("\uEB8A", "·"); }
 
 }  // namespace ftxtui::theme

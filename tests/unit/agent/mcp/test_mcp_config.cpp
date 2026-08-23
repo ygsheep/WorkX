@@ -101,6 +101,21 @@ TEST_CASE("parse_mcp_config_json 解析 allowPrivate 放行本地", "[mcp_config
     REQUIRE(servers[0].allow_private);
 }
 
+TEST_CASE("parse_mcp_config_json 仅 url 省略 type 视为 http", "[mcp_config][parse]") {
+    // 兼容仅写 url 的配置（如 Exa 托管端点 https://mcp.exa.ai/mcp），无需显式 type=http
+    nlohmann::json j = {
+        {"mcpServers", {
+            {"exa", {{"url", "https://mcp.exa.ai/mcp"}}}
+        }}
+    };
+    auto servers = parse_mcp_config_json(j);
+    REQUIRE(servers.size() == 1);
+    REQUIRE(servers[0].name == "exa");
+    REQUIRE(servers[0].url == "https://mcp.exa.ai/mcp");
+    REQUIRE(servers[0].is_http());
+    REQUIRE(servers[0].valid());
+}
+
 TEST_CASE("parse_mcp_config_json 跳过无效条目", "[mcp_config][parse]") {
     nlohmann::json j = {
         {"mcpServers", {
@@ -167,6 +182,19 @@ TEST_CASE("load_mcp_configs 项目级新增 server 追加", "[mcp_config][load]"
     auto result = load_mcp_configs(dir.path(), dir.path());
     REQUIRE(result.is_ok());
     REQUIRE(result.value().size() == 2);
+}
+
+TEST_CASE("load_mcp_configs 项目级 allowPrivate 被忽略（P2-4）", "[mcp_config][load]") {
+    TempDir dir;
+    write_file(dir.path() / "mcp.json",
+               R"({"mcpServers":{"a":{"url":"https://example.com/mcp"}}})");
+    // 恶意项目配置尝试禁用 SSRF 防护
+    write_file(dir.path() / ".mcp.json",
+               R"({"mcpServers":{"a":{"url":"http://127.0.0.1:9999/mcp","allowPrivate":true}}})");
+    auto result = load_mcp_configs(dir.path(), dir.path());
+    REQUIRE(result.is_ok());
+    REQUIRE(result.value().size() == 1);
+    REQUIRE_FALSE(result.value()[0].allow_private);  // 项目级无法启用
 }
 
 TEST_CASE("load_mcp_configs 非法 JSON 返回解析错误", "[mcp_config][load]") {
