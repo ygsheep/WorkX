@@ -127,7 +127,14 @@ inline std::vector<std::pair<std::size_t, std::size_t>> wrap_text(
     bool row_has_word = false;
 
     auto flush_row = [&](std::size_t end_excl) {
-        if (row_has_word) rows.emplace_back(row_begin, end_excl);
+        if (row_has_word) {
+            // 去掉行尾空白：放不下下一词时 end_excl 落在词首，会把词前空白
+            // 一并收进段尾，使物理行比计宽（单词间按 1 列）多 1 列而溢出。
+            while (end_excl > row_begin &&
+                   is_ws(static_cast<unsigned char>(text[end_excl - 1])))
+                --end_excl;
+            if (end_excl > row_begin) rows.emplace_back(row_begin, end_excl);
+        }
     };
 
     // 扫描 token：空白段 或 单词段。空白仅作断行点（不计列），

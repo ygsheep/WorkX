@@ -24,6 +24,18 @@ namespace {
 /// 信息行文字：米白色（统一主题）
 const Color kInfoText = theme::T::Text;
 
+/// @brief 截断到 max 字符（超长加省略号；回退到多字节边界避免切断 UTF-8）
+std::string truncate_utf8(std::string s, std::size_t max) {
+    if (s.size() <= max) return s;
+    s.resize(max);
+    while (!s.empty() && (static_cast<unsigned char>(s.back()) & 0xC0) == 0x80)
+        s.pop_back();
+    if (!s.empty() && (static_cast<unsigned char>(s.back()) & 0xC0) == 0xC0)
+        s.pop_back();
+    s += "…";
+    return s;
+}
+
 /// @brief 键值行；默认键灰暗、值默认色；传入 text 时整行（键+值）用该颜色
 Element kv(const std::string& key, const std::string& value,
            Color text = Color::Default) {
@@ -161,31 +173,49 @@ void append_context_info(Elements& rows, const SidebarModel& s) {
 }
 
 /// @brief 可折叠区块（MCP）：chevron 标题行可点击，展开显示条目
-void append_collapsible_section(Elements& rows, const std::string_view& title,
-                                const std::vector<std::string>& items,
-                                bool expanded, SectionHit* hit) {
+/// @details 每台 server 前带状态点（绿=已连接 / 红=失败 / 灰=连接中），
+///          失败时在下方追加红色错误信息行。
+void append_mcp_section(Elements& rows, const std::vector<McpServerEntry>& servers,
+                        bool expanded, SectionHit* hit) {
     Element header = ftxui::hbox({
         ftxui::text(std::string(expanded ? theme::icon_chevron_down()
                                          : theme::icon_chevron_right()))
             | ftxui::color(theme::T::TextFaint),
         ftxui::text(" "),
-        ftxui::text(std::string(title)) | ftxui::color(kInfoText),
+        ftxui::text(std::string(str::kSidebarMCP)) | ftxui::color(kInfoText),
     });
     if (hit) header = header | ftxui::reflect(hit->box);
     rows.push_back(header);
     if (!expanded) return;
-    if (items.empty()) {
+    if (servers.empty()) {
         rows.push_back(ftxui::hbox({
             ftxui::text("  "),
             ftxui::text(std::string(str::kDash)) | ftxui::color(theme::T::TextFaint),
         }));
         return;
     }
-    for (const auto& it : items) {
+    for (const auto& s : servers) {
+        // 状态点：1=已连接(绿) 2=失败(红) 0=连接中(灰)
+        Color dot_color = theme::T::TextFaint;
+        if (s.state == 1) dot_color = theme::T::DiffAdd;
+        else if (s.state == 2) dot_color = theme::T::DiffDel;
+        std::string line = s.name;
+        if (!s.protocol.empty()) line += " · " + s.protocol;
+        if (s.tool_count > 0) line += " · " + std::to_string(s.tool_count) + " 工具";
         rows.push_back(ftxui::hbox({
             ftxui::text("  "),
-            ftxui::flex(ftxui::text(it) | ftxui::color(theme::T::TextDim)),
+            ftxui::text(std::string(theme::icon_dot())) | ftxui::color(dot_color),
+            ftxui::text(" "),
+            ftxui::flex(ftxui::text(line) | ftxui::color(theme::T::TextDim)),
         }));
+        // 失败：红色错误信息（截断避免溢出窄侧栏）
+        if (s.state == 2 && !s.error.empty()) {
+            rows.push_back(ftxui::hbox({
+                ftxui::text("    "),
+                ftxui::flex(ftxui::text(truncate_utf8(s.error, 48))
+                            | ftxui::color(theme::T::DiffDel)),
+            }));
+        }
     }
 }
 
@@ -261,8 +291,7 @@ void append_sidebar_info(Elements& rows, const SidebarModel& s,
         section_hits->back().kind = SectionHit::Kind::kMCP;
         mcp_hit = &section_hits->back();
     }
-    append_collapsible_section(inner, str::kSidebarMCP, s.mcp_servers,
-                               s.mcp_expanded, mcp_hit);
+    append_mcp_section(inner, s.mcp_servers, s.mcp_expanded, mcp_hit);
 
     // TODO 列表（可折叠，#24：状态图标 + 内容）
     SectionHit* todo_hit = nullptr;

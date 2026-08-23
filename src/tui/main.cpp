@@ -33,8 +33,34 @@
 #include "crash_reporter.h"
 #include "wizard.h"
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
+namespace {
+
+#if defined(_WIN32)
+/// @brief Windows 端确保控制台以 UTF-8 输出/输入代码页（65001），使中文字符能正常加载显示。
+///        FTXUI 在 Screen 构造时也会设置，这里在 FTXUI 首次输出前显式检测并确保：
+///        若当前代码页不是 UTF-8（如 GBK/936），中文会乱码或显示为问号。
+void ensure_console_utf8() {
+    const UINT prev_out = ::GetConsoleOutputCP();
+    const UINT prev_in = ::GetConsoleCP();
+    if (prev_out != CP_UTF8) ::SetConsoleOutputCP(CP_UTF8);
+    if (prev_in != CP_UTF8) ::SetConsoleCP(CP_UTF8);
+    (void)prev_out; (void)prev_in;
+}
+#endif
+
+}  // namespace
+
 int main(int argc, char** argv) {
     crash::InstallHandlers();
+#if defined(_WIN32)
+    // 检测/加载 UTF-8 中文字符集（见 ensure_console_utf8），放在向导/主界面
+    // 创建任何 Screen 之前，确保早期中文输出也不走 GBK 转码。
+    ensure_console_utf8();
+#endif
     bool mock_mode = false;
     bool smoke_mode = false;
     for (int i = 1; i < argc; ++i) {
@@ -73,6 +99,7 @@ int main(int argc, char** argv) {
     std::string session_dir;
     std::unique_ptr<agent::ChatSession> session;
     agent::IBackendAdmin* backend_admin = nullptr;
+    std::shared_ptr<agent::mcp::McpClientManager> mcp_manager;  // #27 M4：MCP server 状态
     auto command_registry = std::make_shared<agent::command::CommandRegistry>();
     // 上下文窗口（token）：启动时经 resolve_context_length 解析，注入侧栏进度条分母
     int32_t context_limit = 0;
@@ -88,6 +115,7 @@ int main(int argc, char** argv) {
         session = std::move(result.session);
         model_name = result.model_name;
         backend_admin = result.backend_admin;
+        mcp_manager = std::move(result.mcp_manager);  // #27 M4：MCP server 状态（侧栏展示）
 
         // 会话持久化目录（/resume 列出历史用）
         if (session) {
@@ -174,6 +202,7 @@ int main(int argc, char** argv) {
     deps.context_limit = context_limit;
     deps.model_catalog = model_catalog;
     deps.command_registry = command_registry;
+    deps.mcp_manager = mcp_manager;  // #27 M4：MCP server 状态（侧栏展示）
     deps.project = fs::current_path().filename().string();
     // B3：侧栏 Agent 显示真实会话 ID（非硬编码 "default"），
     //     与审计日志 / 事件流的 session_id 一致，便于对照

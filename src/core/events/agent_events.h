@@ -180,4 +180,24 @@ struct TodoUpdatedEvent {
     std::vector<core::todo::TodoItem> todos;  ///< 变更后的完整清单快照
 };
 
+// ============================================================
+// MCP server 状态（#27 M4：后台连接结果 → TUI 侧栏）
+// ============================================================
+
+/// @brief MCP server 状态条目（轻量，供 UI 侧栏展示；core 层不依赖 agent/mcp 类型）
+struct McpServerStatusLite {
+    std::string name;       ///< server 名
+    std::string protocol;   ///< 协商协议版本（"2026-07-28" / "2025-11-25"）
+    int tool_count = 0;     ///< 已预取工具数
+    int state = 0;          ///< 0=连接中 1=已连接 2=失败
+    std::string error;      ///< 失败原因（state==2 时）
+};
+
+/// @brief MCP server 状态变化事件（#27 M4：后台连接完成/失败时发布，UI 刷新侧栏）
+/// @details McpClientManager 后台线程逐个连接 server，每完成/失败一个即异步发布
+///          全量快照；TUI 主循环 drain 后经 ActionMcpStatus 更新侧栏（彩色状态点）。
+struct McpStatusChangedEvent {
+    std::vector<McpServerStatusLite> servers;  ///< 全部配置 server 的状态快照
+};
+
 } // namespace agent

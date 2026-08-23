@@ -351,6 +351,20 @@ bool ViewModel::apply_variant(const ActionTodoUpdate& a) {
     return true;
 }
 
+bool ViewModel::apply_variant(const ActionMcpStatus& a) {
+    // 结构化存储：状态点 + 失败错误信息（#27 M4）
+    std::vector<McpServerEntry> entries;
+    entries.reserve(a.servers.size());
+    for (const auto& s : a.servers) {
+        entries.push_back(McpServerEntry{
+            s.name, s.protocol, s.tool_count, s.state, s.error,
+        });
+    }
+    if (sidebar.mcp_servers == entries) return false;  // 无变化，避免无谓重绘
+    sidebar.mcp_servers = std::move(entries);
+    return true;
+}
+
 namespace {
 
 /// @brief 按行切分（兼容 \r\n / \n），空串返回空列表

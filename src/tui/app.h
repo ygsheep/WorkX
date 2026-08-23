@@ -49,6 +49,10 @@ class IConfigManager;
 class ModelCatalog;
 }  // namespace agent
 
+namespace agent::mcp {
+class McpClientManager;
+}  // namespace agent::mcp
+
 namespace agent::command {
 class CommandRegistry;
 }  // namespace agent::command
@@ -78,6 +82,9 @@ struct AppDeps {
     std::shared_ptr<std::atomic<std::shared_ptr<const agent::ModelCatalog>>> model_catalog;
     /// @brief 命令注册表（内置 + 用户命令；斜杠命令经统一命令执行路径）
     std::shared_ptr<agent::command::CommandRegistry> command_registry;
+
+    /// @brief MCP 连接管理器（#27 M4：侧栏展示已连接 server 状态）
+    std::shared_ptr<agent::mcp::McpClientManager> mcp_manager;
 
     /// @brief 提交一条用户消息（由 main 的实现路由到会话/处理器）
     std::function<void(const std::string&)> on_submit;

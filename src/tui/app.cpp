@@ -36,6 +36,7 @@
 #include "agent/model/context_resolver.h"  // 上下文窗口解析（侧栏进度条）
 #include "agent/model/provider_config.h"
 #include "agent/model/provider_preset.h"  // find_preset（上下文窗口解析）
+#include "agent/mcp/mcp_client_manager.h"  // #27 M4：MCP server 状态查询
 #include "agent/session/session_store.h"
 #include "agent/skill/inclaude/skill_loader.h"
 #include "command/builtins.h"
@@ -280,6 +281,16 @@ App::App(AppDeps deps)
 
     m_bridge.set_wake_callback([this] { m_screen.PostEvent(Event::Custom); });
     m_bridge.start();
+
+    // #27 M4：查询已连接 MCP server 状态并推送侧栏（连接在 create_session 完成）
+    if (m_deps.mcp_manager) {
+        std::vector<McpServerLite> servers;
+        for (const auto& st : m_deps.mcp_manager->server_status()) {
+            servers.push_back(McpServerLite{st.name, st.protocol, st.tool_count,
+                                            static_cast<int>(st.state), st.error});
+        }
+        m_queue.push(ActionMcpStatus{std::move(servers)});
+    }
 
     // 输入历史：启动时从配置目录加载（~/.workx/history.json）
     m_input_history.load(agent::default_config_path().parent_path() / "history.json");

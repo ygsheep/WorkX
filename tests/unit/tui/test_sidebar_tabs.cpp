@@ -201,7 +201,7 @@ TEST_CASE("sidebar tabs embeds sub agent menu element in tasks tab", "[sidebar_t
 TEST_CASE("sidebar tabs collapsible sections expanded by default", "[sidebar_tabs][render]") {
     SidebarTabsModel tabs = make_tabs();
     SidebarModel sidebar;
-    sidebar.mcp_servers = {"server-a"};
+    sidebar.mcp_servers = {{"server-a", "2026-07-28", 2, 1, ""}};
     sidebar.todos = {make_todo("todo-1")};
     const auto text = render_elem(build_sidebar_tabs(tabs, sidebar));
     REQUIRE(text.find("MCP") != std::string::npos);
@@ -215,13 +215,22 @@ TEST_CASE("sidebar tabs collapsible sections hide items when collapsed", "[sideb
     SidebarModel sidebar;
     sidebar.mcp_expanded = false;
     sidebar.todo_expanded = false;
-    sidebar.mcp_servers = {"server-a"};
+    sidebar.mcp_servers = {{"server-a", "2026-07-28", 2, 1, ""}};
     sidebar.todos = {make_todo("todo-1")};
     const auto text = render_elem(build_sidebar_tabs(tabs, sidebar));
     REQUIRE(text.find("MCP") != std::string::npos);   // 标题仍在
     REQUIRE(text.find("TODO") != std::string::npos);
     REQUIRE(text.find("server-a") == std::string::npos);  // 条目隐藏
     REQUIRE(text.find("todo-1") == std::string::npos);
+}
+
+TEST_CASE("sidebar tabs mcp failed server shows error text", "[sidebar_tabs][render]") {
+    SidebarTabsModel tabs = make_tabs();
+    SidebarModel sidebar;
+    sidebar.mcp_servers = {{"broken", "", 0, 2, "spawn failed"}};
+    const auto text = render_elem(build_sidebar_tabs(tabs, sidebar));
+    REQUIRE(text.find("broken") != std::string::npos);
+    REQUIRE(text.find("spawn failed") != std::string::npos);  // 失败错误信息可见
 }
 
 TEST_CASE("sidebar tabs records section hit boxes", "[sidebar_tabs][hit]") {

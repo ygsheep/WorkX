@@ -202,6 +202,21 @@ struct ActionTodoUpdate {
     std::vector<core::todo::TodoItem> todos;
 };
 
+/// @brief MCP server 状态条目（#27 M4：侧栏展示）
+struct McpServerLite {
+    std::string name;       ///< server 名
+    std::string protocol;   ///< 协商协议版本（"2026-07-28" / "2025-11-25"）
+    int tool_count = 0;     ///< 已预取工具数
+    int state = 0;          ///< 0=连接中 1=已连接 2=失败
+    std::string error;      ///< 失败原因（state==2 时）
+};
+
+/// @brief MCP server 状态更新（#27 M4：启动时查询 + 后台连接事件驱动）
+/// @details ViewModel 更新 sidebar.mcp_servers 触发侧栏 MCP 区块重绘。
+struct ActionMcpStatus {
+    std::vector<McpServerLite> servers;
+};
+
 /// @brief 统一动作类型
 using Action = std::variant<
     ActionAppendMessage,
@@ -227,7 +242,8 @@ using Action = std::variant<
     ActionSessionsLoaded,
     ActionProviderSwitched,
     ActionProviderSwitchFailed,
-    ActionTodoUpdate
+    ActionTodoUpdate,
+    ActionMcpStatus
 >;
 
 }  // namespace ftxtui

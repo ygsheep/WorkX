@@ -49,7 +49,7 @@ MessageNode assistant_msg(std::string text) {
 TEST_CASE("estimate_markdown_height matches plain paragraphs", "[layout][markdown]") {
     const std::string md = "line one\nline two\n\nline three";
     REQUIRE(estimate_markdown_height(md, 240) == rendered_md_height(md));
-    REQUIRE(estimate_markdown_height(md, 240) == 3);  // 空行（emptyElement）不占行
+    REQUIRE(estimate_markdown_height(md, 240) == 6);  // 3 物理行 × 段落行距2；空行（emptyElement）不占行
 }
 
 TEST_CASE("estimate_markdown_height matches code block with language tag", "[layout][markdown]") {
@@ -93,8 +93,8 @@ TEST_CASE("estimate_markdown_height matches mixed blocks", "[layout][markdown]")
         "\n"
         "```\n```\n";  // 空代码块不渲染
     REQUIRE(estimate_markdown_height(md, 240) == rendered_md_height(md));
-    // 标题 1 + 列表 1 + 代码(1+1+2) + 表格 1 + 分隔线 1 + 段落 1 = 9
-    REQUIRE(estimate_markdown_height(md, 240) == 9);
+    // 标题 1 + 列表 1 + 代码(1+1+2=4) + 孤立|行 1×行距2=2 + 分隔线 1 + 段落 1×行距2=2 = 11
+    REQUIRE(estimate_markdown_height(md, 240) == 11);
 }
 
 TEST_CASE("estimate_markdown_height matches table block", "[layout][markdown]") {
@@ -118,10 +118,10 @@ TEST_CASE("estimate_markdown_height matches table with alignment separator", "[l
 }
 
 TEST_CASE("estimate_markdown_height matches orphan pipe line (degraded)", "[layout][markdown]") {
-    // 无分隔行的孤立 | 行：降级为普通段落 1 行
+    // 无分隔行的孤立 | 行：降级为普通段落 1 行（×行距2）
     const std::string md = "| a | b |";
     REQUIRE(estimate_markdown_height(md, 240) == rendered_md_height(md));
-    REQUIRE(estimate_markdown_height(md, 240) == 1);
+    REQUIRE(estimate_markdown_height(md, 240) == 2);
 }
 
 // ============================================================================
@@ -131,7 +131,7 @@ TEST_CASE("estimate_markdown_height matches orphan pipe line (degraded)", "[layo
 TEST_CASE("estimate_message_height matches plain assistant message", "[layout][message]") {
     MessageNode m = assistant_msg("hello\nworld");
     REQUIRE(estimate_message_height(m, 240) == rendered_height(m));
-    REQUIRE(estimate_message_height(m, 240) == 3);  // 正文 2 + 操作按钮栏 1
+    REQUIRE(estimate_message_height(m, 240) == 5);  // 正文 2 物理行×行距2 = 4 + 操作按钮栏 1
 }
 
 TEST_CASE("estimate_message_height matches empty assistant message", "[layout][message]") {
@@ -176,8 +176,8 @@ TEST_CASE("estimate_message_height matches user message", "[layout][message]") {
     m.text = "hi\n```cpp\nx\n```";
     m.sealed = true;
     REQUIRE(estimate_message_height(m, 240) == rendered_height(m));
-    // 上下留白 2 + 内容（段落 1 行 + 代码块：1 代码行 + 1 lang 行 + 2 留白 = 4） = 7
-    REQUIRE(estimate_message_height(m, 240) == 7);
+    // 上下留白 2 + 内容（段落 1 行×行距2=2 + 代码块：1 代码行 + 1 lang 行 + 2 留白 = 4） = 8
+    REQUIRE(estimate_message_height(m, 240) == 8);
 }
 
 TEST_CASE("estimate_message_height matches user message with empty text", "[layout][message]") {
@@ -194,8 +194,8 @@ TEST_CASE("estimate_message_height matches reasoning card collapsed", "[layout][
     m.reasoning = "thinking line";
     m.reasoning_expanded = false;
     REQUIRE(estimate_message_height(m, 240) == rendered_height(m));
-    // 思考卡 3（边框 2 + 头 1）+ 正文 1 + 操作按钮栏 1 = 5
-    REQUIRE(estimate_message_height(m, 240) == 5);
+    // 思考卡 3（边框 2 + 头 1）+ 正文 1×行距2=2 + 操作按钮栏 1 = 6
+    REQUIRE(estimate_message_height(m, 240) == 6);
 }
 
 TEST_CASE("estimate_message_height matches reasoning card expanded", "[layout][message]") {
@@ -204,8 +204,8 @@ TEST_CASE("estimate_message_height matches reasoning card expanded", "[layout][m
     m.reasoning = "think a\nthink b";
     m.reasoning_expanded = true;
     REQUIRE(estimate_message_height(m, 240) == rendered_height(m));
-    // 思考卡 3 + 展开 2 + 正文 1 + 操作按钮栏 1 = 7
-    REQUIRE(estimate_message_height(m, 240) == 7);
+    // 思考卡 3 + 展开 reasoning 2 物理行×行距2=4 + 正文 1×行距2=2 + 操作按钮栏 1 = 10
+    REQUIRE(estimate_message_height(m, 240) == 10);
 }
 
 TEST_CASE("estimate_message_height matches tool card", "[layout][message]") {
@@ -218,8 +218,8 @@ TEST_CASE("estimate_message_height matches tool card", "[layout][message]") {
     t.result = "line1\nline2";
     m.tool_calls.push_back(t);
     REQUIRE(estimate_message_height(m, 240) == rendered_height(m));
-    // 工具卡 3(边框2+头1) + vPad 2 + 展开 2 + 正文 1 + 操作按钮栏 1 = 9
-    REQUIRE(estimate_message_height(m, 240) == 9);
+    // 工具卡 3(边框2+头1) + vPad 2 + 展开 2 + 正文 1×行距2=2 + 操作按钮栏 1 = 12
+    REQUIRE(estimate_message_height(m, 240) == 12);
 }
 
 TEST_CASE("estimate_message_height matches tool card collapsed", "[layout][message]") {
@@ -231,8 +231,8 @@ TEST_CASE("estimate_message_height matches tool card collapsed", "[layout][messa
     t.expanded = false;
     m.tool_calls.push_back(t);
     REQUIRE(estimate_message_height(m, 240) == rendered_height(m));
-    // 工具卡 3 + vPad 2 + 正文 1 + 操作按钮栏 1 = 7
-    REQUIRE(estimate_message_height(m, 240) == 7);
+    // 工具卡 3 + vPad 2 + 正文 1×行距2=2 + 操作按钮栏 1 = 8
+    REQUIRE(estimate_message_height(m, 240) == 8);
 }
 
 TEST_CASE("estimate_message_height matches tool card with file path header", "[layout][message]") {
@@ -246,8 +246,8 @@ TEST_CASE("estimate_message_height matches tool card with file path header", "[l
     t.result = "line1\nline2";
     m.tool_calls.push_back(t);
     REQUIRE(estimate_message_height(m, 240) == rendered_height(m));
-    // 工具卡 3 + vPad 2 + 路径行 1 + 展开 2 + 正文 1 + 操作按钮栏 1 = 10
-    REQUIRE(estimate_message_height(m, 240) == 10);
+    // 工具卡 3 + vPad 2 + 路径行 1 + 展开 2 + 正文 1×行距2=2 + 操作按钮栏 1 = 13
+    REQUIRE(estimate_message_height(m, 240) == 13);
 }
 
 TEST_CASE("estimate_message_height ignores tool card non-json arguments", "[layout][message]") {
@@ -261,8 +261,8 @@ TEST_CASE("estimate_message_height ignores tool card non-json arguments", "[layo
     t.result = "line1";
     m.tool_calls.push_back(t);
     REQUIRE(estimate_message_height(m, 240) == rendered_height(m));
-    // 工具卡 3 + vPad 2 + 展开 1 + 正文 1 + 操作按钮栏 1 = 8（无路径行）
-    REQUIRE(estimate_message_height(m, 240) == 8);
+    // 工具卡 3 + vPad 2 + 展开 1 + 正文 1×行距2=2 + 操作按钮栏 1 = 10（无路径行）
+    REQUIRE(estimate_message_height(m, 240) == 10);
 }
 
 TEST_CASE("estimate_message_height matches two adjacent tool cards", "[layout][message]") {
@@ -280,9 +280,9 @@ TEST_CASE("estimate_message_height matches two adjacent tool cards", "[layout][m
     t2.expanded = false;
     m.tool_calls.push_back(t2);
     REQUIRE(estimate_message_height(m, 240) == rendered_height(m));
-    // 正文 1 + 卡片 3+3 + 分隔(每卡前 1 + 最后卡后 1 = 3) + 操作按钮栏 1 = 11
+    // 正文 1×行距2=2 + 卡片 3+3 + 分隔(每卡前 1 + 最后卡后 1 = 3) + 操作按钮栏 1 = 12
     //（相邻卡片之间只留 1 行，不再双倍叠加）
-    REQUIRE(estimate_message_height(m, 240) == 11);
+    REQUIRE(estimate_message_height(m, 240) == 12);
 }
 
 TEST_CASE("estimate_message_height matches error message", "[layout][message]") {
@@ -291,6 +291,6 @@ TEST_CASE("estimate_message_height matches error message", "[layout][message]") 
     m.text = "boom";
     m.sealed = true;
     REQUIRE(estimate_message_height(m, 240) == rendered_height(m));
-    // 错误头 1 + 正文 1 = 2
-    REQUIRE(estimate_message_height(m, 240) == 2);
+    // 错误头 1 + 正文 1×行距2=2 = 3
+    REQUIRE(estimate_message_height(m, 240) == 3);
 }
