@@ -63,7 +63,6 @@ std::string command_exec_token(std::string_view line) {
             if (!cur.empty()) {
                 tokens.push_back(cur);
                 cur.clear();
-                if (tokens.size() >= 4) break;  // 最多看几个 token 就够
             }
         } else if (c == ';' || c == '&' || c == '|' || c == '>' || c == '<' || c == '`') {
             if (!cur.empty()) {
@@ -102,6 +101,33 @@ std::string command_exec_token(std::string_view line) {
         return first;  // 只有包装层本身（如 `sh`）→ 保守放行纯包装
     }
     return first;
+}
+
+/// @brief 命令串是否含 shell 链接/分隔/重定向/命令替换元字符（P1-1 硬阻塞修复）
+/// @details guard_command 必须在字符串级拒绝这些字符，而非仅校验首个 token：
+///          即使首命令在白名单内（如 cmake），`&&` 之后的任意命令仍会被包装
+///          shell（sh -c / cmd /c）执行 → RCE。默认命令（kTestCmd/kBuildCmd/
+///          kLintCmd）是项目硬编码可信串，不含这些字符，放行不受影响。
+bool contains_separator(std::string_view s) noexcept {
+    for (const char c : s) {
+        switch (c) {
+            case ';':   // 命令分隔
+            case '&':   // 后台 / &&
+            case '|':   // 管道 / ||
+            case '>':   // 重定向
+            case '<':   // 重定向
+            case '`':   // 反引号命令替换
+            case '$':   // 变量展开 / $(...) 命令替换
+            case '(':   // 子 shell / 命令分组
+            case ')':   // 子 shell
+            case '\n':  // 换行命令分隔
+            case '\r':
+                return true;
+            default:
+                break;
+        }
+    }
+    return false;
 }
 
 /// @brief 命令是否在白名单内（仅校验真实落地的 exec token）
@@ -188,6 +214,13 @@ const char* kBuildCmd = "cmake --build . --config Debug";
 ///        默认命令（kTestCmd 等）是项目硬编码的可信串→放行；
 ///        非空覆盖命令→必须在白名单内，否则拒绝执行（返回 Failed）。
 std::string guard_command(const std::string& cmd) {
+    // P1-1 硬阻塞：命令串含 shell 链接/分隔/重定向/命令替换元字符时，整个拒绝。
+    // 不能只靠 command_exec_token（它遇 `&&` 即停并返回首 token"cmake"，导致
+    // "cmake --build . && rm -rf /" 被当成白名单命令放行 → 包装 shell 全量执行 → RCE。
+    if (contains_separator(cmd)) {
+        LOG_WARN("[guard_command] rejected: contains shell separator/operator");
+        return {};
+    }
     if (is_command_allowed(cmd)) {
         return cmd;
     }

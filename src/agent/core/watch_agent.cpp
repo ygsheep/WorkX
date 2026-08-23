@@ -47,8 +47,17 @@ ReActResult WatchAgent::run(const AgentGoal& goal, const std::string& goal_spec,
     }
 
     // 解析监控目录（相对路径挂到会话 cwd 下）
-    fs::path root = fs::path(m_deps.cwd) / fs::path(spec.path);
     std::error_code ec;
+    fs::path cwd_canon = fs::weakly_canonical(fs::path(m_deps.cwd), ec);
+    if (ec || !fs::is_directory(cwd_canon, ec)) {
+        result.was_error = true;
+        result.goal_status = GoalStatus::Failed;
+        result.error_message = "cannot resolve working directory";
+        LOG_WARN("[watch_agent] bad cwd '{}' (goal='{}')", m_deps.cwd, goal_spec);
+        return result;
+    }
+    fs::path root = cwd_canon / fs::path(spec.path);
+    ec.clear();
     root = fs::weakly_canonical(root, ec);
     if (ec || !fs::is_directory(root, ec)) {
         result.was_error = true;
@@ -57,7 +66,24 @@ ReActResult WatchAgent::run(const AgentGoal& goal, const std::string& goal_spec,
         LOG_WARN("[watch_agent] bad watch path '{}' (goal='{}')", spec.path, goal_spec);
         return result;
     }
+    // 隔离校验：监控根必须落在会话 cwd 子树内（防 symlink / ../ 逃逸到敏感目录）
+    const std::string cwd_s = cwd_canon.lexically_normal().string();
     const std::string root_s = root.lexically_normal().string();
+    {
+        bool inside = root_s == cwd_s;
+        if (!inside) {
+            const std::string prefix = cwd_s + std::string(1, fs::path::preferred_separator);
+            inside = root_s.rfind(prefix, 0) == 0;
+        }
+        if (!inside) {
+            result.was_error = true;
+            result.goal_status = GoalStatus::Failed;
+            result.error_message = "watch path escapes working directory";
+            LOG_WARN("[watch_agent] watch path escapes cwd '{}' (goal='{}')",
+                     spec.path, goal_spec);
+            return result;
+        }
+    }
 
     std::string glob_err;
     const std::vector<std::string> items =

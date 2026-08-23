@@ -21,9 +21,15 @@ struct BatchItemResult {
     std::string item;
     bool skipped = false;        // item 无法安全引用
     bool rejected = false;       // 物化命令未过白名单
+    bool timedout = false;       // 整体未在截止前完成
     int exit_code = -1;
     std::string out_brief;       // stdout/stderr 摘要
 };
+
+// BatchAgent 单次 run 的整体截止（毫秒）。run_whitelisted 单条 exec 已有 60s
+// 超时，但 n 条 * 并发下可能长时间阻塞；超过截止则未开始/未完成的条目标记
+// timedout，避免 join 无限挂起。默认 5 分钟。
+constexpr std::chrono::milliseconds kBatchDeadline(300000);
 
 } // namespace
 
@@ -88,14 +94,26 @@ ReActResult BatchAgent::run(const AgentGoal& goal, const std::string& goal_spec,
     }
 
     std::atomic<size_t> next{0};
+    std::atomic<bool> expired{false};
+    const auto deadline = std::chrono::steady_clock::now() + kBatchDeadline;
     const auto worker = [&]() {
         for (;;) {
             const size_t idx = next.fetch_add(1);
             if (idx >= n) break;
+            if (expired.load(std::memory_order_relaxed)) {
+                results[idx].timedout = true;  // 整体截止已到，不再启动新的 exec
+                continue;
+            }
             auto& r = results[idx];
             const std::string cmd = materialize_cmd(spec.cmd_template, items[idx]);
             if (cmd.empty()) {
                 r.skipped = true;  // item 含 shell 敏感字符，拒绝注入
+                continue;
+            }
+            // 启动前复查截止：已过期则本轮条目直接标记 timedout，不再分流副作用
+            if (std::chrono::steady_clock::now() >= deadline) {
+                expired.store(true, std::memory_order_relaxed);
+                results[idx].timedout = true;
                 continue;
             }
             bool rejected = false;
@@ -119,12 +137,15 @@ ReActResult BatchAgent::run(const AgentGoal& goal, const std::string& goal_spec,
     }
 
     // 汇总
-    int ok = 0, failed = 0, skipped = 0, rejected = 0;
+    int ok = 0, failed = 0, skipped = 0, rejected = 0, timedout = 0;
     std::string summary;
     summary.reserve(items.size() * 80);
     summary = "批量执行 " + std::to_string(n) + " 项（glob=`" + spec.glob + "`）：\n\n";
     for (const auto& r : results) {
-        if (r.rejected) {
+        if (r.timedout) {
+            ++timedout;
+            summary += "  ⏱ `" + r.item + "` 整体截止超时，未执行\n";
+        } else if (r.rejected) {
             ++rejected;
             summary += "  ⚠ `" + r.item + "` 命令被白名单拒绝\n";
         } else if (r.skipped) {
@@ -143,15 +164,16 @@ ReActResult BatchAgent::run(const AgentGoal& goal, const std::string& goal_spec,
         }
     }
     summary += "\n完成：✓" + std::to_string(ok) + " ✗" + std::to_string(failed)
-             + " 跳过" + std::to_string(skipped) + " 拒绝" + std::to_string(rejected);
+             + " 跳过" + std::to_string(skipped) + " 拒绝" + std::to_string(rejected)
+             + " 超时" + std::to_string(timedout);
 
-    result.goal_status = (failed == 0 && rejected == 0 && skipped == 0)
+    result.goal_status = (failed == 0 && rejected == 0 && skipped == 0 && timedout == 0)
                              ? GoalStatus::Achieved : GoalStatus::Failed;
     if (m_deps.tracker) {
         m_deps.tracker->record_verdict(
             result.goal_status,
-            std::format("batch ok={} failed={} skipped={} rejected={}",
-                        ok, failed, skipped, rejected));
+            std::format("batch ok={} failed={} skipped={} rejected={} timedout={}",
+                        ok, failed, skipped, rejected, timedout));
     }
 
     result.final_answer = summary;
