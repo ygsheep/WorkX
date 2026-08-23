@@ -41,6 +41,7 @@ AgentType parse_agent_type(std::string_view s) noexcept {
     if (v == "batch") return AgentType::Batch;
     if (v == "watch" || v == "watcher") return AgentType::Watch;
     if (v == "script" || v == "script-agent") return AgentType::Script;
+    if (v == "background" || v == "bg") return AgentType::Background;
     return AgentType::Unknown;
 }
 
@@ -56,6 +57,7 @@ std::string_view to_string(AgentType type) noexcept {
         case AgentType::Batch:       return "batch";
         case AgentType::Watch:       return "watch";
         case AgentType::Script:      return "script";
+        case AgentType::Background:  return "background";
         case AgentType::Unknown:
         default:                     return "unknown";
     }
@@ -73,6 +75,7 @@ bool is_implemented(AgentType type) noexcept {
         case AgentType::Coordinator:
         case AgentType::Researcher:
         case AgentType::Reviewer:
+        case AgentType::Background:   // 后台分发（包装默认底层 Agent）
             return true;
         default:
             return false;

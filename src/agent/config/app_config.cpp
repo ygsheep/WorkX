@@ -152,7 +152,8 @@ void register_config_defaults(ConfigManager& cfg) {
         .key = keys::AGENT_ACTIVE,
         .description = "Current agent type (empty=ReAct; goal-guarded/verify=GoalGuardedAgent; "
                        "planner/coordinator/researcher/reviewer=read-only/planning roles; "
-                       "executor=execute; coordinator+AgentTool; batch/watch/script=no-LLM modes); "
+                       "executor=execute; coordinator+AgentTool; batch/watch/script=no-LLM modes; "
+                       "background/bg=run request in background, non-blocking, event-notified); "
                        "non-empty also filters active skills",
         .default_value = std::string(""),
         .type = ConfigSchema::Type::String

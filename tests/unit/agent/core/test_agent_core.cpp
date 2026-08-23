@@ -76,7 +76,16 @@ TEST_CASE("to_string / is_implemented 一致", "[agent][agent_type]") {
     REQUIRE(is_implemented(AgentType::Executor));
     REQUIRE(is_implemented(AgentType::Researcher));
     REQUIRE(is_implemented(AgentType::Reviewer));
+    // 后台分发（包装默认底层 Agent）
+    REQUIRE(is_implemented(AgentType::Background));
     REQUIRE_FALSE(is_implemented(AgentType::Unknown));
+}
+
+TEST_CASE("parse_agent_type: background/bg 别名", "[agent][agent_type]") {
+    REQUIRE(parse_agent_type("background") == AgentType::Background);
+    REQUIRE(parse_agent_type("bg") == AgentType::Background);
+    REQUIRE(parse_agent_type(" Background ") == AgentType::Background);
+    REQUIRE(to_string(AgentType::Background) == "background");
 }
 
 // ============================================================

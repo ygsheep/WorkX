@@ -99,4 +99,24 @@ private:
     AgentType m_type;
 };
 
+/// @brief BackgroundAgent 的 IAgentLoop 适配（长时运行、不阻塞主对话、事件通知）
+/// @details agent.active="background" 时由 QueryEngine 路由到此。run() 把整条用户
+///          请求包装成 TaskManager 后台任务（底层默认 ReAct 循环）并**立即返回**
+///          task_id 提示；后台线程逐步发 BackgroundProgressEvent、完成发
+///          BackgroundCompletedEvent。不触碰主会话 m_messages（run() 返回后消息
+///          未变，任务在独立消息缓冲中运行）。
+class WORKX_API BackgroundLoopAdapter final : public IAgentLoop {
+public:
+    explicit BackgroundLoopAdapter(const GoalAgentDeps& deps);
+    AgentRunResult run(AgentRunContext ctx) override;
+    AgentType type() const noexcept override { return AgentType::Background; }
+
+    /// 最近一次分发的后台任务 id（空 = 尚未分发/失败）
+    const std::string& task_id() const noexcept { return m_task_id; }
+
+private:
+    GoalAgentDeps m_deps;
+    std::string m_task_id;
+};
+
 } // namespace agent

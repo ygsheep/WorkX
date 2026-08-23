@@ -28,6 +28,7 @@ enum class AgentType {
     Batch,            ///< #32 同构输入并行
     Watch,            ///< #32 文件/事件监控
     Script,           ///< #32 确定性脚本执行（无需 LLM）
+    Background,       ///< 长时运行：整条请求转后台，不阻塞主对话，事件通知
 };
 
 /// @brief 将 agent.active 字符串解析为 AgentType
