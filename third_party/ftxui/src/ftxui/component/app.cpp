@@ -1411,7 +1411,18 @@ size_t App::Internal::FetchTerminalEvents() {
           mouse.button = delta > 0 ? Mouse::WheelRight : Mouse::WheelLeft;
           mouse.motion = Mouse::Pressed;
         } else if (flags & MOUSE_MOVED) {
-          mouse.button = Mouse::None;
+          // 拖拽（按住左键移动）：dwButtonState 保留着按下的按钮位，据此把
+          // "按住拖动"识别为 button=Left + motion=Moved，供上层实现拖拽调整
+          // 侧边栏宽度等交互；否则拖动与普通悬停无法区分。
+          if (me.dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) {
+            mouse.button = Mouse::Left;
+          } else if (me.dwButtonState & RIGHTMOST_BUTTON_PRESSED) {
+            mouse.button = Mouse::Right;
+          } else if (me.dwButtonState & FROM_LEFT_2ND_BUTTON_PRESSED) {
+            mouse.button = Mouse::Middle;
+          } else {
+            mouse.button = Mouse::None;
+          }
           mouse.motion = Mouse::Moved;
         } else {
           // Press / release（DOUBLE_CLICK 视为普通按下）
