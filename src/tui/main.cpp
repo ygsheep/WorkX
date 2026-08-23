@@ -99,15 +99,20 @@ int main(int argc, char** argv) {
         else if (level_str == "fatal") level = agent::log::LogLevel::LOG_FATAL;
         agent::log::Logger::get_instance().set_level(level);
 
-        // logging.file：空 = 默认 workx_时间戳.log；启动时清理过期历史文件
+        // logging.file：空 = 默认单一固定文件 workx.log（按大小轮转）；
+        // 启动时清理旧版时间戳历史日志 workx_*.log
         std::string log_file = cfg.get_or<std::string>(agent::keys::LOG_FILE, "");
+        size_t max_size_mb = static_cast<size_t>(cfg.get_or<int>(agent::keys::LOG_MAX_SIZE_MB, 10));
+        size_t max_files = static_cast<size_t>(cfg.get_or<int>(agent::keys::LOG_MAX_FILES, 5));
         if (log_file.empty()) {
             agent::cleanup_expired_logs(cfg.get_or<int>(agent::keys::LOG_RETENTION_DAYS, 7));
             const auto& def = agent::default_log_path();
             if (!def.empty()) log_file = def.string();
         }
         if (!log_file.empty()) {
-            agent::log::Logger::get_instance().enable_file_output(log_file, true);
+            auto& logger = agent::log::Logger::get_instance();
+            logger.set_rotation(max_size_mb * 1024 * 1024, max_files);
+            logger.enable_file_output(log_file, true);
         }
 
         // 审计日志（大小轮转 + 天数清理）：启用后记录工具调用与安全事件

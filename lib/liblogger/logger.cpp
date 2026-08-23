@@ -169,9 +169,40 @@ void Logger::writer_thread_func() {
             if (m_file_stream.is_open()) {
                 m_file_stream << buffer;
                 m_file_stream.flush();
+                maybe_rotate_locked();
             }
         }
     }
+}
+
+void Logger::maybe_rotate_locked() {
+    const size_t max_bytes = m_max_size_bytes.load(std::memory_order_relaxed);
+    const size_t max_files = m_max_files.load(std::memory_order_relaxed);
+    if (max_bytes == 0 || max_files == 0 || m_filename.empty()) return;
+
+    std::error_code ec;
+    const uintmax_t size = std::filesystem::file_size(m_filename, ec);
+    if (ec || size == 0 || static_cast<uintmax_t>(max_bytes) > size) return;
+
+    m_file_stream.close();
+
+    const std::string base = m_filename;
+    // 从最旧往最新平移：.k -> .k+1，超出 max_files 的最旧文件被丢弃
+    for (size_t i = max_files; i > 1; --i) {
+        std::error_code e;
+        const std::string dst = base + "." + std::to_string(i);
+        const std::string src = base + "." + std::to_string(i - 1);
+        std::filesystem::remove(dst, e);
+        if (std::filesystem::exists(src, e)) {
+            std::filesystem::rename(src, dst, e);
+        }
+    }
+
+    // 当前文件滚动为 .1，并重新打开新的空文件
+    std::error_code e;
+    std::filesystem::remove(base + ".1", e);
+    std::filesystem::rename(base, base + ".1", e);
+    m_file_stream.open(base, std::ios::app);
 }
 
 } // namespace agent::log

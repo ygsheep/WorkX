@@ -186,10 +186,24 @@ void register_config_defaults(ConfigManager& cfg) {
     });
     cfg.register_schema({
         .key = keys::LOG_RETENTION_DAYS,
-        .description = "Retention days for run logs (0 = keep all)",
+        .description = "Retention days for legacy timestamped run logs workx_*.log (0 = keep all)",
         .default_value = 7,
         .type = ConfigSchema::Type::Int,
         .int_range = std::make_pair<int64_t, int64_t>(0, 3650)
+    });
+    cfg.register_schema({
+        .key = keys::LOG_MAX_SIZE_MB,
+        .description = "Run log roll size in MB (0 = no rotation, single workx.log grows unbounded)",
+        .default_value = 10,
+        .type = ConfigSchema::Type::Int,
+        .int_range = std::make_pair<int64_t, int64_t>(0, 1024)
+    });
+    cfg.register_schema({
+        .key = keys::LOG_MAX_FILES,
+        .description = "Max rolled run log files kept besides workx.log (workx.log.1 .. .N)",
+        .default_value = 5,
+        .type = ConfigSchema::Type::Int,
+        .int_range = std::make_pair<int64_t, int64_t>(1, 100)
     });
 
     // === Audit（#37 审计日志：大小轮转 + 天数清理）===
@@ -352,19 +366,9 @@ std::filesystem::path default_config_path() {
 }
 
 std::filesystem::path default_log_path() {
-    // 文件名附加程序启动时间后缀：workx_YYYYMMDD_HHMMSS.log
-    // 便于区分多次启动产生的日志，避免覆盖历史日志
-    auto now = std::chrono::system_clock::now();
-    auto t = std::chrono::system_clock::to_time_t(now);
-    std::tm tm{};
-#ifdef _WIN32
-    localtime_s(&tm, &t);
-#else
-    localtime_r(&t, &tm);
-#endif
-    char time_suffix[32];
-    std::strftime(time_suffix, sizeof(time_suffix), "%Y%m%d_%H%M%S", &tm);
-    std::string log_filename = std::string("workx_") + time_suffix + ".log";
+    // 单一固定文件名 workx.log，按大小轮转为 workx.log.1/.2/...
+    // 避免旧版每次启动生成 workx_YYYYMMDD_HHMMSS.log 导致文件无限堆积
+    std::string log_filename = "workx.log";
 
 // 所有构建（Debug/Release）：日志统一写入用户配置目录 ~/.workx/logs/
     // 便于在多启动实例间集中管理日志，避免散落于 exe 同目录

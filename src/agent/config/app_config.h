@@ -56,7 +56,11 @@ namespace keys {
     // Logging
     constexpr const char* LOG_LEVEL        = "logging.level";
     constexpr const char* LOG_FILE         = "logging.file";
-    /// 运行日志保留天数：启动时删除超过该天数的历史 workx*.log（0 = 不清理）
+    /// 运行日志单文件超过该大小（MB）时轮转（0 = 不轮转），滚动为 workx.log.N
+    constexpr const char* LOG_MAX_SIZE_MB  = "logging.max_size_mb";
+    /// 保留的运行日志轮转文件数（workx.log.1 .. workx.log.N）
+    constexpr const char* LOG_MAX_FILES    = "logging.max_files";
+    /// 运行日志保留天数：启动时删除超过该天数的历史 workx_*.log（旧版时间戳命名，0 = 不清理）
     constexpr const char* LOG_RETENTION_DAYS = "logging.retention_days";
 
     // Tool — FileReadTool

@@ -96,7 +96,7 @@ public:
     static AuditLogger& instance() noexcept;
 
     /// @brief 初始化审计日志文件
-    /// @param file_path 审计日志文件路径（如 ~/.workx/logs/audit/audit.jsonl）
+    /// @param file_path 审计日志文件路径（如 ~/.workx/logs/audit.jsonl）
     /// @param max_size_mb 单文件大小上限（MB），超过时触发轮转
     /// @param retention_days 保留天数
     void init(const std::string& file_path, size_t max_size_mb = 10, size_t retention_days = 30);
