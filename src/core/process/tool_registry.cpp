@@ -140,6 +140,14 @@ std::optional<std::string> ToolRegistry::resolve_ripgrep() const {
 #endif
 }
 
+std::optional<std::string> ToolRegistry::resolve_jq() const {
+#ifdef _WIN32
+    return resolve_tool("jq", "tools/jq.exe", "jq.exe");
+#else
+    return resolve_tool("jq", "tools/jq", "jq");
+#endif
+}
+
 void ToolRegistry::clear_cache() {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_cache.clear();

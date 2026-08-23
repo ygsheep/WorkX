@@ -97,6 +97,20 @@ if(WORKX_HAS_VENDOR_RIPGREP)
     target_compile_definitions(workx PRIVATE WORKX_HAS_BUNDLED_RIPGREP=1)
 endif()
 
+# --- vendor/jq：拷贝单文件 jq 到 <exe_dir>/tools/jq ---
+# 由 scripts/fetch-jq.py 下载；运行时由 ToolRegistry::resolve_jq() 查找
+if(WORKX_HAS_VENDOR_JQ)
+    add_custom_command(TARGET workx POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:workx>/tools"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${WORKX_JQ_SOURCE}"
+            "$<TARGET_FILE_DIR:workx>/tools/${WORKX_JQ_DEST_NAME}"
+        COMMENT "Bundling jq: ${WORKX_JQ_DEST_NAME}"
+    )
+    target_compile_definitions(workx PRIVATE WORKX_HAS_BUNDLED_JQ=1)
+endif()
+
 target_include_directories(workx PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${CMAKE_CURRENT_SOURCE_DIR}

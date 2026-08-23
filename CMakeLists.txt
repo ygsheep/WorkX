@@ -259,6 +259,33 @@ else()
 endif()
 
 # ============================================================
+# vendor/jq: 单文件 jq 拷贝到输出目录的 tools/ 子目录
+# 二进制由 scripts/fetch-jq.py 下载到 vendor/jq/<platform>/
+# 运行时由 ToolRegistry 的 resolve_jq() 从 <exe_dir>/tools/jq 查找
+# 缺失时自动回退 PATH 中的 jq，仍无则不启用，不报错
+# ============================================================
+set(WORKX_VENDOR_JQ_DIR ${CMAKE_SOURCE_DIR}/vendor/jq)
+
+if(WIN32)
+    set(WORKX_JQ_SOURCE ${WORKX_VENDOR_JQ_DIR}/windows/jq.exe)
+    set(WORKX_JQ_DEST_NAME jq.exe)
+elseif(APPLE)
+    set(WORKX_JQ_SOURCE ${WORKX_VENDOR_JQ_DIR}/macos/jq)
+    set(WORKX_JQ_DEST_NAME jq)
+else()
+    set(WORKX_JQ_SOURCE ${WORKX_VENDOR_JQ_DIR}/linux/jq)
+    set(WORKX_JQ_DEST_NAME jq)
+endif()
+
+if(EXISTS "${WORKX_JQ_SOURCE}")
+    set(WORKX_HAS_VENDOR_JQ TRUE)
+    message(STATUS "jq: vendor binary found at ${WORKX_JQ_SOURCE}")
+else()
+    set(WORKX_HAS_VENDOR_JQ FALSE)
+    message(STATUS "jq: vendor binary not found at ${WORKX_JQ_SOURCE}, fallback to PATH (or disabled)")
+endif()
+
+# ============================================================
 # 业务源码（src/ 下按 core/agent/tui/app 模块拆分，详见各 CMakeLists.txt）
 # ============================================================
 add_subdirectory(src)

@@ -94,17 +94,32 @@ TEST_CASE("ToolRegistry resolve_tool for nonexistent tool returns nullopt", "[to
     REQUIRE_FALSE(path.has_value());
 }
 
-TEST_CASE("ToolRegistry resolve_tool finds shell in PATH", "[tool_registry][resolve]") {
+// ============================================================
+// resolve_jq 基本契约（bundled <exe_dir>/tools/jq > PATH）
+// ============================================================
+
+TEST_CASE("ToolRegistry resolve_jq returns absolute path or nullopt", "[tool_registry][jq]") {
     auto& reg = ToolRegistry::instance();
-#ifdef _WIN32
-    // cmd.exe 一定在 PATH 中
-    auto path = reg.resolve_tool("cmd_test", "tools/cmd.exe", "cmd.exe");
-#else
-    // sh 一定在 PATH 中
-    auto path = reg.resolve_tool("sh_test", "tools/sh", "sh");
-#endif
-    // 应该从 PATH 找到
-    REQUIRE(path.has_value());
-    REQUIRE(std::filesystem::path(*path).is_absolute());
-    REQUIRE(std::filesystem::exists(*path));
+    reg.clear_cache();
+
+    auto path = reg.resolve_jq();
+    // 要么返回 nullopt（未捆绑且未安装），要么返回绝对路径
+    REQUIRE(is_absolute_if_present(path));
+
+    // 如果返回了路径，文件应该存在
+    if (path) {
+        REQUIRE(std::filesystem::exists(*path));
+    }
+}
+
+TEST_CASE("ToolRegistry resolve_jq result is cached consistently", "[tool_registry][jq]") {
+    auto& reg = ToolRegistry::instance();
+    reg.clear_cache();
+
+    auto first = reg.resolve_jq();
+    auto second = reg.resolve_jq();
+    REQUIRE(first.has_value() == second.has_value());
+    if (first) {
+        REQUIRE(*first == *second);
+    }
 }

@@ -60,6 +60,8 @@ tests/*.out
 
 # Vendor external binaries (downloaded by scripts/fetch-ripgrep.py)
 vendor/ripgrep/
+# Vendor external binaries (downloaded by scripts/fetch-jq.py)
+vendor/jq/
 
 # Generated icon artifacts (from src/icon.png via scripts/convert_icon.py)
 # 源图 src/icon.png 入库，产物 ico/icns 由 CMake 配置阶段生成
