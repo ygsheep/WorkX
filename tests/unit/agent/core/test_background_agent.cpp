@@ -87,3 +87,64 @@ TEST_CASE("background: 缺少 task_manager/provider 时返回错误而非分发"
     REQUIRE(out.react.was_error);
     REQUIRE(out.background_task_id.empty());
 }
+
+TEST_CASE("background: 单次使用守卫 — 二次 run 被拒绝（P1-2）", "[agent][background]") {
+    MockTaskManager tm;
+    MockCompletionProvider provider;
+    auto registry = std::make_shared<tool::ToolRegistry>();
+
+    GoalAgentDeps deps;
+    deps.provider = &provider;
+    deps.registry = registry;
+    deps.task_manager = &tm;
+    deps.cwd = ".";
+    deps.session_id = "sess-1";
+
+    BackgroundLoopAdapter adapter(deps);
+    std::vector<ChatMessage> messages;
+    messages.push_back(ChatMessage::user("first"));
+
+    AgentRunContext ctx;
+    ctx.messages = &messages;
+    ctx.system_prompt = "sys";
+
+    REQUIRE_FALSE(adapter.run(ctx).react.was_error);   // 首次成功（分发）
+    const AgentRunResult second = adapter.run(ctx);     // 二次应被单次守卫拒绝
+    REQUIRE(second.react.was_error);
+    REQUIRE(second.background_task_id.empty());
+    REQUIRE(second.react.error_message.find("single-use") != std::string::npos);
+    REQUIRE(tm.launched_count() == 1);                 // 未重复分发
+}
+
+TEST_CASE("background: cancel() 定向取消已分发任务（P1-1）", "[agent][background]") {
+    MockTaskManager tm;
+    MockCompletionProvider provider;
+    auto registry = std::make_shared<tool::ToolRegistry>();
+
+    GoalAgentDeps deps;
+    deps.provider = &provider;
+    deps.registry = registry;
+    deps.task_manager = &tm;
+    deps.cwd = ".";
+    deps.session_id = "sess-1";
+
+    BackgroundLoopAdapter adapter(deps);
+    std::vector<ChatMessage> messages;
+    messages.push_back(ChatMessage::user("task"));
+
+    AgentRunContext ctx;
+    ctx.messages = &messages;
+    ctx.system_prompt = "sys";
+
+    const AgentRunResult out = adapter.run(ctx);
+    REQUIRE_FALSE(out.react.was_error);
+    REQUIRE_FALSE(out.background_task_id.empty());
+
+    adapter.cancel();
+    const auto task = tm.find_task(out.background_task_id);
+    REQUIRE(task != nullptr);
+    REQUIRE(task->shouldCancel());   // 协作式取消标志已置位
+
+    // task_id 按值返回（header API），不暴露内部缓冲引用
+    REQUIRE(adapter.task_id() == out.background_task_id);
+}

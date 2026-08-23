@@ -105,18 +105,22 @@ private:
 ///          task_id 提示；后台线程逐步发 BackgroundProgressEvent、完成发
 ///          BackgroundCompletedEvent。不触碰主会话 m_messages（run() 返回后消息
 ///          未变，任务在独立消息缓冲中运行）。
+/// @note 单一实例只分发一次（m_used 单次使用守卫，防并发 run() 对 m_task_id 竞争）。
 class WORKX_API BackgroundLoopAdapter final : public IAgentLoop {
 public:
     explicit BackgroundLoopAdapter(const GoalAgentDeps& deps);
     AgentRunResult run(AgentRunContext ctx) override;
     AgentType type() const noexcept override { return AgentType::Background; }
 
-    /// 最近一次分发的后台任务 id（空 = 尚未分发/失败）
-    const std::string& task_id() const noexcept { return m_task_id; }
+    /// 最近一次分发的后台任务 id；按值返回避免对外暴露内部缓冲的引用竞争
+    std::string task_id() const noexcept { return m_task_id; }
+    /// 定向取消本实例分发的后台任务（task_manager->cancel；未分发/已结束为空操作）
+    void cancel() const noexcept;
 
 private:
     GoalAgentDeps m_deps;
-    std::string m_task_id;
+    std::atomic<bool> m_used{false};  ///< 单次使用守卫（PR R3-1 P1-2）
+    std::string m_task_id;            ///< 最近一次分发的后台任务 id（写入受 m_used 保护）
 };
 
 } // namespace agent

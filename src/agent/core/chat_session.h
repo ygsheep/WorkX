@@ -361,6 +361,7 @@ private:
     ///          会与任务线程形成数据竞争 → 堆损坏（resume 后重发消息崩溃的 UAF 根因）。
     ///          复刻析构 wait 模式：cancel 当前任务 + wait → cancelAll + waitForAll → 复位标志。
     void cancel_and_wait_current_task();
+    void cancel_background_tasks();  // 定向取消本会话已分发的后台任务（P1-1）
 
     /// @brief #24：接线 TodoStore 持久化回调（session_id → 当前 SessionStore 写 todo 事件）
     /// @details 在 SessionStore 创建/切换后调用（懒创建 + switch_session）。
@@ -436,6 +437,8 @@ private:
     mutable std::mutex m_state_mutex;
     std::shared_ptr<Task> m_current_task;  // 跟踪当前后台任务，用于析构等待
     std::condition_variable m_task_cv;
+    /// 本会话已分发的后台任务 id（P1-1 定向取消；受 m_state_mutex 保护）
+    std::vector<std::string> m_background_task_ids;
 };
 
 } // namespace agent

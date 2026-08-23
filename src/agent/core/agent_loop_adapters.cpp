@@ -101,14 +101,58 @@ std::string last_user_text(const std::vector<ChatMessage>* messages) {
     return {};
 }
 
+/// @brief 后台任务保留的提示词长度上限（P2-2：避免超长请求直灌 LLM）
+constexpr size_t kMaxBackgroundPromptChars = 32000;
+
+/// @brief 后台任务不派生的工具（AgentTool）：后台不再递归起 SubAgent/后台任务，
+///        防异步级联失控（P2-3 最小权限降级）。
+/// @note "Agent" 需对齐 agent::tool::kAgentToolName，改动时保持同步。
+constexpr const char* kBackgroundForbiddenTool = "Agent";
+
+/// @brief 过滤后台任务不应暴露的工具 schema（输入不变，返回新数组）
+nlohmann::json strip_background_forbidden_tools(const nlohmann::json& schema) {
+    if (!schema.is_array()) return schema;
+    nlohmann::json out = nlohmann::json::array();
+    for (const auto& item : schema) {
+        const bool forbidden = item.is_object() &&
+                               item.value("name", std::string{}) == kBackgroundForbiddenTool;
+        if (!forbidden) {
+            out.push_back(item);
+        }
+    }
+    return out;
+}
+
 } // namespace
 
 BackgroundLoopAdapter::BackgroundLoopAdapter(const GoalAgentDeps& deps)
     : m_deps(deps) {}
 
+void BackgroundLoopAdapter::cancel() const noexcept {
+    if (m_task_id.empty() || !m_deps.task_manager) {
+        return;
+    }
+    // task->cancel() 仅置原子标志（协作式取消），线程安全，可在任意线程调用。
+    const auto task = m_deps.task_manager->find_task(m_task_id);
+    if (task) {
+        task->cancel();
+    }
+}
+
 AgentRunResult BackgroundLoopAdapter::run(AgentRunContext ctx) {
     AgentRunResult out;
     out.agent_type = type();
+
+    // P1-2：单次使用守卫，拒绝并发/重复 run()——m_task_id 的写入只在首调发生，
+    // 彻底消除对 m_task_id 的数据竞争（UB）。
+    if (m_used.exchange(true)) {
+        out.react.was_error = true;
+        out.react.goal_status = GoalStatus::Failed;
+        out.react.error_message =
+            "background agent adapter is single-use; run() called more than once";
+        LOG_WARN("[background_agent] run() invoked more than once (dispatch rejected)");
+        return out;
+    }
 
     if (!m_deps.task_manager || !m_deps.provider) {
         out.react.was_error = true;
@@ -118,13 +162,18 @@ AgentRunResult BackgroundLoopAdapter::run(AgentRunContext ctx) {
         LOG_WARN("[background_agent] missing task_manager/provider");
         return out;
     }
-    const std::string user_text = last_user_text(ctx.messages);
+    std::string user_text = last_user_text(ctx.messages);
     if (user_text.empty()) {
         out.react.was_error = true;
         out.react.goal_status = GoalStatus::Failed;
         out.react.error_message = "background agent requires a non-empty user request";
         LOG_WARN("[background_agent] empty user request");
         return out;
+    }
+    if (user_text.size() > kMaxBackgroundPromptChars) {
+        user_text = user_text.substr(0, kMaxBackgroundPromptChars);
+        LOG_WARN("[background_agent] user request truncated to {} chars",
+                 kMaxBackgroundPromptChars);
     }
 
     // 分发后台任务：仅捕获会话期稳定依赖的拷贝（指针均由宿主保证存活于会话周期），
@@ -136,31 +185,35 @@ AgentRunResult BackgroundLoopAdapter::run(AgentRunContext ctx) {
     // 拷贝需要跨 run() 存活的值语义依赖（字符串 / json），指针仅保留会话稳定的。
     GoalAgentDeps deps = m_deps;
     const std::string system_prompt = std::move(ctx.system_prompt);
-    const nlohmann::json tools_schema = [&] {
-        return deps.registry ? deps.registry->get_all_schemas()
-                             : nlohmann::json::array();
-    }();
+    // P2-3：后台不暴露 AgentTool（防异步递归派生子 Agent/后台任务）
+    const nlohmann::json tools_schema = strip_background_forbidden_tools(
+        deps.registry ? deps.registry->get_all_schemas() : nlohmann::json::array());
 
+    // 供后台子线程取消句柄：ChatSession 经 result.background_task_id 或 cancel() 定向取消
     m_deps.task_manager->launch(task_id,
         [deps, task_id, user_text, system_prompt, tools_schema]
         (const std::atomic<bool>& should_cancel) {
             // 底层默认 ReAct 循环（ReActLoopFactory::make 注入会话权限/事件/压缩器）
-            // 例外：后台线程循环由本任务生命周期管理，不再以 m_deps.external_compactor 跨会话复用。
             auto loop = ReActLoopFactory::make(deps, deps.registry, ReActLoop::Config{});
             std::vector<ChatMessage> messages;
             messages.push_back(ChatMessage::user(user_text));
 
-            auto task_ptr = deps.task_manager->find_task(task_id);
+            // observer 仅捕获最小依赖（P3-2）：指针 + id，避免按值拷贝大结构体；
+            // 每次回调按需 find_task（P2-1），不持有对局部 task_ptr 的引用。
+            auto* task_manager = deps.task_manager;
+            auto* event_bus = deps.event_bus;
             ReActResult result = loop->run(messages, system_prompt, tools_schema,
                 should_cancel,
-                [deps, task_id, &task_ptr](const ReActStep& step) {
+                [task_manager, event_bus, task_id](const ReActStep& step) {
                     const std::string line = format_step_line(step);
-                    if (task_ptr && !line.empty()) {
-                        task_ptr->append_output(line);
+                    if (task_manager && !line.empty()) {
+                        if (const auto task = task_manager->find_task(task_id)) {
+                            task->append_output(line);
+                        }
                     }
                     // 进度事件：增量通知（不注入主会话 LLM 上下文），供第二层渲染
-                    if (deps.event_bus != nullptr && !line.empty()) {
-                        deps.event_bus->publish_async(BackgroundProgressEvent{
+                    if (event_bus != nullptr && !line.empty()) {
+                        event_bus->publish_async(BackgroundProgressEvent{
                             .task_id = task_id,
                             .step_number = step.step_number,
                             .step_type = step_type_str(step.type),
@@ -184,11 +237,16 @@ AgentRunResult BackgroundLoopAdapter::run(AgentRunContext ctx) {
             } else if (!result.final_answer.empty()) {
                 summary = std::format("Final: {}", result.final_answer);
             }
-            if (task_ptr && !summary.empty()) {
-                task_ptr->append_output(summary);
+            if (summary.empty()) {
+                summary = "(后台任务无文本输出)";
             }
-            if (deps.event_bus != nullptr) {
-                deps.event_bus->publish_async(BackgroundCompletedEvent{
+            if (task_manager) {
+                if (const auto task = task_manager->find_task(task_id)) {
+                    task->append_output(summary);
+                }
+            }
+            if (event_bus != nullptr) {
+                event_bus->publish_async(BackgroundCompletedEvent{
                     .task_id = task_id,
                     .final_answer = summary,
                     .was_error = result.was_error,
