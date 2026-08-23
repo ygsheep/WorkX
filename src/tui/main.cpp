@@ -33,8 +33,34 @@
 #include "crash_reporter.h"
 #include "wizard.h"
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
+namespace {
+
+#if defined(_WIN32)
+/// @brief Windows 端确保控制台以 UTF-8 输出/输入代码页（65001），使中文字符能正常加载显示。
+///        FTXUI 在 Screen 构造时也会设置，这里在 FTXUI 首次输出前显式检测并确保：
+///        若当前代码页不是 UTF-8（如 GBK/936），中文会乱码或显示为问号。
+void ensure_console_utf8() {
+    const UINT prev_out = ::GetConsoleOutputCP();
+    const UINT prev_in = ::GetConsoleCP();
+    if (prev_out != CP_UTF8) ::SetConsoleOutputCP(CP_UTF8);
+    if (prev_in != CP_UTF8) ::SetConsoleCP(CP_UTF8);
+    (void)prev_out; (void)prev_in;
+}
+#endif
+
+}  // namespace
+
 int main(int argc, char** argv) {
     crash::InstallHandlers();
+#if defined(_WIN32)
+    // 检测/加载 UTF-8 中文字符集（见 ensure_console_utf8），放在向导/主界面
+    // 创建任何 Screen 之前，确保早期中文输出也不走 GBK 转码。
+    ensure_console_utf8();
+#endif
     bool mock_mode = false;
     bool smoke_mode = false;
     for (int i = 1; i < argc; ++i) {

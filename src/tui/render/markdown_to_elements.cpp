@@ -29,6 +29,12 @@ using ftxui::BorderStyle;
 
 namespace {
 
+/// @brief 普通正文段落单行占用的行高（>=1）。中文字体行距 1.2 上下太挤，
+///        TXTUI 每行高度只能取整数行，故折中定为 2：内容行 + 下方 1 空行，
+///        让中文段落读起来更疏朗。仅作用于普通正文段落（含孤立 | 行），
+///        标题/列表/代码块/表格保持紧凑，避免整体竖屏占用翻倍。
+constexpr int kParagraphLineHeight = 2;
+
 /// @brief 去首尾空白（空格/制表符），返回副本
 std::string trim_copy(std::string_view s) {
     size_t b = 0, e = s.size();
@@ -363,12 +369,16 @@ Element span_element(const StyledSpan& s) {
     return e;
 }
 
-Element line_to_element(std::string_view line) {
-    auto spans = parse_inline_spans(line);
+/// @brief 渲染 span 序列为横向元素（保留粗体/代码等样式）
+Element spans_to_element(const std::vector<StyledSpan>& spans) {
     Elements children;
     children.reserve(spans.size());
     for (const auto& s : spans) children.push_back(span_element(s));
     return ftxui::hbox(std::move(children));
+}
+
+Element line_to_element(std::string_view line) {
+    return spans_to_element(parse_inline_spans(line));
 }
 
 bool is_code_fence(std::string_view line, std::string& lang_out) {
@@ -498,9 +508,122 @@ int cell_display_width(std::string_view cell) {
     return w;
 }
 
+/// @brief 表格单元格折行：剥离行内标记后按显示列宽折行，再按样式切回 span
+/// @details wrap_text 按原始字节计宽会把行内标记（** 等）算进宽度，导致带标记的
+///          单元格在列宽恰好等于显示宽时被提前折行；这里先拼纯文本（去标记）折行，
+///          再把每个物理行切回原始 span 序列，保留粗体/代码等样式。
+/// @return 每行一个 span 序列；空单元格返回 1 行空 span
+std::vector<std::vector<StyledSpan>> wrap_cell_spans(
+    std::string_view cell, int col_w) {
+    const std::vector<StyledSpan> spans = parse_inline_spans(cell);
+    std::string plain;
+    std::vector<std::size_t> starts;
+    starts.reserve(spans.size());
+    for (const auto& s : spans) {
+        starts.push_back(plain.size());
+        plain += s.text;
+    }
+    const auto segs = wrap_text(plain, std::max(1, col_w));
+    std::vector<std::vector<StyledSpan>> out;
+    out.reserve(segs.size());
+    for (auto [b, e] : segs) {
+        std::vector<StyledSpan> line;
+        std::size_t idx = 0;
+        while (idx + 1 < spans.size() && starts[idx + 1] <= b) ++idx;
+        std::size_t pos = b;
+        while (pos < e && idx < spans.size()) {
+            const std::size_t span_end =
+                (idx + 1 < spans.size()) ? starts[idx + 1] : plain.size();
+            const std::size_t seg_b = pos;
+            const std::size_t seg_e = std::min(e, span_end);
+            if (seg_e > seg_b) {
+                StyledSpan s = spans[idx];
+                s.text = plain.substr(seg_b, seg_e - seg_b);
+                line.push_back(std::move(s));
+            }
+            pos = seg_e;
+            ++idx;
+        }
+        if (line.empty()) line.push_back(StyledSpan{});
+        out.push_back(std::move(line));
+    }
+    return out;
+}
+
+/// @brief 计算表格列宽：自然宽（各列最大显示宽）→ 按可用宽度封顶
+/// @param header 表头单元格
+/// @param data   数据行单元格
+/// @param max_width 表格可用总列宽（含边框）；<=0 时不封顶
+/// @return 各列显示宽（至少 2，容纳 CJK 全角字符）
+std::vector<int> compute_table_widths(const std::vector<std::string>& header,
+                                      const std::vector<std::vector<std::string>>& data,
+                                      int max_width) {
+    size_t cols = header.size();
+    for (const auto& r : data) cols = std::max(cols, r.size());
+    std::vector<int> widths(cols, 2);
+    for (size_t c = 0; c < header.size(); ++c)
+        widths[c] = std::max(widths[c], cell_display_width(header[c]));
+    for (const auto& r : data)
+        for (size_t c = 0; c < r.size(); ++c)
+            widths[c] = std::max(widths[c], cell_display_width(r[c]));
+
+    if (max_width > 0) {
+        // 表格总宽 = 1 + Σwidth + 3*cols（边框+列间距），封顶到可用宽度
+        const int avail = std::max(static_cast<int>(cols),
+                                   max_width - 1 - 3 * static_cast<int>(cols));
+        long total = 0;
+        for (int w : widths) total += w;
+        if (total > avail) {
+            const std::vector<int> natural = widths;
+            // 按自然宽比例收缩（至少 2 列）
+            for (int& w : widths)
+                w = std::max(2, static_cast<int>(w * static_cast<long>(avail) / total));
+            // 修正比例取整造成的超出：从最宽列逐列削减（极端窄屏可低于 2）
+            total = 0;
+            for (int w : widths) total += w;
+            while (total > avail) {
+                int idx = -1;
+                for (size_t c = 0; c < widths.size(); ++c)
+                    if (widths[c] > 1 && (idx < 0 || widths[c] > widths[idx]))
+                        idx = static_cast<int>(c);
+                if (idx < 0) break;
+                --widths[idx];
+                --total;
+            }
+            // 回补窄列：比例收缩会把窄列（如表头）挤到 2 列导致换行，
+            // 把低于 min(自然宽,4) 的列从最宽列扣减补足（总宽不变）
+            for (size_t c = 0; c < widths.size(); ++c) {
+                const int floor = std::min(natural[c], 4);
+                while (widths[c] < floor) {
+                    int donor = -1;
+                    for (size_t d = 0; d < widths.size(); ++d)
+                        if (widths[d] > 2 && (donor < 0 || widths[d] > widths[donor]))
+                            donor = static_cast<int>(d);
+                    if (donor < 0) break;
+                    --widths[donor];
+                    ++widths[c];
+                }
+            }
+        }
+    }
+    return widths;
+}
+
+/// @brief 表格行渲染高度：各列折行行数的最大值（至少 1）
+int table_row_height(const std::vector<std::string>& cells,
+                     const std::vector<int>& widths) {
+    int h = 1;
+    for (size_t c = 0; c < cells.size(); ++c) {
+        const int w = (c < widths.size()) ? widths[c] : 1;
+        h = std::max(h, static_cast<int>(wrap_cell_spans(cells[c], w).size()));
+    }
+    return h;
+}
+
 /// @brief 表格块渲染（FTXUI 版，样式对齐 src/tui render_table）
 /// @param rows 原始表格行：rows[0]=表头，rows[1]=分隔行，rows[2..]=数据行
-Element render_table_block(const std::vector<std::string>& rows) {
+/// @param max_width 表格可用总列宽（含边框）；长单元格按列宽折行，避免溢出输出区
+Element render_table_block(const std::vector<std::string>& rows, int max_width) {
     const std::vector<std::string> header = split_table_row(rows[0]);
     std::vector<int> aligns;
     is_table_separator(rows[1], aligns);
@@ -510,15 +633,9 @@ Element render_table_block(const std::vector<std::string>& rows) {
     for (size_t i = 2; i < rows.size(); ++i)
         data.push_back(split_table_row(rows[i]));
 
-    size_t cols = header.size();
-    for (const auto& r : data) cols = std::max(cols, r.size());
-
-    std::vector<int> widths(cols, 0);
-    for (size_t c = 0; c < header.size(); ++c)
-        widths[c] = std::max(widths[c], cell_display_width(header[c]));
-    for (const auto& r : data)
-        for (size_t c = 0; c < r.size(); ++c)
-            widths[c] = std::max(widths[c], cell_display_width(r[c]));
+    const std::vector<int> widths = compute_table_widths(header, data, max_width);
+    const size_t cols = widths.size();
+    aligns.resize(cols, 0);
 
     auto border = [&](const char* left, const char* mid, const char* right) {
         std::string s = left;
@@ -529,24 +646,62 @@ Element render_table_block(const std::vector<std::string>& rows) {
         s += right;
         return ftxui::text(s);
     };
-    auto row_elem = [&](const std::vector<std::string>& cells, bool head) {
-        Elements children;
-        children.push_back(ftxui::text("\u2502 "));
-        for (size_t c = 0; c < cols; ++c) {
-            if (c > 0) children.push_back(ftxui::text(" \u2502 "));
-            std::string cell = c < cells.size() ? cells[c] : "";
-            int w = cell_display_width(cell);
-            int pad = std::max(0, widths[c] - w);
+
+    // 单元格：按列宽折行（保留行内样式），每物理行按对齐方式补空格。
+    // 返回各物理行元素（每行宽度 = col_w），供行级逐行拼装以补全 │ 分隔线。
+    auto cell_lines = [&](const std::string& cell, int col_w, int align) {
+        auto lines = wrap_cell_spans(cell, col_w);
+        std::vector<Element> out;
+        out.reserve(lines.size());
+        for (const auto& line : lines) {
+            int w = 0;
+            for (const auto& s : line) w += ftxui::string_width(s.text);
+            int pad = std::max(0, col_w - w);
             int left = 0, right = pad;
-            if (aligns[c] == 1) { left = pad / 2; right = pad - left; }
-            else if (aligns[c] == 2) { left = pad; right = 0; }
-            // 单元格走行内解析（对齐 src/tui：表格内容里的 **粗体** 也渲染）
-            auto e = line_to_element(std::string(left, ' ') + cell + std::string(right, ' '));
-            if (head) e = e | ftxui::bold;
-            children.push_back(std::move(e));
+            if (align == 1) { left = pad / 2; right = pad - left; }
+            else if (align == 2) { left = pad; right = 0; }
+            Elements children;
+            if (left > 0) children.push_back(ftxui::text(std::string(left, ' ')));
+            for (const auto& s : line) children.push_back(span_element(s));
+            if (right > 0) children.push_back(ftxui::text(std::string(right, ' ')));
+            out.push_back(ftxui::hbox(std::move(children)));
         }
-        children.push_back(ftxui::text(" \u2502"));
-        return ftxui::hbox(std::move(children));
+        if (out.empty()) out.push_back(ftxui::text(std::string(col_w, ' ')));
+        return out;
+    };
+
+    // 行：各列折行行数取最大为行高，逐物理行拼装 hbox，
+    // 短列补空白行 → 换行后的每一行都有完整 │ 分隔线
+    auto row_elem = [&](const std::vector<std::string>& cells, bool head) {
+        std::vector<std::vector<Element>> cols_lines;
+        cols_lines.reserve(cols);
+        int row_h = 1;
+        for (size_t c = 0; c < cols; ++c) {
+            std::string cell = c < cells.size() ? cells[c] : "";
+            auto lines = cell_lines(cell, widths[c], aligns[c]);
+            if (head) {
+                for (auto& e : lines) e = e | ftxui::bold;
+            }
+            row_h = std::max(row_h, static_cast<int>(lines.size()));
+            cols_lines.push_back(std::move(lines));
+        }
+        Elements rows_out;
+        rows_out.reserve(static_cast<size_t>(row_h));
+        for (int k = 0; k < row_h; ++k) {
+            Elements children;
+            children.push_back(ftxui::text("\u2502 "));
+            for (size_t c = 0; c < cols; ++c) {
+                if (c > 0) children.push_back(ftxui::text(" \u2502 "));
+                const auto& lines = cols_lines[c];
+                if (k < static_cast<int>(lines.size()))
+                    children.push_back(lines[static_cast<size_t>(k)]);
+                else
+                    children.push_back(ftxui::text(std::string(widths[c], ' ')));
+            }
+            children.push_back(ftxui::text(" \u2502"));
+            rows_out.push_back(ftxui::hbox(std::move(children)));
+        }
+        return ftxui::vbox(std::move(rows_out));
     };
 
     Elements rows_elem;
@@ -557,6 +712,14 @@ Element render_table_block(const std::vector<std::string>& rows) {
     rows_elem.push_back(border("\u2514", "\u2534", "\u2518"));  // └ ┴ ┘
     return ftxui::vbox(std::move(rows_elem));
 }
+
+// ---- 消息各嵌套层级的正文可用宽（build_transcript 外层缩进 2 恒存在） ----
+/// @brief 助手正文可用宽：外层 2 + build_message 内层缩进 2
+inline int message_body_width(int width) { return std::max(1, width - 4); }
+/// @brief 用户消息正文可用宽：外层 2 + 左边框 1 + 内层缩进 2
+inline int user_body_width(int width) { return std::max(1, width - 5); }
+/// @brief 卡片（思考/工具）内容可用宽：外层 2 + 卡片边框 2 + 内容缩进 4
+inline int card_content_width(int width) { return std::max(1, width - 8); }
 
 /// @brief 按 '\n' 拆行（与 build_markdown 的行拆分一致）
 std::vector<std::string> split_lines(std::string_view text) {
@@ -606,13 +769,20 @@ int count_markdown_lines(const std::vector<std::string>& lines, int width) {
             continue;
         }
         if (in_code) { code_lines.push_back(line); continue; }
-        // 表格块：表头行 + 分隔行 + 连续 | 行 → 顶/表头/中/底边框 4 行 + 数据行
+        // 表格块：表头行 + 分隔行 + 连续 | 行 → 顶/表头/中/底边框 + 数据行
+        //（行高按列宽折行统计，与 render_table_block 一致）
         std::vector<int> aligns_tmp;
         if (is_table_row(line) && i + 1 < lines.size() &&
             is_table_separator(lines[i + 1], aligns_tmp)) {
             size_t j = i + 2;
             while (j < lines.size() && is_table_row(lines[j])) ++j;
-            h += 4 + static_cast<int>(j - i - 2);
+            const std::vector<std::string> header = split_table_row(lines[i]);
+            std::vector<std::vector<std::string>> data;
+            for (size_t k = i + 2; k < j; ++k) data.push_back(split_table_row(lines[k]));
+            const std::vector<int> widths = compute_table_widths(header, data, width);
+            h += 3;  // 顶/中/底边框
+            h += table_row_height(header, widths);
+            for (const auto& r : data) h += table_row_height(r, widths);
             i = j - 1;
             continue;
         }
@@ -630,8 +800,12 @@ int count_markdown_lines(const std::vector<std::string>& lines, int width) {
             h += static_cast<int>(wrap_text(heading, safe_w).size());
         else if (is_list_item(line, content, ordered))
             h += static_cast<int>(wrap_text(content, std::max(1, safe_w - 4)).size());
+        else if (is_hr(line))
+            h += 1;  // 水平分隔线：恒定 1 行，与 build_markdown 的 separator 一致（不走行距）
         else
-            h += static_cast<int>(wrap_text(line, safe_w).size());
+            // 普通段落：与 paragraph_block 一致，每物理行占 kParagraphLineHeight 行高
+            h += kParagraphLineHeight *
+                 static_cast<int>(wrap_text(line, safe_w).size());
     }
     flush_code();
     return h;
@@ -679,6 +853,19 @@ Element wrap_block(std::string_view src, int wrap_w,
         Element r = line_to_element(src.substr(b, e - b));
         if (decorate) r = decorate(std::move(r));
         es.push_back(std::move(r));
+    }
+    return ftxui::vbox(std::move(es));
+}
+
+/// @brief 普通正文段落：每个物理行占 kParagraphLineHeight 行高，放大中文字体行距。
+///        标题/列表/代码块/表格不走这里（保持紧凑），避免整体竖屏占用翻倍。
+Element paragraph_block(std::string_view src, int wrap_w) {
+    auto rows = wrap_text(src, std::max(1, wrap_w));
+    Elements es;
+    es.reserve(rows.size());
+    for (auto [b, e] : rows) {
+        es.push_back(ftxui::flex(line_to_element(src.substr(b, e - b))) |
+                     ftxui::size(ftxui::HEIGHT, ftxui::EQUAL, kParagraphLineHeight));
     }
     return ftxui::vbox(std::move(es));
 }
@@ -788,19 +975,19 @@ Element build_markdown(std::string_view text, int width) {
             tbl.push_back(lines[++i]);  // 分隔行
             while (i + 1 < lines.size() && is_table_row(lines[i + 1]))
                 tbl.push_back(lines[++i]);
-            blocks.push_back(render_table_block(tbl));
+            blocks.push_back(render_table_block(tbl, safe_w));
             continue;
         }
 
         // 孤立 | 行（无分隔行）：降级为普通行内文本（保留 | 分隔，可读）
         if (is_table_row(line)) {
             blocks.push_back(ftxui::color(theme::T::Text)(
-                wrap_block(line, safe_w)));
+                paragraph_block(line, safe_w)));
             continue;
         }
 
-        // 普通段落：按显示宽度折行
-        blocks.push_back(wrap_block(line, safe_w));
+        // 普通段落：按显示宽度折行，行距放大（中文字体可读性）
+        blocks.push_back(paragraph_block(line, safe_w));
     }
     flush_code();
     return ftxui::vbox(std::move(blocks));
@@ -1077,13 +1264,13 @@ int estimate_message_height(const MessageNode& msg, int width) {
     // - 思考/工具卡：圆角边框 2 行 + 头行 1 行 + 展开内容
     // - 流式游标 1 行；正文行恒 ≥1 行（左侧缩进 text("  ") 占 1 行）
     // 正文行数随 width 变化（按显示列宽折行）→ 传入与 build_message 相同的宽度。
-    auto content_lines = [width](std::string_view t) {
-        return std::max(1, estimate_markdown_height(t, width));
+    auto content_lines = [](std::string_view t, int w) {
+        return std::max(1, estimate_markdown_height(t, w));
     };
     if (msg.role == MsgRole::User) {
         int h = 2;  // 顶部/底部留白各 1 行
         if (!msg.text.empty() || msg.streaming)
-            h += content_lines(msg.text);
+            h += content_lines(msg.text, user_body_width(width));
         return h;
     }
 
@@ -1092,14 +1279,15 @@ int estimate_message_height(const MessageNode& msg, int width) {
     if (msg.reasoned && !msg.reasoning.empty()) {
         h += 3;  // 边框 2 行 + 头行 1 行
         if (msg.reasoning_expanded)
-            h += content_lines(msg.reasoning);
+            h += content_lines(msg.reasoning, card_content_width(width));
     }
     if (!msg.text.empty() || msg.streaming)
-        h += content_lines(msg.text);
+        h += content_lines(msg.text, message_body_width(width));
     for (const auto& t : msg.tool_calls) {
         h += 3;  // 边框 2 行 + 头行 1 行
         if (t.done && t.expanded)
-            h += estimate_tool_result_lines(t, width) + (tool_file_path(t.arguments).empty() ? 0 : 1);
+            h += estimate_tool_result_lines(t, card_content_width(width))
+                 + (tool_file_path(t.arguments).empty() ? 0 : 1);
     }
     // 卡片间距：每张卡片前空 1 行 + 最后一张卡片后空 1 行
     //（交错渲染统一插入单行分隔，相邻卡片不叠加双倍间距）
@@ -1118,8 +1306,9 @@ Element build_message(const MessageNode& msg, int width, std::size_t anim_frame,
         Elements body;
         body.push_back(ftxui::text(" "));  // 顶部间距
         if (!msg.text.empty() || msg.streaming) {
+            // 可用宽 = width - 外层缩进 2 - 边框 1 - 内层缩进 2
             body.push_back(ftxui::hbox({ftxui::text("  "),
-                                        ftxui::flex(build_markdown(msg.text, width))}));
+                                        ftxui::flex(build_markdown(msg.text, user_body_width(width)))}));
         }
         body.push_back(ftxui::text(" "));  // 底部间距
         return std::make_shared<UserMessageBox>(ftxui::vbox(std::move(body)));
@@ -1166,7 +1355,7 @@ Element build_message(const MessageNode& msg, int width, std::size_t anim_frame,
         if (msg.reasoning_expanded) {
             card_rows.push_back(ftxui::hbox({
                 ftxui::text("    "),
-                ftxui::flex(ftxui::color(theme::T::Text)(build_markdown(msg.reasoning, width)))
+                ftxui::flex(ftxui::color(theme::T::Text)(build_markdown(msg.reasoning, card_content_width(width))))
             }));
         }
         auto card = ftxui::borderStyled(BorderStyle::ROUNDED,
@@ -1215,7 +1404,7 @@ Element build_message(const MessageNode& msg, int width, std::size_t anim_frame,
             }
             content.push_back(ftxui::hbox({
                 ftxui::text("    "),
-                ftxui::flex(render_tool_result(t, width))
+                ftxui::flex(render_tool_result(t, card_content_width(width)))
             }));
             card_rows.push_back(ftxui::vbox(std::move(content)));
         }
@@ -1246,7 +1435,7 @@ Element build_message(const MessageNode& msg, int width, std::size_t anim_frame,
         // 无工具卡：正文整体渲染
         if (!msg.text.empty() || msg.streaming) {
             rows.push_back(ftxui::hbox({ftxui::text("  "),
-                                        ftxui::flex(build_markdown(msg.text, width))}));
+                                        ftxui::flex(build_markdown(msg.text, message_body_width(width)))}));
         }
     } else {
         std::size_t cursor = 0;
@@ -1256,7 +1445,7 @@ Element build_message(const MessageNode& msg, int width, std::size_t anim_frame,
             if (pos > cursor) {
                 rows.push_back(ftxui::hbox({
                     ftxui::text("  "),
-                    ftxui::flex(build_markdown(msg.text.substr(cursor, pos - cursor), width)),
+                    ftxui::flex(build_markdown(msg.text.substr(cursor, pos - cursor), message_body_width(width))),
                 }));
                 cursor = pos;
             }
@@ -1269,7 +1458,7 @@ Element build_message(const MessageNode& msg, int width, std::size_t anim_frame,
             rows.push_back(ftxui::text(" "));
             rows.push_back(ftxui::hbox({
                 ftxui::text("  "),
-                ftxui::flex(build_markdown(msg.text.substr(cursor), width)),
+                ftxui::flex(build_markdown(msg.text.substr(cursor), message_body_width(width))),
             }));
         } else {
             // 最后一张卡片之后空一行（与流式游标/操作按钮栏分隔）
