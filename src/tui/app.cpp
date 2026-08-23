@@ -806,6 +806,14 @@ void App::cmd_clear() {
     if (!old_file.empty()) {
         std::error_code ec;
         std::filesystem::remove(old_file, ec);
+        // 从会话缓存剔除已删除文件：m_session_metas 为一次性后台缓存，
+        // 不清除会让 /resume 面板与 Ctrl+P 聚合搜索继续列出已删除的会话。
+        const std::filesystem::path deleted = old_file;
+        for (auto it = m_session_metas.begin(); it != m_session_metas.end(); ) {
+            it = (!it->file_path.empty() && std::filesystem::path(it->file_path) == deleted)
+                     ? m_session_metas.erase(it)
+                     : ++it;
+        }
     }
     reset_vm_for_new_session();
 }
