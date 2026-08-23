@@ -37,7 +37,7 @@ std::unique_ptr<IAgentLoop> QueryEngine::make_loop(AgentType type) const {
         case AgentType::ReAct: {
             // 常规全量 ReAct 循环（默认 max_iterations），非单步
             auto loop = std::make_unique<ReActLoop>(
-                m_deps.provider, m_deps.registry, ReActLoop::Config{},
+                m_deps.provider, m_deps.registry, make_react_config(),
                 m_deps.config_manager, m_deps.task_manager, m_deps.cwd,
                 m_deps.external_compactor, m_deps.event_bus, m_deps.touch_collector,
                 m_deps.file_index_invalidator, m_deps.session_id);
@@ -73,13 +73,20 @@ std::unique_ptr<IAgentLoop> QueryEngine::make_loop(AgentType type) const {
                      to_string(type));
             // 未实现类型回退到 ReAct（占位，后续实现可扩展）
             auto loop = std::make_unique<ReActLoop>(
-                m_deps.provider, m_deps.registry, ReActLoop::Config{},
+                m_deps.provider, m_deps.registry, make_react_config(),
                 m_deps.config_manager, m_deps.task_manager, m_deps.cwd,
                 m_deps.external_compactor, m_deps.event_bus, m_deps.touch_collector,
                 m_deps.file_index_invalidator, m_deps.session_id);
             apply_permission(loop);
             return std::make_unique<ReActLoopAdapter>(std::move(loop));
     }
+}
+
+ReActLoop::Config QueryEngine::make_react_config() const {
+    ReActLoop::Config cfg;
+    cfg.max_iterations = m_deps.config_manager->get_or<int>(
+        agent::keys::AGENT_MAX_ITERATIONS, cfg.max_iterations);
+    return cfg;
 }
 
 AgentRunResult QueryEngine::run(const IConfigManager& cfg, AgentRunContext ctx) {

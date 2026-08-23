@@ -60,6 +60,9 @@ public:
 private:
     void apply_permission(std::unique_ptr<ReActLoop>& loop) const;
 
+    /// @brief 构建 ReAct 循环配置（读取 agent.max_iterations，缺失用引擎默认值）
+    ReActLoop::Config make_react_config() const;
+
     GoalAgentDeps m_deps;
     QueryTracker m_tracker;
 };

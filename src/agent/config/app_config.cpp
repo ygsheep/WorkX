@@ -168,6 +168,18 @@ void register_config_defaults(ConfigManager& cfg) {
         .type = ConfigSchema::Type::String
     });
 
+    // 0.6.x：ReAct 循环基础预算（最大迭代轮数）。默认 40（原硬编码 25）；
+    // 预算耗尽或检测到重复工具调用时，内部评审器可评审"是否继续"并追加预算
+    // （见 ReActLoop::Config::review_* 字段；此键仅控制基础预算）。
+    cfg.register_schema({
+        .key = keys::AGENT_MAX_ITERATIONS,
+        .description = "Max ReAct iterations per turn (base budget; internal reviewer "
+                       "may grant extra iterations when stall/limit is detected)",
+        .default_value = 40,
+        .type = ConfigSchema::Type::Int,
+        .int_range = std::make_pair<int64_t, int64_t>(1, 2000)
+    });
+
     // === Logging ===
     cfg.register_schema({
         .key = keys::LOG_LEVEL,

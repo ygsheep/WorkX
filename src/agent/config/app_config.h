@@ -52,6 +52,9 @@ namespace keys {
     /// #32 多模式：script:<command> / batch:cmd=<tmpl>&glob=<pattern>&concurrency=<n>
     ///             / watch:path=<dir>&cmd=<tmpl>&polls=<n>&interval=<ms>（agent.active 分别配合）
     constexpr const char* AGENT_GOAL     = "agent.goal";
+    /// ReAct 循环每轮基础预算（最大迭代轮数）。预算耗尽时若启用内部评审器
+    /// （agent.max_iterations + 停滞恢复），会评审"是否继续"并追加额外预算。
+    constexpr const char* AGENT_MAX_ITERATIONS = "agent.max_iterations";
 
     // Logging
     constexpr const char* LOG_LEVEL        = "logging.level";

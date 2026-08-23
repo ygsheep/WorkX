@@ -19,6 +19,7 @@
 
 #include <cctype>
 #include <cassert>
+#include <deque>
 #include <stdexcept>
 #include <filesystem>
 #include <format>
@@ -411,6 +412,134 @@ void ReActLoop::parse_embedded_tool_calls(const std::string& content,
 }
 
 // ============================================================
+// normalize_tool_input — 工具输入规范化签名
+// ============================================================
+
+std::string ReActLoop::normalize_tool_input(const nlohmann::json& input) {
+    // 只保留结构：对象键按名排序、数组按序、标量紧凑序列化。
+    // 忽略键顺序与空白，使等价调用（即便参数顺序抖动）签名一致，用于停滞判定。
+    std::string out;
+    std::function<void(const nlohmann::json&)> append = [&](const nlohmann::json& j) {
+        if (j.is_object()) {
+            out += '{';
+            std::vector<std::string> keys;
+            for (auto it = j.begin(); it != j.end(); ++it) keys.push_back(it.key());
+            std::sort(keys.begin(), keys.end());
+            for (size_t i = 0; i < keys.size(); ++i) {
+                if (i) out += ',';
+                out += keys[i];
+                out += ':';
+                append(j.at(keys[i]));
+            }
+            out += '}';
+        } else if (j.is_array()) {
+            out += '[';
+            for (size_t i = 0; i < j.size(); ++i) {
+                if (i) out += ',';
+                append(j[i]);
+            }
+            out += ']';
+        } else {
+            out += j.dump();  // 标量紧凑序列化（含字符串转义、数字规范化）
+        }
+    };
+    append(input.is_null() ? nlohmann::json::object() : input);
+    return out;
+}
+
+// ============================================================
+// run_reviewer — 内部评审器（停滞/达上限时判断"是否继续"）
+// ============================================================
+
+ReActLoop::ReviewerDecision ReActLoop::run_reviewer(
+    const std::string& user_request,
+    const std::vector<std::string>& tool_history,
+    int iteration, int remaining_budget, bool at_limit) const {
+
+    ReviewerDecision decision;  // 默认 continue_loop=false（wrap_up），失败即收尾
+    if (!m_config.review_enabled) {
+        return decision;
+    }
+
+    const std::string kSys =
+        "你是严格的任务进度评审器，用最短判断决定 Agent 是否应继续投入推理。\n"
+        "只输出一行 JSON 对象，不要任何多余文本或解释：\n"
+        "{\"action\": \"continue\" 或 \"wrap_up\", \"reason\": \"不超过30字\"}\n"
+        "- action=continue：任务尚未完成且修复方向明确；reason 给一句具体纠偏/下一步\n"
+        "- action=wrap_up：已取得足够进展、或明显走偏/停滞、或继续性价比低；reason 给进展小结\n"
+        "注意：不要因不确定就轻易 wrap_up；但若在重复做同一件事，倾向 wrap_up。";
+
+    std::string ctx = "用户目标/请求：\n" +
+        (user_request.empty() ? std::string("(由前文对话上下文决定)") : user_request) + "\n\n";
+    if (!tool_history.empty()) {
+        ctx += "最近工具执行序列：\n";
+        for (const auto& line : tool_history) ctx += "- " + line + "\n";
+        ctx += "\n";
+    }
+    ctx += std::format("当前进度：已用迭代 {} 轮，剩余基础预算 {} 轮。\n", iteration, remaining_budget);
+    ctx += at_limit ? "触发原因：已到达最大迭代预算。\n"
+                    : "触发原因：检测到重复的工具调用（可能陷入循环）。\n";
+
+    CompletionRequest req;
+    req.stream = false;
+    req.temperature = 0.0f;
+    req.max_tokens = 200;
+    req.messages.push_back(ChatMessage::system(kSys));
+    req.messages.push_back(ChatMessage::user(ctx));
+
+    auto reader = m_provider->submit_completion(req);
+    if (!reader) {
+        LOG_WARN("[react_loop] reviewer: submit failed, default wrap_up");
+        return decision;
+    }
+
+    std::string text;
+    StreamChunk chunk;
+    while (true) {
+        StreamState state = reader->next([]() { return false; }, chunk);
+        if (state == StreamState::HasData || state == StreamState::Complete) {
+            text += chunk.content_delta;
+            if (state == StreamState::Complete) break;
+        } else {
+            break;  // Error / Cancelled
+        }
+    }
+
+    const auto lbrace = text.find('{');
+    const auto rbrace = text.rfind('}');
+    if (lbrace != std::string::npos && rbrace != std::string::npos && rbrace > lbrace) {
+        try {
+            const nlohmann::json j = nlohmann::json::parse(text.substr(lbrace, rbrace - lbrace + 1));
+            if (j.is_object()) {
+                const std::string action = j.value("action", "");
+                const std::string reason = j.value("reason", "");
+                if (action == "continue") {
+                    decision.continue_loop = true;
+                    decision.correction = reason;
+                } else {
+                    decision.continue_loop = false;
+                    decision.wrap_summary = reason;
+                }
+            }
+        } catch (...) {
+            LOG_WARN("[react_loop] reviewer: failed to parse decision, default wrap_up");
+        }
+    } else {
+        LOG_WARN("[react_loop] reviewer: no JSON decision in response, default wrap_up");
+    }
+
+    if (decision.continue_loop && decision.correction.empty()) {
+        decision.correction =
+            "检测到重复动作，请回顾当前进展并换一条更高效的路径完成目标，不要再次调用相同工具做同一件事。";
+    }
+
+    LOG_INFO("[react_loop] reviewer decision: {}, reason='{}'",
+             decision.continue_loop ? "continue" : "wrap_up",
+             decision.continue_loop ? decision.correction : decision.wrap_summary);
+    return decision;
+}
+
+// ============================================================
 // run — ReAct 主循环
 // ============================================================
 
@@ -479,7 +608,31 @@ ReActResult ReActLoop::run(
     tool::ToolContext turn_env_probe;
     bool turn_git_probed = false;
 
-    for (int iteration = 1; iteration <= m_config.max_iterations; ++iteration) {
+    // 0.6.x：停滞检测 + 内部评审器。budget 为当前剩余预算（base 在"达上限评审→继续"时可追加）。
+    // 用 while+budget 而非 for(m<=max) 表达，使"超限评审→追加预算"无需 goto 即可续跑同一循环体。
+    int budget = std::max(1, m_config.max_iterations);
+    int iteration = 1;
+    int review_grants = 0;         ///< 达上限评审"继续"已允许的次数
+    bool graceful_stop = false;    ///< 内部评审 wrap_up 的优雅收尾（非硬错误）
+    bool hard_budget_reached = false;  ///< 预算(含追加)真正耗尽且未产出 final_answer
+    std::deque<ToolCallSignature> recent_calls;  ///< 停滞判定滑动窗口（记录最近已执行调用签名）
+    std::vector<std::string> tool_history;       ///< 最近工具执行日志（评审喂入）
+    constexpr size_t kMaxToolHistory = 6;        ///< 喂给评审器的工具日志条数上限
+
+    // 评审上下文用"用户主要任务"（第一条非空 user 消息，截断）而非全量历史
+    std::string primary_request;
+    for (const auto& m : messages) {
+        if (m.role == ChatMessage::Role::User && !m.content.empty()) {
+            primary_request = m.content;
+            if (primary_request.size() > 400) {
+                primary_request.resize(400);
+                primary_request += "...";
+            }
+            break;
+        }
+    }
+
+    while (!graceful_stop && budget > 0) {
         result.total_iterations = iteration;
 
         // ================================================================
@@ -609,6 +762,54 @@ ReActResult ReActLoop::run(
         }
 
         // ================================================================
+        // === 停滞检测：重复工具调用（进入 Action 前判定）===
+        // ================================================================
+        if (m_config.review_enabled && m_config.review_stall_window > 1) {
+            bool stall = false;
+            for (const auto& tu : thought.tool_uses) {
+                ToolCallSignature sig{tu.name, normalize_tool_input(tu.input)};
+                if (std::find(recent_calls.begin(), recent_calls.end(), sig)
+                    != recent_calls.end()) {
+                    stall = true;
+                    break;
+                }
+            }
+
+            if (stall) {
+                LOG_WARN("[react_loop] iteration={} stall detected (repeated tool call)",
+                         iteration);
+                ReviewerDecision dec = run_reviewer(primary_request, tool_history,
+                                                    iteration, budget, /*at_limit*/false);
+                if (dec.continue_loop) {
+                    // 纠偏续跑：不执行重复工具（避免悬空 tool_calls），注入指令进入下轮 Thought
+                    messages.push_back(ChatMessage::system(dec.correction));
+                    recent_calls.clear();
+                    --budget;
+                    hard_budget_reached = (budget <= 0);  // 停滞连吃预算耗尽也判硬错误
+                    ++iteration;
+                    LOG_INFO("[react_loop] stall recovery: continue (budget={})", budget);
+                    continue;  // 回到 while 条件，下一轮 Thought 重新规划
+                }
+                // wrap_up：优雅收尾（非硬错误）
+                graceful_stop = true;
+                result.final_answer = dec.wrap_summary.empty()
+                    ? "任务因检测到工具循环而由内部评审器中止。"
+                    : dec.wrap_summary;
+                result.final_reasoning = "stall-recovery wrap up";
+                LOG_WARN("[react_loop] stall recovery: wrap_up");
+                break;
+            }
+
+            // 未停滞：把本次 tool_uses 压入窗口并截断
+            for (const auto& tu : thought.tool_uses) {
+                recent_calls.push_back({tu.name, normalize_tool_input(tu.input)});
+            }
+            while (static_cast<int>(recent_calls.size()) > m_config.review_stall_window) {
+                recent_calls.pop_front();
+            }
+        }
+
+        // ================================================================
         // === 有 tool_use：构建 assistant 消息 ===
         // ================================================================
 
@@ -653,7 +854,9 @@ ReActResult ReActLoop::run(
 
                 result.total_tool_calls++;
             }
-            continue;  // 继续下一轮 Thought
+            --budget;
+            ++iteration;
+            continue;  // 继续下一轮 Thought（无执行器以错误回传，预算照常消耗）
         }
 
         // 有 executor：3.1 并行执行所有 tool_use
@@ -808,6 +1011,21 @@ ReActResult ReActLoop::run(
             messages.push_back(ChatMessage::tool_result(
                 exec.tool_use_id, exec.tool_name, result_text, tool_error));
 
+            // 累计评审用工具历史（每条取观察首行，最多 kMaxToolHistory 条）
+            {
+                std::string firstline = result_text;
+                const auto nl = firstline.find('\n');
+                if (nl != std::string::npos) firstline.resize(nl);
+                if (firstline.size() > 120) {
+                    firstline.resize(120);
+                    firstline += "...";
+                }
+                tool_history.push_back(exec.tool_name + ": " + firstline);
+                if (tool_history.size() > kMaxToolHistory) {
+                    tool_history.erase(tool_history.begin());
+                }
+            }
+
             // 记录 Observation 步骤
             {
                 ReActStep step;
@@ -829,6 +1047,39 @@ ReActResult ReActLoop::run(
         }
 
         // 继续下一轮 Thought（LLM 根据 tool_result 决定下一步）
+        --budget;
+
+        // --- 达上限评审门：基础预算耗尽且本轮未产出 final_answer → 评审是否追加 ---
+        if (budget <= 0 && m_config.review_enabled
+            && review_grants < std::max(0, m_config.review_max_grants)) {
+            ReviewerDecision dec = run_reviewer(primary_request, tool_history,
+                                                iteration, budget, /*at_limit*/true);
+            if (dec.continue_loop) {
+                ++review_grants;
+                budget += std::max(1, m_config.review_extra_budget);
+                const std::string correction = dec.correction.empty()
+                    ? "已到达默认迭代上限，请尽快收敛：若任务完成请给出最终答复，否则换更高效的路径。"
+                    : dec.correction;
+                messages.push_back(ChatMessage::system(correction));
+                LOG_WARN("[react_loop] base budget exhausted, reviewer grants extra {} "
+                         "iterations (grant #{}), budget now {}",
+                         m_config.review_extra_budget, review_grants, budget);
+            } else {
+                // wrap_up：优雅收尾（非硬错误）
+                graceful_stop = true;
+                result.final_answer = dec.wrap_summary.empty()
+                    ? std::format("已达到最大迭代预算（{} 轮）但任务未完成，由内部评审器中止。",
+                                  m_config.max_iterations)
+                    : dec.wrap_summary;
+                result.final_reasoning = "at-limit wrap up";
+                LOG_WARN("[react_loop] at-limit reviewer decided wrap_up");
+                break;
+            }
+        }
+
+        ++iteration;
+        // 预算（含追加）耗尽且评审未授予继续 → 供循环后判硬错误
+        hard_budget_reached = (budget <= 0);
     }
 
     // ================================================================
@@ -843,24 +1094,25 @@ ReActResult ReActLoop::run(
     // 使 compare_shape 的 log_rewrite 归因在 compact 改写历史后能正确触发
     result.rewrite_version = m_compactor.rewrite_version();
 
-    // 超过最大迭代数：仅当真正跑满 max_iterations 才报错
+    // 超过预算（含评审追加）且未产出 final_answer：视为硬错误
     // 注意：LLM 返回空 content + 无 tool_use 时也会 break 退出，此时 final_answer 为空，
-    // 但属于正常退出（LLM 主动结束），不应误判为 max iterations
-    if (!result.was_interrupted && !result.was_error
-        && result.final_answer.empty()
-        && result.total_iterations >= m_config.max_iterations) {
+    // 但属于正常退出（LLM 主动结束），不应误判为 max iterations（hard_budget_reached=false）。
+    if (hard_budget_reached && !result.was_interrupted && !result.was_error
+        && result.final_answer.empty()) {
         result.was_error = true;
-        result.error_message = std::format("Agent loop reached max iterations ({})",
-                                           m_config.max_iterations);
-        LOG_WARN("[react_loop] max iterations reached={}, total_duration_ms={:.1f}, "
+        result.error_message = std::format("Agent loop reached max budget ({} iterations)",
+                                           result.total_iterations);
+        LOG_WARN("[react_loop] max budget reached={}, total_duration_ms={:.1f}, "
                  "total_tool_calls={}",
-                 m_config.max_iterations, result.total_duration_ms,
+                 result.total_iterations, result.total_duration_ms,
                  result.total_tool_calls);
     } else {
         LOG_INFO("[react_loop] loop end, iterations={}, total_duration_ms={:.1f}, "
-                 "total_tool_calls={}, was_interrupted={}, was_error={}",
+                 "total_tool_calls={}, was_interrupted={}, was_error={}, "
+                 "graceful_stop={}",
                  result.total_iterations, result.total_duration_ms,
-                 result.total_tool_calls, result.was_interrupted, result.was_error);
+                 result.total_tool_calls, result.was_interrupted, result.was_error,
+                 graceful_stop);
     }
 
     return result;

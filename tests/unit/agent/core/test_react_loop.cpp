@@ -415,9 +415,11 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop tool permission denied is reported
 // ============================================================================
 
 TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop stops at max_iterations", "[react_loop][iteration]") {
-    // 每次都返回 tool_use，永远不结束
+    // 每次都返回 tool_use，永远不结束。关闭内部评审器以测试"纯预算耗尽=硬错误"语义
+    // （评审器开启时，重复工具调用会触发停滞 recover，见 stall/at-limit 测试）。
     ReActLoop::Config config;
     config.max_iterations = 3;
+    config.review_enabled = false;
     auto loop = make_loop(config);
 
     // 准备 3 次工具调用响应
@@ -742,4 +744,94 @@ TEST_CASE_METHOD(ReActLoopFixture,
     auto loop2 = make_loop();
     host.inject(*loop2);
     REQUIRE(loop2->permission_mode() == tool::PermissionMode::Default);
+}
+
+// ============================================================================
+// 停滞检测 + 内部评审器（0.6.x）
+// ============================================================================
+
+TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop stall recovery continues after reviewer correction",
+                 "[react_loop][stall]") {
+    ReActLoop::Config config;
+    config.max_iterations = 10;
+    config.review_stall_window = 2;
+    auto loop = make_loop(config);
+
+    // 迭代1: Echo(a)；迭代2: 再次 Echo(a) → 停滞；评审返回 continue；迭代3: final
+    make_tool_call_reader("tu_1", "Echo", R"({"text":"a"})");
+    make_tool_call_reader("tu_2", "Echo", R"({"text":"a"})");
+    make_text_reader(R"({"action":"continue","reason":"try another file"})");
+    make_text_reader("done after recovery");
+
+    std::vector<ChatMessage> messages = {ChatMessage::user("fix task")};
+    auto result = loop->run(messages, "", registry->get_all_schemas(), should_cancel);
+
+    REQUIRE_FALSE(result.was_error);
+    REQUIRE(result.final_answer == "done after recovery");
+    REQUIRE(result.total_iterations == 3);
+    // 纠偏指令注入为 system 消息；重复工具实际只执行一次（第二次因停滞被驳回未执行）
+    REQUIRE(messages.size() == 5);
+    REQUIRE(messages[3].role == ChatMessage::Role::System);
+    REQUIRE(messages[3].content.find("try another file") != std::string::npos);
+    REQUIRE(echo_tool->call_count == 1);
+}
+
+TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop stall detection wraps up gracefully",
+                 "[react_loop][stall]") {
+    ReActLoop::Config config;
+    config.max_iterations = 10;
+    config.review_stall_window = 2;
+    auto loop = make_loop(config);
+
+    make_tool_call_reader("tu_1", "Echo", R"({"text":"a"})");
+    make_tool_call_reader("tu_2", "Echo", R"({"text":"a"})");
+    make_text_reader(R"({"action":"wrap_up","reason":"stuck in loop"})");
+
+    std::vector<ChatMessage> messages = {ChatMessage::user("fix")};
+    auto result = loop->run(messages, "", registry->get_all_schemas(), should_cancel);
+
+    REQUIRE_FALSE(result.was_error);
+    REQUIRE_FALSE(result.was_interrupted);
+    REQUIRE(result.final_answer.find("stuck in loop") != std::string::npos);
+    REQUIRE(result.total_iterations == 2);
+}
+
+TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop at-limit reviewer grants extra budget",
+                 "[react_loop][limit-review]") {
+    ReActLoop::Config config;
+    config.max_iterations = 2;
+    config.review_extra_budget = 5;
+    config.review_max_grants = 2;
+    auto loop = make_loop(config);
+
+    make_tool_call_reader("tu_1", "Echo", R"({"text":"a"})");  // 迭代1
+    make_tool_call_reader("tu_2", "Echo", R"({"text":"b"})");  // 迭代2（不同输入，不触发停滞）
+    make_text_reader(R"({"action":"continue","reason":"keep going"})");  // 达上限评审
+    make_text_reader("done with extra budget");                          // 追加预算后迭代3
+
+    std::vector<ChatMessage> messages = {ChatMessage::user("task")};
+    auto result = loop->run(messages, "", registry->get_all_schemas(), should_cancel);
+
+    REQUIRE_FALSE(result.was_error);
+    REQUIRE(result.final_answer == "done with extra budget");
+    REQUIRE(result.total_iterations == 3);  // 超限后评审"继续" → 追加预算续跑
+}
+
+TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop at-limit reviewer wraps up gracefully",
+                 "[react_loop][limit-review]") {
+    ReActLoop::Config config;
+    config.max_iterations = 2;
+    auto loop = make_loop(config);
+
+    make_tool_call_reader("tu_1", "Echo", R"({"text":"a"})");
+    make_tool_call_reader("tu_2", "Echo", R"({"text":"b"})");
+    make_text_reader(R"({"action":"wrap_up","reason":"enough progress"})");
+
+    std::vector<ChatMessage> messages = {ChatMessage::user("task")};
+    auto result = loop->run(messages, "", registry->get_all_schemas(), should_cancel);
+
+    REQUIRE_FALSE(result.was_error);
+    REQUIRE(result.final_answer.find("enough progress") != std::string::npos);
+    REQUIRE(result.total_iterations == 2);
+    REQUIRE(echo_tool->call_count == 2);
 }
