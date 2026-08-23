@@ -25,7 +25,7 @@ AgentRunResult GoalGuardedLoopAdapter::run(AgentRunContext ctx) {
     out.react = agent.run(
         *ctx.messages, ctx.system_prompt, ctx.tools_schema,
         ctx.should_cancel ? *ctx.should_cancel : kNeverCancel(),
-        ctx.goal, ctx.observer);
+        ctx.goal, ctx.goal_spec, ctx.observer);
     return out;
 }
 

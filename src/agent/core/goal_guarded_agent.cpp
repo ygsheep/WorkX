@@ -5,7 +5,9 @@
 #include <utility>
 #include <vector>
 
-#include "agent/core/verdict.h"
+#include "agent/core/query_tracker.h"
+#include "agent/core/verdict.h"          // Verdict / check_goal
+#include "core/events/agent_events.h"    // AgentVerdictEvent
 #include "liblogger/logger.h"
 
 namespace agent {
@@ -16,11 +18,20 @@ std::unique_ptr<ReActLoop> ReActLoopFactory::make_one_step(const GoalAgentDeps& 
     // 在每轮后跑 Verdict 决定是否续轮，因此本轮是否"FinalAnswer"不影响正确性。
     ReActLoop::Config cfg;
     cfg.max_iterations = 1;
-    return std::make_unique<ReActLoop>(
+    auto loop = std::make_unique<ReActLoop>(
         deps.provider, deps.registry, cfg,
         deps.config_manager, deps.task_manager, deps.cwd,
         deps.external_compactor, deps.event_bus, deps.touch_collector,
         deps.file_index_invalidator, deps.session_id);
+    // 0.6.x：把会话级权限三态应用到内部单步循环 + 注册变更回调，
+    // 修复 GoalGuarded 路由（此前权限状态只在 chat_session 手动 ReAct 分支上应用）的缺口。
+    loop->apply_permission_state(
+        deps.permission_mode, deps.permission_mode_before_plan,
+        deps.permission_mode == tool::PermissionMode::Plan);
+    if (deps.permission_state_changed_cb) {
+        loop->set_permission_state_changed_callback(deps.permission_state_changed_cb);
+    }
+    return loop;
 }
 
 GoalGuardedAgent::GoalGuardedAgent(GoalAgentDeps deps)
@@ -32,7 +43,25 @@ ReActResult GoalGuardedAgent::run(
     const nlohmann::json& tools_schema,
     const std::atomic<bool>& should_cancel,
     const AgentGoal& goal,
+    const std::string& goal_spec,
     IReActObserver* observer) {
+
+    // 每轮 Verdict 结果 -> 事件（TUI）+ QueryTracker（调用链），双路但同源
+    const auto emit_verdict = [&](const Verdict& v, int attempt) {
+        if (m_deps.tracker) {
+            m_deps.tracker->record_verdict(v.status, v.detail);
+        }
+        if (!m_deps.event_bus) {
+            return;
+        }
+        AgentVerdictEvent event;
+        event.session_id = m_deps.session_id;
+        event.goal_spec = goal_spec;
+        event.attempt = attempt;
+        event.goal_status = static_cast<int32_t>(v.status);
+        event.detail = v.detail;
+        m_deps.event_bus->publish_async(std::move(event));
+    };
 
     // 无目标：退化为单轮 ReAct，直接返回（不循环）
     if (!goal.has_goal()) {
@@ -54,6 +83,7 @@ ReActResult GoalGuardedAgent::run(
 
         // 先验：测试/文件类目标可能初始即达成，避免多余 ReAct
         Verdict pre = check_goal(goal, cwd);
+        emit_verdict(pre, attempt);
         if (pre.status == GoalStatus::Achieved) {
             result = ReActLoopFactory::make_one_step(m_deps)->run(  // 让 LLM 给结语
                 messages, system_prompt, tools_schema, should_cancel, observer);
@@ -75,6 +105,7 @@ ReActResult GoalGuardedAgent::run(
 
         // 观察后验证（关键：即使 LLM 主观 FinalAnswer 也算未达成）
         Verdict post = check_goal(goal, cwd);
+        emit_verdict(post, attempt);
         if (post.status == GoalStatus::Achieved) {
             achieved = true;
             LOG_INFO("[goal_guarded] achieved after action, attempt={}", attempt);

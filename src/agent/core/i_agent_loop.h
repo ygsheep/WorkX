@@ -30,6 +30,7 @@ struct AgentRunContext {
     nlohmann::json tools_schema;
     const std::atomic<bool>* should_cancel = nullptr;
     AgentGoal goal;                                ///< 空 = 无目标守卫
+    std::string goal_spec;                         ///< agent.goal 原文（展示/事件透传用）
     IReActObserver* observer = nullptr;
 };
 

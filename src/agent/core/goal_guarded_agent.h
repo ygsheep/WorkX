@@ -48,6 +48,16 @@ struct GoalAgentDeps {
     skill::TouchCollector* touch_collector = nullptr;
     std::function<void()> file_index_invalidator;
     std::string session_id;
+    /// #28：会话级权限状态（Default/Plan/Bypass 三态 + 进 Plan 前原模式），
+    /// 0.6.x：注入内部单步 ReActLoop，修复 GoalGuarded 路由丢失权限状态的缺口。
+    tool::PermissionMode permission_mode{tool::PermissionMode::Default};
+    tool::PermissionMode permission_mode_before_plan{tool::PermissionMode::Default};
+    /// 权限模式变更回调（空则不挂，宿主用来自查鼠标路径统一状态源）
+    std::function<void(tool::PermissionMode /*mode*/, tool::PermissionMode /*before_plan*/,
+                       bool /*in_plan*/)> permission_state_changed_cb;
+    /// 0.6.x：查询追踪器（可选）。非空时每轮 Verdict 结果写入 tracker 的
+    /// 当前记录（verdict_history），供 QueryEngine→queryTracking 调用链溯源。
+    class QueryTracker* tracker = nullptr;
 };
 
 /// @brief 构造 GoalGuardedAgent 内部 ReActLoop 的工厂（供 QueryEngine 复用注入逻辑）
@@ -68,6 +78,7 @@ public:
     /// @param tools_schema 工具 schema
     /// @param should_cancel 外部取消信号
     /// @param goal 目标定义（None 时退化为一轮 ReAct）
+    /// @param goal_spec agent.goal 原文（AgentVerdictEvent 透传/展示用，可空）
     /// @param observer 事件观察者（可选）
     /// @return 结果（含 goal_status 与最终 final_answer）
     ReActResult run(std::vector<ChatMessage>& messages,
@@ -75,6 +86,7 @@ public:
                     const nlohmann::json& tools_schema,
                     const std::atomic<bool>& should_cancel,
                     const AgentGoal& goal,
+                    const std::string& goal_spec,
                     IReActObserver* observer = nullptr);
 
 private:

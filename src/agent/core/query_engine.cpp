@@ -12,6 +12,21 @@ namespace agent {
 QueryEngine::QueryEngine(GoalAgentDeps deps)
     : m_deps(std::move(deps)) {}
 
+void QueryEngine::set_permission(PermissionSnapshot snap) {
+    m_deps.permission_mode = snap.mode;
+    m_deps.permission_mode_before_plan = snap.before_plan;
+    m_deps.permission_state_changed_cb = std::move(snap.on_changed);
+}
+
+void QueryEngine::apply_permission(std::unique_ptr<ReActLoop>& loop) const {
+    loop->apply_permission_state(
+        m_deps.permission_mode, m_deps.permission_mode_before_plan,
+        m_deps.permission_mode == tool::PermissionMode::Plan);
+    if (m_deps.permission_state_changed_cb) {
+        loop->set_permission_state_changed_callback(m_deps.permission_state_changed_cb);
+    }
+}
+
 AgentType QueryEngine::resolve_agent_type(const IConfigManager& cfg) const {
     const std::string active = cfg.get_or<std::string>(agent::keys::AGENT_ACTIVE, "");
     return parse_agent_type(active);
@@ -26,9 +41,11 @@ std::unique_ptr<IAgentLoop> QueryEngine::make_loop(AgentType type) const {
                 m_deps.config_manager, m_deps.task_manager, m_deps.cwd,
                 m_deps.external_compactor, m_deps.event_bus, m_deps.touch_collector,
                 m_deps.file_index_invalidator, m_deps.session_id);
+            apply_permission(loop);
             return std::make_unique<ReActLoopAdapter>(std::move(loop));
         }
         case AgentType::GoalGuarded: {
+            // 权限/回调随 m_deps 透传给适配器 → GoalGuardedAgent 内部循环
             return std::make_unique<GoalGuardedLoopAdapter>(m_deps);
         }
         case AgentType::Unknown:
@@ -48,6 +65,7 @@ std::unique_ptr<IAgentLoop> QueryEngine::make_loop(AgentType type) const {
                 m_deps.config_manager, m_deps.task_manager, m_deps.cwd,
                 m_deps.external_compactor, m_deps.event_bus, m_deps.touch_collector,
                 m_deps.file_index_invalidator, m_deps.session_id);
+            apply_permission(loop);
             return std::make_unique<ReActLoopAdapter>(std::move(loop));
     }
 }
@@ -59,9 +77,15 @@ AgentRunResult QueryEngine::run(const IConfigManager& cfg, AgentRunContext ctx) 
         // 理论不可达（make_loop 恒返回非空），防呆回退
         loop = make_loop(AgentType::ReAct);
     }
+
+    // queryTracking 调用链：注入 tracker（GoalGuarded 记录每轮 Verdict）+ 启动本轮记录
+    m_deps.tracker = &m_tracker;
+    m_tracker.begin(type, ctx.goal_spec);
+
     AgentRunResult out = loop->run(std::move(ctx));
     // 覆盖为实际执行的类型（回退场景下准确）
     out.agent_type = loop->type();
+    m_tracker.finish(out.react.goal_status, out.react.final_answer);
     return out;
 }
 

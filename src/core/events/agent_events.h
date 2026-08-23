@@ -61,11 +61,28 @@ struct ToolResultEvent {
 };
 
 /// @brief Agent 编排完成
+/// @details 0.6.x：新增 agent_type / goal_status / goal_spec，透传本次查询的
+///          实际 Agent 类型与目标验证终态，供 UI 展示与 QueryTracker 溯源。
+///          字段用 int32_t 存枚举值（core 层不依赖 agent 类型，见 McpServerStatusLite 惯例）。
 struct AgentDoneEvent {
     std::string final_response;
     int32_t total_steps = 0;
     int32_t total_tool_calls = 0;
     double total_duration_ms = 0.0;
+    int32_t agent_type = 0;    ///< AgentType 枚举值（0=Unknown 1=ReAct 2=GoalGuarded …）
+    int32_t goal_status = 0;   ///< GoalStatus 枚举值（0=Unknown 1=Pending 2=Achieved 3=Failed）
+    std::string goal_spec;     ///< agent.goal 原文（空 = 普通对话，无目标守卫）
+};
+
+/// @brief 目标验证进度事件（GoalGuardedAgent 每轮 check_goal 后发布，0.6.x）
+/// @details 供 TUI 第二层/侧栏展示 Verdict 进度（如"第 N 轮验证：测试仍红"）。
+///          goal_status 用 int32_t 存 GoalStatus 枚举值，保持 core 层不依赖 agent 类型。
+struct AgentVerdictEvent {
+    std::string session_id;
+    std::string goal_spec;    ///< agent.goal 原文（展示用）
+    int32_t attempt = 0;      ///< 当前尝试轮数（1-based）
+    int32_t goal_status = 0;  ///< GoalStatus 枚举值（0=Unknown 1=Pending 2=Achieved 3=Failed）
+    std::string detail;       ///< 验证器返回的人可读说明（如测试失败数/缺失路径）
 };
 
 /// @brief 缓存诊断事件（DeepSeek 硬盘缓存命中率劣化归因）
