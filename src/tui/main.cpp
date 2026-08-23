@@ -16,6 +16,7 @@
 
 #include "agent/api/i_backend_admin.h"
 #include "agent/api/remote/http_client.h"  // models.dev 目录后台刷新
+#include "agent/audit/audit_logger.h"
 #include "agent/command/inclaude/registry.h"
 #include "agent/config/app_config.h"
 #include "agent/core/chat_session.h"
@@ -86,10 +87,40 @@ int main(int argc, char** argv) {
     }
 
     // 日志（Debug/Release 统一到 ~/.workx/logs）
-    agent::log::Logger::get_instance().set_level(agent::log::LogLevel::LOG_INFO);
-    auto log_file = agent::default_log_path();
-    if (!log_file.empty()) {
-        agent::log::Logger::get_instance().enable_file_output(log_file.string(), true);
+    // 级别 / 文件路径 / 保留天数全部由配置接管；删除过期历史日志后再打开文件。
+    {
+        // logging.level：字符串 → LogLevel（平缓回退到 info）
+        const std::string level_str = cfg.get_or<std::string>(agent::keys::LOG_LEVEL, "info");
+        agent::log::LogLevel level = agent::log::LogLevel::LOG_INFO;
+        if (level_str == "trace") level = agent::log::LogLevel::LOG_TRACE;
+        else if (level_str == "debug") level = agent::log::LogLevel::LOG_DEBUG;
+        else if (level_str == "warn") level = agent::log::LogLevel::LOG_WARN;
+        else if (level_str == "error") level = agent::log::LogLevel::LOG_ERROR;
+        else if (level_str == "fatal") level = agent::log::LogLevel::LOG_FATAL;
+        agent::log::Logger::get_instance().set_level(level);
+
+        // logging.file：空 = 默认 workx_时间戳.log；启动时清理过期历史文件
+        std::string log_file = cfg.get_or<std::string>(agent::keys::LOG_FILE, "");
+        if (log_file.empty()) {
+            agent::cleanup_expired_logs(cfg.get_or<int>(agent::keys::LOG_RETENTION_DAYS, 7));
+            const auto& def = agent::default_log_path();
+            if (!def.empty()) log_file = def.string();
+        }
+        if (!log_file.empty()) {
+            agent::log::Logger::get_instance().enable_file_output(log_file, true);
+        }
+
+        // 审计日志（大小轮转 + 天数清理）：启用后记录工具调用与安全事件
+        if (cfg.get_or<bool>(agent::keys::AUDIT_ENABLED, true)) {
+            std::string audit_file = cfg.get_or<std::string>(agent::keys::AUDIT_FILE, "");
+            if (audit_file.empty()) audit_file = (agent::log_dir() / "audit.jsonl").string();
+            agent::audit::AuditLogger::instance().init(
+                audit_file,
+                static_cast<size_t>(cfg.get_or<int>(agent::keys::AUDIT_MAX_SIZE_MB, 10)),
+                static_cast<size_t>(cfg.get_or<int>(agent::keys::AUDIT_RETENTION_DAYS, 30)));
+        } else {
+            agent::audit::AuditLogger::instance().set_enabled(false);
+        }
     }
 
     auto& bus = agent::EventBus::instance();

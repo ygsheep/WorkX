@@ -49,8 +49,10 @@ namespace keys {
     constexpr const char* AGENT_ACTIVE   = "agent.active";
 
     // Logging
-    constexpr const char* LOG_LEVEL      = "logging.level";
-    constexpr const char* LOG_FILE       = "logging.file";
+    constexpr const char* LOG_LEVEL        = "logging.level";
+    constexpr const char* LOG_FILE         = "logging.file";
+    /// 运行日志保留天数：启动时删除超过该天数的历史 workx*.log（0 = 不清理）
+    constexpr const char* LOG_RETENTION_DAYS = "logging.retention_days";
 
     // Tool — FileReadTool
     constexpr const char* FILE_READ_MAX_SIZE  = "tool.file_read.max_file_size_bytes";
@@ -107,5 +109,11 @@ std::filesystem::path default_config_path();
 
 /// @brief 默认日志文件路径（平台相关）
 std::filesystem::path default_log_path();
+
+/// @brief 日志目录（统一为配置目录下的 logs/）
+std::filesystem::path log_dir();
+
+/// @brief 清理过期运行日志：删除 logs/ 下超过 retention_days 天的 workx*.log（0 表示不清理）
+void cleanup_expired_logs(int retention_days);
 
 } // namespace agent
