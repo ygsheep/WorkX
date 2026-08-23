@@ -716,29 +716,68 @@ void App::resume_session(const std::string& file_path, const std::string& title)
     m_vm.output_level = OutputLevel::Main;
     invalidate_msg_cache();
     const auto history = m_deps.session->get_messages();
+    int open_idx = -1;  // 正在合并的工具调用 assistant 节点索引（-1=无）
     for (const auto& cm : history) {
         if (cm.role == agent::ChatMessage::Role::User) {
+            open_idx = -1;  // 用户消息分隔回合
             m_vm.apply(ActionAppendMessage{.role = "user", .text = cm.content});
         } else if (cm.role == agent::ChatMessage::Role::Assistant) {
-            // 构造含卡片的 assistant 节点：正文 + 思考卡片 + 工具卡片
-            MessageNode n;
-            n.role = MsgRole::Assistant;
-            n.text = cm.content;
-            n.sealed = true;
-            if (!cm.reasoning_content.empty()) {
-                n.reasoned = true;
-                n.reasoning = cm.reasoning_content;
-                n.reasoning_expanded = m_vm.card_defaults.reasoning_expanded;
-                n.reasoning_ms = cm.reasoning_ms;
+            if (!cm.tool_uses.empty()) {
+                // 工具调用消息：合并进当前 open 节点（对齐实时路径：一个回合一条
+                // 消息多张卡片相邻，避免恢复会话时卡片间叠加消息级空行成两行间距）
+                if (open_idx < 0) {
+                    m_vm.messages.push_back(MessageNode{});
+                    open_idx = static_cast<int>(m_vm.messages.size()) - 1;
+                    auto& open = m_vm.messages[open_idx];
+                    open.role = MsgRole::Assistant;
+                    open.sealed = true;
+                    open.reasoning_expanded = m_vm.card_defaults.reasoning_expanded;
+                }
+                auto& open = m_vm.messages[open_idx];
+                if (!cm.content.empty()) open.text += cm.content;
+                if (!cm.reasoning_content.empty()) {
+                    open.reasoned = true;
+                    if (!open.reasoning.empty()) open.reasoning += "\n";
+                    open.reasoning += cm.reasoning_content;
+                    open.reasoning_ms += cm.reasoning_ms;
+                }
+                for (const auto& tu : cm.tool_uses) {
+                    ToolCallNode t;
+                    t.tool_name = tu.name;
+                    t.call_id = tu.id;
+                    t.arguments = tu.input.dump();
+                    t.text_pos = open.text.size();  // 正文插入点（对齐实时路径）
+                    open.tool_calls.push_back(std::move(t));
+                }
+            } else if (open_idx >= 0) {
+                // 同一回合的最终答复：并入 open 节点（对齐实时路径：最终答复与工具卡
+                // 同一条消息，避免恢复会话时末卡与最终文本之间叠加消息级空行成两行间距）
+                auto& open = m_vm.messages[open_idx];
+                if (!cm.content.empty()) {
+                    if (!open.text.empty()) open.text += "\n";
+                    open.text += cm.content;
+                }
+                if (!cm.reasoning_content.empty()) {
+                    open.reasoned = true;
+                    if (!open.reasoning.empty()) open.reasoning += "\n";
+                    open.reasoning += cm.reasoning_content;
+                    open.reasoning_ms += cm.reasoning_ms;
+                }
+                open_idx = -1;  // 回合结束
+            } else {
+                // 独立答复（无工具调用、无 open）：独立节点
+                MessageNode n;
+                n.role = MsgRole::Assistant;
+                n.text = cm.content;
+                n.sealed = true;
+                if (!cm.reasoning_content.empty()) {
+                    n.reasoned = true;
+                    n.reasoning = cm.reasoning_content;
+                    n.reasoning_expanded = m_vm.card_defaults.reasoning_expanded;
+                    n.reasoning_ms = cm.reasoning_ms;
+                }
+                m_vm.messages.push_back(std::move(n));
             }
-            for (const auto& tu : cm.tool_uses) {
-                ToolCallNode t;
-                t.tool_name = tu.name;
-                t.call_id = tu.id;
-                t.arguments = tu.input.dump();
-                n.tool_calls.push_back(std::move(t));
-            }
-            m_vm.messages.push_back(std::move(n));
         } else if (cm.role == agent::ChatMessage::Role::Tool) {
             // 工具结果：按 call_id 回填对应卡片（出错默认展开，对齐实时路径）
             for (auto it = m_vm.messages.rbegin(); it != m_vm.messages.rend(); ++it) {

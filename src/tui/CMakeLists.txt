@@ -11,6 +11,19 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(ftxui)
 
+# 根 CMakeLists 把 /we4700-4703（MSVC 告警转错误）作为第一方代码策略，但会
+# 继承到 vendored 第三方 ftxui，使其 C4702「不可达代码」等告警变成编译错误
+# （screen/terminal.cpp、component/event.cpp 等）。为 ftxui 三个库目标统一
+# 强制包含抑制头，在 TU 最顶端禁用这些告警，且不改动 ftxui 源码。
+if(MSVC)
+    foreach(_ftxui_target screen dom component)
+        if(TARGET ${_ftxui_target})
+            target_compile_options(${_ftxui_target} PRIVATE
+                "/FI${CMAKE_SOURCE_DIR}/third_party/ftxui/suppress_msvc_warnings.h")
+        endif()
+    endforeach()
+endif()
+
 add_executable(workx
     main.cpp
     app.cpp

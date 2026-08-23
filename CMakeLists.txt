@@ -26,8 +26,11 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 if(MSVC)
     add_compile_options(/W4 /utf-8 /Zc:preprocessor /FS)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+    # 提升未初始化变量警告为错误
+    add_compile_options(/we4700 /we4701 /we4702 /we4703)
 else()
-    add_compile_options(-Wall -Wextra -Wpedantic)
+    add_compile_options(-Wall -Wextra -Wpedantic -Wuninitialized -Wmaybe-uninitialized)
+    add_compile_options(-Werror=uninitialized -Werror=maybe-uninitialized)
 endif()
 
 # nlohmann_json / CURL 是硬依赖：公共头无条件 include <nlohmann/json.hpp>
