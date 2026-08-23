@@ -70,7 +70,12 @@ TEST_CASE("to_string / is_implemented 一致", "[agent][agent_type]") {
     REQUIRE(is_implemented(AgentType::Batch));
     REQUIRE(is_implemented(AgentType::Watch));
     REQUIRE(is_implemented(AgentType::Script));
-    REQUIRE_FALSE(is_implemented(AgentType::Coordinator));  // 占位未实现
+    // #33：五个角色 Agent 已实现
+    REQUIRE(is_implemented(AgentType::Coordinator));
+    REQUIRE(is_implemented(AgentType::Planner));
+    REQUIRE(is_implemented(AgentType::Executor));
+    REQUIRE(is_implemented(AgentType::Researcher));
+    REQUIRE(is_implemented(AgentType::Reviewer));
     REQUIRE_FALSE(is_implemented(AgentType::Unknown));
 }
 

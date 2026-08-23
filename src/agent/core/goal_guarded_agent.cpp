@@ -12,19 +12,17 @@
 
 namespace agent {
 
-std::unique_ptr<ReActLoop> ReActLoopFactory::make_one_step(const GoalAgentDeps& deps) {
-    // max_iterations=1：每次 run() 只推进一轮 Thought+Action+Observation
-    // （LLM 无 tool_use 时即给出本轮 FinalAnswer 退出）。外层 GoalGuarded 环
-    // 在每轮后跑 Verdict 决定是否续轮，因此本轮是否"FinalAnswer"不影响正确性。
-    ReActLoop::Config cfg;
-    cfg.max_iterations = 1;
+std::unique_ptr<ReActLoop> ReActLoopFactory::make(
+    const GoalAgentDeps& deps,
+    std::shared_ptr<tool::ToolRegistry> registry,
+    ReActLoop::Config cfg) {
     auto loop = std::make_unique<ReActLoop>(
-        deps.provider, deps.registry, cfg,
+        deps.provider, std::move(registry), std::move(cfg),
         deps.config_manager, deps.task_manager, deps.cwd,
         deps.external_compactor, deps.event_bus, deps.touch_collector,
         deps.file_index_invalidator, deps.session_id);
-    // 0.6.x：把会话级权限三态应用到内部单步循环 + 注册变更回调，
-    // 修复 GoalGuarded 路由（此前权限状态只在 chat_session 手动 ReAct 分支上应用）的缺口。
+    // 0.6.x：把会话级权限三态应用到循环 + 注册变更回调，
+    // 修复路由（此前权限状态只在 chat_session 手动 ReAct 分支上应用）的缺口。
     loop->apply_permission_state(
         deps.permission_mode, deps.permission_mode_before_plan,
         deps.permission_mode == tool::PermissionMode::Plan);
@@ -32,6 +30,12 @@ std::unique_ptr<ReActLoop> ReActLoopFactory::make_one_step(const GoalAgentDeps& 
         loop->set_permission_state_changed_callback(deps.permission_state_changed_cb);
     }
     return loop;
+}
+
+std::unique_ptr<ReActLoop> ReActLoopFactory::make_one_step(const GoalAgentDeps& deps) {
+    ReActLoop::Config cfg;
+    cfg.max_iterations = 1;
+    return make(deps, deps.registry, std::move(cfg));
 }
 
 GoalGuardedAgent::GoalGuardedAgent(GoalAgentDeps deps)

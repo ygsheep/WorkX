@@ -151,8 +151,9 @@ void register_config_defaults(ConfigManager& cfg) {
     cfg.register_schema({
         .key = keys::AGENT_ACTIVE,
         .description = "Current agent type (empty=ReAct; goal-guarded/verify=GoalGuardedAgent; "
-                       "planner/executor/coordinator/researcher/reviewer/batch/watch=extensible "
-                       "placeholders falling back to ReAct); non-empty also filters active skills",
+                       "planner/coordinator/researcher/reviewer=read-only/planning roles; "
+                       "executor=execute; coordinator+AgentTool; batch/watch/script=no-LLM modes); "
+                       "non-empty also filters active skills",
         .default_value = std::string(""),
         .type = ConfigSchema::Type::String
     });

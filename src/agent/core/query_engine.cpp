@@ -57,12 +57,14 @@ std::unique_ptr<IAgentLoop> QueryEngine::make_loop(AgentType type) const {
         case AgentType::Watch:
             // #32：文件/事件监控轮询（无 LLM）
             return std::make_unique<WatchLoopAdapter>(m_deps);
-        case AgentType::Unknown:
         case AgentType::Planner:
         case AgentType::Executor:
         case AgentType::Coordinator:
         case AgentType::Researcher:
         case AgentType::Reviewer:
+            // #33：角色 Agent（提示覆盖 + 工具过滤）+ 复用 ReActLoop 引擎
+            return std::make_unique<RoleLoopAdapter>(m_deps, type);
+        case AgentType::Unknown:
         default:
             LOG_WARN("[query_engine] agent type '{}' not implemented, fallback to ReAct",
                      to_string(type));

@@ -126,6 +126,7 @@ target_sources(workx_agent PRIVATE
     core/script_agent.cpp        # 0.6.x：#32 ScriptAgent（确定性脚本）
     core/batch_agent.cpp         # 0.6.x：#32 BatchAgent（同构并行）
     core/watch_agent.cpp         # 0.6.x：#32 WatchAgent（文件/事件监控）
+    core/role_agent.cpp          # 0.6.x：#33 角色 Agent（Planner/Executor/Coordinator/Researcher/Reviewer）
 
     # session
     session/session_store.cpp

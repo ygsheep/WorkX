@@ -68,6 +68,11 @@ bool is_implemented(AgentType type) noexcept {
         case AgentType::Batch:    // #32 多模式已实现
         case AgentType::Watch:
         case AgentType::Script:
+        case AgentType::Planner:      // #33 角色 Agent 已实现
+        case AgentType::Executor:
+        case AgentType::Coordinator:
+        case AgentType::Researcher:
+        case AgentType::Reviewer:
             return true;
         default:
             return false;

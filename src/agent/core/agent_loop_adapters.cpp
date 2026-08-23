@@ -67,4 +67,12 @@ AgentRunResult WatchLoopAdapter::run(AgentRunContext ctx) {
     return out;
 }
 
+RoleLoopAdapter::RoleLoopAdapter(GoalAgentDeps deps, AgentType type)
+    : m_deps(std::move(deps)), m_type(type) {}
+
+AgentRunResult RoleLoopAdapter::run(AgentRunContext ctx) {
+    RoleAgent agent(m_deps, role_profile_of(m_type));
+    return agent.run(std::move(ctx));
+}
+
 } // namespace agent

@@ -17,6 +17,7 @@
 #include "agent/core/i_agent_loop.h"
 #include "agent/core/react_loop.h"
 #include "agent/core/goal_guarded_agent.h"
+#include "agent/core/role_agent.h"
 #include "agent/core/script_agent.h"
 #include "agent/core/batch_agent.h"
 #include "agent/core/watch_agent.h"
@@ -82,6 +83,20 @@ public:
 
 private:
     GoalAgentDeps m_deps;
+};
+
+/// @brief 角色 Agent 的 IAgentLoop 适配（#33 Planner/Executor/Coordinator/Researcher/Reviewer）
+/// @details 构造时由 QueryEngine 指定具体的 AgentType，RoleAgent 据此加载对应
+///          RoleProfile（角色指令 + 工具过滤策略）。
+class WORKX_API RoleLoopAdapter final : public IAgentLoop {
+public:
+    RoleLoopAdapter(GoalAgentDeps deps, AgentType type);
+    AgentRunResult run(AgentRunContext ctx) override;
+    AgentType type() const noexcept override { return m_type; }
+
+private:
+    GoalAgentDeps m_deps;
+    AgentType m_type;
 };
 
 } // namespace agent

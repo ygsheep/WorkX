@@ -23,9 +23,6 @@ namespace agent::tool {
 
 namespace {
 
-/// @brief Agent 工具名（防递归排除 + 工具元信息共用，避免硬编码漂移）
-constexpr const char* kAgentToolName = "Agent";
-
 /// @brief 生成任务 id（对齐 TS generateTaskId：'a' 前缀 + 8 个随机小写字母数字）
 std::string generate_task_id() {
     static constexpr char kAlphabet[] = "0123456789abcdefghijklmnopqrstuvwxyz";
