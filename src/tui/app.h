@@ -95,10 +95,15 @@ struct AppDeps {
     /// @brief 退出应用回调（/exit）
     std::function<void()> on_exit;
 
-    /// @brief 运行时创建后端（/provider 热切换；main 注入 agent::create_backend 包装）
-    /// @param provider_name 供应商 id（ProviderConfigEntry.id，写入 backend.provider）
+    /// @brief 运行时创建后端（/provider 热切换；main 注入 agent::create_backend_for_entry 包装）
+    /// @param entry 目标供应商条目（含 base_url/api_key/model，创建后端时以条目为准）
     /// @return BackendCreateResult（provider 可为空 = 配置不足或创建/初始化失败）
-    std::function<agent::BackendCreateResult(const std::string& provider_name)> create_provider;
+    std::function<agent::BackendCreateResult(const agent::ProviderConfigEntry& entry)> create_provider;
+
+    /// @brief 配置落盘回调（供应商切换成功持久化后调用；main 注入 save_to_file）
+    /// @details apply_provider_switch 只改 ConfigManager 内存，不落盘。
+    ///          热切换后必须 save 到磁盘，否则重启读取旧配置还原为上一供应商。
+    std::function<void()> save_config;
 };
 
 /// @brief 顶层应用

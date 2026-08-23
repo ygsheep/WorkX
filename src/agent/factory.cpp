@@ -122,8 +122,66 @@ BackendCreateResult create_backend(IConfigManager& cfg,
 }
 
 // ============================================================
-// create_session
+// create_backend_for_entry — 按供应商条目创建后端（/provider 热切换）
 // ============================================================
+
+BackendCreateResult create_backend_for_entry(IConfigManager& cfg,
+                                             const ProviderConfigEntry& entry,
+                                             IEventBus& event_bus) {
+    BackendCreateResult result;
+
+    // 预置默认（可能为空；自定义条目 id 不在预设表返回 nullptr）
+    const ProviderPreset* preset = find_preset(entry.id);
+
+    // URL：条目显式 base_url > preset 默认 > ""（旧实现只用全局 cfg 旧值，切换失败根因）
+    std::string effective_url = entry.base_url;
+    if (effective_url.empty() && preset && !preset->default_url.empty()) {
+        effective_url = preset->default_url;
+    }
+    result.remote_url = effective_url;
+
+    // Model：条目 model > cfg > preset 默认
+    std::string effective_model = entry.model;
+    if (effective_model.empty()) {
+        effective_model = cfg.get_or<std::string>(keys::MODEL_NAME, "");
+    }
+    if (effective_model.empty() && preset && !preset->default_model.empty()) {
+        effective_model = preset->default_model;
+    }
+    result.model_name = effective_model;
+
+    // 无 URL 时不创建 backend（ProviderConfigEntry 存在但未配置 base_url）
+    if (effective_url.empty()) {
+        return result;
+    }
+
+    // API Key：条目 api_key > cfg 全局（切换前 apply_provider_switch 尚未写 cfg，旧值不可靠）
+    std::string api_key = entry.api_key;
+    if (api_key.empty()) {
+        api_key = cfg.get_or<std::string>(keys::API_KEY, "");
+    }
+
+    BackendConfig backend_config;
+    backend_config.type = BackendConfig::Type::Remote;
+    backend_config.provider = preset ? preset->type : ProviderType::OpenAI;
+    backend_config.base_url = effective_url;
+    backend_config.model_name = effective_model;
+    backend_config.api_key = api_key;
+    int default_timeout = preset && preset->timeout_ms > 0 ? preset->timeout_ms : 30000;
+    backend_config.timeout_ms = cfg.get_or<int>(keys::TIMEOUT_MS, default_timeout);
+    backend_config.send_reasoning_content = cfg.get_or<bool>(keys::SEND_REASONING, false);
+
+    auto backend = BackendFactory::create(backend_config, &event_bus);
+    if (!backend) {
+        return result;  // provider 保持 nullptr
+    }
+    auto init_result = backend->initialize(backend_config);
+    if (init_result.is_err()) {
+        return result;  // provider 保持 nullptr（鉴权/网络等失败）
+    }
+    result.provider = std::move(backend);
+    return result;
+}
 
 SessionResult create_session(IConfigManager& cfg,
                              const ProviderPreset* preset,

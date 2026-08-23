@@ -1220,8 +1220,10 @@ void App::switch_provider(int index) {
         return;
     }
     // 后台创建新后端（不阻塞 UI）；完成后经事件队列回 UI 线程执行热切换
+    // 以目标条目自身配置为准创建（base_url/api_key/model），
+    // 自定义供应商也无需依赖切换前旧的全局 cfg
     std::thread([this, entry] {
-        auto result = m_deps.create_provider(entry.id);
+        auto result = m_deps.create_provider(entry);
         if (!result.provider) {
             m_queue.push(ActionProviderSwitchFailed{.provider_name = entry.name});
             m_screen.PostEvent(Event::Custom);
@@ -1256,6 +1258,8 @@ void App::handle_provider_switched(std::unique_ptr<agent::ICompletionProvider> p
     // 持久化切换（成功后写配置，避免失败残留）
     if (m_deps.config_manager)
         agent::apply_provider_switch(*m_deps.config_manager, entry);
+    // apply_provider_switch 仅写内存；必须落盘，否则重启读取旧配置还原为上一供应商
+    if (m_deps.save_config) m_deps.save_config();
     // 更新侧栏模型显示与模型列表 active 标记
     if (!model_name.empty()) {
         m_vm.sidebar.model = model_name;
@@ -2488,6 +2492,8 @@ void App::run() {
             .on_commit = [this] {
                 if (m_deps.config_manager)
                     agent::save_provider_configs(*m_deps.config_manager, m_providers);
+                // save_provider_configs 仅写内存；落盘，否则重启丢失新增/编辑的供应商条目
+                if (m_deps.save_config) m_deps.save_config();
             },
             .on_close = [this] { if (m_composer) m_composer->TakeFocus(); },
             .title = std::string(str::kPaletteProviderTitle),

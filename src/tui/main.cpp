@@ -248,10 +248,14 @@ int main(int argc, char** argv) {
     deps.on_submit = [&](const std::string& text) {
         if (session) session->send_message(text);
     };
-    // /provider 热切换：复用统一后端工厂（预设名或自定义条目 id 均可解析）
-    deps.create_provider = [&cfg, &bus](const std::string& name) {
-        return agent::create_backend(cfg, agent::find_preset(name), bus);
+    // /provider 热切换：以目标供应商条目自身配置为准创建后端，
+    // 自定义条目（非 preset）也能正确使用其 base_url/api_key，避免依赖旧全局 cfg
+    deps.create_provider = [&cfg, &bus](const agent::ProviderConfigEntry& entry) {
+        return agent::create_backend_for_entry(cfg, entry, bus);
     };
+    // /provider 热切换落盘：apply_provider_switch 只改内存，这里 save 到磁盘，
+    // 否则重启会读取旧配置还原为上一供应商
+    deps.save_config = [&cfg, &config_path] { (void)cfg.save_to_file(config_path); };
 
     ftxtui::App app(std::move(deps));
     app.run();
