@@ -149,7 +149,7 @@ private:
     void rebuild_model_entries();
     /// @brief 打开 /resume 会话选择面板（仅会话条目）
     void open_resume_palette();
-    /// @brief 打开供应商切换面板（读配置 backend.providers）
+    /// @brief 打开供应商管理面板（读配置 backend.providers）
     void open_provider_palette();
     /// @brief 供应商面板选中：后台创建后端 → 完成后热切换
     void switch_provider(int index);
@@ -283,14 +283,14 @@ private:
     std::vector<SearchEntry> m_session_entries;  ///< /resume 面板条目（仅会话）
     bool m_resume_open = false;
     std::vector<SearchEntry> m_model_entries;    ///< /model 面板条目（由 m_model_items 派生）
-    std::vector<SearchEntry> m_provider_entries; ///< 供应商面板条目
     bool m_provider_open = false;
     std::vector<agent::ProviderConfigEntry> m_providers;  ///< 配置中的供应商列表
     std::string m_current_provider;              ///< 当前供应商 id（backend.provider）
 
     // ---- 侧边栏布局 ----
     bool m_sidebar_left = false;                 ///< 侧边栏居中位置（false=右，true=左）
-    int m_sidebar_width = 35;                    ///< 侧边栏宽度百分比（Ctrl+←/→ 调整，[20,80]）
+    int m_sidebar_width = 35;                    ///< 侧边栏宽度百分比（Ctrl+←/→ / 鼠标拖动，[20,80]）
+    bool m_sidebar_resizing = false;             ///< 正在用鼠标拖动侧边栏分隔线调整宽度
     /// @brief 侧边栏 tab 栏命中区（每帧由 build_sidebar_tabs 重建；鼠标点击用）
     std::deque<TabHit> m_tab_hits;
     /// @brief 侧栏可折叠区块命中区（MCP/TODO 标题行；每帧由 append_sidebar_info 重建）
