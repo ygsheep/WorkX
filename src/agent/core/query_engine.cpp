@@ -48,14 +48,26 @@ std::unique_ptr<IAgentLoop> QueryEngine::make_loop(AgentType type) const {
             // 权限/回调随 m_deps 透传给适配器 → GoalGuardedAgent 内部循环
             return std::make_unique<GoalGuardedLoopAdapter>(m_deps);
         }
-        case AgentType::Unknown:
+        case AgentType::Script:
+            // #32：确定性脚本执行（无 LLM），复用同一套 deps
+            return std::make_unique<ScriptLoopAdapter>(m_deps);
+        case AgentType::Batch:
+            // #32：glob 同构并行（无 LLM）
+            return std::make_unique<BatchLoopAdapter>(m_deps);
+        case AgentType::Watch:
+            // #32：文件/事件监控轮询（无 LLM）
+            return std::make_unique<WatchLoopAdapter>(m_deps);
         case AgentType::Planner:
         case AgentType::Executor:
         case AgentType::Coordinator:
         case AgentType::Researcher:
         case AgentType::Reviewer:
-        case AgentType::Batch:
-        case AgentType::Watch:
+            // #33：角色 Agent（提示覆盖 + 工具过滤）+ 复用 ReActLoop 引擎
+            return std::make_unique<RoleLoopAdapter>(m_deps, type);
+        case AgentType::Background:
+            // 长时运行：整条请求转后台，不阻塞主对话，进度/完成走事件
+            return std::make_unique<BackgroundLoopAdapter>(m_deps);
+        case AgentType::Unknown:
         default:
             LOG_WARN("[query_engine] agent type '{}' not implemented, fallback to ReAct",
                      to_string(type));

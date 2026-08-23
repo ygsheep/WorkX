@@ -54,4 +54,13 @@ inline std::string_view icon_retry() { return icon("\uF2F9", "R"); }
 /// @brief 状态点（nf-cod-circle_small_filled，小实心点）→ "·"（MCP 连接状态：绿/红/灰）
 inline std::string_view icon_dot() { return icon("\uEB8A", "·"); }
 
+// ----------------------------------------------------------------------------
+// 模型输入能力（供应商管理面板：Nerd Font → ASCII 降级）
+// ----------------------------------------------------------------------------
+
+/// @brief 文本输入（nf-fa-font）→ "T"（LLM 恒支持）
+inline std::string_view icon_input_text() { return icon("\uF031", "T"); }
+/// @brief 图像/视觉输入（nf-fa-image）→ "图"（supports_vision）
+inline std::string_view icon_input_vision() { return icon("\uF03E", "图"); }
+
 }  // namespace ftxtui::theme

@@ -64,6 +64,16 @@ struct GoalAgentDeps {
 /// @details 注入途径与 ChatSession 构造 ReActLoop 完全一致；max_iterations=1 使每次
 ///          run() 只推进一轮 Thought+Action+Observation，由外层环控制续轮。
 struct ReActLoopFactory {
+    /// #33：构造一个已应用会话权限/事件的 ReActLoop（供角色 Agent 复用）。
+    /// @param deps    依赖（permission 三态与变更回调会注入到 loop）
+    /// @param registry 工具注册表（角色 Agent 可传入过滤后的子 registry）
+    /// @param cfg     循环配置（默认全量 max_iterations；GoalGuarded 用 max_iterations=1）
+    static std::unique_ptr<ReActLoop> make(
+        const GoalAgentDeps& deps,
+        std::shared_ptr<tool::ToolRegistry> registry,
+        ReActLoop::Config cfg);
+
+    /// 单步 ReActLoop（GoalGuarded 每轮一次），等价 make(deps, deps.registry, {1})
     static std::unique_ptr<ReActLoop> make_one_step(const GoalAgentDeps& deps);
 };
 

@@ -51,6 +51,10 @@ TEST_CASE("parse_agent_type: 占位类型路由可识别", "[agent][agent_type]"
     REQUIRE(parse_agent_type("reviewer") == AgentType::Reviewer);
     REQUIRE(parse_agent_type("batch") == AgentType::Batch);
     REQUIRE(parse_agent_type("watch") == AgentType::Watch);
+    // #32：新增 Script 类型
+    REQUIRE(parse_agent_type("script") == AgentType::Script);
+    REQUIRE(parse_agent_type("Script") == AgentType::Script);
+    REQUIRE(parse_agent_type("script-agent") == AgentType::Script);
 }
 
 TEST_CASE("parse_agent_type: 未知串 → Unknown（不抛异常）", "[agent][agent_type]") {
@@ -62,8 +66,26 @@ TEST_CASE("to_string / is_implemented 一致", "[agent][agent_type]") {
     REQUIRE(to_string(AgentType::GoalGuarded) == "goal-guarded");
     REQUIRE(is_implemented(AgentType::ReAct));
     REQUIRE(is_implemented(AgentType::GoalGuarded));
-    REQUIRE_FALSE(is_implemented(AgentType::Coordinator));  // 占位未实现
+    // #32：Batch/Watch/Script 已实现
+    REQUIRE(is_implemented(AgentType::Batch));
+    REQUIRE(is_implemented(AgentType::Watch));
+    REQUIRE(is_implemented(AgentType::Script));
+    // #33：五个角色 Agent 已实现
+    REQUIRE(is_implemented(AgentType::Coordinator));
+    REQUIRE(is_implemented(AgentType::Planner));
+    REQUIRE(is_implemented(AgentType::Executor));
+    REQUIRE(is_implemented(AgentType::Researcher));
+    REQUIRE(is_implemented(AgentType::Reviewer));
+    // 后台分发（包装默认底层 Agent）
+    REQUIRE(is_implemented(AgentType::Background));
     REQUIRE_FALSE(is_implemented(AgentType::Unknown));
+}
+
+TEST_CASE("parse_agent_type: background/bg 别名", "[agent][agent_type]") {
+    REQUIRE(parse_agent_type("background") == AgentType::Background);
+    REQUIRE(parse_agent_type("bg") == AgentType::Background);
+    REQUIRE(parse_agent_type(" Background ") == AgentType::Background);
+    REQUIRE(to_string(AgentType::Background) == "background");
 }
 
 // ============================================================
@@ -90,6 +112,41 @@ TEST_CASE("parse_goal: cmd 提取命令", "[agent][goal]") {
     AgentGoal g = parse_goal("cmd:ctest --output-on-failure");
     REQUIRE(g.type == AgentGoal::CustomScript);
     REQUIRE(g.command == "ctest --output-on-failure");
+}
+
+// ---- #32 多模式目标语法 ----
+TEST_CASE("parse_goal: script 提取命令", "[agent][goal]") {
+    AgentGoal g = parse_goal("script:python build.py --all");
+    REQUIRE(g.type == AgentGoal::Script);
+    REQUIRE(g.command == "python build.py --all");
+}
+
+TEST_CASE("parse_goal: batch 解析模板/glob/并发度", "[agent][goal]") {
+    AgentGoal g = parse_goal(
+        "batch:cmd=npm test -- {item}&glob=packages/**/*.test.js&concurrency=4");
+    REQUIRE(g.type == AgentGoal::Batch);
+    REQUIRE(g.command == "npm test -- {item}");
+    REQUIRE(g.glob == "packages/**/*.test.js");
+    REQUIRE(g.concurrency == 4);
+}
+
+TEST_CASE("parse_goal: batch 缺省字段用默认值", "[agent][goal]") {
+    AgentGoal g = parse_goal("batch:cmd=ctest -- {item}");
+    REQUIRE(g.type == AgentGoal::Batch);
+    REQUIRE(g.command == "ctest -- {item}");
+    REQUIRE(g.glob.empty());          // 默认 glob 见 mode_agent_common
+    REQUIRE(g.concurrency == 1);
+}
+
+TEST_CASE("parse_goal: watch 解析 path/cmd/polls/interval", "[agent][goal]") {
+    AgentGoal g = parse_goal(
+        "watch:path=src&cmd=cmake --build .&polls=5&interval=200&glob=*.cpp");
+    REQUIRE(g.type == AgentGoal::Watch);
+    REQUIRE(g.path == "src");
+    REQUIRE(g.command == "cmake --build .");
+    REQUIRE(g.watch_polls == 5);
+    REQUIRE(g.watch_interval_ms == 200);
+    REQUIRE(g.glob == "*.cpp");
 }
 
 // ============================================================

@@ -9,63 +9,21 @@
 
 #pragma once
 
-#include <cstdint>
-#include <cstddef>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include <ftxui/screen/string.hpp>
+
 namespace ftxtui {
 
 /// @brief UTF-8 文本的终端显示列宽（CJK/全角=2，组合符≈0，其余=1）
+/// @details 必须与 FTXUI text() 实际渲染的宽度判定完全一致（单源真值，A3）：
+///          直接委托 ftxui::string_width（wcwidth 完整全角表，含 emoji 等宽区间），
+///          否则折行/表格列宽按一个宽度表计算、渲染按另一个度量，
+///          会造成表格边框错位、正文行超宽而越过内容区"黑边"。
 inline int utf8_display_width(std::string_view s) {
-    int w = 0;
-    size_t i = 0;
-    const size_t n = s.size();
-    auto next_width = [&](std::uint32_t cp) -> int {
-        // 宽/全角区间（East Asian Wide|Fullwidth 的实用子集）
-        if ((cp >= 0x1100 && cp <= 0x115F) ||
-            (cp >= 0x2E80 && cp <= 0x303E) ||
-            (cp >= 0x3041 && cp <= 0x33FF) ||
-            (cp >= 0x3400 && cp <= 0x4DBF) ||
-            (cp >= 0x4E00 && cp <= 0x9FFF) ||
-            (cp >= 0xA000 && cp <= 0xA4CF) ||
-            (cp >= 0xAC00 && cp <= 0xD7A3) ||
-            (cp >= 0xF900 && cp <= 0xFAFF) ||
-            (cp >= 0xFE30 && cp <= 0xFE4F) ||
-            (cp >= 0xFF00 && cp <= 0xFF60) ||
-            (cp >= 0xFFE0 && cp <= 0xFFE6) ||
-            (cp >= 0x20000 && cp <= 0x2FFFD) ||
-            (cp >= 0x30000 && cp <= 0x3FFFD))
-            return 2;
-        // 零宽组合字符/控制符：不计列
-        if ((cp >= 0x0300 && cp <= 0x036F) ||          // 组合读音符
-            (cp >= 0x200B && cp <= 0x200F) ||          // 零宽空格/方向
-            (cp == 0xFEFF) ||                          // BOM/零宽不换行
-            (cp >= 0x2028 && cp <= 0x2029))            // 行分隔符
-            return 0;
-        return 1;
-    };
-    while (i < n) {
-        const unsigned char c0 = static_cast<unsigned char>(s[i]);
-        std::uint32_t cp = c0;
-        int extra = 0;
-        if (c0 >= 0x80) {
-            if ((c0 >> 5) == 0b110) { cp = c0 & 0x1F; extra = 1; }
-            else if ((c0 >> 4) == 0b1110) { cp = c0 & 0x0F; extra = 2; }
-            else if ((c0 >> 3) == 0b11110) { cp = c0 & 0x07; extra = 3; }
-        }
-        if (extra) {
-            ++i;
-            for (int k = 0; k < extra && i < n; ++k, ++i)
-                cp = (cp << 6) | (static_cast<unsigned char>(s[i]) & 0x3F);
-            w += next_width(cp);
-        } else {
-            w += next_width(cp);
-            ++i;
-        }
-    }
-    return w;
+    return ftxui::string_width(s);
 }
 
 /// @brief 按显示列宽把一条逻辑行折行为若干物理行

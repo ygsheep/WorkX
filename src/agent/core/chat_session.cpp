@@ -207,6 +207,8 @@ ChatSession::~ChatSession() {
     if (m_provider) {
         m_provider->interrupt();
     }
+    // P1-1：先定向取消本会话已分发的后台任务，避免其后台线程越过会话销毁访问裸指针
+    cancel_background_tasks();
     // H-9：等待后台任务完成，防止 use-after-free
     // 改用 ITaskManager::wait(task) 替代 sleep_for(50ms) 轮询
     // wait 内部用 condition_variable.wait_until + 30s 兜底超时
@@ -226,10 +228,29 @@ ChatSession::~ChatSession() {
     m_task_manager.get().waitForAll();
 }
 
+void ChatSession::cancel_background_tasks() {
+    std::vector<std::string> ids;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        ids.swap(m_background_task_ids);
+    }
+    if (ids.empty()) {
+        return;
+    }
+    auto& tm = m_task_manager.get();
+    for (const auto& id : ids) {
+        if (const auto task = tm.find_task(id)) {
+            task->cancel();  // 协作式取消：仅置原子标志，线程安全
+        }
+    }
+}
+
 void ChatSession::cancel_and_wait_current_task() {
-    // H-9 wait 模式：先 cancel 当前任务 + wait（condition_variable.wait_until + 30s 兜底），
-    // 再 cancelAll + waitForAll 终止 AgentTool 启动的子 Agent 后台任务。
+    // H-9 wait 模式：先定向取消本会话后台任务（P1-1）+ cancel 当前任务 + wait
+    // （condition_variable.wait_until + 30s 兜底），再 cancelAll + waitForAll 终止
+    // AgentTool 启动的子 Agent 后台任务。
     // 全部等待完成后再改共享状态，避免与 ReActLoop 对 m_messages 的引用读写并发。
+    cancel_background_tasks();
     std::shared_ptr<Task> task;
     {
         std::lock_guard<std::mutex> lock(m_state_mutex);
@@ -956,6 +977,12 @@ void ChatSession::run_completion(const std::string& user_text,
             AgentRunResult run_result =
                 query_engine.run(m_config_manager.get(), std::move(run_ctx));
             ReActResult react_result = std::move(run_result.react);
+
+            // 记录本会话已分发的后台任务（P1-1 定向取消）：切会话/清除/析构时精确取消
+            if (!run_result.background_task_id.empty()) {
+                std::lock_guard<std::mutex> lock(m_state_mutex);
+                m_background_task_ids.push_back(run_result.background_task_id);
+            }
 
             // 思考时长回填：reasoning_ms（本 turn 所有 Thought 阶段实际耗时）仅在流式结束后可知，
             // 持久化前回填到本轮最后一条 assistant 消息（写入 JSONL 的 reasoningMs 字段）

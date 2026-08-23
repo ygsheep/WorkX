@@ -58,6 +58,7 @@
 #include "widgets/composer.h"
 #include "widgets/suggest_panel.h"
 #include "widgets/search_palette.h"
+#include "widgets/provider_manager.h"
 #include "core/utils/file_index.h"
 
 namespace ftxtui {
@@ -1198,28 +1199,8 @@ void App::open_provider_palette() {
     m_providers = agent::load_provider_configs(*m_deps.config_manager);
     m_current_provider =
         m_deps.config_manager->get_or<std::string>(agent::keys::PROVIDER, "");
-    if (m_providers.empty()) {
-        m_vm.apply(ActionAppendMessage{.role = "assistant",
-            .text = std::string(str::kNoProvidersConfigured)});
-        return;
-    }
-    assemble_provider_entries();
     m_provider_open = true;
     if (m_provider_comp) m_provider_comp->TakeFocus();
-}
-
-void App::assemble_provider_entries() {
-    m_provider_entries.clear();
-    for (size_t i = 0; i < m_providers.size(); ++i) {
-        const auto& p = m_providers[i];
-        m_provider_entries.push_back(SearchEntry{
-            .category = SearchCategory::Provider,
-            .title = p.name,
-            .subtitle = p.base_url,
-            .payload = static_cast<int>(i),
-            .active = (p.id == m_current_provider),
-        });
-    }
 }
 
 void App::switch_provider(int index) {
@@ -2493,17 +2474,25 @@ void App::run() {
         [this] { if (m_composer) m_composer->TakeFocus(); },
         std::string(str::kPaletteResumeTitle));
 
-    // /provider 供应商面板：选择后运行时热切换（后台建后端 → 保留对话换 provider）
-    m_provider_comp = make_search_palette(
-        m_provider_entries,
-        [this](int idx) {
-            m_provider_open = false;
-            switch_provider(idx);
-            if (m_composer) m_composer->TakeFocus();
+    // /provider 供应商管理：列表层可切换/编辑/添加/删除，表单层字段编辑
+    // 列表改动经 on_commit 持久化；设为使用中走 switch_provider 热切换
+    m_provider_comp = make_provider_manager(
+        ftxtui::ProviderManagerOptions{
+            .providers = m_providers,
+            .active_id = m_current_provider,
+            .catalog = m_deps.model_catalog ? m_deps.model_catalog->load() : nullptr,
+            .on_activate = [this](int idx) {
+                switch_provider(idx);
+                if (m_composer) m_composer->TakeFocus();
+            },
+            .on_commit = [this] {
+                if (m_deps.config_manager)
+                    agent::save_provider_configs(*m_deps.config_manager, m_providers);
+            },
+            .on_close = [this] { if (m_composer) m_composer->TakeFocus(); },
+            .title = std::string(str::kPaletteProviderTitle),
         },
-        m_provider_open,
-        [this] { if (m_composer) m_composer->TakeFocus(); },
-        std::string(str::kPaletteProviderTitle));
+        m_provider_open);
 
     // 子 Agent 菜单（任务调度 tab）：纵向可聚焦；Enter 跳转转录区对应消息
     {
@@ -2925,6 +2914,39 @@ void App::run() {
             if (active_panel && active_panel->OnEvent(e)) {
                 m_screen.RequestAnimationFrame();
                 return true;
+            }
+            // 侧边栏拖动调整宽度：按住左键拖住内容区与侧栏之间的分隔线（"黑边"）
+            // 即可改宽度。分隔线列 = 右栏 width-sidebar_cols-1 / 左栏 sidebar_cols，
+            // 命中带宽 ±1 列便于抓取；拖动中以鼠标 x 精确换算目标列数后写回百分比。
+            const int d_width = ftxui::Terminal::Size().dimx;
+            const bool d_show_sidebar = d_width >= kSidebarCollapseWidth;
+            if (d_show_sidebar) {
+                const int d_bcols = d_width * m_sidebar_width / 100;
+                const int d_border_col = m_sidebar_left ? d_bcols : (d_width - d_bcols - 1);
+                const ftxui::Mouse& m = e.mouse();
+                if (m.button == ftxui::Mouse::Left &&
+                    m.motion == ftxui::Mouse::Pressed &&
+                    m.x >= d_border_col - 1 && m.x <= d_border_col + 1) {
+                    // 命中分隔线 → 开始拖动
+                    m_sidebar_resizing = true;
+                    m_screen.RequestAnimationFrame();
+                    return true;
+                }
+                if (m_sidebar_resizing) {
+                    if (m.button == ftxui::Mouse::Left && m.motion == ftxui::Mouse::Moved) {
+                        int target_cols = m_sidebar_left ? m.x : (d_width - 1 - m.x);
+                        const int pct = target_cols * 100 / d_width;
+                        constexpr int kMinW = 20, kMaxW = 80;
+                        m_sidebar_width = std::clamp(pct, kMinW, kMaxW);
+                        m_screen.RequestAnimationFrame();
+                        return true;
+                    }
+                    if (m.motion == ftxui::Mouse::Released) {
+                        m_sidebar_resizing = false;
+                        m_screen.RequestAnimationFrame();
+                        return true;
+                    }
+                }
             }
             if (e.mouse().button == ftxui::Mouse::WheelUp) {
                 if (m_vm.output_level == OutputLevel::SubAgent) {

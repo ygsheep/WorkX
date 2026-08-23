@@ -42,6 +42,8 @@ struct AgentRunContext {
 struct AgentRunResult {
     ReActResult react;            ///< 复用既有结果载体（步骤/token/目标状态）
     AgentType agent_type = AgentType::Unknown;  ///< 实际执行的类型
+    /// Background 模式：已分发的后台任务 id（空 = 同步执行）
+    std::string background_task_id;
 };
 
 /// @brief 统一 Agent 循环接口

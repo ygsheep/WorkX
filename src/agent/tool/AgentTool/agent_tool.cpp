@@ -14,7 +14,9 @@
 #include <mutex>
 
 #include "agent/api/chat_types.h"
+#include "agent/core/agent_task_id.h"
 #include "agent/core/react_loop.h"
+#include "agent/core/react_step_format.h"
 #include "core/task/task_manager.h"
 #include "core/utils/error.h"
 #include "core/events/agent_events.h"
@@ -22,26 +24,6 @@
 namespace agent::tool {
 
 namespace {
-
-/// @brief Agent 工具名（防递归排除 + 工具元信息共用，避免硬编码漂移）
-constexpr const char* kAgentToolName = "Agent";
-
-/// @brief 生成任务 id（对齐 TS generateTaskId：'a' 前缀 + 8 个随机小写字母数字）
-std::string generate_task_id() {
-    static constexpr char kAlphabet[] = "0123456789abcdefghijklmnopqrstuvwxyz";
-    // 复用随机源（MSVC 上 std::random_device 每次构造开销大，批量调度场景明显）
-    // L-2：std::random_device 与 uniform_int_distribution 均非线程安全，加锁保护
-    static std::mutex s_mutex;
-    static std::random_device rd;
-    std::lock_guard<std::mutex> lock(s_mutex);
-    std::uniform_int_distribution<size_t> dist(0, sizeof(kAlphabet) - 2);
-    std::string id = "a";
-    id.reserve(9);
-    for (int i = 0; i < 8; ++i) {
-        id += kAlphabet[dist(rd)];
-    }
-    return id;
-}
 
 /// @brief 用 ", " 连接任务 id 列表（v1.2.0 批量调度返回消息）
 std::string fmt_join_ids(const std::vector<std::string>& ids) {
@@ -56,35 +38,6 @@ std::string fmt_join_ids(const std::vector<std::string>& ids) {
 /// @brief 格式化任务数量描述（单复数："1 task" / "3 tasks"）
 std::string fmt_task_count(size_t n) {
     return std::format("{} {}", n, n == 1 ? "task" : "tasks");
-}
-
-/// @brief 格式化 ReAct 步骤为输出行（写入 Task 输出缓冲）
-std::string format_step_line(const ReActStep& step) {
-    switch (step.type) {
-        case ReActStepType::Thought:
-            return step.thought_text.empty() ? std::string{}
-                                             : std::format("[{}] Thought: {}", step.step_number, step.thought_text);
-        case ReActStepType::Action:
-            return std::format("[{}] Tool: {}", step.step_number, step.tool_name);
-        case ReActStepType::Observation:
-            return step.observation.empty() ? std::string{}
-                                            : std::format("[{}] Observation: {}", step.step_number, step.observation);
-        case ReActStepType::FinalAnswer:
-            return step.thought_text.empty() ? std::string{}
-                                            : std::format("[{}] Final: {}", step.step_number, step.thought_text);
-    }
-    return {};
-}
-
-/// @brief 步骤类型 → 字符串（v1.2.0 进度事件 step_type 字段）
-const char* step_type_str(ReActStepType type) {
-    switch (type) {
-        case ReActStepType::Thought:     return "thought";
-        case ReActStepType::Action:      return "action";
-        case ReActStepType::Observation: return "observation";
-        case ReActStepType::FinalAnswer: return "final";
-    }
-    return "unknown";
 }
 
 /// @brief 子 Agent 启动参数（聚合，避免长参数列表）
@@ -342,7 +295,7 @@ ResultV2<ToolResult> AgentTool::call(
     tasks.reserve(specs.size());
     ids.reserve(specs.size());
     for (const auto& spec : specs) {
-        const std::string task_id = generate_task_id();
+        const std::string task_id = generate_agent_task_id('a');
         ids.push_back(task_id);
         tasks.push_back(launch_sub_agent(SubAgentLaunchOptions{
             .task_id = task_id,

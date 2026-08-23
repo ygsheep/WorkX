@@ -180,7 +180,7 @@ static bool glob_match_impl(const char* p, size_t p_len,
     return true;
 }
 
-bool GlobTool::glob_match(std::string_view pattern, std::string_view text) {
+bool glob_match(std::string_view pattern, std::string_view text) {
     return glob_match_impl(pattern.data(), pattern.size(),
                            text.data(), text.size());
 }

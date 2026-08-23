@@ -122,6 +122,11 @@ target_sources(workx_agent PRIVATE
     core/goal_guarded_agent.cpp  # 0.6.x：#31 目标导向 Agent（goal_guarded_agent.h）
     core/agent_loop_adapters.cpp # 0.6.x：#33 IAgentLoop 适配器（ReActAdapter / GoalGuardedAdapter）
     core/query_engine.cpp    # 0.6.x：QueryEngine 编排器落地（query_engine.h）
+    core/mode_agent_common.cpp   # 0.6.x：#32 多模式 Agent 公共纯函数
+    core/script_agent.cpp        # 0.6.x：#32 ScriptAgent（确定性脚本）
+    core/batch_agent.cpp         # 0.6.x：#32 BatchAgent（同构并行）
+    core/watch_agent.cpp         # 0.6.x：#32 WatchAgent（文件/事件监控）
+    core/role_agent.cpp          # 0.6.x：#33 角色 Agent（Planner/Executor/Coordinator/Researcher/Reviewer）
 
     # session
     session/session_store.cpp

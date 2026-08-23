@@ -34,16 +34,27 @@ struct AgentGoal {
         LintZero,         ///< lint 零告警
         FileExists,       ///< 文件存在
         CustomScript,     ///< 自定义脚本退出码 == 0
+        /// #32 多模式 Agent（由对应 Loop 专属执行，不作为 GoalGuarded 的 Verdict）
+        Script,           ///< ScriptAgent：确定性命令执行一次（agent.active=script）
+        Batch,            ///< BatchAgent：glob 展开同构并行（agent.active=batch）
+        Watch,            ///< WatchAgent：路径/事件监控轮询（agent.active=watch）
     };
     Type type = None;
-    /// FileExists：目标路径；BuildClean/LintZero/TestsPass 留空用默认命令
+    /// FileExists/Watch：目标路径 / 监控目录；BuildClean/LintZero/TestsPass 留空用默认命令
     std::string path;
-    /// CustomScript：要执行的命令；空则用 type 对应的默认命令
+    /// CustomScript/Script：命令；Batch：命令模板（{item} 占位）；Watch：触发命令模板
     std::string command;
+    /// Batch：glob 模式；Watch：监控目录内的过滤模式（可空 = 监控整目录）
+    std::string glob;
     /// 最大尝试轮数（默认 50，可配置）
     int max_attempts = 50;
     /// 每间隔 N 次未达成弹一次"是否继续"询问（<=0 表示不弹）
     int ask_user_every = 0;
+    /// Batch：并行度（默认 1）
+    int concurrency = 1;
+    /// Watch：轮询次数（默认 1）；轮询间隔毫秒（默认 0 = 不等待）
+    int watch_polls = 1;
+    int watch_interval_ms = 0;
 
     bool has_goal() const noexcept { return type != None; }
 };

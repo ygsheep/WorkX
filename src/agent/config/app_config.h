@@ -49,6 +49,8 @@ namespace keys {
     constexpr const char* AGENT_ACTIVE   = "agent.active";
     /// 目标导向 Agent（agent.active=goal-guarded/verify）的目标声明。
     /// 取值：tests_pass / build_clean / lint_zero / file_exists:<path> / cmd:<command>
+    /// #32 多模式：script:<command> / batch:cmd=<tmpl>&glob=<pattern>&concurrency=<n>
+    ///             / watch:path=<dir>&cmd=<tmpl>&polls=<n>&interval=<ms>（agent.active 分别配合）
     constexpr const char* AGENT_GOAL     = "agent.goal";
 
     // Logging

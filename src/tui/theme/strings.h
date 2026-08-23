@@ -122,7 +122,7 @@ inline constexpr std::string_view kPaletteHint =
     "↑↓/Tab 选择 · Enter 运行 · Esc 清除/关闭";
 inline constexpr std::string_view kPaletteModelTitle   = "切换模型";
 inline constexpr std::string_view kPaletteResumeTitle  = "恢复会话";
-inline constexpr std::string_view kPaletteProviderTitle = "切换供应商";
+inline constexpr std::string_view kPaletteProviderTitle = "供应商管理";
 inline constexpr std::string_view kCatFeature = "> 功能";
 inline constexpr std::string_view kCatFile    = "@ 文件";
 inline constexpr std::string_view kCatSession = "# 会话";

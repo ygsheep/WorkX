@@ -31,6 +31,7 @@ add_executable(workx
     widgets/status_line.cpp
     widgets/suggest_panel.cpp
     widgets/search_palette.cpp
+    widgets/provider_manager.cpp
     wizard.cpp
 )
 

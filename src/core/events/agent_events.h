@@ -188,6 +188,34 @@ struct SubAgentProgressEvent {
     double duration_ms = 0.0;   ///< 本步骤耗时（毫秒，思考卡标签展示用）
 };
 
+/// @brief 后台 Agent 进度事件（BackgroundAgent → 订阅者，长时任务逐步流式订阅）
+/// @details 与 SubAgentProgressEvent 同构（字段镜像 ReActStep），供第二层卡片
+///          渲染复用主会话 UI。task_id 前缀 'b'，与子 Agent 'a' 区分，避免混淆。
+///          ⚠️ 仅作增量通知，不注入主会话 LLM 上下文（与 SubAgent 同策略）。
+struct BackgroundProgressEvent {
+    std::string task_id;        ///< 后台任务 id（'b'+8 随机）
+    int32_t step_number = 0;    ///< 步骤序号（1-based，与 ReActStep.step_number 对齐）
+    std::string step_type;      ///< "thought" / "action" / "observation" / "final"
+    std::string content;        ///< 步骤内容（格式化行，可为空）
+    // --- 结构化字段（与 ReActStep 对应，供第二层卡片渲染复用）---
+    std::string thought_text;   ///< thought/final 的 LLM 文本
+    std::string tool_name;      ///< action 的工具名
+    std::string tool_input;     ///< action 的工具参数 JSON 字符串
+    std::string observation;    ///< observation 的工具结果文本
+    bool is_error = false;      ///< 工具执行是否出错
+    double duration_ms = 0.0;   ///< 本步骤耗时（毫秒）
+};
+
+/// @brief 后台 Agent 完成事件（BackgroundAgent → 订阅者，后台结果通知）
+/// @details 仅携带 task_id + 结果摘要，不注入主会话 LLM 上下文（防刷屏）。
+///          完整输出仍通过 TaskOutput 按 task_id 读取。
+struct BackgroundCompletedEvent {
+    std::string task_id;        ///< 后台任务 id（'b'+8 随机）
+    std::string final_answer;   ///< 最终答案（Final: ...）或错误信息（Error: ...），可为空
+    bool was_error = false;     ///< 后台任务是否以错误结束
+    double duration_ms = 0.0;   ///< 后台 Agent 循环耗时（毫秒）
+};
+
 /// @brief 待办清单更新事件（#24：TodoStore → TUI 侧边栏/StatusBar）
 /// @details TodoStore 每次变更（TaskCreate/Update/Delete/List、TodoWrite 全量替换、
 ///          restore_todos 恢复）后异步发布，携带该 session 完整清单快照。
