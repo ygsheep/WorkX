@@ -40,6 +40,7 @@ AgentType parse_agent_type(std::string_view s) noexcept {
     if (v == "reviewer" || v == "review") return AgentType::Reviewer;
     if (v == "batch") return AgentType::Batch;
     if (v == "watch" || v == "watcher") return AgentType::Watch;
+    if (v == "script" || v == "script-agent") return AgentType::Script;
     return AgentType::Unknown;
 }
 
@@ -54,6 +55,7 @@ std::string_view to_string(AgentType type) noexcept {
         case AgentType::Reviewer:    return "reviewer";
         case AgentType::Batch:       return "batch";
         case AgentType::Watch:       return "watch";
+        case AgentType::Script:      return "script";
         case AgentType::Unknown:
         default:                     return "unknown";
     }
@@ -63,6 +65,9 @@ bool is_implemented(AgentType type) noexcept {
     switch (type) {
         case AgentType::ReAct:
         case AgentType::GoalGuarded:
+        case AgentType::Batch:    // #32 多模式已实现
+        case AgentType::Watch:
+        case AgentType::Script:
             return true;
         default:
             return false;

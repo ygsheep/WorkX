@@ -87,6 +87,28 @@ ReActResult GoalGuardedAgent::run(
             messages, system_prompt, tools_schema, should_cancel, observer);
     }
 
+    // #32：多模式目标（script/batch/watch）由专属 Agent 驱动，不是目标环可验证的
+    // Verdict。若被误路由到这里（agent.active 与 agent.goal 不匹配），立即报错，
+    // 避免 check_goal 返回 Failed 后仍空转 max_attempts 轮 ReAct。
+    if (!has_checker(goal.type)) {
+        // #32：多模式目标无 verdict checker，映射回对应的 agent.active 名便于排障
+        const char* route = "script";
+        switch (goal.type) {
+            case AgentGoal::Batch: route = "batch"; break;
+            case AgentGoal::Watch: route = "watch"; break;
+            default:               route = "script"; break;
+        }
+        ReActResult misrouted;
+        misrouted.was_error = true;
+        misrouted.goal_status = GoalStatus::Failed;
+        misrouted.error_message =
+            "goal type has no verdict checker; route with agent.active="
+            + std::string(route);
+        LOG_WARN("[goal_guarded] misrouted multi-mode goal type={} spec='{}'",
+                 static_cast<int>(goal.type), goal_spec);
+        return misrouted;
+    }
+
     ReActResult result;             // 累积：last 轮的步骤/token + 最终 final_answer
     bool achieved = false;
 

@@ -27,6 +27,7 @@ enum class AgentType {
     Reviewer,         ///< #33 只读审查
     Batch,            ///< #32 同构输入并行
     Watch,            ///< #32 文件/事件监控
+    Script,           ///< #32 确定性脚本执行（无需 LLM）
 };
 
 /// @brief 将 agent.active 字符串解析为 AgentType
@@ -37,6 +38,7 @@ enum class AgentType {
 ///   - "planner" → Planner；"executor" → Executor；"coordinator" → Coordinator
 ///   - "researcher"/"research" → Researcher；"reviewer" → Reviewer
 ///   - "batch" → Batch；"watch" / "watcher" → Watch
+///   - "script" / "script-agent" → Script
 /// 其它未知串 → Unknown（不抛异常，调用方决定回退默认 ReAct）
 ///
 /// @param s agent.active 配置值（可为空）

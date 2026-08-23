@@ -39,6 +39,13 @@ Verdict check_goal(const AgentGoal& goal, const std::string& cwd);
 /// @brief 查询某类型是否已有验证器实现
 bool has_checker(AgentGoal::Type type) noexcept;
 
+/// @brief 白名单校验待执行命令
+/// @param cmd 命令串（默认命令 or 用户覆盖/模板命令）
+/// @return 允许则返回原命令；被拦截返回空
+/// @note #32：Guard_command 同时供 GoalGuarded 的 verify 与多模式 Agent
+///       （Script/Batch/Watch）复用，统一"命令安全"落点，避免各自实现漂移。
+std::string guard_command(const std::string& cmd);
+
 namespace detail {
 /// @brief 解析 stdout 中 enum 值（供大文件/失败子串判定用），供内置 checker 复用
 int exit_code_of(const std::string& cmd, const std::string& cwd);

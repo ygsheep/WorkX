@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "core/process/exec_output.h"
@@ -314,6 +316,14 @@ Verdict check_goal(const AgentGoal& goal, const std::string& cwd) {
         case AgentGoal::LintZero:     return checker_lint(goal, cwd);
         case AgentGoal::FileExists:   return checker_file_exists(goal, cwd);
         case AgentGoal::CustomScript: return checker_custom(goal, cwd);
+        case AgentGoal::Script:
+        case AgentGoal::Batch:
+        case AgentGoal::Watch:
+            // #32：多模式目标是专属 Loop 驱动的多步执行（并行/轮询），不是单一
+            //       命令可判定的 Verdict。若被错误路由到 GoalGuarded，直接 Failed，
+            //       避免 check_goal 被误判为 Pending 造成死循环。
+            return {GoalStatus::Failed,
+                    "goal type is driven by its dedicated agent (script/batch/watch)"};
         case AgentGoal::None:
         default:
             return {GoalStatus::Pending, "no goal"};
@@ -372,6 +382,44 @@ AgentGoal parse_goal(std::string_view spec) noexcept {
     if (starts_with(v_low, "cmd:")) {
         goal.type = AgentGoal::CustomScript;
         goal.command = trimmed(spec).substr(std::string_view("cmd:").size());
+        return goal;
+    }
+    // ---- #32 多模式目标：script: / batch: / watch: ----
+    if (starts_with(v_low, "script:")) {
+        goal.type = AgentGoal::Script;
+        goal.command = trimmed(spec).substr(std::string_view("script:").size());
+        return goal;
+    }
+    if (starts_with(v_low, "batch:") || starts_with(v_low, "watch:")) {
+        const bool is_watch = starts_with(v_low, "watch:");
+        const std::string_view sfx = is_watch ? std::string_view("watch:")
+                                               : std::string_view("batch:");
+        const std::string rest = trimmed(spec).substr(sfx.size());
+        // & 分隔的 k=v 键值表
+        std::vector<std::pair<std::string, std::string>> kv;
+        std::stringstream ss(rest);
+        std::string tok;
+        while (std::getline(ss, tok, '&')) {
+            const size_t eq = tok.find('=');
+            if (eq == std::string::npos) {
+                kv.emplace_back(tok, "");   // 裸键（如 concurrency）值为空
+            } else {
+                kv.emplace_back(tok.substr(0, eq), tok.substr(eq + 1));
+            }
+        }
+        goal.type = is_watch ? AgentGoal::Watch : AgentGoal::Batch;
+        for (auto& [k, val] : kv) {
+            if (k == "cmd")        goal.command = val;
+            else if (k == "glob")  goal.glob = val;
+            else if (k == "path")  goal.path = val;
+            else if (k == "concurrency") {
+                try { goal.concurrency = std::max(1, std::stoi(val)); } catch (...) {}
+            } else if (k == "polls") {
+                try { goal.watch_polls = std::max(1, std::stoi(val)); } catch (...) {}
+            } else if (k == "interval") {
+                try { goal.watch_interval_ms = std::max(0, std::stoi(val)); } catch (...) {}
+            }
+        }
         return goal;
     }
     // 无法识别 → None（不抛异常，避免配置错误崩会话）

@@ -34,4 +34,37 @@ const std::atomic<bool>& kNeverCancel() {
     return k;
 }
 
+ScriptLoopAdapter::ScriptLoopAdapter(GoalAgentDeps deps)
+    : m_deps(std::move(deps)) {}
+
+AgentRunResult ScriptLoopAdapter::run(AgentRunContext ctx) {
+    AgentRunResult out;
+    out.agent_type = type();
+    ScriptAgent agent(m_deps);
+    out.react = agent.run(ctx.goal, ctx.goal_spec, *ctx.messages, ctx.observer);
+    return out;
+}
+
+BatchLoopAdapter::BatchLoopAdapter(GoalAgentDeps deps)
+    : m_deps(std::move(deps)) {}
+
+AgentRunResult BatchLoopAdapter::run(AgentRunContext ctx) {
+    AgentRunResult out;
+    out.agent_type = type();
+    BatchAgent agent(m_deps);
+    out.react = agent.run(ctx.goal, ctx.goal_spec, *ctx.messages, ctx.observer);
+    return out;
+}
+
+WatchLoopAdapter::WatchLoopAdapter(GoalAgentDeps deps)
+    : m_deps(std::move(deps)) {}
+
+AgentRunResult WatchLoopAdapter::run(AgentRunContext ctx) {
+    AgentRunResult out;
+    out.agent_type = type();
+    WatchAgent agent(m_deps);
+    out.react = agent.run(ctx.goal, ctx.goal_spec, *ctx.messages, ctx.observer);
+    return out;
+}
+
 } // namespace agent
