@@ -2,6 +2,21 @@
 #include "agent/api/remote/sse_stream_reader.h"
 #include "agent/api/remote/ssrf.h"
 
+// 平台网络头：ssrf_opensocket_cb 用到 sockaddr_in/sockaddr_in6、ntohl、
+// IPPROTO_TCP、socket() 等。Windows 由 winsock 提供，POSIX 由 netinet/sys 提供，
+// 必须显式包含（curl/curl.h 不保证传递这些符号，Linux 裸编译会报未声明）。
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX  // winsock/windows 的 min/max 宏会干扰 std::numeric_limits
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#endif
+
 #include <curl/curl.h>
 
 #include <unordered_map>
