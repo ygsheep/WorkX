@@ -34,6 +34,7 @@
 #define _DEFAULT_SOURCE  // getentropy
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
@@ -415,7 +416,11 @@ ResultV2<OAuthCallback> oauth_loopback_listen(int port, int& out_port, int timeo
     tv.tv_usec = (timeout_ms % 1000) * 1000;
     fd_set rfds;
     FD_ZERO(&rfds);
+#ifdef _WIN32
     FD_SET(static_cast<SOCKET>(fd), &rfds);
+#else
+    FD_SET(fd, &rfds);
+#endif
     const int sel = select(fd + 1, &rfds, nullptr, nullptr, &tv);
     if (sel <= 0) {
         close_fd();
@@ -451,7 +456,12 @@ ResultV2<OAuthCallback> oauth_loopback_listen(int port, int& out_port, int timeo
     std::string request;
     char buf[1024];
     for (int i = 0; i < 32; ++i) {
-        const int n = static_cast<int>(recv(static_cast<SOCKET>(client), buf, sizeof(buf), 0));
+        const int n = static_cast<int>(
+#ifdef _WIN32
+            recv(static_cast<SOCKET>(client), buf, sizeof(buf), 0));
+#else
+            recv(client, buf, sizeof(buf), 0));
+#endif
         if (n <= 0) break;
         request.append(buf, static_cast<size_t>(n));
         if (request.find("\r\n\r\n") != std::string::npos) break;
