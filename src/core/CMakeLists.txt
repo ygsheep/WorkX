@@ -36,9 +36,11 @@ target_sources(workx_core PRIVATE
     process/subprocess.cpp
     process/tool_registry.cpp
     task/task_manager.cpp
+    todo/todo_item.cpp
     tool_kind.cpp
     utils/error.cpp
     utils/file_index.cpp
+    utils/line_diff.cpp
     utils/uuid.cpp
     utils/path_encoder.cpp
 )

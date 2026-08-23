@@ -2,14 +2,18 @@
  * @file chat_session.cpp
  * @brief 对话状态机实现
  * @details 编排用户输入、ReAct 循环、流式事件发布、自动重试、会话持久化
- * @version 3.1.0
+ * @version 3.1.1
  * @date 2026-07
  */
 
 #include "agent/core/chat_session.h"
 #include "agent/core/react_loop.h"
+#include "agent/core/agent_type.h"          // 0.6.x：#31 AgentType 路由
+#include "agent/core/goal_guarded_agent.h"  // 0.6.x：#31 GoalGuardedAgent + parse_goal
+#include "agent/core/query_engine.h"        // 0.6.x：QueryEngine 唯一编排入口
 #include "agent/message/types.h"
 #include "agent/tool/tool_kind.h"
+#include "agent/tool/TodoStore/todo_store.h"  // #24：待办清单持久化接线
 #include "agent/command/inclaude/command.h"
 #include "agent/command/inclaude/registry.h"
 #include "agent/skill/inclaude/conditional.h"
@@ -114,14 +118,14 @@ void ChatSession::ReActEventPublisher::on_action(const ReActStep& step) {
     m_bus.publish_async(ToolCallEvent{
         .tool_name = step.tool_name,
         .arguments = step.tool_input.dump(),
-        .call_id = "",
+        .call_id = step.tool_use_id,
         .tool_type = tool::infer_tool_type(step.tool_name)
     });
 }
 
 void ChatSession::ReActEventPublisher::on_observation(const ReActStep& step) {
     m_bus.publish_async(ToolResultEvent{
-        .call_id = "",
+        .call_id = step.tool_use_id,
         .result = step.observation,
         .is_error = step.is_error
     });
@@ -190,14 +194,21 @@ ChatSession::ChatSession(std::unique_ptr<ICompletionProvider> provider,
             return this->summarize_with_llm(middle);
         });
 
+    // #24：接线 TodoStore 事件总线（变更后发布 TodoUpdatedEvent → UI 侧边栏/StatusBar）
+    tool::TodoStore::instance().set_event_bus(&m_event_bus.get());
+
     subscribe_interrupt();
+    subscribe_sub_agent_persistence();
 }
 
 ChatSession::~ChatSession() {
+    unsubscribe_sub_agent_persistence();
     unsubscribe_interrupt();
     if (m_provider) {
         m_provider->interrupt();
     }
+    // P1-1：先定向取消本会话已分发的后台任务，避免其后台线程越过会话销毁访问裸指针
+    cancel_background_tasks();
     // H-9：等待后台任务完成，防止 use-after-free
     // 改用 ITaskManager::wait(task) 替代 sleep_for(50ms) 轮询
     // wait 内部用 condition_variable.wait_until + 30s 兜底超时
@@ -215,6 +226,45 @@ ChatSession::~ChatSession() {
     // 子 Agent 为协作式取消，cancelAll 后 waitForAll 会快速返回。
     m_task_manager.get().cancelAll();
     m_task_manager.get().waitForAll();
+}
+
+void ChatSession::cancel_background_tasks() {
+    std::vector<std::string> ids;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        ids.swap(m_background_task_ids);
+    }
+    if (ids.empty()) {
+        return;
+    }
+    auto& tm = m_task_manager.get();
+    for (const auto& id : ids) {
+        if (const auto task = tm.find_task(id)) {
+            task->cancel();  // 协作式取消：仅置原子标志，线程安全
+        }
+    }
+}
+
+void ChatSession::cancel_and_wait_current_task() {
+    // H-9 wait 模式：先定向取消本会话后台任务（P1-1）+ cancel 当前任务 + wait
+    // （condition_variable.wait_until + 30s 兜底），再 cancelAll + waitForAll 终止
+    // AgentTool 启动的子 Agent 后台任务。
+    // 全部等待完成后再改共享状态，避免与 ReActLoop 对 m_messages 的引用读写并发。
+    cancel_background_tasks();
+    std::shared_ptr<Task> task;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        task = m_current_task;
+    }
+    if (task) {
+        task->cancel();
+        m_task_manager.get().wait(task);
+    }
+    m_task_manager.get().cancelAll();
+    m_task_manager.get().waitForAll();
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    m_generating.store(false);
+    m_current_task.reset();
 }
 
 void ChatSession::set_system_prompt(const std::string& prompt) {
@@ -258,6 +308,8 @@ skill::TouchCollector& ChatSession::touch_collector() {
 }
 
 void ChatSession::clear_history() {
+    // 生成中安全：清空消息前先取消并等待当前任务，避免与 ReActLoop 竞争 m_messages。
+    cancel_and_wait_current_task();
     std::lock_guard<std::mutex> lock(m_state_mutex);
     m_messages.clear();
     // DS_CACHE M-3：移除 m_cache_hit_total/m_cache_miss_total 重置（死代码已删除）
@@ -268,6 +320,8 @@ void ChatSession::clear_history() {
     // 清理 conditional skills 会话级累积：过期 touch 不再触发激活
     m_touch_collector.clear();
     m_activated_skills.clear();
+    // #24：清空待办清单（写空快照到 JSONL 防止 /resume 恢复旧清单，保留持久化回调）
+    tool::TodoStore::instance().reset_session(m_session_id);
 }
 
 void ChatSession::set_compactor_context_window(int32_t context_window_tokens) {
@@ -314,6 +368,8 @@ bool ChatSession::restore_from_file(const std::string& file_path) {
 }
 
 void ChatSession::import_messages(std::vector<ChatMessage> messages) {
+    // 生成中安全：与 switch_session 同理，先取消并等待当前任务，避免与 ReActLoop 竞争 m_messages。
+    cancel_and_wait_current_task();
     std::lock_guard<std::mutex> lock(m_state_mutex);
     m_messages = std::move(messages);
     // 重置压缩器与前缀形状基线（对齐 switch_session，新上下文从零开始）
@@ -321,7 +377,20 @@ void ChatSession::import_messages(std::vector<ChatMessage> messages) {
     m_last_prefix_shape = PrefixShape{};
 }
 
+bool ChatSession::set_provider(std::unique_ptr<ICompletionProvider> provider) {
+    if (!provider) return false;
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    if (m_generating.load()) return false;  // 生成中拒绝切换（ReActLoop 持有 provider 指针）
+    m_provider = std::move(provider);
+    return true;
+}
+
 bool ChatSession::switch_session(const std::string& file_path) {    // 加载历史消息和元信息（文件 I/O 在锁外执行）
+    // 生成中安全：切换会话前先取消并等待当前任务完全退出。
+    // ReActLoop::run 通过非 const 引用直接读写 m_messages，若此处（UI 线程）并发 move
+    // m_messages，会与任务线程形成数据竞争 → 堆损坏（resume 后重发消息崩溃的 UAF 根因）。
+    cancel_and_wait_current_task();
+
     auto messages = agent::session::SessionStore::load_messages(file_path);
     if (messages.empty()) return false;
 
@@ -331,29 +400,84 @@ bool ChatSession::switch_session(const std::string& file_path) {    // 加载历
     // 从文件名提取 session_id（stem，如 "76e1b10d-...-...jsonl" → "76e1b10d-...-..."）
     std::string new_session_id = std::filesystem::path(file_path).stem().string();
 
-    std::lock_guard<std::mutex> lock(m_state_mutex);
-    // 1. 替换 session_id
-    m_session_id = new_session_id;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        // 1. 替换 session_id
+        m_session_id = new_session_id;
 
-    // 2. 清空消息历史，填入加载的历史消息
-    m_messages = std::move(messages);
+        // 2. 清空消息历史，填入加载的历史消息
+        m_messages = std::move(messages);
 
-    // 3. 关闭旧 SessionStore，创建新 SessionStore 指向历史文件
-    if (m_session_store) {
-        m_session_store->close();
-    }
-    auto new_store = std::make_shared<agent::session::SessionStore>(file_path, new_session_id);
-    if (!new_store->open()) {
-        return false;  // 打开失败，保留旧状态不变（messages 已替换但 store 为空，后续不持久化）
-    }
-    m_session_store = new_store;
-    // 不追加 session_start（会话进行中，只是换文件继续写）
+        // 3. 关闭旧 SessionStore，创建新 SessionStore 指向历史文件
+        if (m_session_store) {
+            m_session_store->close();
+        }
+        auto new_store = std::make_shared<agent::session::SessionStore>(file_path, new_session_id);
+        if (!new_store->open()) {
+            return false;  // 打开失败，保留旧状态不变（messages 已替换但 store 为空，后续不持久化）
+        }
+        m_session_store = new_store;
+        // 不追加 session_start（会话进行中，只是换文件继续写）
 
-    // 4. 重置压缩器和前缀形状基线（新会话上下文从零开始）
-    m_compactor.reset();
-    m_last_prefix_shape = PrefixShape{};
+        // 4. 重置压缩器和前缀形状基线（新会话上下文从零开始）
+        m_compactor.reset();
+        m_last_prefix_shape = PrefixShape{};
+    }  // 释放 m_state_mutex
+
+    // #24：恢复该会话待办清单（发布事件刷新 UI）+ 接线持久化回调。
+    // 必须在锁外执行：restore_todos 与 wire_todo_persistence 内部会再次加 m_state_mutex，
+    // 持锁调用会对非递归 mutex 二次锁定 → EDEADLK（resume 会话崩溃根因）。
+    auto todos = agent::session::SessionStore::load_todos(file_path);
+    tool::TodoStore::instance().restore_todos(new_session_id, std::move(todos));
+    wire_todo_persistence();
 
     return true;
+}
+
+void ChatSession::new_session() {
+    // 生成中安全：先取消并等待当前任务，避免与 ReActLoop 竞争 m_messages。
+    cancel_and_wait_current_task();
+    std::string new_session_id;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        // 1. 新会话 ID
+        new_session_id = core::util::generate_uuid();
+        m_session_id = new_session_id;
+        // 2. 清空消息历史
+        m_messages.clear();
+        // 3. 关闭旧 SessionStore 并置空（新会话文件懒创建：首条 user 消息时创建）
+        if (m_session_store) {
+            m_session_store->close();
+            m_session_store.reset();
+        }
+        // 4. 重置压缩器与前缀形状基线 + conditional skills 会话级累积
+        m_compactor.reset();
+        m_last_prefix_shape = PrefixShape{};
+        m_touch_collector.clear();
+        m_activated_skills.clear();
+        // 懒创建参数（m_store_configured 等）保持不变，复用启动时配置
+    }  // 释放 m_state_mutex
+
+    // 锁外：重置 TodoStore 到新会话空清单（restore_todos 内部会再加 m_state_mutex，
+    // 持锁调用会对非递归 mutex 二次锁定 → EDEADLK，与 switch_session 同理）。
+    tool::TodoStore::instance().restore_todos(new_session_id, {});
+    wire_todo_persistence();
+}
+
+void ChatSession::wire_todo_persistence() {
+    std::shared_ptr<agent::session::SessionStore> store;
+    std::string session_id;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        store = m_session_store;
+        session_id = m_session_id;
+    }
+    if (!store) return;
+    tool::TodoStore::instance().set_persist_callback(
+        session_id,
+        [store](const std::vector<core::todo::TodoItem>& todos) {
+            store->append_todo(todos);
+        });
 }
 
 bool ChatSession::rename_session(const std::string& title) {
@@ -413,6 +537,8 @@ void ChatSession::persist_message(const ChatMessage& msg) {
                 m_session_store = new_store;
             }
             store = new_store;
+            // #24：接线 TodoStore 持久化回调（新会话从空清单开始）
+            wire_todo_persistence();
         } catch (const std::exception&) {
             return;  // 创建失败，放弃持久化
         }
@@ -451,7 +577,8 @@ void ChatSession::persist_message(const ChatMessage& msg) {
         case ChatMessage::Role::Assistant:
             store->append_assistant_message(uuid, "", msg.content,
                                             msg.reasoning_content,
-                                            msg.tool_uses, timestamp);
+                                            msg.tool_uses, timestamp,
+                                            msg.reasoning_ms);
             break;
         case ChatMessage::Role::Tool:
             store->append_tool_message(uuid, "", msg.tool_call_id,
@@ -486,7 +613,8 @@ void ChatSession::persist_messages_range(size_t start_idx, const std::string& pa
             case ChatMessage::Role::Assistant:
                 store->append_assistant_message(uuid, current_parent, msg.content,
                                                 msg.reasoning_content,
-                                                msg.tool_uses, timestamp);
+                                                msg.tool_uses, timestamp,
+                                                msg.reasoning_ms);
                 break;
             case ChatMessage::Role::Tool:
                 store->append_tool_message(uuid, current_parent, msg.tool_call_id,
@@ -603,6 +731,33 @@ void ChatSession::regenerate() {
         }
     }
     run_completion(last_user_text, last_user_images);
+}
+
+void ChatSession::regenerate_from(const std::string& user_text) {
+    // 检查是否正在生成
+    if (m_generating.load()) {
+        m_event_bus.get().publish_async(StreamErrorEvent{
+            .session_id = m_session_id,
+            .message = "Still generating, cannot regenerate",
+            .retryable = true
+        });
+        return;
+    }
+
+    std::vector<std::string> last_user_images;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        // 从后往前找最后一条匹配的用户消息，删除该用户消息及其后所有消息
+        //（run_completion 会重新 push 该用户消息，避免重复）
+        for (auto it = m_messages.rbegin(); it != m_messages.rend(); ++it) {
+            if (it->role == ChatMessage::Role::User && it->content == user_text) {
+                last_user_images = it->image_paths;
+                m_messages.erase(it.base() - 1, m_messages.end());
+                break;
+            }
+        }
+    }
+    run_completion(user_text, last_user_images);
 }
 
 void ChatSession::send_message(const std::string& text,
@@ -741,40 +896,49 @@ void ChatSession::run_completion(const std::string& user_text,
                 tools_schema = m_tool_registry->get_all_schemas();
             }
 
-            // ---- 创建 ReActLoop ----
-            // D-5：注入 IConfigManager，工具通过 ToolContext.config_manager() 访问
-            // BashTool DI：注入 TaskManager，工具通过 ToolContext.task_manager() 启动后台任务
-            // cwd：注入会话启动时捕获的工作目录，避免运行中 cwd 漂移导致工具在错误目录执行
-            // DS_CACHE H-3：注入 m_compactor 引用，使卡死守卫/rewrite_version 跨 turn 持久化
-            // AskUserTool DI：注入 EventBus，工具通过 ToolContext.event_bus() 发布事件
-            // 宿主文件索引失效回调：FileWriteTool 写文件后通知宿主（TUI @ 补全）重建索引
-            ReActLoop loop(m_provider.get(), m_tool_registry, ReActLoop::Config{},
-                           &m_config_manager.get(), &m_task_manager.get(), m_cwd,
-                           &m_compactor, &m_event_bus.get(), &m_touch_collector,
-                           m_file_index_invalidator);
+            // ---- 0.6.x：QueryEngine 统一编排入口（验收标准：唯一 loop 入口）----
+            // 按 agent.active 解析 AgentType 构造 ReAct/GoalGuarded，注入同一套依赖 +
+            // 会话级权限状态 + 查询追踪调用链。普通对话（agent.active 空）走 ReAct，
+            // 行为与以往手动 ReActLoop 完全一致（回归零差异）。
+            const auto active_agent_conf =
+                m_config_manager.get().get_or<std::string>(agent::keys::AGENT_ACTIVE, "");
+            const std::string goal_spec =
+                m_config_manager.get().get_or<std::string>(agent::keys::AGENT_GOAL, "");
 
-            // #45：注入会话级权限状态（ReActLoop 每轮重建，跨 turn 恢复
-            //      Default/Plan/Bypass 三态与 Plan 退出恢复逻辑）
+            // 依赖与旧 ReActLoop 手动构造同源（provider/registry/config_manager/
+            // task_manager/cwd/compactor/event_bus/touch 注入路径一一对应）。
+            GoalAgentDeps gdeps{
+                .provider = m_provider.get(),
+                .registry = m_tool_registry,
+                .config_manager = &m_config_manager.get(),
+                .task_manager = &m_task_manager.get(),
+                .cwd = m_cwd,
+                .external_compactor = &m_compactor,
+                .event_bus = &m_event_bus.get(),
+                .touch_collector = &m_touch_collector,
+                .file_index_invalidator = m_file_index_invalidator,
+                .session_id = m_session_id,
+            };
+            QueryEngine query_engine(std::move(gdeps));
+
+            // #45#28：注入会话级权限状态（Default/Plan/Bypass 三态 + Plan 退出恢复），
+            // 由 QueryEngine 落到 ReAct 循环与 GoalGuarded 内部循环（后者此前缺失）。
+            // 回调写回 ChatSession（受 m_state_mutex 保护）统一状态源，对齐
+            // EnterPlanMode/ExitPlanModeV2/on_permission_mode_changed（H-1 PR #46 评审）。
             {
                 std::lock_guard<std::mutex> lock(m_state_mutex);
-                loop.apply_permission_state(
-                    m_permission_mode, m_permission_mode_before_plan,
-                    m_permission_mode == tool::PermissionMode::Plan);
-            }
-
-            // H-1（PR #46 评审）：工具路径权限变更回写 ChatSession（受 m_state_mutex
-            // 保护），统一状态源 —— EnterPlanMode/ExitPlanModeV2/on_permission_mode_changed
-            // 修改 ReActLoop 投影后同步写回会话，确保下一轮 apply_permission_state 注入
-            // 最新三态（修复场景 A：Shift+Tab Plan + ExitPlanModeV2 批准后下一轮打回 Plan
-            // 的"粘死"；场景 B：EnterPlanMode 工具进入 Plan 后下一轮丢失的缺陷）
-            loop.set_permission_state_changed_callback(
-                [this](tool::PermissionMode mode,
-                       tool::PermissionMode before_plan,
-                       bool /*in_plan*/) {
-                    std::lock_guard<std::mutex> lock(m_state_mutex);
-                    m_permission_mode = mode;
-                    m_permission_mode_before_plan = before_plan;
+                query_engine.set_permission(PermissionSnapshot{
+                    .mode = m_permission_mode,
+                    .before_plan = m_permission_mode_before_plan,
+                    .on_changed = [this](tool::PermissionMode mode,
+                                         tool::PermissionMode before_plan,
+                                         bool /*in_plan*/) {
+                        std::lock_guard<std::mutex> lk(m_state_mutex);
+                        m_permission_mode = mode;
+                        m_permission_mode_before_plan = before_plan;
+                    },
                 });
+            }
 
             // 3.2：使用 IReActObserver 接口替代 lambda 回调
             // ReActEventPublisher 内部完成 ReActStep → IEventBus 事件转换
@@ -798,11 +962,39 @@ void ChatSession::run_completion(const std::string& user_text,
                 m_last_prefix_shape = cur_shape_baseline;
             }
 
-            // ---- 执行 ReAct 循环 ----
-            ReActResult react_result = loop.run(
-                m_messages, m_system_prompt, tools_schema,
-                should_cancel, &publisher
-            );
+            // ---- 执行 Agent 循环（QueryEngine 按 agent.active 路由，唯一入口）----
+            // 目标守卫 goal 来自 agent.goal；goal_spec 原文透传用于 AgentDoneEvent/
+            // AgentVerdictEvent 展示。observer 用 ReActEventPublisher 发布步骤事件。
+            AgentRunContext run_ctx{
+                .messages = &m_messages,
+                .system_prompt = m_system_prompt,
+                .tools_schema = tools_schema,
+                .should_cancel = &should_cancel,
+                .goal = parse_goal(goal_spec),
+                .goal_spec = goal_spec,
+                .observer = &publisher,
+            };
+            AgentRunResult run_result =
+                query_engine.run(m_config_manager.get(), std::move(run_ctx));
+            ReActResult react_result = std::move(run_result.react);
+
+            // 记录本会话已分发的后台任务（P1-1 定向取消）：切会话/清除/析构时精确取消
+            if (!run_result.background_task_id.empty()) {
+                std::lock_guard<std::mutex> lock(m_state_mutex);
+                m_background_task_ids.push_back(run_result.background_task_id);
+            }
+
+            // 思考时长回填：reasoning_ms（本 turn 所有 Thought 阶段实际耗时）仅在流式结束后可知，
+            // 持久化前回填到本轮最后一条 assistant 消息（写入 JSONL 的 reasoningMs 字段）
+            if (react_result.reasoning_ms > 0.0) {
+                std::lock_guard<std::mutex> lock(m_state_mutex);
+                for (auto it = m_messages.rbegin(); it != m_messages.rend(); ++it) {
+                    if (it->role == ChatMessage::Role::Assistant) {
+                        it->reasoning_ms = react_result.reasoning_ms;
+                        break;
+                    }
+                }
+            }
 
             // 项目会话恢复：批量持久化 ReActLoop 新增的 assistant/tool 消息
             persist_messages_range(messages_before_loop);
@@ -845,7 +1037,8 @@ void ChatSession::run_completion(const std::string& user_text,
                     .prompt_cache_hit_tokens = react_result.prompt_cache_hit_tokens,
                     .prompt_cache_miss_tokens = react_result.prompt_cache_miss_tokens,
                     .prompt_ms = react_result.prompt_ms,
-                    .generation_ms = react_result.generation_ms
+                    .generation_ms = react_result.generation_ms,
+                    .reasoning_ms = react_result.reasoning_ms
                 });
                 m_generating.store(false);
                 return;
@@ -916,7 +1109,8 @@ void ChatSession::run_completion(const std::string& user_text,
                 .prompt_cache_hit_tokens = react_result.prompt_cache_hit_tokens,
                 .prompt_cache_miss_tokens = react_result.prompt_cache_miss_tokens,
                 .prompt_ms = react_result.prompt_ms,
-                .generation_ms = react_result.generation_ms
+                .generation_ms = react_result.generation_ms,
+                .reasoning_ms = react_result.reasoning_ms
             });
 
             // DS_CACHE M-3：移除 m_cache_hit_total/m_cache_miss_total 累加（死代码已删除）
@@ -945,7 +1139,11 @@ void ChatSession::run_completion(const std::string& user_text,
                 .final_response = react_result.final_answer,
                 .total_steps = static_cast<int32_t>(react_result.steps.size()),
                 .total_tool_calls = react_result.total_tool_calls,
-                .total_duration_ms = react_result.total_duration_ms
+                .total_duration_ms = react_result.total_duration_ms,
+                // 0.6.x：透传实际 Agent 类型与目标守卫终态（QueryTracker 调用链溯源）
+                .agent_type = static_cast<int32_t>(run_result.agent_type),
+                .goal_status = static_cast<int32_t>(react_result.goal_status),
+                .goal_spec = goal_spec,
             });
 
             m_generating.store(false);
@@ -1243,6 +1441,52 @@ void ChatSession::subscribe_interrupt() {
 
 void ChatSession::unsubscribe_interrupt() {
     m_event_bus.get().unsubscribe<InterruptEvent>(m_interrupt_token);
+}
+
+void ChatSession::subscribe_sub_agent_persistence() {
+    m_sub_progress_token = m_event_bus.get().subscribe<SubAgentProgressEvent>(
+        [this](const SubAgentProgressEvent& e) {
+            // final 步由 SubAgentCompletedEvent 承载，UI 不渲染，跳过持久化
+            if (e.step_type == "final") return;
+            agent::session::SubAgentEvent ev;
+            ev.type = "progress";
+            ev.task_id = e.task_id;
+            ev.step_number = e.step_number;
+            ev.step_type = e.step_type;
+            ev.content = e.content;
+            ev.thought_text = e.thought_text;
+            ev.tool_name = e.tool_name;
+            ev.tool_input = e.tool_input;
+            ev.observation = e.observation;
+            ev.is_error = e.is_error;
+            ev.duration_ms = e.duration_ms;
+            std::shared_ptr<agent::session::SessionStore> store;
+            {
+                std::lock_guard<std::mutex> lock(m_state_mutex);
+                store = m_session_store;
+            }
+            if (store) store->append_sub_agent(ev);
+        });
+    m_sub_completed_token = m_event_bus.get().subscribe<SubAgentCompletedEvent>(
+        [this](const SubAgentCompletedEvent& e) {
+            agent::session::SubAgentEvent ev;
+            ev.type = "completed";
+            ev.task_id = e.task_id;
+            ev.final_answer = e.final_answer;
+            ev.was_error = e.was_error;
+            ev.duration_ms = e.duration_ms;
+            std::shared_ptr<agent::session::SessionStore> store;
+            {
+                std::lock_guard<std::mutex> lock(m_state_mutex);
+                store = m_session_store;
+            }
+            if (store) store->append_sub_agent(ev);
+        });
+}
+
+void ChatSession::unsubscribe_sub_agent_persistence() {
+    m_event_bus.get().unsubscribe<SubAgentProgressEvent>(m_sub_progress_token);
+    m_event_bus.get().unsubscribe<SubAgentCompletedEvent>(m_sub_completed_token);
 }
 
 } // namespace agent

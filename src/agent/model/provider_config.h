@@ -10,8 +10,11 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace agent {
+
+class IConfigManager;
 
 /// @brief 供应商配置条目（与持久化 JSON 字段一一对应）
 struct ProviderConfigEntry {
@@ -28,5 +31,16 @@ struct ProviderSwitchResult {
     bool applied = false;        ///< 是否执行了"设为使用中"（需要热切换）
     ProviderConfigEntry entry;   ///< 切换到的条目（applied=true 时有效）
 };
+
+/// @brief 从配置读取供应商列表（backend.providers JSON 数组）
+std::vector<ProviderConfigEntry> load_provider_configs(IConfigManager& cfg);
+
+/// @brief 保存供应商列表到配置（backend.providers）
+void save_provider_configs(IConfigManager& cfg,
+                           const std::vector<ProviderConfigEntry>& providers);
+
+/// @brief 将条目设为使用中（写 backend.provider / remote_url / model / api_key）
+/// @details 先清除旧标量键再写入新值，防止残留上次供应商配置。
+void apply_provider_switch(IConfigManager& cfg, const ProviderConfigEntry& entry);
 
 } // namespace agent

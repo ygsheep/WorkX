@@ -110,6 +110,11 @@ void SSEStreamReader::on_sse_event(const SSEEvent& event) {
         {
             std::lock_guard<std::mutex> lock(m_queue_mutex);
             m_chunk_queue.push(std::move(chunk));
+            LOG_INFO("[sse] chunk queued, content_len={}, reasoning_len={}, "
+                     "tool_start={}, tool_delta={}, is_final={}, queue={}",
+                     chunk.content_delta.size(), chunk.reasoning_delta.size(),
+                     chunk.is_tool_use_start, chunk.is_tool_use_delta,
+                     chunk.is_final, m_chunk_queue.size());
         }
         m_queue_cv.notify_one();
     }

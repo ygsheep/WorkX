@@ -235,7 +235,8 @@ PermissionResult FileReadTool::check_permissions(
     while (std::getline(ss, part, '|')) {
         try {
             const std::string expanded = expand_path(part, ctx.cwd);
-            auto res = validate_path_access(expanded, ctx.cwd);
+            auto res = validate_path_access(expanded, ctx.cwd,
+                                            repo_root_allowlist(ctx.git_repo_root));
             if (res.is_err()) {
                 // 评审 #2：绝对禁止（私钥/凭据）不可确认；越界/可确认敏感路径由用户确认放行
                 if (!is_absolutely_forbidden_path(expanded) &&
@@ -338,7 +339,27 @@ ResultV2<ToolResult> FileReadTool::call(
         ));
     }
 
-    // 7. 编码检测（替代原 is_binary_file，更精确：UTF-16 不会被误判为二进制）
+    // 7. 图片文件检测：扩展名明确告知模型当前模型无图片输入能力，
+    //    避免模型猜测内容或把占位错误写入文件（真实用户场景复现）
+    {
+        const std::string ext = file_path.extension().string();
+        std::string lower_ext = ext;
+        std::transform(lower_ext.begin(), lower_ext.end(), lower_ext.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        static constexpr const char* kImageExts[] = {
+            ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tiff", ".svg"};
+        for (const char* img : kImageExts) {
+            if (lower_ext == img) {
+                return ResultV2<ToolResult>::err(Error::Code::InvalidInput,
+                    std::format("File '{}' is an image ({}) which the current model "
+                                "cannot read (no image input support). Inform the user "
+                                "that image files cannot be processed.",
+                                file_path.filename().string(), img + 1));
+            }
+        }
+    }
+
+    // 8. 编码检测（替代原 is_binary_file，更精确：UTF-16 不会被误判为二进制）
     const Encoding encoding = detect_encoding(file_path);
     if (encoding == Encoding::Binary) {
         return ResultV2<ToolResult>::err(Error::Code::InvalidInput,

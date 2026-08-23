@@ -2,7 +2,7 @@
  * @file remote_backend.cpp
  * @brief 远程后端实现
  * @details 使用 HttpClient（Boost.Beast）发送 API 请求，通过 IProviderAdapter 适配不同协议
- * @version 4.0.0
+ * @version 4.1.0
  * @date 2026-07
  */
 
@@ -64,7 +64,10 @@ ResultV2<void> RemoteBackend::initialize(const BackendConfig& config) {
     }
 
 #ifdef WORKX_HAS_CURL
-    m_http_client = std::make_unique<HttpClient>();
+    // M-1：测试注入的客户端优先保留，否则创建真实 HttpClient
+    if (!m_http_client) {
+        m_http_client = std::make_unique<HttpClient>();
+    }
     m_state.store(BackendState::Ready, std::memory_order_release);
 
     // H-1：通过 DI 注入的 m_event_bus 发布，不再调用 EventBus::instance()；
@@ -144,23 +147,12 @@ ModelInfo RemoteBackend::get_model_info() const {
 
 std::shared_ptr<IStreamReader> RemoteBackend::submit_completion(const CompletionRequest& request) {
 #ifdef WORKX_HAS_CURL
-    // M-7：单一状态判断，Ready 才接受请求
-    if (m_state.load(std::memory_order_acquire) != BackendState::Ready ||
-        !m_adapter || !m_http_client) {
-        return nullptr;
-    }
-
-    // 加锁检查在飞请求，避免覆盖旧 reader 导致 HTTP 仍跑但 reader 失联
-    std::lock_guard<std::mutex> lock(m_active_mutex);
-    if (m_active_reader) {
-        // 已有在飞请求，拒绝新请求
-        return nullptr;
-    }
-
-    // M-7：CAS Ready → Generating
-    BackendState expected = BackendState::Ready;
-    if (!m_state.compare_exchange_strong(expected, BackendState::Generating,
-        std::memory_order_acq_rel, std::memory_order_acquire)) {
+    // v1.2.0（PR #49 修复）：支持并发在飞请求（子 Agent 并行批量调度）。
+    // 原实现单活跃请求（m_active_reader 非空即拒绝），并行子任务中仅第一个
+    // 能获得 LLM 响应，其余立即失败。HttpClient 基于 curl_multi 支持并发流，
+    // 此处快速路径只检查基础设施，状态仲裁在锁内完成。
+    if (!m_adapter || !m_http_client ||
+        m_state.load(std::memory_order_acquire) == BackendState::Shutdown) {
         return nullptr;
     }
 
@@ -172,7 +164,23 @@ std::shared_ptr<IStreamReader> RemoteBackend::submit_completion(const Completion
     };
 
     auto reader = std::make_shared<SSEStreamReader>(std::move(parse_cb));
-    m_active_reader = reader;
+
+    // 锁内仲裁并发提交：
+    //  - 首个请求：CAS Ready → Generating（失败即状态已变，如并发 shutdown，拒绝）
+    //  - 后续请求：要求仍处于 Generating（非终态），直接加入集合
+    {
+        std::lock_guard<std::mutex> lock(m_active_mutex);
+        if (m_active_readers.empty()) {
+            BackendState expected = BackendState::Ready;
+            if (!m_state.compare_exchange_strong(expected, BackendState::Generating,
+                std::memory_order_acq_rel, std::memory_order_acquire)) {
+                return nullptr;
+            }
+        } else if (m_state.load(std::memory_order_acquire) != BackendState::Generating) {
+            return nullptr;
+        }
+        m_active_readers.push_back(reader);
+    }
 
     std::string url = m_adapter->build_url(m_config.base_url);
     std::string body = m_adapter->build_request_body(request, m_config.model_name);
@@ -182,17 +190,20 @@ std::shared_ptr<IStreamReader> RemoteBackend::submit_completion(const Completion
     // on_complete 在 HttpClient poll 线程触发，需加锁与 submit_completion/interrupt 同步
     m_http_client->async_post_stream(
         url, header_pairs, body, reader,
-        [this]() {
+        [this, reader]() {
             std::lock_guard<std::mutex> lock(m_active_mutex);
-            // M-N1：仅当仍为 Generating 时才回到 Ready，避免覆盖 Shutdown 终态。
+            // v1.2.0（PR #49 修复）：从集合移除本请求，而非无条件 reset 单一 reader
+            std::erase(m_active_readers, reader);
+            // M-N1：仅当集合清空且仍为 Generating 时才回到 Ready，避免覆盖 Shutdown 终态。
             // 边界场景：shutdown() 持锁 CAS Generating→Shutdown 并清理 reader 后释放锁，
             // 被取消的请求触发 on_complete 时若用 store(Ready) 会覆盖 Shutdown，导致
             // backend 回到 Ready 但 http_client 已 shutdown，后续请求接受但失败。
             // CAS 失败（状态非 Generating，如已被 shutdown 转为 Shutdown）则保持终态。
-            BackendState expected = BackendState::Generating;
-            m_state.compare_exchange_strong(expected, BackendState::Ready,
-                std::memory_order_acq_rel, std::memory_order_acquire);
-            m_active_reader.reset();
+            if (m_active_readers.empty()) {
+                BackendState expected = BackendState::Generating;
+                m_state.compare_exchange_strong(expected, BackendState::Ready,
+                    std::memory_order_acq_rel, std::memory_order_acquire);
+            }
         },
         m_config.timeout_ms);
 
@@ -212,13 +223,14 @@ void RemoteBackend::interrupt() {
 
 void RemoteBackend::interrupt_locked() {
     // M-A：interrupt 的无锁实现，调用方必须已持有 m_active_mutex
-    if (m_active_reader) {
-        m_active_reader->cancel();
+    // v1.2.0（PR #49 修复）：中断全部在飞请求（支持并发批量调度）
+    for (const auto& reader : m_active_readers) {
+        reader->cancel();
         if (m_http_client) {
-            m_http_client->cancel_stream(m_active_reader.get());
+            m_http_client->cancel_stream(reader.get());
         }
-        m_active_reader.reset();
     }
+    m_active_readers.clear();
     // M-7：若处于 Generating，回到 Ready；其他状态不变
     BackendState expected = BackendState::Generating;
     m_state.compare_exchange_strong(expected, BackendState::Ready,

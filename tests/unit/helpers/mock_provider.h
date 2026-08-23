@@ -24,6 +24,7 @@
 #include <optional>
 #include <functional>
 #include <string>
+#include <mutex>
 
 #include "agent/api/i_completion_provider.h"
 #include "agent/api/i_stream_reader.h"
@@ -148,25 +149,39 @@ class MockCompletionProvider : public ICompletionProvider {
 public:
     /// @brief 排队下一次 submit_completion 返回的 reader
     void set_next_reader(std::shared_ptr<MockStreamReader> reader) {
+        std::lock_guard<std::mutex> lock(mutex_);
         readers_.push_back(std::move(reader));
     }
 
     int submit_count = 0;
     int interrupt_count = 0;
 
-    std::shared_ptr<IStreamReader> submit_completion(const CompletionRequest& /*request*/) override {
+    // 记录最近一次请求的 tools schema（供测试断言子 Agent 工具集过滤）
+    nlohmann::json last_tools;
+
+    std::shared_ptr<IStreamReader> submit_completion(const CompletionRequest& request) override {
+        std::lock_guard<std::mutex> lock(mutex_);
         submit_count++;
+        last_tools = request.tools;
         if (readers_.empty()) return nullptr;
         auto reader = readers_.front();
         readers_.pop_front();
         return reader;
     }
 
-    void interrupt() override { interrupt_count++; }
+    void interrupt() override {
+        // L-5：与 submit_count 同锁保护，避免并发中断时计数丢失
+        std::lock_guard<std::mutex> lock(mutex_);
+        interrupt_count++;
+    }
 
-    bool is_generating() const override { return !readers_.empty(); }
+    bool is_generating() const override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return !readers_.empty();
+    }
 
 private:
+    mutable std::mutex mutex_;
     std::deque<std::shared_ptr<MockStreamReader>> readers_;
 };
 

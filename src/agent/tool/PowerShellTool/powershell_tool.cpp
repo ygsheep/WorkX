@@ -248,21 +248,6 @@ ResultV2<ToolResult> PowerShellTool::call(
             Error::Code::InvalidInput, "PowerShellTool: 'command' must not be empty");
     }
 
-    // #35：命令级风险检测（破坏性/SSRF/env 泄露）——执行前硬拦截 + 审计
-    const auto risk = detect_shell_risk(command);
-    if (risk != ShellRisk::None) {
-        const std::string reason = shell_risk_description(risk);
-        auto guard_event = [&](EventType t) {
-            audit::AuditLogger::instance().log_security(t, reason, ctx.session_id, name());
-        };
-        if ((risk & ShellRisk::Destructive) != ShellRisk::None) guard_event(EventType::SecurityDangerousCommand);
-        if ((risk & ShellRisk::SSRF) != ShellRisk::None) guard_event(EventType::SecuritySSRFAttempt);
-        if ((risk & ShellRisk::EnvLeak) != ShellRisk::None) guard_event(EventType::SecurityEnvVarLeak);
-        return ResultV2<ToolResult>::err(
-            Error::Code::PermissionDenied,
-            "Command blocked by security guard: " + reason);
-    }
-
     int timeout_ms = kDefaultTimeoutMs;
     if (input.contains("timeout") && input["timeout"].is_number()) {
         timeout_ms = input["timeout"].get<int>();
@@ -279,6 +264,35 @@ ResultV2<ToolResult> PowerShellTool::call(
     if (input.contains("dangerously_disable_sandbox") &&
         input["dangerously_disable_sandbox"].is_boolean()) {
         disable_sandbox = input["dangerously_disable_sandbox"].get<bool>();
+    }
+
+    // #35：命令级风险检测（破坏性/SSRF/env 泄露）——执行前拦截 + 审计
+    // 手动审核（Default）模式下由用户确认放行；放行后禁用沙箱授予完整访问
+    const auto risk = detect_shell_risk(command);
+    if (risk != ShellRisk::None) {
+        const std::string reason = shell_risk_description(risk);
+        auto guard_event = [&](EventType t) {
+            audit::AuditLogger::instance().log_security(t, reason, ctx.session_id, name());
+        };
+        if ((risk & ShellRisk::Destructive) != ShellRisk::None) guard_event(EventType::SecurityDangerousCommand);
+        if ((risk & ShellRisk::SSRF) != ShellRisk::None) guard_event(EventType::SecuritySSRFAttempt);
+        if ((risk & ShellRisk::EnvLeak) != ShellRisk::None) guard_event(EventType::SecurityEnvVarLeak);
+        if (!is_bypass_mode(ctx.permission_mode) && !is_plan_mode(ctx.permission_mode)) {
+            const std::string question = std::format(
+                "The command is blocked by the security guard ({}):\n\n```\n{}\n```\n\n"
+                "Allow running this command?", reason, command);
+            if (ask_user_confirm(ctx, question)) {
+                disable_sandbox = true;
+            } else {
+                return ResultV2<ToolResult>::err(
+                    Error::Code::PermissionDenied,
+                    "Command execution denied by user: " + reason);
+            }
+        } else {
+            return ResultV2<ToolResult>::err(
+                Error::Code::PermissionDenied,
+                "Command blocked by security guard: " + reason);
+        }
     }
 
     // cwd：优先用参数，否则用 ctx.cwd

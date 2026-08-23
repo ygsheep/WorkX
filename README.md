@@ -44,6 +44,12 @@
 
 **Agent Harness 定位**：除终端客户端外，`src/core` + `src/agent` 构成可复用的 Agent Harness 库（`workx::agent`）。外部工程可通过 `find_package(workx)` 或 `add_subdirectory` 链接并驱动 ReAct Agent 循环（注入 `ICompletionProvider`、订阅 `EventBus` 事件即可），**无需任何 TUI/应用层依赖**——`src/tui` 与 `src/app` 只是参考宿主实现。消费示例见 `tests/consumer/`。
 
+### 模块依赖关系
+
+![模块依赖关系图（Mermaid 渲染）](docs/img/11_module_dependency.png)
+
+依赖方向为**单向分层**（无循环依赖）：`src/tui` 与 `src/island` 依赖 `src/agent` + `src/core`，`src/agent` 依赖 `src/core`，`src/core` 无内部模块依赖。源文件见 [`docs/module_dependency.mmd`](docs/module_dependency.mmd)。
+
 ### 核心工作流（鲸鱼娘图解）
 
 | 📐 ReAct 推理循环 | 📡 EventBus 跨层中枢 |
@@ -142,6 +148,7 @@ WorkX 的核心是 Agent 自主调用工具完成任务。内置工具集如下�
 - **永不裁剪区**：system prompt + 最近 5 轮对话 + 上一轮 tool_calls/results
 - **兜底策略**：中段历史摘要压缩 → 依然超限降级多工具并行 → 最后抛 `ContextOverflowError`
 - **实时面板**：StatusBar 显示 4 类计数（Prompt / Cache Create / Cache Read / Generated）+ 估算费用
+- **细粒度统计**：侧边栏展示会话累计 Token、DS 缓存命中率（`DS 缓存 命中 80% (8k/10k)`）与 Prompt/生成分项（#65）
 
 ## 前置条件
 
@@ -307,7 +314,8 @@ build\bin\workx.exe
 |------|------|
 | `/help` | 显示所有可用命令 |
 | `/exit` / `/quit` | 退出程序 |
-| `/clear` | 清空聊天历史 |
+| `/clear` | 删除当前会话文件并新建会话 |
+| `/new` | 新建会话并切换（保留旧会话文件） |
 | `/regen` | 重新生成上一条回复 |
 | `/model` | 切换当前使用的模型 |
 

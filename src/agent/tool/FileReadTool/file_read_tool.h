@@ -52,6 +52,10 @@ public:
     /// @return JSON Schema 对象，定义 file_path/offset/limit/pages 字段
     nlohmann::json input_schema() const override;
 
+    /// @brief 只读工具
+    /// @return true（读取无副作用）
+    bool is_read_only() const override { return true; }
+
     /// @brief 验证输入参数
     /// @param input 输入 JSON 对象
     /// @param ctx 工具执行上下文（当前未使用）

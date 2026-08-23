@@ -128,6 +128,29 @@ TEST_CASE("session_store: assistant with tool_uses round-trip", "[session][store
 }
 
 // ============================================================
+// assistant 消息思考时长（reasoningMs）
+// ============================================================
+
+TEST_CASE("session_store: assistant reasoningMs round-trip", "[session][store]") {
+    TempFile tmp("workx_test_reasoningms.jsonl");
+
+    {
+        SessionStore store(tmp.string());
+        REQUIRE(store.open());
+        REQUIRE(store.append_assistant_message("a1", "u1", "answer", "thinking", {}, "t2", 4200.0));
+        store.close();
+    }
+
+    auto events = SessionStore::read_all(tmp.string());
+    REQUIRE(events.size() == 1);
+    REQUIRE(events[0]["reasoningMs"] == 4200.0);
+
+    auto messages = SessionStore::load_messages(tmp.string());
+    REQUIRE(messages.size() == 1);
+    REQUIRE(messages[0].reasoning_ms == 4200.0);
+}
+
+// ============================================================
 // list_sessions
 // ============================================================
 

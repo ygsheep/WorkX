@@ -135,6 +135,13 @@ public:
     /// @brief 重新生成最后一条回复
     void regenerate();
 
+    /// @brief 从指定用户消息重新生成（重试按钮：截断到该用户消息后重新推理）
+    /// @param user_text 触发该回复的用户消息文本（从后往前匹配最后一条相同文本）
+    /// @details 与 regenerate() 的区别：regenerate() 只重生成最后一条回复；
+    ///          本方法先截断到匹配的用户消息（含）之后的所有消息，再以该用户
+    ///          消息重新生成，支持对历史任意一条回复做重试。
+    void regenerate_from(const std::string& user_text);
+
     /// @brief 获取对话历史（返回拷贝，线程安全）
     std::vector<ChatMessage> get_messages() const;
 
@@ -173,6 +180,17 @@ public:
     ///          加载的消息不会触发持久化（避免回环）。
     bool restore_from_file(const std::string& file_path);
 
+    /// @brief 新建会话（/new 与 /clear 共用）：清空消息并切换到新 session_id
+    /// @details 保留旧会话文件（/new 语义）；/clear 由调用方在切换后删除旧文件。
+    ///          生成中安全（先取消并等待当前任务）：
+    ///          1. 生成新 session_id（core::util::generate_uuid）
+    ///          2. 清空 m_messages
+    ///          3. 关闭旧 SessionStore 并置空（新会话文件懒创建：首条 user 消息时
+    ///             以新 session_id 创建 JSONL，复用启动时 configure_session_store 参数）
+    ///          4. 重置压缩器与前缀形状基线 + conditional skills 会话级累积
+    ///          锁外重置 TodoStore 到新会话空清单（restore_todos 内部再加 m_state_mutex）。
+    void new_session();
+
     /// @brief 切换到历史会话（/resume 命令调用）
     /// @param file_path 历史会话 JSONL 文件路径
     /// @return true=切换成功
@@ -209,6 +227,15 @@ public:
     ///          返回的指针生命周期由 ChatSession 管理，session 析构后禁止使用。
     ICompletionProvider* completion_provider() const { return m_provider.get(); }
 
+    /// @brief 运行时切换推理后端（/provider 热切换）
+    /// @param provider 新后端（须已 initialize；空指针忽略）
+    /// @return true=已替换；false=生成中拒绝切换（调用方应先用 is_generating 检查）
+    /// @details 线程安全（受 m_state_mutex 保护）。ReActLoop 每次 run 时从
+    ///          m_provider 取指针（chat_session.cpp run_completion 内新建），
+    ///          非生成中替换无并发访问。切换后调用方通常需 import_messages
+    ///          保留对话继续（消息在 ChatSession 内，不受 provider 影响）。
+    bool set_provider(std::unique_ptr<ICompletionProvider> provider);
+
     /// @brief #45：设置会话级权限模式（CLI --bypass-permissions 注入）
     /// @details 仅接受 Default/BypassPermissions（Plan 由 toggle_permission_mode 管理）。
     ///          线程安全（受 m_state_mutex 保护）。跨 turn 生效（下一轮 ReActLoop 注入）。
@@ -224,6 +251,11 @@ public:
 
     /// @brief 是否正在生成
     bool is_generating() const { return m_generating.load(); }
+
+    /// @brief 暂停模型活动：取消并等待当前后台任务完全退出
+    /// @details 供宿主（TUI /edit 等）在需要独占文件/状态时调用，避免后台
+    ///          ReActLoop 写文件与宿主操作冲突。线程安全（内部持锁）。
+    void cancel_current_task() { cancel_and_wait_current_task(); }
 
     /// @brief 提交用户消息，触发 LLM 推理
     /// @param text 用户文本
@@ -294,6 +326,14 @@ private:
     /// @brief 取消中断订阅
     void unsubscribe_interrupt();
 
+    /// @brief 订阅子 Agent 进度/完成事件并持久化到 SessionStore
+    /// @details 第二层（子 Agent 记录）持久化：SubAgentProgressEvent/SubAgentCompletedEvent
+    ///          发布时追加 sub_agent 事件到当前 SessionStore，/resume 时按序重放恢复。
+    void subscribe_sub_agent_persistence();
+
+    /// @brief 取消子 Agent 事件持久化订阅
+    void unsubscribe_sub_agent_persistence();
+
     /// @brief DS_CACHE M-4：LLM 摘要回调（注入到 m_compactor）
     /// @param middle 待摘要的中段消息序列
     /// @return LLM 生成的摘要文本（失败时抛异常，由 compact_middle fallback 到机械折叠）
@@ -313,6 +353,20 @@ private:
     /// @param start_idx 起始索引（含）
     /// @param parent_uuid 父消息 UUID（用于 parentUuid 字段）
     void persist_messages_range(size_t start_idx, const std::string& parent_uuid = "");
+
+    /// @brief 生成中安全：取消并等待当前后台任务完全退出后，再复位生成标志
+    /// @details 切换/清理会话共享状态（m_messages / m_compactor / m_session_store）前必须先调用。
+    ///          因为 ReActLoop::run 通过非 const 引用直接读写 m_messages，若调用方（UI 线程）
+    ///          并发执行 switch_session/clear_history/import_messages 对 m_messages 做 move/clear，
+    ///          会与任务线程形成数据竞争 → 堆损坏（resume 后重发消息崩溃的 UAF 根因）。
+    ///          复刻析构 wait 模式：cancel 当前任务 + wait → cancelAll + waitForAll → 复位标志。
+    void cancel_and_wait_current_task();
+    void cancel_background_tasks();  // 定向取消本会话已分发的后台任务（P1-1）
+
+    /// @brief #24：接线 TodoStore 持久化回调（session_id → 当前 SessionStore 写 todo 事件）
+    /// @details 在 SessionStore 创建/切换后调用（懒创建 + switch_session）。
+    ///          回调捕获 store 的 shared_ptr，TodoStore 每次变更时追加全量快照。
+    void wire_todo_persistence();
 
     std::unique_ptr<ICompletionProvider> m_provider;
     std::vector<ChatMessage> m_messages;
@@ -375,10 +429,16 @@ private:
     // 中断事件订阅
     EventToken m_interrupt_token;
 
+    // 子 Agent 事件持久化订阅（progress/completed）
+    EventToken m_sub_progress_token;
+    EventToken m_sub_completed_token;
+
     // 并发控制：保护 m_messages / m_system_prompt / m_tool_registry / m_current_task
     mutable std::mutex m_state_mutex;
     std::shared_ptr<Task> m_current_task;  // 跟踪当前后台任务，用于析构等待
     std::condition_variable m_task_cv;
+    /// 本会话已分发的后台任务 id（P1-1 定向取消；受 m_state_mutex 保护）
+    std::vector<std::string> m_background_task_ids;
 };
 
 } // namespace agent

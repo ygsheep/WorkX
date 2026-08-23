@@ -1,5 +1,21 @@
 #include "agent/api/remote/http_client.h"
 #include "agent/api/remote/sse_stream_reader.h"
+#include "agent/api/remote/ssrf.h"
+
+// 平台网络头：ssrf_opensocket_cb 用到 sockaddr_in/sockaddr_in6、ntohl、
+// IPPROTO_TCP、socket() 等。Windows 由 winsock 提供，POSIX 由 netinet/sys 提供，
+// 必须显式包含（curl/curl.h 不保证传递这些符号，Linux 裸编译会报未声明）。
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX  // winsock/windows 的 min/max 宏会干扰 std::numeric_limits
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#endif
 
 #include <curl/curl.h>
 
@@ -79,6 +95,20 @@ CURLSH* shared_curl_share() {
     return sh;
 }
 
+/// @brief 限制允许的协议（含重定向），兼容新旧 curl
+/// @details libcurl 7.85.0 起 CURLOPT_PROTOCOLS/REDIR_PROTOCOLS 被弃用，
+///          改用 *_STR 字符串形式；按编译期版本选择，避免 -Werror 下
+///          -Wdeprecated-declarations 升级为错误导致 Linux 编译失败。
+void restrict_allowed_protocols(CURL* curl) {
+#if LIBCURL_VERSION_NUM >= 0x075500   // 7.85.0
+    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+    curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "http,https");
+#else
+    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+    curl_easy_setopt(curl, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS);
+#endif
+}
+
 } // anonymous namespace
 
 // ============================================================
@@ -135,6 +165,44 @@ static size_t write_cb(void* ptr, size_t size, size_t nmemb, void* userdata) {
     return size * nmemb;
 }
 
+/// @brief 响应头回调：收集响应头（键转小写，供 Content-Type / Mcp-Session-Id 读取）
+static size_t header_cb(char* buffer, size_t size, size_t nitems, void* userdata) {
+    auto* headers = static_cast<std::vector<std::pair<std::string, std::string>>*>(userdata);
+    const size_t total = size * nitems;
+    std::string line(buffer, total);
+    while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
+    const auto colon = line.find(':');
+    if (colon != std::string::npos) {
+        std::string key = line.substr(0, colon);
+        std::string value = line.substr(colon + 1);
+        const auto start = value.find_first_not_of(" \t");
+        if (start != std::string::npos) value = value.substr(start);
+        std::transform(key.begin(), key.end(), key.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        headers->emplace_back(std::move(key), std::move(value));
+    }
+    return total;
+}
+
+// ============================================================
+// SSRF 连接钩子（#25）：建立连接前拦截内网/回环/链路本地目标
+// ============================================================
+// 通过 CURLOPT_OPENSOCKETFUNCTION 在 libcurl 真正 connect 前拿到解析后的
+// sockaddr，命中内网地址返回 CURL_SOCKET_BAD 让 curl 以连接失败中止。
+// 相比"仅预检输入 URL"，本钩子同时覆盖 3xx 重定向后的最终目标。
+static curl_socket_t ssrf_opensocket_cb(void* /*clientp*/, curlsocktype /*purpose*/,
+                                        struct sockaddr* addr) {
+    if (!addr) return CURL_SOCKET_BAD;
+    if (addr->sa_family == AF_INET) {
+        auto* a = reinterpret_cast<struct sockaddr_in*>(addr);
+        if (is_private_ipv4(ntohl(a->sin_addr.s_addr))) return CURL_SOCKET_BAD;
+    } else if (addr->sa_family == AF_INET6) {
+        auto* a = reinterpret_cast<struct sockaddr_in6*>(addr);
+        if (is_private_ipv6(a->sin6_addr.s6_addr)) return CURL_SOCKET_BAD;
+    }
+    return socket(addr->sa_family, SOCK_STREAM, IPPROTO_TCP);
+}
+
 // ============================================================
 // Sync GET（V2-2：返回 ResultV2<HttpResponse>）
 // ============================================================
@@ -143,6 +211,19 @@ ResultV2<HttpResponse> HttpClient::get(const std::string& url,
                                        const std::vector<std::pair<std::string, std::string>>& headers,
                                        int timeout_ms) {
     LOG_DEBUG("[http] GET {} timeout={}ms", url, timeout_ms);
+    // #25 P3-1：SSRF 预检（防御纵深）——开启防护时先解析 URL，命中内网直接拒绝，
+    // 提供比连接钩子更清晰的错误信息（连接钩子仍兜底重定向后的最终目标）
+    if (m_block_private_ips) {
+        const ParsedUrl parsed = parse_url(url);
+        if (!parsed.scheme.empty() && !parsed.host.empty() &&
+            host_resolves_to_private(parsed.host)) {
+            LOG_WARN("[http] GET {} 目标解析到内网/回环/链路本地地址，SSRF 防护拒绝", url);
+            return ResultV2<HttpResponse>::err(
+                Error::Code::PermissionDenied,
+                "SSRF 防护：目标主机解析到内网/回环/链路本地地址，已拒绝请求",
+                url);
+        }
+    }
     CURL* curl = curl_easy_init();
     if (!curl) {
         LOG_ERROR("[http] GET {} curl_easy_init failed", url);
@@ -153,9 +234,12 @@ ResultV2<HttpResponse> HttpClient::get(const std::string& url,
     }
 
     std::string body;
+    std::vector<std::pair<std::string, std::string>> resp_headers;
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header_cb);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &resp_headers);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, static_cast<long>(timeout_ms));
     // C.7：补连接超时，防止 DNS/TCP 阶段挂死耗尽总超时
     // 默认 10s 连接超时（若 timeout_ms < 10s 则跟随总超时）
@@ -168,6 +252,12 @@ ResultV2<HttpResponse> HttpClient::get(const std::string& url,
     // H-1：关联 CURLSH 共享连接缓存，跨 HttpClient 实例复用 TCP/TLS 连接
     if (auto* sh = shared_curl_share()) {
         curl_easy_setopt(curl, CURLOPT_SHARE, sh);
+    }
+    // #25：SSRF 防护（可选开启）——连接钩子拦截内网目标，并限制重定向协议
+    if (m_block_private_ips) {
+        curl_easy_setopt(curl, CURLOPT_OPENSOCKETFUNCTION, ssrf_opensocket_cb);
+        curl_easy_setopt(curl, CURLOPT_OPENSOCKETDATA, nullptr);
+        restrict_allowed_protocols(curl);
     }
 
     struct curl_slist* hl = nullptr;
@@ -191,10 +281,102 @@ ResultV2<HttpResponse> HttpClient::get(const std::string& url,
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
     resp.status_code = static_cast<unsigned int>(code);
     resp.body = std::move(body);
+    resp.headers = std::move(resp_headers);
     if (code >= 400) {
         LOG_WARN("[http] GET {} returned HTTP {} body_len={}", url, code, resp.body.size());
     } else {
         LOG_DEBUG("[http] GET {} -> {} bytes={}", url, code, resp.body.size());
+    }
+    if (hl) curl_slist_free_all(hl);
+    curl_easy_cleanup(curl);
+    return ResultV2<HttpResponse>::ok(std::move(resp));
+}
+
+// ============================================================
+// Sync POST（同步 body，返回 HttpResponse）
+// ============================================================
+
+ResultV2<HttpResponse> HttpClient::post(
+        const std::string& url,
+        const std::vector<std::pair<std::string, std::string>>& headers,
+        const std::string& body,
+        int timeout_ms) {
+    LOG_DEBUG("[http] POST {} body_len={} timeout={}ms",
+              url, body.size(), timeout_ms);
+    // #25 P3-1：SSRF 预检（防御纵深），与 get() 一致
+    if (m_block_private_ips) {
+        const ParsedUrl parsed = parse_url(url);
+        if (!parsed.scheme.empty() && !parsed.host.empty() &&
+            host_resolves_to_private(parsed.host)) {
+            LOG_WARN("[http] POST {} 目标解析到内网/回环/链路本地地址，SSRF 防护拒绝", url);
+            return ResultV2<HttpResponse>::err(
+                Error::Code::PermissionDenied,
+                "SSRF 防护：目标主机解析到内网/回环/链路本地地址，已拒绝请求",
+                url);
+        }
+    }
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        LOG_ERROR("[http] POST {} curl_easy_init failed", url);
+        return ResultV2<HttpResponse>::err(
+            Error::Code::InternalError,
+            "curl_easy_init failed",
+            url);
+    }
+
+    std::string out_body;
+    std::vector<std::pair<std::string, std::string>> resp_headers;
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out_body);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header_cb);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &resp_headers);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, static_cast<long>(timeout_ms));
+    long connect_to = (std::min)(10000L, static_cast<long>(timeout_ms));
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, connect_to);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
+    if (auto* sh = shared_curl_share()) {
+        curl_easy_setopt(curl, CURLOPT_SHARE, sh);
+    }
+    // #25：SSRF 防护（可选开启）——连接钩子拦截内网目标，并限制重定向协议
+    if (m_block_private_ips) {
+        curl_easy_setopt(curl, CURLOPT_OPENSOCKETFUNCTION, ssrf_opensocket_cb);
+        curl_easy_setopt(curl, CURLOPT_OPENSOCKETDATA, nullptr);
+        restrict_allowed_protocols(curl);
+    }
+
+    struct curl_slist* hl = nullptr;
+    for (const auto& [k, v] : headers)
+        hl = curl_slist_append(hl, (k + ": " + v).c_str());
+    if (hl) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hl);
+
+    CURLcode rc = curl_easy_perform(curl);
+    if (rc != CURLE_OK) {
+        // V2-2：网络错误通过 Error 携带错误码
+        std::string err_msg = curl_easy_strerror(rc);
+        LOG_ERROR("[http] POST {} failed: {} (rc={})", url, err_msg, static_cast<int>(rc));
+        if (hl) curl_slist_free_all(hl);
+        curl_easy_cleanup(curl);
+        return ResultV2<HttpResponse>::err(
+            Error::from_curl_code(static_cast<int>(rc), url));
+    }
+
+    HttpResponse resp;
+    long code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+    resp.status_code = static_cast<unsigned int>(code);
+    resp.body = std::move(out_body);
+    resp.headers = std::move(resp_headers);
+    if (code >= 400) {
+        LOG_WARN("[http] POST {} returned HTTP {} body_len={}", url, code, resp.body.size());
+    } else {
+        LOG_DEBUG("[http] POST {} -> {} bytes={}", url, code, resp.body.size());
     }
     if (hl) curl_slist_free_all(hl);
     curl_easy_cleanup(curl);
@@ -214,7 +396,8 @@ public:
                  const std::string& body,
                  std::shared_ptr<SSEStreamReader> reader,
                  std::function<void()> on_complete,
-                 const int timeout_ms)
+                 const int timeout_ms,
+                 const bool block_private_ips)
         : m_body(body)
         , m_reader(std::move(reader))
         , m_on_complete(std::move(on_complete))
@@ -256,6 +439,12 @@ public:
         // H-1：关联 CURLSH 共享连接缓存
         if (auto* sh = shared_curl_share()) {
             curl_easy_setopt(m_curl, CURLOPT_SHARE, sh);
+        }
+        // #25 P2-1：SSRF 防护（可选开启）——流式会话同样拦截内网目标并限制协议
+        if (block_private_ips) {
+            curl_easy_setopt(m_curl, CURLOPT_OPENSOCKETFUNCTION, ssrf_opensocket_cb);
+            curl_easy_setopt(m_curl, CURLOPT_OPENSOCKETDATA, nullptr);
+            restrict_allowed_protocols(m_curl);
         }
 
         for (const auto& [k, v] : headers)
@@ -365,6 +554,13 @@ private:
             // C.10：直接传 string_view，避免每个 SSE chunk 都构造 std::string 拷贝
             self->m_reader->feed_data(std::string_view(
                 static_cast<const char*>(ptr), size * nmemb));
+
+        // 数据接收进度：每 256KB 记录一次（避免高频日志）
+        const size_t received = self->m_bytes_received.fetch_add(size * nmemb,
+            std::memory_order_relaxed) + size * nmemb;
+        if (received / (256 * 1024) != (received - size * nmemb) / (256 * 1024)) {
+            LOG_INFO("[http][stream] received_bytes={}KB", received / 1024);
+        }
         return size * nmemb;
     }
 
@@ -377,6 +573,7 @@ private:
     std::shared_ptr<SSEStreamReader> m_reader;
     std::function<void()> m_on_complete;
     std::atomic<bool> m_cancelled{false};
+    std::atomic<size_t> m_bytes_received{0};  // 数据接收累计字节（进度日志用）
     // H-2：总时长超时（Timer-based），0 表示禁用
     int m_total_timeout_ms = 120000;  // 默认 2 分钟
     std::chrono::steady_clock::time_point m_start_time;
@@ -500,7 +697,7 @@ void HttpClient::async_post_stream(
         std::shared_ptr<SSEStreamReader> reader,
         std::function<void()> on_complete,
         int timeout_ms) const {
-    LOG_DEBUG("[http][stream] POST {} body_len={} timeout={}ms", url, body.size(), timeout_ms);
+    LOG_INFO("[http][stream] POST {} body_len={} timeout={}ms", url, body.size(), timeout_ms);
     auto parsed = parse_url(url);
     // H-4：URL 解析失败（scheme 为空）时直接 finish reader，避免构造 "://" 怪 URL
     if (parsed.scheme.empty()) {
@@ -512,11 +709,12 @@ void HttpClient::async_post_stream(
     auto* key = reader.get();
 
     const auto session = std::make_shared<StreamSession>(
-        parsed, headers, body, reader, std::move(on_complete), timeout_ms);
+        parsed, headers, body, reader, std::move(on_complete), timeout_ms,
+        m_block_private_ips);
 
     if (!session->easy_handle()) {
         // curl 初始化失败：主动 finish reader 让上层能收到错误，避免 next() 无限阻塞
-        // （调用方已把 reader 存入 m_active_reader，若不 finish 会永远等数据）
+        // （调用方已把 reader 存入 m_active_readers，若不 finish 会永远等数据）
         // finish_with_error 会同时触发 reader->finish 和 on_complete 回调
         LOG_ERROR("[http][stream] POST {} curl_easy_init failed", url);
         session->finish_with_error("Failed to initialize curl session");

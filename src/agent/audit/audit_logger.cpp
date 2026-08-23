@@ -336,6 +336,7 @@ std::string AuditLogger::timestamp_now() const {
     // 计算时区偏移（分钟）
     auto offset_min = [](const std::tm& t) -> int {
         #ifdef _WIN32
+        (void)t;
         long tz_offset;
         _get_timezone(&tz_offset);
         return static_cast<int>(-tz_offset / 60);

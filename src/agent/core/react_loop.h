@@ -4,7 +4,7 @@
  * @details 实现 Thought/Action/Observation 三阶段显式分离的 agent 循环，
  *          替代 ChatSession 中的扁平 while 循环。
  *          使用原生 function calling（Anthropic/OpenAI），不依赖文本解析。
- * @version 1.0.0
+ * @version 1.1.0
  * @date 2026-07
  */
 
@@ -25,6 +25,7 @@
 #include "agent/tool/registry.h"
 #include "agent/tool/executor.h"
 #include "agent/tool/context.h"
+#include "agent/core/goal_verdict.h"  // GoalStatus（#31：目标导向 Agent 结果）
 
 namespace agent {
 
@@ -66,6 +67,7 @@ struct ReActStep {
 
     // --- Action 阶段字段 ---
     std::string tool_name;                        ///< 当前执行的工具名
+    std::string tool_use_id;                      ///< 工具调用唯一 ID（与 tool_uses[].id 对应）
     nlohmann::json tool_input;                    ///< 工具输入参数
 
     // --- Observation 阶段字段 ---
@@ -112,11 +114,15 @@ struct ReActResult {
     int32_t rewrite_version = 0;
     double prompt_ms = 0.0;
     double generation_ms = 0.0;
+    double reasoning_ms = 0.0;  ///< 思考阶段实际耗时（本 turn 所有 Thought 阶段之和，毫秒）
 
     // --- 状态 ---
     bool was_interrupted = false;                 ///< 用户中断
     bool was_error = false;                       ///< 发生错误（流式错误/提交失败/超迭代数）
     std::string error_message;                    ///< 错误信息（was_error=true 时有效）
+
+    // --- 0.6.x：#31 目标验证状态（普通对话恒为 Unknown）---
+    GoalStatus goal_status = GoalStatus::Unknown;
 
     // --- 部分输出（中断/错误时可能有部分内容）---
     std::string partial_content;                  ///< 中断时的部分文本
@@ -167,7 +173,17 @@ public:
 
     /// @brief 循环配置
     struct Config {
-        int max_iterations = 25;                  ///< 最大迭代轮数
+        /// 基础预算：最大迭代轮数（原硬编码 25，现默认 40，可由 agent.max_iterations 覆盖）。
+        /// 预算耗尽或检测到重复工具调用时，内部评审器（review_*）可追加额外预算继续。
+        int max_iterations = 40;
+        /// 停滞/超限评审开关（内部一次性评审器，不暴露为工具 schema）
+        bool review_enabled = true;
+        /// 停滞判定窗口：同一 (工具名+规范化输入) 签名在最近 N 次调用内再次出现即视为循环
+        int review_stall_window = 4;
+        /// 评审"继续"时追加的额外迭代预算（块大小）
+        int review_extra_budget = 8;
+        /// 达上限评审的"继续"允许次数上限（硬性总预算 = max_iterations + extra*grants）
+        int review_max_grants = 2;
         CacheAwareCompactor::Config compactor_cfg; ///< DS_CACHE: 缓存感知压缩配置
     };
 
@@ -210,19 +226,23 @@ public:
               CacheAwareCompactor* external_compactor = nullptr,
               IEventBus* event_bus = nullptr,
               skill::TouchCollector* touch_collector = nullptr,
-              std::function<void()> file_index_invalidator = nullptr);
+              std::function<void()> file_index_invalidator = nullptr,
+              std::string session_id = "");
 
     /// @brief 构造（使用默认配置）
     /// @param config_manager 配置管理器（H-5：必须非空，注入到 ToolContext）
     /// @param cwd 工作目录（注入到 ToolContext.cwd，空则用进程当前目录）
     /// @param event_bus 事件总线（可选，用于 AskUserTool 等需要发布事件的工具）
+    /// @param session_id 会话 ID（#30：注入到 ToolContext.session_id，供审计日志关联，
+    ///                    空则使用默认值 "default"）
     ReActLoop(ICompletionProvider* provider,
               std::shared_ptr<tool::ToolRegistry> registry,
               IConfigManager* config_manager,
               ITaskManager* task_manager = nullptr,
               std::string cwd = "",
-              IEventBus* event_bus = nullptr)
-        : ReActLoop(provider, std::move(registry), Config{}, config_manager, task_manager, std::move(cwd), nullptr, event_bus, nullptr, nullptr) {}
+              IEventBus* event_bus = nullptr,
+              std::string session_id = "")
+        : ReActLoop(provider, std::move(registry), Config{}, config_manager, task_manager, std::move(cwd), nullptr, event_bus, nullptr, nullptr, std::move(session_id)) {}
 
     ~ReActLoop() = default;
 
@@ -345,6 +365,24 @@ private:
         } status = Completed;
     };
 
+    /// @brief 内部评审器决定（停滞检测 / 达上限时判断"是否继续"）
+    /// @details 只喂关键信息（目标、工具序列、最近 observation、预算），
+    ///          返回 continue（注入纠偏指令、追加预算）或 wrap_up（优雅收尾）。
+    struct ReviewerDecision {
+        bool continue_loop = false;   ///< true=注入纠偏继续; false=收尾
+        std::string correction;       ///< continue 时注入到 messages 的纠偏指令
+        std::string wrap_summary;     ///< wrap_up 时的收尾摘要（为空回退部分进展）
+    };
+
+    /// @brief 工具调用签名（停滞检测窗口元素）
+    struct ToolCallSignature {
+        std::string tool_name;
+        std::string normalized_input;
+        bool operator==(const ToolCallSignature& o) const {
+            return tool_name == o.tool_name && normalized_input == o.normalized_input;
+        }
+    };
+
     // ============================================================
     // 内部方法
     // ============================================================
@@ -381,6 +419,24 @@ private:
     static void parse_embedded_tool_calls(const std::string& content,
                                           std::vector<ToolUse>& out_tools);
 
+    /// @brief 规范化工具输入为签名（仅保留键名与标量/数组结构，丢弃顺序与空白）
+    /// @param input 工具输入 JSON 对象
+    /// @return 规范化签名字符串
+    static std::string normalize_tool_input(const nlohmann::json& input);
+
+    /// @brief 内部评审器：一次性 completion 判断"是否继续"
+    /// @details 只喂关键信息（用户目标、最近工具执行序列与观察、当前预算），
+    ///          返回 ReviewerDecision。失败/解析异常时默认 wrap_up（不冒险继续）。
+    /// @param user_request 用户原始请求摘要（截断）
+    /// @param tool_history 最近工具执行日志（tool_name: 首行观察）
+    /// @param iteration 当前迭代
+    /// @param remaining_budget 剩余基础预算（<=0 表示已耗尽/超限）
+    /// @param at_limit 是否为达上限评审（true 时追加预算逻辑由调用方处理）
+    ReviewerDecision run_reviewer(const std::string& user_request,
+                                  const std::vector<std::string>& tool_history,
+                                  int iteration, int remaining_budget,
+                                  bool at_limit) const;
+
     /// @brief H-1（PR #46 评审）：权限状态变更通知宿主（ChatSession 回写持久状态）
     /// @details 工具路径回调（on_permission_mode_changed / on_enter_plan_mode /
     ///          on_exit_plan_mode）修改投影状态后调用。宿主回调受宿主锁保护，
@@ -407,6 +463,7 @@ private:
     ITaskManager* m_task_manager = nullptr;       ///< BashTool 后台任务 DI（可选，注入到 ToolContext）
     IEventBus* m_event_bus = nullptr;             ///< AskUserTool 事件发布 DI（可选，注入到 ToolContext）
     std::string m_cwd;                            ///< 工作目录（会话启动时捕获，注入到 ToolContext.cwd）
+    std::string m_session_id;                     ///< #30：会话 ID（注入到 ToolContext.session_id，审计日志关联）
     skill::TouchCollector* m_touch_collector = nullptr;  ///< conditional skills touch 收集器（可选）
     std::function<void()> m_file_index_invalidator;     ///< 宿主文件索引失效回调（可选，注入到 ToolContext）
     tool::PermissionMode m_permission_mode{tool::PermissionMode::Default};  ///< #28：会话级权限模式

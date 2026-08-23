@@ -178,10 +178,13 @@ ResultV2<ToolResult> AskUserTool::call(
     AskUserResult result;
     bool timed_out = false;
 
+    LOG_INFO("[AskUserTool] waiting for TUI response, timeout_ms={}", timeout_ms);
+
     if (timeout_ms > 0) {
         auto status = future.wait_for(std::chrono::milliseconds(timeout_ms));
         if (status == std::future_status::timeout) {
             timed_out = true;
+            LOG_WARN("[AskUserTool] timed out after {}ms", timeout_ms);
             // 置位取消标志并发布超时事件，唤醒 TUI 主循环关闭 ChoicePanel。
             // 必须先置位 cancel_flag 再发事件，确保 TUI 收到 KEY_WAKE 时能看到标志已置位。
             if (cancel_flag) {
@@ -200,9 +203,11 @@ ResultV2<ToolResult> AskUserTool::call(
     if (!timed_out) {
         try {
             result = future.get();
+            LOG_INFO("[AskUserTool] got response, submitted={}", result.submitted);
         } catch (const std::future_error&) {
             // promise 已销毁或未设值，视为取消
             result.submitted = false;
+            LOG_WARN("[AskUserTool] future_error while getting result");
         }
     } else {
         // 超时：构造 timeout 结果

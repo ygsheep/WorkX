@@ -301,3 +301,50 @@ TEST_CASE("subprocess works with minimal args", "[subprocess][basic]") {
     REQUIRE(r.is_ok());
     REQUIRE(r.value().is_success());
 }
+
+// ============================================================
+// exec_interactive：交互式子进程（继承终端 stdio）
+// ============================================================
+
+TEST_CASE("exec_interactive propagates exit code", "[subprocess][interactive]") {
+    // 静默命令（不输出，避免污染测试终端），验证退出码透传
+#ifdef _WIN32
+    auto r = exec_interactive("cmd.exe", {"/c", "exit 42"});
+#else
+    auto r = exec_interactive("/bin/sh", {"-c", "exit 42"});
+#endif
+    REQUIRE(r.is_ok());
+    REQUIRE(r.value().exit_code == 42);
+}
+
+TEST_CASE("exec_interactive returns err when command not found", "[subprocess][interactive]") {
+    auto r = exec_interactive("this_command_does_not_exist_xyz_12345", {});
+    REQUIRE(r.is_err());
+    REQUIRE(r.error().code == Error::Code::ResourceNotFound);
+}
+
+TEST_CASE("exec_interactive respects cwd", "[subprocess][interactive]") {
+    auto tmp_dir = fs::temp_directory_path() / "workx_subprocess_interactive_cwd_test";
+    fs::create_directories(tmp_dir);
+    const std::string marker = "unique_marker_file_xyz.txt";
+    auto marker_path = tmp_dir / marker;
+    {
+        std::ofstream ofs(marker_path);
+        ofs << "marker";
+    }
+
+    // 子进程在指定 cwd 下探测文件存在性（静默，exit 0=存在 / 1=不存在）
+#ifdef _WIN32
+    auto r = exec_interactive("cmd.exe", {"/c", "if exist " + marker + " (exit 0) else (exit 1)"},
+                              tmp_dir.string());
+#else
+    auto r = exec_interactive("/bin/sh", {"-c", "test -f '" + marker + "'"}, tmp_dir.string());
+#endif
+
+    REQUIRE(r.is_ok());
+    REQUIRE(r.value().exit_code == 0);
+
+    std::error_code ec;
+    fs::remove(marker_path, ec);
+    fs::remove(tmp_dir, ec);
+}

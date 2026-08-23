@@ -158,6 +158,37 @@ TEST_CASE("ToolRegistry get_all_schemas on empty returns empty array", "[tool_re
     REQUIRE(schemas.empty());
 }
 
+TEST_CASE("ToolRegistry get_schemas_by_names filters by whitelist", "[tool_registry][schema][filter]") {
+    ToolRegistry registry;
+    registry.register_tool(std::make_shared<StubTool>("A", "desc A"));
+    registry.register_tool(std::make_shared<StubTool>("B", "desc B"));
+    registry.register_tool(std::make_shared<StubTool>("C", "desc C"));
+
+    auto schemas = registry.get_schemas_by_names({"B", "C"});
+    REQUIRE(schemas.is_array());
+    REQUIRE(schemas.size() == 2);
+    REQUIRE(schemas[0]["name"] == "B");
+    REQUIRE(schemas[1]["name"] == "C");
+}
+
+TEST_CASE("ToolRegistry get_schemas_by_names ignores unknown names", "[tool_registry][schema][filter]") {
+    ToolRegistry registry;
+    registry.register_tool(std::make_shared<StubTool>("A", "desc A"));
+
+    auto schemas = registry.get_schemas_by_names({"A", "Nope", ""});
+    REQUIRE(schemas.size() == 1);
+    REQUIRE(schemas[0]["name"] == "A");
+}
+
+TEST_CASE("ToolRegistry get_schemas_by_names with empty whitelist returns empty", "[tool_registry][schema][filter]") {
+    ToolRegistry registry;
+    registry.register_tool(std::make_shared<StubTool>("A", "desc A"));
+
+    auto schemas = registry.get_schemas_by_names({});
+    REQUIRE(schemas.is_array());
+    REQUIRE(schemas.empty());
+}
+
 // ============================================================================
 // exists & size
 // ============================================================================

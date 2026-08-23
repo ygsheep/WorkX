@@ -150,10 +150,34 @@ void register_config_defaults(ConfigManager& cfg) {
     // === Agent ===
     cfg.register_schema({
         .key = keys::AGENT_ACTIVE,
-        .description = "Current agent name (empty = no agent context); "
-                       "skills declaring an agent field only inject/activate when it matches",
+        .description = "Current agent type (empty=ReAct; goal-guarded/verify=GoalGuardedAgent; "
+                       "planner/coordinator/researcher/reviewer=read-only/planning roles; "
+                       "executor=execute; coordinator+AgentTool; batch/watch/script=no-LLM modes; "
+                       "background/bg=run request in background, non-blocking, event-notified); "
+                       "non-empty also filters active skills",
         .default_value = std::string(""),
         .type = ConfigSchema::Type::String
+    });
+
+    // 0.6.x：#31 目标导向 Agent 的目标声明（agent.active=goal-guarded/verify 时生效）
+    cfg.register_schema({
+        .key = keys::AGENT_GOAL,
+        .description = "Goal for goal-guarded agent: tests_pass / build_clean / "
+                       "lint_zero / file_exists:<path> / cmd:<command> (empty = no goal)",
+        .default_value = std::string(""),
+        .type = ConfigSchema::Type::String
+    });
+
+    // 0.6.x：ReAct 循环基础预算（最大迭代轮数）。默认 40（原硬编码 25）；
+    // 预算耗尽或检测到重复工具调用时，内部评审器可评审"是否继续"并追加预算
+    // （见 ReActLoop::Config::review_* 字段；此键仅控制基础预算）。
+    cfg.register_schema({
+        .key = keys::AGENT_MAX_ITERATIONS,
+        .description = "Max ReAct iterations per turn (base budget; internal reviewer "
+                       "may grant extra iterations when stall/limit is detected)",
+        .default_value = 40,
+        .type = ConfigSchema::Type::Int,
+        .int_range = std::make_pair<int64_t, int64_t>(1, 2000)
     });
 
     // === Logging ===
@@ -171,6 +195,55 @@ void register_config_defaults(ConfigManager& cfg) {
         .default_value = std::string(""),
         .type = ConfigSchema::Type::String,
         .env_var = "WORKX_LOG_FILE"
+    });
+    cfg.register_schema({
+        .key = keys::LOG_RETENTION_DAYS,
+        .description = "Retention days for legacy timestamped run logs workx_*.log (0 = keep all)",
+        .default_value = 7,
+        .type = ConfigSchema::Type::Int,
+        .int_range = std::make_pair<int64_t, int64_t>(0, 3650)
+    });
+    cfg.register_schema({
+        .key = keys::LOG_MAX_SIZE_MB,
+        .description = "Run log roll size in MB (0 = no rotation, single workx.log grows unbounded)",
+        .default_value = 10,
+        .type = ConfigSchema::Type::Int,
+        .int_range = std::make_pair<int64_t, int64_t>(0, 1024)
+    });
+    cfg.register_schema({
+        .key = keys::LOG_MAX_FILES,
+        .description = "Max rolled run log files kept besides workx.log (workx.log.1 .. .N)",
+        .default_value = 5,
+        .type = ConfigSchema::Type::Int,
+        .int_range = std::make_pair<int64_t, int64_t>(1, 100)
+    });
+
+    // === Audit（#37 审计日志：大小轮转 + 天数清理）===
+    cfg.register_schema({
+        .key = keys::AUDIT_ENABLED,
+        .description = "Enable audit logging (tool invoke / security events)",
+        .default_value = true,
+        .type = ConfigSchema::Type::Bool
+    });
+    cfg.register_schema({
+        .key = keys::AUDIT_FILE,
+        .description = "Audit log file path (empty = logs/audit.jsonl)",
+        .default_value = std::string(""),
+        .type = ConfigSchema::Type::String
+    });
+    cfg.register_schema({
+        .key = keys::AUDIT_MAX_SIZE_MB,
+        .description = "Audit log rotation size in MB",
+        .default_value = 10,
+        .type = ConfigSchema::Type::Int,
+        .int_range = std::make_pair<int64_t, int64_t>(1, 1024)
+    });
+    cfg.register_schema({
+        .key = keys::AUDIT_RETENTION_DAYS,
+        .description = "Audit log retention days (rotated files)",
+        .default_value = 30,
+        .type = ConfigSchema::Type::Int,
+        .int_range = std::make_pair<int64_t, int64_t>(1, 3650)
     });
 
     // === Tool — FileReadTool ===
@@ -216,6 +289,31 @@ void register_config_defaults(ConfigManager& cfg) {
         .description = "CNY to USD exchange rate for balance display (DeepSeek returns CNY)",
         .default_value = 7.2,
         .type = ConfigSchema::Type::Double
+    });
+
+    // === Web（#25 WebSearchTool / WebFetchTool）===
+    cfg.register_schema({
+        .key = keys::WEB_SEARCH_PROVIDER,
+        .description = "Web search provider: tavily (default) / serper / searxng "
+                       "(P1 chained fallback reserved)",
+        .default_value = std::string("tavily"),
+        .type = ConfigSchema::Type::String,
+        .env_var = "WORKX_SEARCH_PROVIDER"
+    });
+    cfg.register_schema({
+        .key = keys::WEB_SEARCH_TAVILY_KEY,
+        .description = "Tavily API key for WebSearchTool (env TAVILY_API_KEY overrides)",
+        .default_value = std::string(""),
+        .type = ConfigSchema::Type::String,
+        .env_var = "TAVILY_API_KEY"
+    });
+    cfg.register_schema({
+        .key = keys::WEB_SEARCH_SEARXNG_URL,
+        .description = "SearXNG instance URL for keyless search fallback "
+                       "(default public instance; set your own for stability)",
+        .default_value = std::string("https://searx.be"),
+        .type = ConfigSchema::Type::String,
+        .env_var = "WORKX_SEARXNG_URL"
     });
 }
 
@@ -280,47 +378,48 @@ std::filesystem::path default_config_path() {
 }
 
 std::filesystem::path default_log_path() {
-    // 文件名附加程序启动时间后缀：workx_YYYYMMDD_HHMMSS.log
-    // 便于区分多次启动产生的日志，避免覆盖历史日志
-    auto now = std::chrono::system_clock::now();
-    auto t = std::chrono::system_clock::to_time_t(now);
-    std::tm tm{};
-#ifdef _WIN32
-    localtime_s(&tm, &t);
-#else
-    localtime_r(&t, &tm);
-#endif
-    char time_suffix[32];
-    std::strftime(time_suffix, sizeof(time_suffix), "%Y%m%d_%H%M%S", &tm);
-    std::string log_filename = std::string("workx_") + time_suffix + ".log";
+    // 单一固定文件名 workx.log，按大小轮转为 workx.log.1/.2/...
+    // 避免旧版每次启动生成 workx_YYYYMMDD_HHMMSS.log 导致文件无限堆积
+    std::string log_filename = "workx.log";
 
-#ifndef NDEBUG
-    // Debug 构建：日志写入 exe 同目录的 logs/，便于开发调试
-    // 通过 GetModuleFileNameW / readlink(/proc/self/exe) 获取 exe 路径
-    std::filesystem::path exe_path;
-#ifdef _WIN32
-    wchar_t buf[MAX_PATH];
-    DWORD len = GetModuleFileNameW(nullptr, buf, MAX_PATH);
-    if (len > 0 && len < MAX_PATH) {
-        exe_path = std::filesystem::path(buf);
-    }
-#else
-    char buf[4096];
-    ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-    if (len > 0) {
-        buf[len] = '\0';
-        exe_path = std::filesystem::path(buf);
-    }
-#endif
-    if (!exe_path.empty()) {
-        return exe_path.parent_path() / "logs" / log_filename;
-    }
-    // 回退：当前工作目录
-    return std::filesystem::current_path() / "logs" / log_filename;
-#else
-    // Release 构建：日志写入用户配置目录（AppData / XDG_CONFIG_HOME）
+// 所有构建（Debug/Release）：日志统一写入用户配置目录 ~/.workx/logs/
+    // 便于在多启动实例间集中管理日志，避免散落于 exe 同目录
     return get_config_dir() / "logs" / log_filename;
-#endif
+}
+
+std::filesystem::path log_dir() {
+    return get_config_dir() / "logs";
+}
+
+void cleanup_expired_logs(int retention_days) {
+    if (retention_days <= 0) return;
+
+    std::error_code ec;
+    auto dir = get_config_dir() / "logs";
+    if (!std::filesystem::is_directory(dir, ec)) return;
+
+    auto now = std::chrono::system_clock::now();
+    auto cutoff = now - std::chrono::hours(24LL * retention_days);
+
+    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+        if (ec) break;
+        if (!entry.is_regular_file()) continue;
+
+        // 仅清理运行日志 workx_*.log，不影响 audit.jsonl / crash.log / codex_run.log
+        const std::string name = entry.path().filename().string();
+        if (name.rfind("workx_", 0) != 0 || name.size() < 5 ||
+            name.compare(name.size() - 4, 4, ".log") != 0) {
+            continue;
+        }
+
+        auto mtime = std::filesystem::last_write_time(entry.path(), ec);
+        if (ec) continue;
+        auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+            mtime - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
+        if (sctp < cutoff) {
+            std::filesystem::remove(entry.path(), ec);
+        }
+    }
 }
 
 } // namespace agent

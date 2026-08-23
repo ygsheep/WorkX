@@ -14,6 +14,7 @@
 #include <string>
 #include <memory>
 #include <chrono>
+#include <thread>
 
 #include "core/export.h"
 #include <filesystem>
@@ -123,8 +124,9 @@ public:
         const nlohmann::json& input,
         const ToolContext& ctx
     ) const {
-        LOG_DEBUG("[tool_executor] begin, tool={}, input_size={}",
-                  tool_name, input.dump().size());
+        LOG_INFO("[tool_executor] begin, tool={}, input_size={}, thread={}",
+                 tool_name, input.dump().size(),
+                 std::hash<std::thread::id>{}(std::this_thread::get_id()));
 
         const auto t0 = std::chrono::steady_clock::now();
 
@@ -287,6 +289,11 @@ private:
         audit::AuditLogger::instance().log_tool_invoke(
             tool_name, input, ctx.session_id, ctx.request_id,
             "allow", "", ms, exec_result.result.text);
+
+        LOG_INFO("[tool_executor] done, tool={}, elapsed_ms={}, result_len={}, "
+                 "truncated={}, thread={}",
+                 tool_name, ms, exec_result.result.text.length(),
+                 exec_result.was_truncated, std::hash<std::thread::id>{}(std::this_thread::get_id()));
 
         return ResultV2<ExecutionResult>::ok(std::move(exec_result));
     }

@@ -47,10 +47,24 @@ namespace keys {
     /// 当前 agent 名（空 = 无 agent 上下文）。声明了 frontmatter agent 字段的
     /// skill 仅在该 agent 匹配时注入 system prompt / 触发 conditional 激活
     constexpr const char* AGENT_ACTIVE   = "agent.active";
+    /// 目标导向 Agent（agent.active=goal-guarded/verify）的目标声明。
+    /// 取值：tests_pass / build_clean / lint_zero / file_exists:<path> / cmd:<command>
+    /// #32 多模式：script:<command> / batch:cmd=<tmpl>&glob=<pattern>&concurrency=<n>
+    ///             / watch:path=<dir>&cmd=<tmpl>&polls=<n>&interval=<ms>（agent.active 分别配合）
+    constexpr const char* AGENT_GOAL     = "agent.goal";
+    /// ReAct 循环每轮基础预算（最大迭代轮数）。预算耗尽时若启用内部评审器
+    /// （agent.max_iterations + 停滞恢复），会评审"是否继续"并追加额外预算。
+    constexpr const char* AGENT_MAX_ITERATIONS = "agent.max_iterations";
 
     // Logging
-    constexpr const char* LOG_LEVEL      = "logging.level";
-    constexpr const char* LOG_FILE       = "logging.file";
+    constexpr const char* LOG_LEVEL        = "logging.level";
+    constexpr const char* LOG_FILE         = "logging.file";
+    /// 运行日志单文件超过该大小（MB）时轮转（0 = 不轮转），滚动为 workx.log.N
+    constexpr const char* LOG_MAX_SIZE_MB  = "logging.max_size_mb";
+    /// 保留的运行日志轮转文件数（workx.log.1 .. workx.log.N）
+    constexpr const char* LOG_MAX_FILES    = "logging.max_files";
+    /// 运行日志保留天数：启动时删除超过该天数的历史 workx_*.log（旧版时间戳命名，0 = 不清理）
+    constexpr const char* LOG_RETENTION_DAYS = "logging.retention_days";
 
     // Tool — FileReadTool
     constexpr const char* FILE_READ_MAX_SIZE  = "tool.file_read.max_file_size_bytes";
@@ -73,6 +87,14 @@ namespace keys {
     constexpr const char* AUDIT_FILE           = "audit.file";
     constexpr const char* AUDIT_MAX_SIZE_MB    = "audit.max_size_mb";
     constexpr const char* AUDIT_RETENTION_DAYS = "audit.retention_days";
+
+    // Web（#25 WebSearchTool / WebFetchTool）
+    /// 搜索 Provider：tavily（默认）/ serper / searxng（P1 链式 fallback 预留）
+    constexpr const char* WEB_SEARCH_PROVIDER     = "web.search.provider";
+    /// Tavily API Key（env TAVILY_API_KEY 覆盖）
+    constexpr const char* WEB_SEARCH_TAVILY_KEY   = "web.search.tavily_api_key";
+    /// SearXNG 实例地址（免 Key 兜底；默认公共实例，可换自建）
+    constexpr const char* WEB_SEARCH_SEARXNG_URL  = "web.search.searxng_url";
 }
 
 /// @brief 注册所有配置项的结构化 Schema（类型/默认值/范围/枚举/环境变量映射）
@@ -99,5 +121,11 @@ std::filesystem::path default_config_path();
 
 /// @brief 默认日志文件路径（平台相关）
 std::filesystem::path default_log_path();
+
+/// @brief 日志目录（统一为配置目录下的 logs/）
+std::filesystem::path log_dir();
+
+/// @brief 清理过期运行日志：删除 logs/ 下超过 retention_days 天的 workx*.log（0 表示不清理）
+void cleanup_expired_logs(int retention_days);
 
 } // namespace agent

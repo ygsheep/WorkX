@@ -460,6 +460,39 @@ TEST_CASE("ChatSession set_session_store and session_store accessor", "[session]
     fs::remove(tmp);
 }
 
+TEST_CASE("ChatSession new_session clears messages and switches id", "[session][new_session]") {
+    MockConfigManager cfg;
+    namespace fs = std::filesystem;
+    auto tmp = fs::temp_directory_path() / "workx_test_new_session.jsonl";
+    fs::remove(tmp);
+
+    auto session = make_test_session(cfg);
+    const std::string old_id = session->session_id();
+    REQUIRE_FALSE(old_id.empty());
+
+    // 注入消息 + SessionStore（模拟已有会话）
+    session->commit_state({ChatMessage::user("hello"), ChatMessage::assistant("hi")}, "sys");
+    auto store = std::make_shared<agent::session::SessionStore>(tmp.string(), old_id);
+    REQUIRE(store->open());
+    store->append_session_start("/cwd", "model", "main");
+    store->append_user_message("u1", "", "hello", "t1");
+    store->close();
+    session->set_session_store(store);
+    REQUIRE(session->get_messages().size() == 2);
+
+    // new_session：清空消息 + 换 id + 关闭 store（新会话文件懒创建）
+    session->new_session();
+    REQUIRE(session->get_messages().empty());
+    REQUIRE_FALSE(session->session_id().empty());
+    REQUIRE(session->session_id() != old_id);
+    REQUIRE(session->session_store() == nullptr);
+
+    // 旧会话文件保留（/new 语义：不删除，由 /clear 调用方删除）
+    REQUIRE(fs::exists(tmp));
+
+    fs::remove(tmp);
+}
+
 TEST_CASE("ChatSession full restore cycle: write then restore", "[session][restore][e2e]") {
     // 端到端测试：通过 SessionStore 写入消息 → ChatSession 从文件恢复 → 验证消息一致
     MockConfigManager cfg;
@@ -536,6 +569,74 @@ TEST_CASE("ChatSession import_messages keeps conversation across provider switch
     // 导入空消息：清空历史（热切换时空对话场景）
     new_session->import_messages({});
     REQUIRE(new_session->get_messages().empty());
+}
+
+// ============================================================
+// 重试按钮：regenerate_from 截断到指定用户消息并重新生成
+// ============================================================
+
+TEST_CASE("ChatSession regenerate_from truncates to matching user message",
+          "[session][retry][regenerate]") {
+    MockConfigManager cfg;
+    auto session = make_test_session(cfg);
+
+    // 注入多轮对话：q1/a1、q2/a2
+    std::vector<ChatMessage> history;
+    history.push_back(ChatMessage::user("q1"));
+    history.push_back(ChatMessage::assistant("a1"));
+    history.push_back(ChatMessage::user("q2"));
+    history.push_back(ChatMessage::assistant("a2"));
+    session->commit_state(std::move(history), "sys");
+
+    // 为重新生成排队一个 mock reader
+    auto reader = std::make_shared<MockStreamReader>();
+    reader->add_content_chunk("a1'");
+    auto* provider = static_cast<MockCompletionProvider*>(session->completion_provider());
+    provider->set_next_reader(reader);
+
+    // 重试 q1 的回复：截断到 q1（含删除），重新生成
+    session->regenerate_from("q1");
+    TaskManager::instance().waitForAll();
+
+    // 验证：q1 之后全部删除，run_completion 重新 push q1 + 新回复
+    auto msgs = session->get_messages();
+    REQUIRE(msgs.size() == 2);
+    REQUIRE(msgs[0].role == ChatMessage::Role::User);
+    REQUIRE(msgs[0].content == "q1");
+    REQUIRE(msgs[1].role == ChatMessage::Role::Assistant);
+    REQUIRE(msgs[1].content == "a1'");
+    REQUIRE(provider->submit_count == 1);
+}
+
+TEST_CASE("ChatSession regenerate_from keeps later turns when retrying last reply",
+          "[session][retry][regenerate]") {
+    MockConfigManager cfg;
+    auto session = make_test_session(cfg);
+
+    std::vector<ChatMessage> history;
+    history.push_back(ChatMessage::user("q1"));
+    history.push_back(ChatMessage::assistant("a1"));
+    history.push_back(ChatMessage::user("q2"));
+    history.push_back(ChatMessage::assistant("a2"));
+    session->commit_state(std::move(history), "sys");
+
+    auto reader = std::make_shared<MockStreamReader>();
+    reader->add_content_chunk("a2'");
+    auto* provider = static_cast<MockCompletionProvider*>(session->completion_provider());
+    provider->set_next_reader(reader);
+
+    // 重试最后一条回复（q2）：仅删除 q2/a2，保留 q1/a1
+    session->regenerate_from("q2");
+    TaskManager::instance().waitForAll();
+
+    auto msgs = session->get_messages();
+    REQUIRE(msgs.size() == 4);
+    REQUIRE(msgs[0].content == "q1");
+    REQUIRE(msgs[1].content == "a1");
+    REQUIRE(msgs[2].role == ChatMessage::Role::User);
+    REQUIRE(msgs[2].content == "q2");
+    REQUIRE(msgs[3].role == ChatMessage::Role::Assistant);
+    REQUIRE(msgs[3].content == "a2'");
 }
 
 // ============================================================

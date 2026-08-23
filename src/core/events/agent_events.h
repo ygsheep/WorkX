@@ -3,7 +3,7 @@
  * @brief Agent 编排事件类型（H-10：从 events.h 按域拆分）
  * @details Agent 推理步骤、工具调用、工具结果、Agent 编排完成等事件。
  *          订阅方按需 include 本文件，避免引入系统/流式事件。
- * @version 1.0.0
+ * @version 1.1.0
  * @date 2026-07
  */
 
@@ -17,6 +17,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/tool_kind.h"  // C-3：直接引用 core 层规范位置，避免 core→agent 分层越界
+#include "core/todo/todo_item.h"  // #24：待办清单条目（TodoStore → UI 事件载荷）
 
 namespace agent {
 
@@ -60,11 +61,28 @@ struct ToolResultEvent {
 };
 
 /// @brief Agent 编排完成
+/// @details 0.6.x：新增 agent_type / goal_status / goal_spec，透传本次查询的
+///          实际 Agent 类型与目标验证终态，供 UI 展示与 QueryTracker 溯源。
+///          字段用 int32_t 存枚举值（core 层不依赖 agent 类型，见 McpServerStatusLite 惯例）。
 struct AgentDoneEvent {
     std::string final_response;
     int32_t total_steps = 0;
     int32_t total_tool_calls = 0;
     double total_duration_ms = 0.0;
+    int32_t agent_type = 0;    ///< AgentType 枚举值（0=Unknown 1=ReAct 2=GoalGuarded …）
+    int32_t goal_status = 0;   ///< GoalStatus 枚举值（0=Unknown 1=Pending 2=Achieved 3=Failed）
+    std::string goal_spec;     ///< agent.goal 原文（空 = 普通对话，无目标守卫）
+};
+
+/// @brief 目标验证进度事件（GoalGuardedAgent 每轮 check_goal 后发布，0.6.x）
+/// @details 供 TUI 第二层/侧栏展示 Verdict 进度（如"第 N 轮验证：测试仍红"）。
+///          goal_status 用 int32_t 存 GoalStatus 枚举值，保持 core 层不依赖 agent 类型。
+struct AgentVerdictEvent {
+    std::string session_id;
+    std::string goal_spec;    ///< agent.goal 原文（展示用）
+    int32_t attempt = 0;      ///< 当前尝试轮数（1-based）
+    int32_t goal_status = 0;  ///< GoalStatus 枚举值（0=Unknown 1=Pending 2=Achieved 3=Failed）
+    std::string detail;       ///< 验证器返回的人可读说明（如测试失败数/缺失路径）
 };
 
 /// @brief 缓存诊断事件（DeepSeek 硬盘缓存命中率劣化归因）
@@ -135,6 +153,96 @@ struct ExitPlanModeEvent {
     std::string session_id;
     std::string plan;       ///< 方案文本（改哪些文件、风险点等）
     bool approved = false;  ///< 用户是否批准
+};
+
+/// @brief 子 Agent 后台任务完成事件（AgentTool → 订阅者，v1.1.0 后台结果自动回送）
+/// @details 后台子 Agent 结束后由 AgentTool 发布，携带 task_id 与最终结果摘要，
+///          使父会话/UI 等订阅者无需轮询 TaskOutput 即可感知子任务完成。
+///          ⚠️ 仅作通知，不注入父 LLM 上下文（避免长输出刷屏父会话，见设计决策）。
+///          完整输出仍通过 TaskOutputTool 按 task_id 读取。
+struct SubAgentCompletedEvent {
+    std::string task_id;        ///< 子 Agent 任务 id（AgentTool 生成的 'a'+8 随机）
+    std::string final_answer;   ///< 最终答案（Final: ...）或错误信息（Error: ...），可为空
+    bool was_error = false;     ///< 子任务是否以错误结束
+    double duration_ms = 0.0;   ///< 子 Agent 循环耗时（毫秒，与 AgentDoneEvent 同型）
+};
+
+/// @brief 子 Agent 进度事件（AgentTool → 订阅者，v1.2.0 子任务进度流式订阅）
+/// @details 子 Agent 每个 ReAct 步骤完成时增量发布，携带 task_id 与当前步骤信息，
+///          使订阅者可按 task_id 实时跟踪子任务进度（无需轮询 TaskOutput）。
+///          ⚠️ 仅作增量通知，不注入父 LLM 上下文（与 SubAgentCompletedEvent 同策略）。
+///          完整输出仍通过 TaskOutputTool 按 task_id 读取。
+///          v1.3.0：补充结构化字段（thought_text/tool_name/tool_input/observation/is_error），
+///          供第二层卡片渲染复用主会话 UI（思考卡/工具卡），content 仍保留格式化行。
+struct SubAgentProgressEvent {
+    std::string task_id;        ///< 子 Agent 任务 id（AgentTool 生成的 'a'+8 随机）
+    int32_t step_number = 0;    ///< 当前步骤序号（1-based，与 ReActStep.step_number 对齐）
+    std::string step_type;      ///< 步骤类型："thought" / "action" / "observation" / "final"
+    std::string content;        ///< 步骤内容（与写入 Task 输出缓冲的格式化行相同，可为空）
+    // --- v1.3.0 结构化字段（与 ReActStep 对应）---
+    std::string thought_text;   ///< thought/final 的 LLM 文本
+    std::string tool_name;      ///< action 的工具名
+    std::string tool_input;     ///< action 的工具参数 JSON 字符串
+    std::string observation;    ///< observation 的工具结果文本
+    bool is_error = false;      ///< 工具执行是否出错
+    double duration_ms = 0.0;   ///< 本步骤耗时（毫秒，思考卡标签展示用）
+};
+
+/// @brief 后台 Agent 进度事件（BackgroundAgent → 订阅者，长时任务逐步流式订阅）
+/// @details 与 SubAgentProgressEvent 同构（字段镜像 ReActStep），供第二层卡片
+///          渲染复用主会话 UI。task_id 前缀 'b'，与子 Agent 'a' 区分，避免混淆。
+///          ⚠️ 仅作增量通知，不注入主会话 LLM 上下文（与 SubAgent 同策略）。
+struct BackgroundProgressEvent {
+    std::string task_id;        ///< 后台任务 id（'b'+8 随机）
+    int32_t step_number = 0;    ///< 步骤序号（1-based，与 ReActStep.step_number 对齐）
+    std::string step_type;      ///< "thought" / "action" / "observation" / "final"
+    std::string content;        ///< 步骤内容（格式化行，可为空）
+    // --- 结构化字段（与 ReActStep 对应，供第二层卡片渲染复用）---
+    std::string thought_text;   ///< thought/final 的 LLM 文本
+    std::string tool_name;      ///< action 的工具名
+    std::string tool_input;     ///< action 的工具参数 JSON 字符串
+    std::string observation;    ///< observation 的工具结果文本
+    bool is_error = false;      ///< 工具执行是否出错
+    double duration_ms = 0.0;   ///< 本步骤耗时（毫秒）
+};
+
+/// @brief 后台 Agent 完成事件（BackgroundAgent → 订阅者，后台结果通知）
+/// @details 仅携带 task_id + 结果摘要，不注入主会话 LLM 上下文（防刷屏）。
+///          完整输出仍通过 TaskOutput 按 task_id 读取。
+struct BackgroundCompletedEvent {
+    std::string task_id;        ///< 后台任务 id（'b'+8 随机）
+    std::string final_answer;   ///< 最终答案（Final: ...）或错误信息（Error: ...），可为空
+    bool was_error = false;     ///< 后台任务是否以错误结束
+    double duration_ms = 0.0;   ///< 后台 Agent 循环耗时（毫秒）
+};
+
+/// @brief 待办清单更新事件（#24：TodoStore → TUI 侧边栏/StatusBar）
+/// @details TodoStore 每次变更（TaskCreate/Update/Delete/List、TodoWrite 全量替换、
+///          restore_todos 恢复）后异步发布，携带该 session 完整清单快照。
+///          TUI 主循环 drain 后经 ActionTodoUpdate 更新 ViewModel，触发侧边栏重绘。
+struct TodoUpdatedEvent {
+    std::string session_id;     ///< 所属会话 id
+    std::vector<core::todo::TodoItem> todos;  ///< 变更后的完整清单快照
+};
+
+// ============================================================
+// MCP server 状态（#27 M4：后台连接结果 → TUI 侧栏）
+// ============================================================
+
+/// @brief MCP server 状态条目（轻量，供 UI 侧栏展示；core 层不依赖 agent/mcp 类型）
+struct McpServerStatusLite {
+    std::string name;       ///< server 名
+    std::string protocol;   ///< 协商协议版本（"2026-07-28" / "2025-11-25"）
+    int tool_count = 0;     ///< 已预取工具数
+    int state = 0;          ///< 0=连接中 1=已连接 2=失败
+    std::string error;      ///< 失败原因（state==2 时）
+};
+
+/// @brief MCP server 状态变化事件（#27 M4：后台连接完成/失败时发布，UI 刷新侧栏）
+/// @details McpClientManager 后台线程逐个连接 server，每完成/失败一个即异步发布
+///          全量快照；TUI 主循环 drain 后经 ActionMcpStatus 更新侧栏（彩色状态点）。
+struct McpStatusChangedEvent {
+    std::vector<McpServerStatusLite> servers;  ///< 全部配置 server 的状态快照
 };
 
 } // namespace agent

@@ -18,7 +18,7 @@ target_compile_definitions(workx_integration_tests PRIVATE
     WORKX_TEST_SERVER_SCRIPT="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/test_server.py"
 )
 target_include_directories(workx_integration_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(workx_integration_tests PRIVATE workx_tui Catch2::Catch2WithMain)
+target_link_libraries(workx_integration_tests PRIVATE workx_agent Catch2::Catch2WithMain)
 
 include(Catch)
 catch_discover_tests(workx_integration_tests

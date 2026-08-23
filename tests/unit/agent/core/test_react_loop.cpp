@@ -131,6 +131,54 @@ public:
 };
 
 // ============================================================
+// ContextCapture — 录制工具执行时的 ToolContext（#30 环境感知验证）
+// ============================================================
+
+/// @brief 记录工具执行时收到的 ToolContext 字段（#30 环境感知验证）
+/// @details 不整结构拷贝（ToolContext 含 std::atomic，不可拷贝/赋值），只录制需求字段。
+struct CapturedContext {
+    std::string session_id;
+    std::string request_id;
+    std::string model;
+    std::string history_summary;
+    bool captured = false;
+};
+
+/// @brief 接收工具的 ToolContext 并写入外部共享结构
+class ContextCaptureTool : public ITool {
+public:
+    explicit ContextCaptureTool(std::shared_ptr<CapturedContext> out)
+        : m_out(std::move(out)) {}
+
+    const std::string& name() const override {
+        static const std::string n = "Capture";
+        return n;
+    }
+    const std::string& description() const override {
+        static const std::string d = "Captures the ToolContext for env-field verification";
+        return d;
+    }
+    const std::string& prompt() const override {
+        static const std::string p = "Capture tool for #30 env field verification";
+        return p;
+    }
+    nlohmann::json input_schema() const override {
+        return {{"type", "object"}, {"properties", {}}};
+    }
+    ResultV2<ToolResult> call(const nlohmann::json&, const ToolContext& ctx) const override {
+        m_out->session_id = ctx.session_id;
+        m_out->request_id = ctx.request_id;
+        m_out->model = ctx.model;
+        m_out->history_summary = ctx.history_summary;
+        m_out->captured = true;
+        return ResultV2<ToolResult>::ok(ToolResult::ok(std::string("captured")));
+    }
+
+private:
+    std::shared_ptr<CapturedContext> m_out;
+};
+
+// ============================================================
 // CooperativeSlowTool — 协作式慢工具（响应 is_cancelled 即可退出）
 // ============================================================
 
@@ -367,9 +415,11 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop tool permission denied is reported
 // ============================================================================
 
 TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop stops at max_iterations", "[react_loop][iteration]") {
-    // 每次都返回 tool_use，永远不结束
+    // 每次都返回 tool_use，永远不结束。关闭内部评审器以测试"纯预算耗尽=硬错误"语义
+    // （评审器开启时，重复工具调用会触发停滞 recover，见 stall/at-limit 测试）。
     ReActLoop::Config config;
     config.max_iterations = 3;
+    config.review_enabled = false;
     auto loop = make_loop(config);
 
     // 准备 3 次工具调用响应
@@ -437,6 +487,36 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop cooperative cancel during tool exe
     REQUIRE(messages.size() >= 3);
     REQUIRE(messages[2].role == ChatMessage::Role::Tool);
     REQUIRE(messages[2].content.find("cancelled") != std::string::npos);
+}
+
+// ============================================================================
+// #30 环境感知注入
+// ============================================================================
+
+TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop injects environment fields into ToolContext (#30)", "[react_loop][env]") {
+    // #30：工具执行时应能读到 request_id / session_id / history_summary / git 环境。
+    //      git 字段依赖 cwd 是否在 git 仓库，本测试不担保其值，仅校验注入通道存在
+    //      （能读到 request_id、历史摘要、模型名即可）。
+    auto cap = std::make_shared<CapturedContext>();
+    registry->register_tool(std::make_shared<ContextCaptureTool>(cap));
+
+    make_tool_call_reader("tu_01", "Capture", R"({})");
+    make_text_reader("done");  // 第二轮无工具调用 → FinalAnswer 结束
+
+    std::vector<ChatMessage> messages = {ChatMessage::user("记住：本项目用 nlohmann/json，不要用 rapidjson")};
+    auto loop = make_loop();
+    auto result = loop->run(messages, "", registry->get_all_schemas(), should_cancel);
+
+    REQUIRE(result.total_tool_calls == 1);
+    REQUIRE(cap->captured);
+    // request_id：每次 turn 生成，非空
+    REQUIRE_FALSE(cap->request_id.empty());
+    // 历史摘要：应包含用户早先约束（只读文本，无修改通道）
+    REQUIRE(cap->history_summary.find("nlohmann/json") != std::string::npos);
+    // session_id：ReActLoop 无注入时回退 "default"
+    REQUIRE(cap->session_id == "default");
+    // model：来自 backend.model_name（未配置时为空，不会崩溃）
+    (void)cap->model;
 }
 
 // ============================================================================
@@ -664,4 +744,94 @@ TEST_CASE_METHOD(ReActLoopFixture,
     auto loop2 = make_loop();
     host.inject(*loop2);
     REQUIRE(loop2->permission_mode() == tool::PermissionMode::Default);
+}
+
+// ============================================================================
+// 停滞检测 + 内部评审器（0.6.x）
+// ============================================================================
+
+TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop stall recovery continues after reviewer correction",
+                 "[react_loop][stall]") {
+    ReActLoop::Config config;
+    config.max_iterations = 10;
+    config.review_stall_window = 2;
+    auto loop = make_loop(config);
+
+    // 迭代1: Echo(a)；迭代2: 再次 Echo(a) → 停滞；评审返回 continue；迭代3: final
+    make_tool_call_reader("tu_1", "Echo", R"({"text":"a"})");
+    make_tool_call_reader("tu_2", "Echo", R"({"text":"a"})");
+    make_text_reader(R"({"action":"continue","reason":"try another file"})");
+    make_text_reader("done after recovery");
+
+    std::vector<ChatMessage> messages = {ChatMessage::user("fix task")};
+    auto result = loop->run(messages, "", registry->get_all_schemas(), should_cancel);
+
+    REQUIRE_FALSE(result.was_error);
+    REQUIRE(result.final_answer == "done after recovery");
+    REQUIRE(result.total_iterations == 3);
+    // 纠偏指令注入为 system 消息；重复工具实际只执行一次（第二次因停滞被驳回未执行）
+    REQUIRE(messages.size() == 5);
+    REQUIRE(messages[3].role == ChatMessage::Role::System);
+    REQUIRE(messages[3].content.find("try another file") != std::string::npos);
+    REQUIRE(echo_tool->call_count == 1);
+}
+
+TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop stall detection wraps up gracefully",
+                 "[react_loop][stall]") {
+    ReActLoop::Config config;
+    config.max_iterations = 10;
+    config.review_stall_window = 2;
+    auto loop = make_loop(config);
+
+    make_tool_call_reader("tu_1", "Echo", R"({"text":"a"})");
+    make_tool_call_reader("tu_2", "Echo", R"({"text":"a"})");
+    make_text_reader(R"({"action":"wrap_up","reason":"stuck in loop"})");
+
+    std::vector<ChatMessage> messages = {ChatMessage::user("fix")};
+    auto result = loop->run(messages, "", registry->get_all_schemas(), should_cancel);
+
+    REQUIRE_FALSE(result.was_error);
+    REQUIRE_FALSE(result.was_interrupted);
+    REQUIRE(result.final_answer.find("stuck in loop") != std::string::npos);
+    REQUIRE(result.total_iterations == 2);
+}
+
+TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop at-limit reviewer grants extra budget",
+                 "[react_loop][limit-review]") {
+    ReActLoop::Config config;
+    config.max_iterations = 2;
+    config.review_extra_budget = 5;
+    config.review_max_grants = 2;
+    auto loop = make_loop(config);
+
+    make_tool_call_reader("tu_1", "Echo", R"({"text":"a"})");  // 迭代1
+    make_tool_call_reader("tu_2", "Echo", R"({"text":"b"})");  // 迭代2（不同输入，不触发停滞）
+    make_text_reader(R"({"action":"continue","reason":"keep going"})");  // 达上限评审
+    make_text_reader("done with extra budget");                          // 追加预算后迭代3
+
+    std::vector<ChatMessage> messages = {ChatMessage::user("task")};
+    auto result = loop->run(messages, "", registry->get_all_schemas(), should_cancel);
+
+    REQUIRE_FALSE(result.was_error);
+    REQUIRE(result.final_answer == "done with extra budget");
+    REQUIRE(result.total_iterations == 3);  // 超限后评审"继续" → 追加预算续跑
+}
+
+TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop at-limit reviewer wraps up gracefully",
+                 "[react_loop][limit-review]") {
+    ReActLoop::Config config;
+    config.max_iterations = 2;
+    auto loop = make_loop(config);
+
+    make_tool_call_reader("tu_1", "Echo", R"({"text":"a"})");
+    make_tool_call_reader("tu_2", "Echo", R"({"text":"b"})");
+    make_text_reader(R"({"action":"wrap_up","reason":"enough progress"})");
+
+    std::vector<ChatMessage> messages = {ChatMessage::user("task")};
+    auto result = loop->run(messages, "", registry->get_all_schemas(), should_cancel);
+
+    REQUIRE_FALSE(result.was_error);
+    REQUIRE(result.final_answer.find("enough progress") != std::string::npos);
+    REQUIRE(result.total_iterations == 2);
+    REQUIRE(echo_tool->call_count == 2);
 }

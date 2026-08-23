@@ -7,9 +7,8 @@
 # 模块划分（与 src/ 分层对齐，每个目标只链接其依赖的最少库）：
 #   - core_unit_tests    : tests/unit/core/**    -> workx_core
 #   - agent_unit_tests   : tests/unit/agent/**   -> workx_agent (含 helpers 自测)
-#   - tui_unit_tests     : tests/unit/tui/**     -> workx_tui
 #   - island_unit_tests  : tests/unit/island/**  -> workx_island
-#   - app_unit_tests     : tests/unit/app/**     -> workx_app
+#   - tui_unit_tests     : tests/unit/tui/**     -> 直接编译 src/tui 无头源
 #
 # 常用命令：
 #   - 只构建某模块测试：  cmake --build build --target <模块>_unit_tests -j <N>
@@ -21,22 +20,22 @@
 
 include(Catch)
 
+# Windows GBK 控制台下 CMake 捕获中文测试名会转码成 mojibake 导致 JSON 解析失败，
+# 用本地补丁版 CatchAddTests.cmake（捕获前先 chcp 65001 切 UTF-8 代码页）覆盖默认脚本。
+set(_CATCH_DISCOVER_TESTS_SCRIPT
+  ${WORKX_ROOT}/cmake/CatchAddTests_utf8.cmake
+  CACHE INTERNAL "Catch2 full path to CatchAddTests.cmake helper file"
+)
+
 # Catch2 提供 main()；每个目标都需这一个编译占位
 set(UNIT_TEST_COMMON ../test_main.cpp)
 
 # 按模块用 glob 收集测试源文件（CONFIGURE_DEPENDS：新增测试文件自动纳入，无需手改列表）
 file(GLOB_RECURSE CORE_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/core/*.cpp)
 file(GLOB_RECURSE AGENT_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/agent/*.cpp)
-file(GLOB_RECURSE TUI_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tui/*.cpp)
 file(GLOB_RECURSE ISLAND_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/island/*.cpp)
-file(GLOB_RECURSE APP_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/app/*.cpp)
 # helpers 自测（Mock 接口实现，依赖 agent 接口），归入 agent 目标
 file(GLOB HELPER_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/helpers/*.cpp)
-
-# test_command_system 物理位于 agent/command/，但依赖 app 层 register_system_commands
-# （builtin_commands.cpp），须归入 app 目标才能链接该符号
-list(REMOVE_ITEM AGENT_TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/agent/command/test_command_system.cpp)
-list(APPEND APP_TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/agent/command/test_command_system.cpp)
 
 # 为某模块创建独立测试可执行文件并注册到 ctest
 # 用法: workx_add_unit_target(<target> <链接库...> <源文件...>)
@@ -59,6 +58,69 @@ endfunction()
 
 workx_add_unit_target(core_unit_tests   workx_core   ${CORE_TEST_SOURCES})
 workx_add_unit_target(agent_unit_tests  workx_agent  ${AGENT_TEST_SOURCES} ${HELPER_TEST_SOURCES})
-workx_add_unit_target(tui_unit_tests    workx_tui    ${TUI_TEST_SOURCES})
 workx_add_unit_target(island_unit_tests workx_island ${ISLAND_TEST_SOURCES})
-workx_add_unit_target(app_unit_tests    workx_app    ${APP_TEST_SOURCES})
+
+# ---- 国内站点 WebFetch/WebSearch 实测探针（手动运行，不入 ctest）----
+# .cxx 扩展避免被上面 agent/*.cpp glob 收进 agent_unit_tests；
+# 依赖真实外网，仅用于人工验证"搜索 + 文章转 md"，不参与 CI。
+add_executable(web_live_probe ${CMAKE_CURRENT_SOURCE_DIR}/agent/tool/web_live_probe.cxx)
+target_include_directories(web_live_probe PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(web_live_probe PRIVATE workx_agent)
+
+# ---- TUI 无头单测 ----
+# 直接编译 src/tui 中不依赖 ScreenInteractive 的无头源（view_model/message_node/
+# markdown/builtins/event_bridge 等），避免在测试链接中拖动整个 FTXUI 交互栈。
+file(GLOB_RECURSE TUI_TEST_SOURCES
+     CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tui/*.cpp)
+if(TUI_TEST_SOURCES)
+    add_executable(tui_unit_tests
+        ${UNIT_TEST_COMMON}
+        ${TUI_TEST_SOURCES}
+        ${WORKX_ROOT}/src/tui/render/markdown_to_elements.cpp
+        ${WORKX_ROOT}/src/tui/render/syntax_highlight.cpp
+        ${WORKX_ROOT}/src/tui/vm/message_node.cpp
+        ${WORKX_ROOT}/src/tui/vm/view_model.cpp
+        ${WORKX_ROOT}/src/tui/command/builtins.cpp
+        ${WORKX_ROOT}/src/tui/bridge/action_queue.cpp
+        ${WORKX_ROOT}/src/tui/bridge/event_bridge.cpp
+        ${WORKX_ROOT}/src/tui/widgets/suggest_panel.cpp
+        ${WORKX_ROOT}/src/tui/widgets/search_palette.cpp
+        ${WORKX_ROOT}/src/tui/widgets/composer.cpp
+        ${WORKX_ROOT}/src/tui/widgets/input_history.cpp
+        ${WORKX_ROOT}/src/tui/widgets/sidebar.cpp
+        ${WORKX_ROOT}/src/tui/widgets/sidebar_tabs.cpp
+        ${WORKX_ROOT}/src/tui/widgets/file_viewer.cpp
+        ${WORKX_ROOT}/src/tui/widgets/change_viewer.cpp
+        ${WORKX_ROOT}/src/tui/wizard.cpp
+    )
+    target_include_directories(tui_unit_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${WORKX_ROOT}/src
+        ${WORKX_ROOT}/src/tui
+        ${WORKX_ROOT}/third_party/ftxui/src
+    )
+    target_compile_definitions(tui_unit_tests PRIVATE
+        SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    target_link_libraries(tui_unit_tests PRIVATE
+        workx_agent
+        workx_core
+        ftxui::dom
+        ftxui::screen
+        ftxui::component
+        Catch2::Catch2WithMain
+    )
+    if(nlohmann_json_FOUND)
+        target_link_libraries(tui_unit_tests PRIVATE nlohmann_json::nlohmann_json)
+    endif()
+    # 启用 tree-sitter：让 tui_unit_tests 走真实 AST 高亮路径（与 workx 主程序一致）
+    if(WORKX_HAS_TREE_SITTER)
+        target_link_libraries(tui_unit_tests PRIVATE
+            ${WORKX_TS_RUNTIME_LIB} ${WORKX_TS_GRAMMAR_LIBS})
+        target_compile_definitions(tui_unit_tests PRIVATE
+            WORKX_HAS_TREE_SITTER=1 ${WORKX_TS_GRAMMAR_DEFS})
+    endif()
+    catch_discover_tests(tui_unit_tests
+        ADD_TAGS_AS_LABELS ON
+        DL_PATHS "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>"
+    )
+endif()

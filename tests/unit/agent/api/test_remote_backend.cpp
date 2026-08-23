@@ -7,6 +7,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <map>
+#include <set>
+#include <mutex>
+#include <functional>
+
 #include "agent/api/remote/remote_backend.h"
 #include "agent/api/backend_factory.h"
 #include "agent/api/backend_types.h"
@@ -30,6 +35,75 @@ BackendConfig make_remote_config() {
     cfg.timeout_ms = 5000;
     return cfg;
 }
+
+/// @brief Fake IHttpClient（M-1）：捕获 on_complete / cancel_stream 供测试驱动
+/// @details 不发起真实网络请求；记录每个 reader 的 on_complete 回调，
+///          测试可手动触发 complete() 模拟请求结束，验证多 reader 并发仲裁路径。
+class FakeHttpClient : public IHttpClient {
+public:
+    ResultV2<HttpResponse> get(
+        const std::string&,
+        const std::vector<std::pair<std::string, std::string>>&,
+        int) override {
+        return ResultV2<HttpResponse>::ok(HttpResponse{});
+    }
+
+    ResultV2<HttpResponse> post(
+        const std::string&,
+        const std::vector<std::pair<std::string, std::string>>&,
+        const std::string&,
+        int) override {
+        return ResultV2<HttpResponse>::ok(HttpResponse{});
+    }
+
+    void async_post_stream(
+        const std::string&,
+        const std::vector<std::pair<std::string, std::string>>&,
+        const std::string&,
+        std::shared_ptr<SSEStreamReader> reader,
+        std::function<void()> on_complete,
+        int) const override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_on_complete[reader.get()] = std::move(on_complete);
+    }
+
+    void cancel_stream(SSEStreamReader* reader) override {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        ++m_cancel_count;
+        m_cancelled.insert(reader);
+    }
+
+    void shutdown() override {}
+
+    /// @brief 触发指定 reader 的 on_complete（模拟请求结束）
+    void complete(IStreamReader* reader) {
+        std::function<void()> cb;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            auto it = m_on_complete.find(reader);
+            if (it == m_on_complete.end()) return;
+            cb = std::move(it->second);
+            m_on_complete.erase(it);
+        }
+        if (cb) cb();
+    }
+
+    [[nodiscard]] size_t cancel_count() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_cancel_count;
+    }
+
+    [[nodiscard]] bool was_cancelled(IStreamReader* reader) const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_cancelled.count(reader) > 0;
+    }
+
+private:
+    mutable std::mutex m_mutex;
+    mutable std::map<IStreamReader*, std::function<void()>> m_on_complete;
+    mutable std::set<IStreamReader*> m_cancelled;
+    mutable size_t m_cancel_count = 0;
+};
 
 } // namespace
 
@@ -406,4 +480,117 @@ TEST_CASE("RemoteBackend interrupt on Idle keeps Idle (M-N1 CAS contract)", "[ba
     REQUIRE(backend.state() == BackendState::Idle);
     REQUIRE_FALSE(backend.is_ready());
     REQUIRE_FALSE(backend.is_generating());
+}
+
+// ============================================================================
+// M-1：多 reader 并发仲裁路径直接单测（注入 FakeHttpClient 驱动回调）
+// 覆盖 v1.2.0 最复杂、风险最高的改动：集合增删清 + 并发状态仲裁。
+// ============================================================================
+
+TEST_CASE("RemoteBackend concurrent submits both return readers and return to Ready", "[backend][remote][concurrency]") {
+    // M-1：两个并发 submit 均返回 reader（不再拒绝第二个），各自 on_complete 后状态回 Ready
+    MockEventBus bus;
+    RemoteBackend backend(&bus);
+    auto fake = std::make_unique<FakeHttpClient>();
+    auto* fake_ptr = fake.get();
+    backend.set_http_client_for_testing(std::move(fake));
+    backend.initialize(make_remote_config());
+    REQUIRE(backend.is_ready());
+
+    CompletionRequest req;
+    auto r1 = backend.submit_completion(req);
+    auto r2 = backend.submit_completion(req);
+    REQUIRE(r1 != nullptr);
+    REQUIRE(r2 != nullptr);
+    REQUIRE(backend.is_generating());
+
+    // 仅完成第一个：仍处于 Generating（第二个在飞）
+    fake_ptr->complete(r1.get());
+    REQUIRE(backend.is_generating());
+
+    // 完成第二个：集合清空，状态回 Ready
+    fake_ptr->complete(r2.get());
+    REQUIRE(backend.is_ready());
+    REQUIRE_FALSE(backend.is_generating());
+}
+
+TEST_CASE("RemoteBackend interrupt cancels all active readers", "[backend][remote][concurrency]") {
+    // M-1：interrupt 遍历取消全部在飞请求并清空集合，状态回 Ready
+    MockEventBus bus;
+    RemoteBackend backend(&bus);
+    auto fake = std::make_unique<FakeHttpClient>();
+    auto* fake_ptr = fake.get();
+    backend.set_http_client_for_testing(std::move(fake));
+    backend.initialize(make_remote_config());
+
+    CompletionRequest req;
+    auto r1 = backend.submit_completion(req);
+    auto r2 = backend.submit_completion(req);
+    REQUIRE(r1 != nullptr);
+    REQUIRE(r2 != nullptr);
+
+    backend.interrupt();
+
+    REQUIRE(fake_ptr->cancel_count() == 2);
+    REQUIRE(fake_ptr->was_cancelled(r1.get()));
+    REQUIRE(fake_ptr->was_cancelled(r2.get()));
+    REQUIRE(backend.is_ready());
+
+    // 中断后集合已清空，新提交可再次进入 Generating
+    auto r3 = backend.submit_completion(req);
+    REQUIRE(r3 != nullptr);
+    REQUIRE(backend.is_generating());
+    fake_ptr->complete(r3.get());
+    REQUIRE(backend.is_ready());
+}
+
+TEST_CASE("RemoteBackend shutdown cancels active readers and rejects new submits", "[backend][remote][concurrency]") {
+    // M-1：shutdown 持锁 CAS Generating→Shutdown 并清理全部 reader，Shutdown 后新请求被拒
+    MockEventBus bus;
+    RemoteBackend backend(&bus);
+    auto fake = std::make_unique<FakeHttpClient>();
+    auto* fake_ptr = fake.get();
+    backend.set_http_client_for_testing(std::move(fake));
+    backend.initialize(make_remote_config());
+
+    CompletionRequest req;
+    auto r1 = backend.submit_completion(req);
+    auto r2 = backend.submit_completion(req);
+    REQUIRE(r1 != nullptr);
+    REQUIRE(r2 != nullptr);
+
+    backend.shutdown();
+
+    REQUIRE(backend.state() == BackendState::Shutdown);
+    REQUIRE(fake_ptr->cancel_count() == 2);
+    REQUIRE(fake_ptr->was_cancelled(r1.get()));
+    REQUIRE(fake_ptr->was_cancelled(r2.get()));
+
+    // Shutdown 后新请求被拒（fast-path 检查 + 锁内 CAS 双保险）
+    auto r3 = backend.submit_completion(req);
+    REQUIRE(r3 == nullptr);
+    REQUIRE(backend.state() == BackendState::Shutdown);
+}
+
+TEST_CASE("RemoteBackend late on_complete after shutdown keeps Shutdown (M-N1)", "[backend][remote][concurrency]") {
+    // M-1 + M-N1：shutdown 清理后，被取消请求的 on_complete 迟到触发，
+    // CAS Generating→Ready 失败，不覆盖 Shutdown 终态
+    MockEventBus bus;
+    RemoteBackend backend(&bus);
+    auto fake = std::make_unique<FakeHttpClient>();
+    auto* fake_ptr = fake.get();
+    backend.set_http_client_for_testing(std::move(fake));
+    backend.initialize(make_remote_config());
+
+    CompletionRequest req;
+    auto r1 = backend.submit_completion(req);
+    REQUIRE(r1 != nullptr);
+
+    backend.shutdown();
+    REQUIRE(backend.state() == BackendState::Shutdown);
+
+    // 迟到 on_complete：集合已清空，CAS Generating→Ready 失败，保持 Shutdown
+    fake_ptr->complete(r1.get());
+    REQUIRE(backend.state() == BackendState::Shutdown);
+    REQUIRE_FALSE(backend.is_ready());
 }

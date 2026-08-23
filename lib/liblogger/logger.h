@@ -204,6 +204,16 @@ public:
         m_buffer_size.store(size, std::memory_order_relaxed);
     }
 
+    /**
+     * @brief 设置文件大小轮转
+     * @param max_size_bytes 单文件超过该字节数时轮转（0 = 不轮转）
+     * @param max_files 保留的历史轮转文件数（workx.log.1 .. workx.log.N）
+     */
+    void set_rotation(size_t max_size_bytes, size_t max_files) noexcept {
+        m_max_size_bytes.store(max_size_bytes, std::memory_order_relaxed);
+        m_max_files.store(max_files, std::memory_order_relaxed);
+    }
+
     // ==================== 日志记录接口 ====================
 
     /**
@@ -304,6 +314,11 @@ private:
      */
     void writer_thread_func();
 
+    /**
+     * @brief 当文件超过轮转阈值时执行轮转（调用方需持有 m_file_mutex）
+     */
+    void maybe_rotate_locked();
+
     // ==================== 成员变量 ====================
     // G-4：移除 static shared_ptr<Logger> instance 和 once_flag
     // 改为 get_instance() 内 static 局部变量（Meyers Singleton）
@@ -325,6 +340,9 @@ private:
     std::thread m_writer_thread;
     std::atomic<bool> m_writer_running{false};
     std::atomic<size_t> m_buffer_size{4096};
+    // 大小轮转：m_max_size_bytes 为滚动阈值（0 禁用），m_max_files 为保留的轮转文件数
+    std::atomic<size_t> m_max_size_bytes{0};
+    std::atomic<size_t> m_max_files{0};
 
     // 重复过滤
     static constexpr int DEFAULT_DUPLICATE_WINDOW_MS = 1000;

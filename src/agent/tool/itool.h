@@ -53,6 +53,12 @@ public:
     /// @brief 获取参数 JSON Schema
     /// @return JSON Schema 描述工具输入参数
     virtual nlohmann::json input_schema() const = 0;
+
+    /// @brief 是否为只读工具（无写/执行副作用）
+    /// @details 默认 false。只读工具（如 Read/Glob/Grep/WebFetch/TaskOutput/Skill）
+    ///          覆盖返回 true。用于子 Agent 在 Plan（只读）权限模式下只获得只读工具集，
+    ///          从工具暴露面层面杜绝写/执行能力，与 check_permissions 形成双重防线。
+    virtual bool is_read_only() const { return false; }
 };
 
 /// @brief 工具前置校验接口（M-5：ISP 拆分）

@@ -138,7 +138,9 @@ function(workx_fetch_ts_grammar name git_repo git_tag)
     # GIT_TAG 为 40 位 commit hash 时禁用 shallow clone:
     # 若该 commit 不是分支 tip 可达, git shallow clone 会长时间卡住/失败。
     # 具名 tag (如 v0.24.2) 保持 shallow, 加速 fetch。
-    if(git_tag MATCHES "^[0-9a-f]{40}$")
+    # 注意: CMake if(MATCHES) 正则不支持 {n} 计数量词, 需 LENGTH + 字符类组合校验
+    string(LENGTH "${git_tag}" _tag_len)
+    if(_tag_len EQUAL 40 AND git_tag MATCHES "^[0-9a-f]+$")
         set(_ts_shallow FALSE)
     else()
         set(_ts_shallow TRUE)
@@ -257,6 +259,33 @@ else()
 endif()
 
 # ============================================================
+# vendor/jq: 单文件 jq 拷贝到输出目录的 tools/ 子目录
+# 二进制由 scripts/fetch-jq.py 下载到 vendor/jq/<platform>/
+# 运行时由 ToolRegistry 的 resolve_jq() 从 <exe_dir>/tools/jq 查找
+# 缺失时自动回退 PATH 中的 jq，仍无则不启用，不报错
+# ============================================================
+set(WORKX_VENDOR_JQ_DIR ${CMAKE_SOURCE_DIR}/vendor/jq)
+
+if(WIN32)
+    set(WORKX_JQ_SOURCE ${WORKX_VENDOR_JQ_DIR}/windows/jq.exe)
+    set(WORKX_JQ_DEST_NAME jq.exe)
+elseif(APPLE)
+    set(WORKX_JQ_SOURCE ${WORKX_VENDOR_JQ_DIR}/macos/jq)
+    set(WORKX_JQ_DEST_NAME jq)
+else()
+    set(WORKX_JQ_SOURCE ${WORKX_VENDOR_JQ_DIR}/linux/jq)
+    set(WORKX_JQ_DEST_NAME jq)
+endif()
+
+if(EXISTS "${WORKX_JQ_SOURCE}")
+    set(WORKX_HAS_VENDOR_JQ TRUE)
+    message(STATUS "jq: vendor binary found at ${WORKX_JQ_SOURCE}")
+else()
+    set(WORKX_HAS_VENDOR_JQ FALSE)
+    message(STATUS "jq: vendor binary not found at ${WORKX_JQ_SOURCE}, fallback to PATH (or disabled)")
+endif()
+
+# ============================================================
 # 业务源码（src/ 下按 core/agent/tui/app 模块拆分，详见各 CMakeLists.txt）
 # ============================================================
 add_subdirectory(src)
@@ -276,8 +305,5 @@ endif()
 
 option(WORKX_BUILD_EXAMPLES "Build examples" ON)
 if(WORKX_BUILD_EXAMPLES)
-    add_subdirectory(example/example_markdown)
-    add_subdirectory(example/example_code_highlight)
-    add_subdirectory(example/example_provider_form)
     add_subdirectory(example/example_dynamic_island)
 endif()

@@ -11,6 +11,9 @@
 
 #include "agent/tool/GrepTool/grep_tool.h"
 
+#include "agent/tool/path_expand.h"        // expand_path
+#include "agent/tool/path_validator.h"     // validate_path_access
+#include "agent/tool/permission_ask.h"      // is_bypass_mode, ask_user_confirm
 #include "core/process/tool_registry.h"     // ToolRegistry::resolve_ripgrep()
 #include "core/process/subprocess.h"        // process::exec()
 #include "core/utils/error.h"
@@ -18,6 +21,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <format>
+#include <sstream>
 
 namespace agent::tool {
 
@@ -146,6 +150,48 @@ std::string truncate_matches(std::string_view output, int max_matches) {
 }
 
 } // namespace
+
+// ============================================================
+// 权限检查（#60：路径边界校验，与 Read 工具一致）
+// ============================================================
+
+PermissionResult GrepTool::check_permissions(
+    const nlohmann::json& input,
+    const ToolContext& ctx
+) const {
+    if (is_bypass_mode(ctx.permission_mode)) {
+        return PermissionResult::ok();
+    }
+    // path 未指定时默认 cwd，已在边界内，无需校验
+    const std::string raw = input.value("path", "");
+    if (raw.empty()) return PermissionResult::ok();
+
+    std::istringstream ss(raw);
+    std::string part;
+    while (std::getline(ss, part, '|')) {
+        try {
+            const std::string expanded = expand_path(part, ctx.cwd);
+            auto res = validate_path_access(expanded, ctx.cwd,
+                                            repo_root_allowlist(ctx.git_repo_root));
+            if (res.is_err()) {
+                if (!is_absolutely_forbidden_path(expanded) &&
+                    ask_user_confirm(ctx, std::format(
+                        "Search access requires your approval:\n\n```\n{}\n```\n\n"
+                        "Allow searching this path?", part))) {
+                    continue;
+                }
+                return PermissionResult::err(
+                    Error::Code::PermissionDenied,
+                    res.error().message);
+            }
+        } catch (const std::exception& e) {
+            return PermissionResult::err(
+                Error::Code::PermissionDenied,
+                std::string("Grep path error: ") + e.what());
+        }
+    }
+    return PermissionResult::ok();
+}
 
 // ============================================================
 // 执行
