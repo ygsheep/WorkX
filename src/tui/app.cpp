@@ -245,8 +245,15 @@ App::App(AppDeps deps)
     }
     register_ftx_builtins(*m_deps.command_registry, FtuiCommandCallbacks{
         .on_exit = [this] {
+            log_run("ctrl-c exit: on_exit begin");
             m_vm.apply(ActionShutdown{});
-            if (m_vm.pending_exit) m_screen.Exit();
+            log_run("ctrl-c exit: ActionShutdown applied, pending_exit=" +
+                    std::to_string(m_vm.pending_exit));
+            if (m_vm.pending_exit) {
+                log_run("ctrl-c exit: calling m_screen.Exit()");
+                m_screen.Exit();
+                log_run("ctrl-c exit: m_screen.Exit() returned");
+            }
         },
         .on_model_select = [this] { open_model_selector(); },
         .on_provider_select = [this] { open_provider_palette(); },
@@ -555,9 +562,9 @@ void App::drain() {
 
 void App::log_run(std::string_view msg) {
     std::lock_guard<std::mutex> lock(m_log_mutex);
-    // B4：日志路径平台无关，统一写 ~/.workx/logs/codex_run.log（复用 agent 配置约定）
+    // B4：日志路径平台无关，统一写 ~/.workx/logs/workx_tui.log（复用 agent 配置约定）
     namespace fs = std::filesystem;
-    fs::path log_path = agent::default_log_path().parent_path() / "codex_run.log";
+    fs::path log_path = agent::default_log_path().parent_path() / "workx_tui.log";
     std::error_code ec;
     if (auto parent = log_path.parent_path(); !parent.empty()) {
         fs::create_directories(parent, ec);
@@ -2331,7 +2338,7 @@ Element App::build_ask_modal() const {
 // ---------------------------------------------------------------------------
 
 void App::run() {
-    // 启动即写运行日志：确保每次运行都创建 ~/.workx/logs/codex_run.log，
+    // 启动即写运行日志：确保每次运行都创建 ~/.workx/logs/workx_tui.log，
     // 而非仅在异常/mock 时才落盘（否则正常运行看不到该文件）
     log_run("app start");
 #if defined(_WIN32)
@@ -2899,10 +2906,12 @@ void App::run() {
                         now - m_last_ctrl_c).count() <= 1000) {
                     m_last_ctrl_c = {};  // 双击：退出
                     m_ctrl_c_hint = false;
+                    log_run("ctrl-c exit: double-press detected, calling on_exit");
                     if (m_deps.event_bus)
                         m_deps.event_bus->publish(agent::InterruptEvent{.force = true});
                     if (m_deps.on_exit) m_deps.on_exit();
                     else m_screen.Exit();
+                    log_run("ctrl-c exit: on_exit returned");
                     return true;
                 }
                 m_last_ctrl_c = now;

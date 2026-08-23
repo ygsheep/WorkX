@@ -118,7 +118,7 @@ int main(int argc, char** argv) {
         // 审计日志（大小轮转 + 天数清理）：启用后记录工具调用与安全事件
         if (cfg.get_or<bool>(agent::keys::AUDIT_ENABLED, true)) {
             std::string audit_file = cfg.get_or<std::string>(agent::keys::AUDIT_FILE, "");
-            if (audit_file.empty()) audit_file = (agent::log_dir() / "audit.jsonl").string();
+            if (audit_file.empty()) audit_file = (agent::log_dir() / "workx_audit.jsonl").string();
             agent::audit::AuditLogger::instance().init(
                 audit_file,
                 static_cast<size_t>(cfg.get_or<int>(agent::keys::AUDIT_MAX_SIZE_MB, 10)),

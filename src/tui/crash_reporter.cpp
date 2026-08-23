@@ -27,7 +27,7 @@ namespace {
 
 std::FILE* g_out = nullptr;
 
-/// @brief 打开崩溃日志（~/.workx/logs/crash.log），避免依赖 agent 日志组件。
+/// @brief 打开崩溃日志（~/.workx/logs/workx_crash.log），避免依赖 agent 日志组件。
 std::FILE* OpenLog() {
 #if defined(_WIN32)
     const char* home = std::getenv("USERPROFILE");
@@ -40,7 +40,7 @@ std::FILE* OpenLog() {
 #if defined(_WIN32)
     CreateDirectoryA(dir.c_str(), nullptr);  // 已存在则失败无害
 #endif
-    std::string path = dir + "/crash.log";
+    std::string path = dir + "/workx_crash.log";
     return std::fopen(path.c_str(), "a");
 }
 

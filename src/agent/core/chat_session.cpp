@@ -19,6 +19,7 @@
 #include "agent/skill/inclaude/conditional.h"
 #include "agent/skill/inclaude/hooks.h"
 #include "agent/config/app_config.h"
+#include "agent/audit/audit_logger.h"  // 会话生命周期审计
 #include "core/task/task_manager.h"
 #include "core/config/config_manager.h"
 #include "core/utils/uuid.h"  // 项目会话恢复：UUID 生成
@@ -322,6 +323,9 @@ void ChatSession::clear_history() {
     m_activated_skills.clear();
     // #24：清空待办清单（写空快照到 JSONL 防止 /resume 恢复旧清单，保留持久化回调）
     tool::TodoStore::instance().reset_session(m_session_id);
+    // 审计：会话结束（清空历史）
+    audit::AuditLogger::instance().log_session_lifecycle(
+        audit::EventType::SessionEnd, m_session_id);
 }
 
 void ChatSession::set_compactor_context_window(int32_t context_window_tokens) {
@@ -353,6 +357,9 @@ void ChatSession::configure_session_store(const std::string& project_dir,
     m_store_cwd = cwd;
     m_store_model = model;
     m_store_git_branch = git_branch;
+    // 审计：会话开始（启动装配时必然调用，保证审计日志文件必然生成）
+    audit::AuditLogger::instance().log_session_lifecycle(
+        audit::EventType::SessionStart, m_session_id);
 }
 
 bool ChatSession::restore_from_file(const std::string& file_path) {
@@ -430,6 +437,9 @@ bool ChatSession::switch_session(const std::string& file_path) {    // 加载历
     auto todos = agent::session::SessionStore::load_todos(file_path);
     tool::TodoStore::instance().restore_todos(new_session_id, std::move(todos));
     wire_todo_persistence();
+    // 审计：切换到恢复的会话
+    audit::AuditLogger::instance().log_session_lifecycle(
+        audit::EventType::SessionStart, new_session_id);
 
     return true;
 }
@@ -462,6 +472,9 @@ void ChatSession::new_session() {
     // 持锁调用会对非递归 mutex 二次锁定 → EDEADLK，与 switch_session 同理）。
     tool::TodoStore::instance().restore_todos(new_session_id, {});
     wire_todo_persistence();
+    // 审计：新会话开始
+    audit::AuditLogger::instance().log_session_lifecycle(
+        audit::EventType::SessionStart, new_session_id);
 }
 
 void ChatSession::wire_todo_persistence() {

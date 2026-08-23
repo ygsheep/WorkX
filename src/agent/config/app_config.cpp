@@ -405,10 +405,16 @@ void cleanup_expired_logs(int retention_days) {
         if (ec) break;
         if (!entry.is_regular_file()) continue;
 
-        // 仅清理运行日志 workx_*.log，不影响 audit.jsonl / crash.log / codex_run.log
+        // 仅清理主运行日志的轮转文件（workx.log.N）与旧版时间戳日志
+        // （workx_YYYYMMDD_HHMMSS.log），不影响活动文件 workx.log、
+        // workx_tui.log / workx_crash.log / workx_audit.jsonl
         const std::string name = entry.path().filename().string();
-        if (name.rfind("workx_", 0) != 0 || name.size() < 5 ||
-            name.compare(name.size() - 4, 4, ".log") != 0) {
+        const bool is_rotated = name.rfind("workx.log.", 0) == 0;
+        const bool is_legacy_ts =
+            name.rfind("workx_", 0) == 0 && name.size() >= 5 &&
+            name.compare(name.size() - 4, 4, ".log") == 0 &&
+            name != "workx_tui.log" && name != "workx_crash.log";
+        if (!is_rotated && !is_legacy_ts) {
             continue;
         }
 

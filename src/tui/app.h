@@ -252,7 +252,7 @@ private:
     std::vector<int> m_msg_height;
     std::vector<std::uint64_t> m_msg_height_ver;
 
-    /// @brief 追加一行运行时日志（codex_run.log，多线程安全）
+    /// @brief 追加一行运行时日志（workx_tui.log，多线程安全）
     void log_run(std::string_view msg);
     std::mutex m_log_mutex;
 
