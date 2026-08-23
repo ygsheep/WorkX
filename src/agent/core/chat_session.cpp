@@ -8,6 +8,9 @@
 
 #include "agent/core/chat_session.h"
 #include "agent/core/react_loop.h"
+#include "agent/core/agent_type.h"          // 0.6.x：#31 AgentType 路由
+#include "agent/core/goal_guarded_agent.h"  // 0.6.x：#31 GoalGuardedAgent + parse_goal
+#include "agent/core/query_engine.h"        // 0.6.x：QueryEngine 唯一编排入口
 #include "agent/message/types.h"
 #include "agent/tool/tool_kind.h"
 #include "agent/tool/TodoStore/todo_store.h"  // #24：待办清单持久化接线
@@ -872,40 +875,49 @@ void ChatSession::run_completion(const std::string& user_text,
                 tools_schema = m_tool_registry->get_all_schemas();
             }
 
-            // ---- 创建 ReActLoop ----
-            // D-5：注入 IConfigManager，工具通过 ToolContext.config_manager() 访问
-            // BashTool DI：注入 TaskManager，工具通过 ToolContext.task_manager() 启动后台任务
-            // cwd：注入会话启动时捕获的工作目录，避免运行中 cwd 漂移导致工具在错误目录执行
-            // DS_CACHE H-3：注入 m_compactor 引用，使卡死守卫/rewrite_version 跨 turn 持久化
-            // AskUserTool DI：注入 EventBus，工具通过 ToolContext.event_bus() 发布事件
-            // 宿主文件索引失效回调：FileWriteTool 写文件后通知宿主（TUI @ 补全）重建索引
-            ReActLoop loop(m_provider.get(), m_tool_registry, ReActLoop::Config{},
-                           &m_config_manager.get(), &m_task_manager.get(), m_cwd,
-                           &m_compactor, &m_event_bus.get(), &m_touch_collector,
-                           m_file_index_invalidator, m_session_id);
+            // ---- 0.6.x：QueryEngine 统一编排入口（验收标准：唯一 loop 入口）----
+            // 按 agent.active 解析 AgentType 构造 ReAct/GoalGuarded，注入同一套依赖 +
+            // 会话级权限状态 + 查询追踪调用链。普通对话（agent.active 空）走 ReAct，
+            // 行为与以往手动 ReActLoop 完全一致（回归零差异）。
+            const auto active_agent_conf =
+                m_config_manager.get().get_or<std::string>(agent::keys::AGENT_ACTIVE, "");
+            const std::string goal_spec =
+                m_config_manager.get().get_or<std::string>(agent::keys::AGENT_GOAL, "");
 
-            // #45：注入会话级权限状态（ReActLoop 每轮重建，跨 turn 恢复
-            //      Default/Plan/Bypass 三态与 Plan 退出恢复逻辑）
+            // 依赖与旧 ReActLoop 手动构造同源（provider/registry/config_manager/
+            // task_manager/cwd/compactor/event_bus/touch 注入路径一一对应）。
+            GoalAgentDeps gdeps{
+                .provider = m_provider.get(),
+                .registry = m_tool_registry,
+                .config_manager = &m_config_manager.get(),
+                .task_manager = &m_task_manager.get(),
+                .cwd = m_cwd,
+                .external_compactor = &m_compactor,
+                .event_bus = &m_event_bus.get(),
+                .touch_collector = &m_touch_collector,
+                .file_index_invalidator = m_file_index_invalidator,
+                .session_id = m_session_id,
+            };
+            QueryEngine query_engine(std::move(gdeps));
+
+            // #45#28：注入会话级权限状态（Default/Plan/Bypass 三态 + Plan 退出恢复），
+            // 由 QueryEngine 落到 ReAct 循环与 GoalGuarded 内部循环（后者此前缺失）。
+            // 回调写回 ChatSession（受 m_state_mutex 保护）统一状态源，对齐
+            // EnterPlanMode/ExitPlanModeV2/on_permission_mode_changed（H-1 PR #46 评审）。
             {
                 std::lock_guard<std::mutex> lock(m_state_mutex);
-                loop.apply_permission_state(
-                    m_permission_mode, m_permission_mode_before_plan,
-                    m_permission_mode == tool::PermissionMode::Plan);
-            }
-
-            // H-1（PR #46 评审）：工具路径权限变更回写 ChatSession（受 m_state_mutex
-            // 保护），统一状态源 —— EnterPlanMode/ExitPlanModeV2/on_permission_mode_changed
-            // 修改 ReActLoop 投影后同步写回会话，确保下一轮 apply_permission_state 注入
-            // 最新三态（修复场景 A：Shift+Tab Plan + ExitPlanModeV2 批准后下一轮打回 Plan
-            // 的"粘死"；场景 B：EnterPlanMode 工具进入 Plan 后下一轮丢失的缺陷）
-            loop.set_permission_state_changed_callback(
-                [this](tool::PermissionMode mode,
-                       tool::PermissionMode before_plan,
-                       bool /*in_plan*/) {
-                    std::lock_guard<std::mutex> lock(m_state_mutex);
-                    m_permission_mode = mode;
-                    m_permission_mode_before_plan = before_plan;
+                query_engine.set_permission(PermissionSnapshot{
+                    .mode = m_permission_mode,
+                    .before_plan = m_permission_mode_before_plan,
+                    .on_changed = [this](tool::PermissionMode mode,
+                                         tool::PermissionMode before_plan,
+                                         bool /*in_plan*/) {
+                        std::lock_guard<std::mutex> lk(m_state_mutex);
+                        m_permission_mode = mode;
+                        m_permission_mode_before_plan = before_plan;
+                    },
                 });
+            }
 
             // 3.2：使用 IReActObserver 接口替代 lambda 回调
             // ReActEventPublisher 内部完成 ReActStep → IEventBus 事件转换
@@ -929,11 +941,21 @@ void ChatSession::run_completion(const std::string& user_text,
                 m_last_prefix_shape = cur_shape_baseline;
             }
 
-            // ---- 执行 ReAct 循环 ----
-            ReActResult react_result = loop.run(
-                m_messages, m_system_prompt, tools_schema,
-                should_cancel, &publisher
-            );
+            // ---- 执行 Agent 循环（QueryEngine 按 agent.active 路由，唯一入口）----
+            // 目标守卫 goal 来自 agent.goal；goal_spec 原文透传用于 AgentDoneEvent/
+            // AgentVerdictEvent 展示。observer 用 ReActEventPublisher 发布步骤事件。
+            AgentRunContext run_ctx{
+                .messages = &m_messages,
+                .system_prompt = m_system_prompt,
+                .tools_schema = tools_schema,
+                .should_cancel = &should_cancel,
+                .goal = parse_goal(goal_spec),
+                .goal_spec = goal_spec,
+                .observer = &publisher,
+            };
+            AgentRunResult run_result =
+                query_engine.run(m_config_manager.get(), std::move(run_ctx));
+            ReActResult react_result = std::move(run_result.react);
 
             // 思考时长回填：reasoning_ms（本 turn 所有 Thought 阶段实际耗时）仅在流式结束后可知，
             // 持久化前回填到本轮最后一条 assistant 消息（写入 JSONL 的 reasoningMs 字段）
@@ -1090,7 +1112,11 @@ void ChatSession::run_completion(const std::string& user_text,
                 .final_response = react_result.final_answer,
                 .total_steps = static_cast<int32_t>(react_result.steps.size()),
                 .total_tool_calls = react_result.total_tool_calls,
-                .total_duration_ms = react_result.total_duration_ms
+                .total_duration_ms = react_result.total_duration_ms,
+                // 0.6.x：透传实际 Agent 类型与目标守卫终态（QueryTracker 调用链溯源）
+                .agent_type = static_cast<int32_t>(run_result.agent_type),
+                .goal_status = static_cast<int32_t>(react_result.goal_status),
+                .goal_spec = goal_spec,
             });
 
             m_generating.store(false);

@@ -150,8 +150,18 @@ void register_config_defaults(ConfigManager& cfg) {
     // === Agent ===
     cfg.register_schema({
         .key = keys::AGENT_ACTIVE,
-        .description = "Current agent name (empty = no agent context); "
-                       "skills declaring an agent field only inject/activate when it matches",
+        .description = "Current agent type (empty=ReAct; goal-guarded/verify=GoalGuardedAgent; "
+                       "planner/executor/coordinator/researcher/reviewer/batch/watch=extensible "
+                       "placeholders falling back to ReAct); non-empty also filters active skills",
+        .default_value = std::string(""),
+        .type = ConfigSchema::Type::String
+    });
+
+    // 0.6.x：#31 目标导向 Agent 的目标声明（agent.active=goal-guarded/verify 时生效）
+    cfg.register_schema({
+        .key = keys::AGENT_GOAL,
+        .description = "Goal for goal-guarded agent: tests_pass / build_clean / "
+                       "lint_zero / file_exists:<path> / cmd:<command> (empty = no goal)",
         .default_value = std::string(""),
         .type = ConfigSchema::Type::String
     });

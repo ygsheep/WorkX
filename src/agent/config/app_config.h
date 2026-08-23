@@ -47,6 +47,9 @@ namespace keys {
     /// 当前 agent 名（空 = 无 agent 上下文）。声明了 frontmatter agent 字段的
     /// skill 仅在该 agent 匹配时注入 system prompt / 触发 conditional 激活
     constexpr const char* AGENT_ACTIVE   = "agent.active";
+    /// 目标导向 Agent（agent.active=goal-guarded/verify）的目标声明。
+    /// 取值：tests_pass / build_clean / lint_zero / file_exists:<path> / cmd:<command>
+    constexpr const char* AGENT_GOAL     = "agent.goal";
 
     // Logging
     constexpr const char* LOG_LEVEL        = "logging.level";
