@@ -71,29 +71,5 @@
           };
         });
 
-      packages = forAllSystems (system:
-        let
-          pkgs = import nixpkgs { inherit system; };
-        in
-        {
-          default = pkgs.stdenv.mkDerivation {
-            pname = "workx";
-            version = "0.6.0";
-            src = pkgs.lib.cleanSource self;
-            nativeBuildInputs = [ pkgs.cmake pkgs.ninja pkgs.pkg-config ];
-            buildInputs = [ pkgs.nlohmann_json pkgs.curl ];
-            cmakeFlags = [
-              "-DWORKX_WITH_TREE_SITTER=ON"
-              "-DWORKX_FETCH_GRAMMARS=ON"
-              "-DWORKX_BUILD_TESTS=OFF"
-              "-DWORKX_BUILD_EXAMPLES=OFF"
-            ];
-            installPhase = ''
-              runHook preInstall
-              install -Dm755 build/bin/workx $out/bin/workx
-              runHook postInstall
-            '';
-          };
-        });
     };
 }
