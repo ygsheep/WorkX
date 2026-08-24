@@ -132,6 +132,7 @@ target_include_directories(workx PRIVATE
 target_link_libraries(workx PRIVATE
     workx_agent
     workx_core
+    workx_island
     ftxui::screen
     ftxui::dom
     ftxui::component
