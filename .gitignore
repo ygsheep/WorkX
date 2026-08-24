@@ -89,3 +89,6 @@ imgui.ini
 /plan/
 /CLAUDE.md
 /AGENT.md
+
+# nix build output symlink
+/result

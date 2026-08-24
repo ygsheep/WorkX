@@ -518,8 +518,8 @@ std::string normalize_lang(std::string_view lang) {
 }
 
 struct Span {
-    uint32_t start;
-    uint32_t end;
+    uint32_t start = 0;
+    uint32_t end = 0;
     Color color;
 };
 

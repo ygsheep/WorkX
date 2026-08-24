@@ -14,6 +14,7 @@
 
 #include "agent/mcp/mcp_config.h"
 
+#include <algorithm>
 #include <fstream>
 #include <nlohmann/json.hpp>
 
@@ -163,15 +164,11 @@ ResultV2<std::vector<McpServerConfig>> load_mcp_configs(
                      "已忽略（仅用户级配置可启用）", cfg.name);
             cfg.allow_private = false;
         }
-        bool replaced = false;
-        for (auto& existing : merged) {
-            if (existing.name == cfg.name) {
-                existing = std::move(cfg);
-                replaced = true;
-                break;
-            }
-        }
-        if (!replaced) {
+        auto it = std::find_if(merged.begin(), merged.end(),
+                               [&](const auto& e) { return e.name == cfg.name; });
+        if (it != merged.end()) {
+            *it = std::move(cfg);
+        } else {
             merged.push_back(std::move(cfg));
         }
     }

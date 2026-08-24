@@ -1054,13 +1054,13 @@ Element build_inline_line(std::string_view line) {
 enum class ShellSectionKind { Error, Stdout, Stderr, Plain };
 
 struct ShellSection {
-    ShellSectionKind kind;
+    ShellSectionKind kind = ShellSectionKind::Plain;
     std::string text;
 };
 
 /// @brief 解析 shell 工具结果中的 <error>/<stdout>/<stderr> 标签段
 std::vector<ShellSection> parse_shell_sections(std::string_view s) {
-    struct Tag { std::string_view open, close; ShellSectionKind kind; };
+    struct Tag { std::string_view open, close; ShellSectionKind kind = ShellSectionKind::Plain; };
     static constexpr Tag kTags[] = {
         {"<error>",  "</error>",  ShellSectionKind::Error},
         {"<stdout>", "</stdout>", ShellSectionKind::Stdout},
