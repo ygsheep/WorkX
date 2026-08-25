@@ -61,6 +61,28 @@ jobs:
       - name: Package release archive
         run: python scripts/package_release.py --platform ${{ matrix.platform }} --arch amd64 --build-dir "${{ github.workspace }}/${{ matrix.build_dir }}"
 
+      - name: Download WiX v3.14 (Windows MSI toolchain)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $wix = Join-Path "${{ github.workspace }}" "wix314"
+          New-Item -ItemType Directory -Path $wix -Force | Out-Null
+          Invoke-WebRequest -Uri "https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip" -OutFile "$wix\wix.zip"
+          Expand-Archive -Path "$wix\wix.zip" -DestinationPath "$wix\bin" -Force
+          Remove-Item "$wix\wix.zip"
+          "WIX_BIN=$wix\bin" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build MSI installer
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $msi = Join-Path "${{ github.workspace }}" "dist"
+          & ".\packaging\build-msi.ps1" `
+            -BuildDir "${{ github.workspace }}\${{ matrix.build_dir }}" `
+            -OutDir $msi `
+            -WixBin $env:WIX_BIN
+          Get-ChildItem $msi -Filter *.msi | ForEach-Object { "MSI artifact: $($_.Name) ($([math]::Round($_.Length/1MB,1)) MB)" }
+
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:

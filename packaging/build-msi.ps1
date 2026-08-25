@@ -133,12 +133,17 @@ if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Path $OutDir -Forc
 $msiPath = Join-Path $OutDir "workx-$version-x64.msi"
 
 # 中文 UI 本地化文件（WiX 自带，位于 SDK\wixui）
-# 用绝对候选路径，避免依赖 $WixBin 推导（提高稳健性）
+# 优先从当前 WixBin 推断（CI 解压目录适用），再回退到标准安装路径
 $wixLang = ""
-foreach ($cand in @(
+$langCands = @()
+if ($WixBin) {
+    $langCands += (Join-Path $WixBin "SDK\wixui\WixUI_zh-CN.wxl")
+}
+$langCands += @(
     "C:\Program Files (x86)\WiX Toolset v3.14\SDK\wixui\WixUI_zh-CN.wxl",
     "C:\Program Files (x86)\WiX Toolset v3.13\SDK\wixui\WixUI_zh-CN.wxl"
-)) {
+)
+foreach ($cand in $langCands) {
     if (Test-Path $cand) { $wixLang = $cand; break }
 }
 if (-not $wixLang) {
