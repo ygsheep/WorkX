@@ -1,0 +1,61 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+    <Fragment>
+        <DirectoryRef Id="INSTALLDIR">
+            <Component Win64="yes" Id="cmp1C9ECA4451D4A9C8BF1FC99810E7F96A" Guid="{317FB4B6-9AB2-4BEC-86E8-863269200993}">
+                <File Id="fil4E5306742BF4669E0868692A64B62AEF" KeyPath="yes" Source="SourceDir\libcurl.dll" />
+            </Component>
+            <Component Win64="yes" Id="cmp39878D1E6847FC98DBBF4DBC681E5084" Guid="{DC77D7D9-2046-44E9-92D1-85DFB3F1A0B5}">
+                <File Id="fil3BD6AB8669794DC115F4C73104390A09" KeyPath="yes" Source="SourceDir\msvcp140.dll" />
+            </Component>
+            <Component Win64="yes" Id="cmp1E4654EBE5850C8A346D75638418CB88" Guid="{6E03EAEA-5251-421C-BD52-423102169AB9}">
+                <File Id="fil978124836EED0675980785DCB116A587" KeyPath="yes" Source="SourceDir\msvcp140_1.dll" />
+            </Component>
+            <Component Win64="yes" Id="cmp069E67B657349D8F3B71252969870CB6" Guid="{537F85D5-E18D-4D37-A2F9-FD5869929CD1}">
+                <File Id="filAEC531D1724B9D3057BFFA52C5381C5D" KeyPath="yes" Source="SourceDir\msvcp140_2.dll" />
+            </Component>
+            <Component Win64="yes" Id="cmpB6AFFBAD86354A09BA809BD787EEB3B4" Guid="{1E3D6CC5-8A62-437D-8436-39A3AAB9F7A2}">
+                <File Id="fil19D2054EC7CBD058EC6E8167DBD61224" KeyPath="yes" Source="SourceDir\msvcp140_atomic_wait.dll" />
+            </Component>
+            <Component Win64="yes" Id="cmp143638EF4C8C6DDAFF6055AA8F04DDD3" Guid="{3BACD6C5-3E9E-49D0-8675-FEACC58ADECC}">
+                <File Id="filF72F27F8B22A20D8581FBF95472E882A" KeyPath="yes" Source="SourceDir\msvcp140_codecvt_ids.dll" />
+            </Component>
+            <Component Win64="yes" Id="cmp9E6863D5DA03BD69631F202C92D19A60" Guid="{E76BCFDA-B8E3-46D7-8C1D-6FF4BA034001}">
+                <File Id="fil6DCA05CC056CECDC2C762F38EC1A9C8E" KeyPath="yes" Source="SourceDir\vcruntime140.dll" />
+            </Component>
+            <Component Win64="yes" Id="cmpF873FD9EB9EA99CCB601A9C5014213BC" Guid="{A1D101FC-CC62-46F2-98FC-AD270D6E952E}">
+                <File Id="fil44C52CDCAB14FAC17FE735364D4038D9" KeyPath="yes" Source="SourceDir\vcruntime140_1.dll" />
+            </Component>
+            <Component Win64="yes" Id="cmp09A5279316DE5194B4F645BFF1D8F081" Guid="{745B49C1-6654-48C9-BFF3-A5083AE04BD3}">
+                <File Id="filFFE3490745C212FF4984FA4128814B6B" KeyPath="yes" Source="SourceDir\workx.exe" />
+            </Component>
+            <Component Win64="yes" Id="cmp661E6064DE65466FDE141F570B0DBD17" Guid="{4302B21E-A57A-4C3B-80A3-F9DCF8F4114C}">
+                <File Id="fil0C75399DE21CD32B40516DB30E884552" KeyPath="yes" Source="SourceDir\z.dll" />
+            </Component>
+            <Directory Id="dir35687EA00C4A04CC71F7370DC8A71FB0" Name="tools">
+                <Component Win64="yes" Id="cmpDDBA4B61382381EE94EA9758CEE85236" Guid="{709DB1D5-FB93-43BF-B36E-C9A69FE1FA8A}">
+                    <File Id="fil5A06EFDF6246D76D1C87A382005B2CF2" KeyPath="yes" Source="SourceDir\tools\jq.exe" />
+                </Component>
+                <Component Win64="yes" Id="cmp6E4765E8040359A24936A8C2465F6165" Guid="{A7B26D73-EDBE-4F76-A010-4B22A03446EF}">
+                    <File Id="fil8F4544491ED8C486569E74055F17C3AB" KeyPath="yes" Source="SourceDir\tools\rg.exe" />
+                </Component>
+            </Directory>
+        </DirectoryRef>
+    </Fragment>
+    <Fragment>
+        <ComponentGroup Id="WorkxComponents">
+            <ComponentRef Id="cmp1C9ECA4451D4A9C8BF1FC99810E7F96A" />
+            <ComponentRef Id="cmp39878D1E6847FC98DBBF4DBC681E5084" />
+            <ComponentRef Id="cmp1E4654EBE5850C8A346D75638418CB88" />
+            <ComponentRef Id="cmp069E67B657349D8F3B71252969870CB6" />
+            <ComponentRef Id="cmpB6AFFBAD86354A09BA809BD787EEB3B4" />
+            <ComponentRef Id="cmp143638EF4C8C6DDAFF6055AA8F04DDD3" />
+            <ComponentRef Id="cmp9E6863D5DA03BD69631F202C92D19A60" />
+            <ComponentRef Id="cmpF873FD9EB9EA99CCB601A9C5014213BC" />
+            <ComponentRef Id="cmp09A5279316DE5194B4F645BFF1D8F081" />
+            <ComponentRef Id="cmp661E6064DE65466FDE141F570B0DBD17" />
+            <ComponentRef Id="cmpDDBA4B61382381EE94EA9758CEE85236" />
+            <ComponentRef Id="cmp6E4765E8040359A24936A8C2465F6165" />
+        </ComponentGroup>
+    </Fragment>
+</Wix>
