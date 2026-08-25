@@ -214,6 +214,12 @@ private:
     void jump_change_to_file();
     /// @brief 刷新后台任务列表（渲染时只读查询 TaskManager，仅进行中/排队中）
     void refresh_background_tasks();
+    /// @brief 后台扫描项目文件树 + git 状态并推送到 UI（项目 tab；线程内 m_queue.push）
+    void start_project_scan();
+    /// @brief 点击项目文件行打开查看器（相对项目根路径 → /view）
+    void open_project_file(const std::string& rel_path);
+    /// @brief 项目树方向键/滚轮滚动（钳制并请求重绘）
+    void scroll_project(int delta);
 
     AppDeps m_deps;
     ViewModel m_vm;
@@ -300,6 +306,10 @@ private:
     std::deque<TabHit> m_tab_hits;
     /// @brief 侧栏可折叠区块命中区（MCP/TODO 标题行；每帧由 append_sidebar_info 重建）
     std::deque<SectionHit> m_section_hits;
+    /// @brief 项目文件树组件（项目 tab 可交互：点击目录/文件、滚轮滚动）
+    ftxui::Component m_project_tree;
+    ftxui::Box m_project_box;          ///< 项目树组件渲染 box（点击命中用；折叠时置空）
+    std::thread m_project_scan_thread; ///< 后台 git 扫描线程（生命周期内 join）
 
     // ---- 输出区域层级导航（标题栏下子列表）----
     /// @brief 层级子列表命中区（面包屑项：主会话/子 Agent；每帧由 build_breadcrumb 重建）
@@ -329,6 +339,7 @@ private:
 
     // ---- 文件查看组件（文件 tab 可聚焦：↑↓/PgUp/PgDn/滚轮滚动）----
     ftxui::Component m_file_viewer;          ///< 文件查看器（聚焦时接收滚动键）
+    ftxui::Box m_file_box;                   ///< 文件查看器渲染 box（滚轮命中用；折叠时置空）
 
     // ---- AskUser 模态（B3：多问题 + 选项 + 自定义输入 + cancel_flag）----
     struct AskQuestion {

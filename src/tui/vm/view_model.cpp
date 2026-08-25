@@ -178,6 +178,9 @@ bool ViewModel::apply_variant(const ActionPermissions& a) {
 bool ViewModel::apply_variant(const ActionAskUser&) { return true; }
 bool ViewModel::apply_variant(const ActionAskUserTimeout&) { return true; }
 
+// ActionOpenPlan 由 App::drain 直接消费（打开侧边栏预览），ViewModel 不处理
+bool ViewModel::apply_variant(const ActionOpenPlan&) { return true; }
+
 bool ViewModel::apply_variant(const ActionCacheDiagnostics& a) {
     // 仅 prefix_changed 时提示（对齐 src/tui ChatRenderer 语义）
     if (!a.prefix_changed) return false;
@@ -362,6 +365,46 @@ bool ViewModel::apply_variant(const ActionMcpStatus& a) {
     }
     if (sidebar.mcp_servers == entries) return false;  // 无变化，避免无谓重绘
     sidebar.mcp_servers = std::move(entries);
+    return true;
+}
+
+namespace {
+
+/// @brief 复制时合并新树到旧树：目录递归继承旧展开状态（按 rel_path 匹配）
+void merge_project_expand(const std::vector<ProjectNode>& src,
+                          std::vector<ProjectNode>& dst) {
+    for (auto& d : dst) {
+        if (!d.is_dir) continue;
+        // 在旧树中找同路径目录，继承其 expanded
+        for (const auto& s : src) {
+            if (s.is_dir && s.rel_path == d.rel_path) {
+                d.expanded = s.expanded;
+                break;
+            }
+        }
+        if (!d.children.empty()) {
+            for (const auto& s : src)
+                if (s.is_dir && s.rel_path == d.rel_path && !s.children.empty()) {
+                    merge_project_expand(s.children, d.children);
+                    break;
+                }
+        }
+    }
+}
+
+}  // namespace
+
+bool ViewModel::apply_variant(const ActionProjectFiles& a) {
+    if (!a.loading) {
+        // 复制后合并保留既有目录展开状态，避免 git 刷新后目录全部重开
+        std::vector<ProjectNode> merged = a.tree;
+        merge_project_expand(tabs.project.tree, merged);
+        tabs.project.tree = std::move(merged);
+    }
+    if (!a.root.empty()) tabs.project.root = a.root;
+    tabs.project.is_git = a.is_git;
+    tabs.project.loading = a.loading;
+    tabs.project.ready = a.loading ? tabs.project.ready : true;
     return true;
 }
 

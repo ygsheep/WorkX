@@ -91,7 +91,8 @@ Element context_bar(int used, int limit) {
         if (i < filled) {
             bar = ftxui::hbox({bar, ftxui::text("█") | ftxui::color(bar_color)});
         } else {
-            bar = ftxui::hbox({bar, ftxui::text("░") | ftxui::color(theme::T::TextFaint)});
+            // 未使用部分：灰色背景实心块（非颗粒，需无颗粒前景字符）
+            bar = ftxui::hbox({bar, ftxui::text(" ") | ftxui::bgcolor(theme::T::TextFaint)});
         }
     }
     return bar;

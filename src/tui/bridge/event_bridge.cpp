@@ -95,6 +95,12 @@ void EventBridge::start() {
     subscribe_typed<agent::ExitPlanModeEvent>(
         [this](const agent::ExitPlanModeEvent&) { push(ActionPermissions{.label = ""}); });
 
+    // 方案预览：退出规划模式时在侧边栏打开方案 markdown 文件
+    subscribe_typed<agent::PlanPreviewEvent>(
+        [this](const agent::PlanPreviewEvent& e) {
+            if (!e.plan_path.empty()) push(ActionOpenPlan{e.plan_path});
+        });
+
     // B3：缓存诊断 / 压缩暂停 / 子 Agent 进度（对齐设计文档 §5 事件映射）
     subscribe_typed<agent::CacheDiagnosticsEvent>(
         [this](const agent::CacheDiagnosticsEvent& e) {

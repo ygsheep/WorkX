@@ -112,6 +112,12 @@ struct ActionAskUser {
 /// @brief AskUser 超时（关闭模态，返回 cancelled）
 struct ActionAskUserTimeout {};
 
+/// @brief 打开方案 markdown 预览（PlanPreviewEvent → 侧边栏文件 tab）
+/// @details 退出规划模式时在侧边栏 /view 打开方案文件，替代在提问里直接展示全文。
+struct ActionOpenPlan {
+    std::string plan_path;  ///< 方案文件绝对路径（已落盘）
+};
+
 /// @brief 缓存诊断事件（DeepSeek 缓存命中率劣化归因）
 /// @details prefix_changed=true 时提示缓存前缀变化原因，辅助理解命中率下降。
 struct ActionCacheDiagnostics {
@@ -217,6 +223,30 @@ struct ActionMcpStatus {
     std::vector<McpServerLite> servers;
 };
 
+/// @brief 项目文件树节点（项目 tab）
+/// @details 由后台 git 扫描线程构造并随 ActionProjectFiles 投递；目录用
+///          children 嵌套，文件用 status 标记 git 状态点。rel_path 为相对项目根
+///          的 '/' 分隔路径（目录/文件唯一键，合并保留展开状态用）。
+struct ProjectNode {
+    std::string name;          ///< 展示名（叶子名）
+    std::string rel_path;      ///< 相对项目根路径（合并/展开键）
+    bool is_dir = false;
+    bool expanded = false;     ///< 目录展开状态（UI 线程维护；默认收起，避免自动全部展开）
+    char status = ' ';         ///< git porcelain 状态码（'M'/'A'/'D'/'R'/'?'，' '=clean）
+    bool has_status = false;   ///< 是否在 git 中处于非干净状态（渲染状态点）
+    std::vector<ProjectNode> children;  ///< 子节点（仅目录）
+};
+
+/// @brief 项目文件树快照（后台 git 扫描完成 → UI 线程）
+/// @details 携带完整树 + 项目根 + 是否 git 仓库；ViewModel 合并入 tabs.project
+///          （保留既有目录展开状态）。
+struct ActionProjectFiles {
+    std::string root;                   ///< 项目根目录（相对路径解析基准）
+    bool is_git = false;                ///< 是否为 git 仓库
+    bool loading = false;               ///< 仅用于初始化占位（true=加载中）
+    std::vector<ProjectNode> tree;      ///< 根 children
+};
+
 /// @brief 统一动作类型
 using Action = std::variant<
     ActionAppendMessage,
@@ -232,6 +262,7 @@ using Action = std::variant<
     ActionPermissions,
     ActionAskUser,
     ActionAskUserTimeout,
+    ActionOpenPlan,
     ActionCacheDiagnostics,
     ActionCompactionPaused,
     ActionSubAgentProgress,
@@ -243,7 +274,8 @@ using Action = std::variant<
     ActionProviderSwitched,
     ActionProviderSwitchFailed,
     ActionTodoUpdate,
-    ActionMcpStatus
+    ActionMcpStatus,
+    ActionProjectFiles
 >;
 
 }  // namespace ftxtui

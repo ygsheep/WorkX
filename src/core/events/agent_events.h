@@ -155,6 +155,14 @@ struct ExitPlanModeEvent {
     bool approved = false;  ///< 用户是否批准
 };
 
+/// @brief 方案预览事件（ExitPlanModeV2Tool → TUI）
+/// @details 退出规划模式呈现方案时，先把方案写入 markdown 文件，再发布本事件，
+///          通知 TUI 在侧边栏以 /view 方式打开该文件预览，避免在提问里直接堆全文。
+struct PlanPreviewEvent {
+    std::string session_id;
+    std::string plan_path;  ///< 方案 markdown 文件绝对路径（已落盘，供 TUI 读取）
+};
+
 /// @brief 子 Agent 后台任务完成事件（AgentTool → 订阅者，v1.1.0 后台结果自动回送）
 /// @details 后台子 Agent 结束后由 AgentTool 发布，携带 task_id 与最终结果摘要，
 ///          使父会话/UI 等订阅者无需轮询 TaskOutput 即可感知子任务完成。

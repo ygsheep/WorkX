@@ -10,6 +10,7 @@
 #include "theme/theme.h"
 #include "widgets/change_viewer.h"
 #include "widgets/file_viewer.h"
+#include "widgets/project_tree.h"
 #include "widgets/sidebar.h"
 
 namespace ftxtui {
@@ -127,7 +128,9 @@ Element build_tasks_tab(const SidebarTabsModel& tabs, const SidebarModel& sideba
 }
 
 /// @brief 文件 tab：/view 只读查看器（路径栏 + 行号 + 虚拟化滚动）
-Element build_files_tab(const FileViewState& file) {
+/// @param file_elem App 侧渲染的组件元素（可交互）；空则回退纯渲染
+Element build_files_tab(const FileViewState& file, const ftxui::Element& file_elem) {
+    if (file_elem) return file_elem;
     return build_file_viewer(file);
 }
 
@@ -137,6 +140,13 @@ Element build_changes_tab(const ChangeViewState& changes,
                           const ftxui::Element& change_elem) {
     if (change_elem) return change_elem;
     return build_change_viewer(changes);
+}
+
+/// @brief 项目 tab：项目文件树（常驻；App 侧渲染组件元素，空则回退纯渲染）
+Element build_projects_tab(const ProjectTreeState& project,
+                           const ftxui::Element& tree_elem) {
+    if (tree_elem) return tree_elem;
+    return build_project_tree(project);
 }
 
 }  // namespace
@@ -159,10 +169,12 @@ Element build_sidebar_tabs(const SidebarTabsModel& tabs,
                            std::deque<TabHit>* hit_boxes,
                            std::deque<SectionHit>* section_hits,
                            const ftxui::Element& sub_menu_elem,
-                           const ftxui::Element& change_viewer_elem) {
+                           const ftxui::Element& change_viewer_elem,
+                           const ftxui::Element& project_tree_elem,
+                           const ftxui::Element& file_viewer_elem) {
     if (hit_boxes) hit_boxes->clear();
 
-    // ---- tab 栏（自绘 hbox）----
+    // ---- tab 栏（自绘 hbox）：任务调度(常驻) | 项目(常驻) | 变更记录(可关) | 文件(可关) ----
     Elements bar;
     auto push_tab = [&](SidebarTab tab, const std::string& label, bool closable) {
         if (!bar.empty())
@@ -185,6 +197,7 @@ Element build_sidebar_tabs(const SidebarTabsModel& tabs,
     };
 
     push_tab(SidebarTab::kTasks, std::string(str::kTabTasks), false);
+    push_tab(SidebarTab::kProjects, std::string(str::kTabProjects), false);
     if (tabs.changes_open)
         push_tab(SidebarTab::kChanges, std::string(str::kTabChanges), true);
     if (tabs.file_open)
@@ -198,7 +211,10 @@ Element build_sidebar_tabs(const SidebarTabsModel& tabs,
         case SidebarTab::kTasks:
             content = build_tasks_tab(tabs, sidebar, sub_menu_elem, section_hits);
             break;
-        case SidebarTab::kFiles:  content = build_files_tab(tabs.file);       break;
+        case SidebarTab::kProjects:
+            content = build_projects_tab(tabs.project, project_tree_elem);
+            break;
+        case SidebarTab::kFiles:  content = build_files_tab(tabs.file, file_viewer_elem); break;
         case SidebarTab::kChanges: content = build_changes_tab(tabs.changes,
                                                                change_viewer_elem); break;
         default:                  content = ftxui::emptyElement();          break;

@@ -34,11 +34,13 @@ add_executable(workx
     bridge/action_queue.cpp
     bridge/event_bridge.cpp
     render/markdown_to_elements.cpp
+    render/code_card.cpp
     render/syntax_highlight.cpp
     widgets/sidebar.cpp
     widgets/sidebar_tabs.cpp
     widgets/file_viewer.cpp
     widgets/change_viewer.cpp
+    widgets/project_tree.cpp
     widgets/composer.cpp
     widgets/input_history.cpp
     widgets/status_line.cpp

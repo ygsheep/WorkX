@@ -12,8 +12,12 @@
 
 #include "agent/tool/PlanMode/exit_plan_mode_v2_tool.h"
 
+#include <cctype>
+#include <filesystem>
 #include <format>
+#include <fstream>
 
+#include "agent/tool/path_matcher.h"
 #include "agent/tool/permission_ask.h"
 #include "core/events/agent_events.h"
 #include "core/events/i_event_bus.h"
@@ -69,12 +73,50 @@ ResultV2<ToolResult> ExitPlanModeV2Tool::call(
             Error::Code::InvalidInput, "ExitPlanModeV2: 'plan' must not be empty");
     }
 
-    // 1. 呈现方案请求用户批准（无确认通道 → fail-closed 未批准）
-    const std::string question = std::format(
-        "Plan:\n\n```\n{}\n```\n\nApprove this plan and exit plan mode?", plan);
+    // 1. 方案写入 markdown 文件（~/.workx/plan/plan_<session>.md），供 TUI 侧边栏预览，
+    //    避免在提问里直接堆全文。写入失败则回退为全文内联展示。
+    std::string plan_path;
+    try {
+        namespace fs = std::filesystem;
+        fs::path dir = fs::path(expand_home("~/.workx/plan"));
+        fs::create_directories(dir);
+        // 会话 id 归一化后用于唯一文件名（避免覆盖 + 保证安全字符）
+        std::string sid = ctx.session_id;
+        for (char& c : sid) {
+            if (!std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '_')
+                c = '_';
+        }
+        fs::path file = dir / (sid.empty() ? std::string("plan.md")
+                                           : ("plan_" + sid + ".md"));
+        {
+            std::ofstream ofs(file, std::ios::trunc | std::ios::binary);
+            if (ofs) ofs << plan;
+        }
+        if (fs::is_regular_file(file)) plan_path = fs::absolute(file).string();
+    } catch (const std::exception&) {
+        plan_path.clear();  // 家目录不可写等场景：走全文内联回退
+    }
+
+    // 2. 先发布方案预览事件，通知 TUI 在侧边栏打开方案文件（先于提问弹出）
+    if (ctx.event_bus_ptr && !plan_path.empty()) {
+        ctx.event_bus_ptr->publish_async(PlanPreviewEvent{
+            .session_id = ctx.session_id,
+            .plan_path = plan_path
+        });
+    }
+
+    // 3. 呈现方案请求用户批准（无确认通道 → fail-closed 未批准）
+    const std::string question =
+        plan_path.empty()
+            ? std::format(
+                  "Plan:\n\n```\n{}\n```\n\nApprove this plan and exit plan mode?",
+                  plan)
+            : std::format(
+                  "方案已写入 {}（侧边栏已预览）。批准该方案并退出规划模式？",
+                  plan_path);
     const bool approved = ask_user_confirm(ctx, question);
 
-    // 2. 批准 → 恢复进入计划前的原模式（评审 #1：非硬编码回 Default）
+    // 4. 批准 → 恢复进入计划前的原模式（评审 #1：非硬编码回 Default）
     //    Bypass 未进入 Plan，无需切换；拒绝则保持 Plan
     if (approved && is_plan_mode(ctx.permission_mode)) {
         if (ctx.on_exit_plan_mode) {
@@ -84,7 +126,7 @@ ResultV2<ToolResult> ExitPlanModeV2Tool::call(
         }
     }
 
-    // 3. 发布退出计划模式事件（publish_async 传值，typeid 匹配订阅）
+    // 5. 发布退出计划模式事件（publish_async 传值，typeid 匹配订阅）
     if (ctx.event_bus_ptr) {
         ctx.event_bus_ptr->publish_async(ExitPlanModeEvent{
             .session_id = ctx.session_id,

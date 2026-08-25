@@ -42,9 +42,10 @@ inline constexpr std::string_view kSlash              = " / ";
 inline constexpr std::string_view kInfinity           = "∞";
 
 // ----------------------------------------------------------------------------
-// 侧边栏 tab（任务调度 | 变更记录 | 文件）
+// 侧边栏 tab（任务调度 | 项目 | 变更记录 | 文件）
 // ----------------------------------------------------------------------------
 inline constexpr std::string_view kTabTasks           = "任务调度";
+inline constexpr std::string_view kTabProjects        = "项目";
 inline constexpr std::string_view kTabChanges         = "变更记录";
 inline constexpr std::string_view kTabFiles           = "文件";
 inline constexpr std::string_view kTabClose           = "✕";
@@ -59,6 +60,16 @@ inline constexpr std::string_view kSubStatusFailed     = "失败";
 inline constexpr std::string_view kSubStepLabel       = "步骤 ";
 inline constexpr std::string_view kTabFilesEmpty      = "暂无打开的文件（/view <file>）";
 inline constexpr std::string_view kTabChangesEmpty    = "暂无文件修改";
+
+// ----------------------------------------------------------------------------
+// 项目文件树 tab（常驻：文件列表 + git 状态点）
+// ----------------------------------------------------------------------------
+inline constexpr std::string_view kProjectsLoading   = "扫描项目文件中…";
+inline constexpr std::string_view kProjectsNoGit     = "未检测到 git 仓库";
+inline constexpr std::string_view kProjectsEmpty     = "（项目为空）";
+inline constexpr std::string_view kProjectsChanges   = " 处改动";
+inline constexpr std::string_view kProjectsDirSuffix = "/";
+inline constexpr std::string_view kProjectsHint      = "点击目录展开/收起 · ↑↓ 滚动 · 点击文件查看";
 
 // ----------------------------------------------------------------------------
 // 变更记录 tab（P5：修改点 Menu + hunk + 目的展开）
@@ -79,6 +90,7 @@ inline constexpr std::string_view kViewTooLarge      = "（文件过大，已截
 inline constexpr std::string_view kViewLineSuffix    = " 行";
 inline constexpr std::string_view kViewLangSep       = " · ";
 inline constexpr std::string_view kViewScrollHint    = "↑↓ 滚动 · Esc 关闭";
+inline constexpr std::string_view kViewDiffHint      = "diff 视图 · ↑↓ 滚动 · Esc 关闭";
 
 // ----------------------------------------------------------------------------
 // 内嵌 nvim 编辑（/edit 方案 B）

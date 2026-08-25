@@ -65,8 +65,8 @@ struct CardDefaults {
     bool tool_expanded = false;      ///< 工具卡默认收起
 };
 
-/// @brief 侧边栏 tab 枚举
-enum class SidebarTab { kTasks = 0, kFiles, kChanges, kCount };
+/// @brief 侧边栏 tab 枚举（任务调度 | 项目 | 变更记录 | 文件）
+enum class SidebarTab { kTasks = 0, kProjects, kFiles, kChanges, kCount };
 
 /// @brief 子 Agent 聚合条目（任务调度 tab）
 struct SubAgentLite {
@@ -145,7 +145,17 @@ struct ChangeViewState {
     bool purpose_expanded = false;   ///< e 展开完整 reasoning
 };
 
-/// @brief 侧边栏 tab 模型（任务调度 | 变更记录 | 文件）
+/// @brief 项目文件树状态（项目 tab，常驻）
+struct ProjectTreeState {
+    bool loading = true;   ///< 后台 git 扫描进行中（未完成时显示加载占位）
+    bool ready = false;    ///< 首轮扫描已完成
+    bool is_git = false;   ///< 项目根是否为 git 仓库
+    std::string root;      ///< 项目根目录（相对路径解析基准）
+    int scroll = 0;        ///< 扁平可视行滚动偏移（虚拟化滚动）
+    std::vector<ProjectNode> tree;  ///< 根 children（ProjectNode 定义于 bridge/action.h）
+};
+
+/// @brief 侧边栏 tab 模型（任务调度 | 项目 | 变更记录 | 文件）
 struct SidebarTabsModel {
     SidebarTab active = SidebarTab::kTasks;
     bool changes_open = false;   ///< 变更记录 tab 是否打开（有 FileChange 时自动开）
@@ -158,6 +168,8 @@ struct SidebarTabsModel {
     std::vector<SubAgentLite> sub_agents;
     std::vector<TaskLite> background_tasks;
     int sub_selected = -1;  ///< 选中子 Agent 索引（-1=无；方向键/Enter 交互）
+    // —— 项目文件树（常驻 tab，后台 git 扫描驱动）——
+    ProjectTreeState project;
     // —— 文件 / 变更记录 ——
     FileViewState file;      ///< 文件 tab 状态（/view 只读查看器）
     ChangeViewState changes; ///< 变更记录 tab 状态（会话内全部修改）
@@ -205,6 +217,7 @@ private:
     bool apply_variant(const ActionPermissions&);
     bool apply_variant(const ActionAskUser&);
     bool apply_variant(const ActionAskUserTimeout&);
+    bool apply_variant(const ActionOpenPlan&);
     bool apply_variant(const ActionCacheDiagnostics&);
     bool apply_variant(const ActionCompactionPaused&);
     bool apply_variant(const ActionSubAgentProgress&);
@@ -217,6 +230,7 @@ private:
     bool apply_variant(const ActionProviderSwitchFailed&);
     bool apply_variant(const ActionTodoUpdate&);
     bool apply_variant(const ActionMcpStatus&);
+    bool apply_variant(const ActionProjectFiles&);
 
     /// @brief 修改追踪：Edit/Write 工具调用 → FileChange（purpose + 行级 diff）
     void track_file_change(const ActionBeginTool& a);

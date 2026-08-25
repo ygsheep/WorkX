@@ -10,7 +10,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <memory>
+#include <set>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -54,6 +57,7 @@
 #include "widgets/sidebar_tabs.h"
 #include "widgets/change_viewer.h"
 #include "widgets/file_viewer.h"
+#include "widgets/project_tree.h"
 #include "widgets/status_line.h"
 #include "widgets/composer.h"
 #include "widgets/suggest_panel.h"
@@ -300,6 +304,9 @@ App::App(AppDeps deps)
         m_queue.push(ActionMcpStatus{std::move(servers)});
     }
 
+    // 项目文件树（项目 tab）：后台 git 扫描启动（先推 loading 占位，线程完成后推快照）
+    start_project_scan();
+
     // 输入历史：启动时从配置目录加载（~/.workx/history.json）
     m_input_history.load(agent::default_config_path().parent_path() / "history.json");
 
@@ -322,6 +329,7 @@ App::~App() {
     if (m_stream_thread.joinable()) m_stream_thread.join();
     // 复制提示自清除线程不触碰任何成员（析构安全）；join 等待它结束时 m_screen 仍存活。
     if (m_copy_flash_thread.joinable()) m_copy_flash_thread.join();
+    if (m_project_scan_thread.joinable()) m_project_scan_thread.join();
     m_bridge.stop();
 }
 
@@ -483,6 +491,12 @@ void App::drain() {
             }
             if (auto* to = std::get_if<ActionAskUserTimeout>(&a)) {
                 if (m_ask_active) close_ask(false);
+                changed = true;
+                continue;
+            }
+            if (auto* open_plan = std::get_if<ActionOpenPlan>(&a)) {
+                // 退出规划模式：侧边栏预览方案 markdown（复用 /view，同路径仅切 tab）
+                cmd_view(open_plan->plan_path);
                 changed = true;
                 continue;
             }
@@ -2318,7 +2332,7 @@ Element App::build_ask_modal() const {
         ftxui::text(std::string(str::kAskIcon)),
         ftxui::text(progress) | ftxui::color(theme::T::TextFaint),
         ftxui::separatorEmpty(),
-        ftxui::flex(ftxui::text(title) | ftxui::bold),
+        ftxui::flex(ftxui::paragraph(title) | ftxui::bold),
     }));
     body.push_back(ftxui::separatorEmpty());
 
@@ -2575,7 +2589,11 @@ void App::run() {
     // 文件查看组件（文件 tab）：可聚焦，↑↓/PgUp/PgDn/滚轮滚动
     m_file_viewer = make_file_viewer(&m_vm.tabs.file);
 
-    // 可聚焦组件栈：composer、AskUser 输入、命令面板、模型/会话/供应商面板、子 Agent 菜单、变更记录、文件查看
+    // 项目文件树组件（项目 tab，常驻）：点击目录展开/收起、点击文件打开、滚轮滚动
+    m_project_tree = make_project_tree(&m_vm.tabs.project,
+                                       [this](const std::string& rel) { open_project_file(rel); });
+
+    // 可聚焦组件栈：composer、AskUser 输入、命令面板、模型/会话/供应商面板、子 Agent 菜单、变更记录、文件查看、项目文件树
     auto container = ftxui::Container::Vertical({
         m_composer,
         m_ask_input,
@@ -2586,6 +2604,7 @@ void App::run() {
         m_sub_menu,
         m_change_viewer,
         m_file_viewer,
+        m_project_tree,
     });
 
     auto layout = ftxui::Renderer(container, [&]() -> ftxui::Element {
@@ -2615,9 +2634,12 @@ void App::run() {
         const int msg_width = std::max(1, content_w - 2);
 
         auto build_sidebar_elem = [this, sidebar_cols](const ftxui::Element& sub_menu_elem,
-                                          const ftxui::Element& change_viewer_elem) {
+                                          const ftxui::Element& change_viewer_elem,
+                                          const ftxui::Element& project_tree_elem,
+                                          const ftxui::Element& file_viewer_elem) {
             return build_sidebar_tabs(m_vm.tabs, m_vm.sidebar, &m_tab_hits, &m_section_hits,
-                                      sub_menu_elem, change_viewer_elem)
+                                      sub_menu_elem, change_viewer_elem, project_tree_elem,
+                                      file_viewer_elem)
                 | ftxui::size(ftxui::WIDTH, ftxui::EQUAL, sidebar_cols)
                 | ftxui::yflex
                 | ftxui::bgcolor(theme::T::Panel);
@@ -2644,16 +2666,41 @@ void App::run() {
             change_viewer_elem = ftxui::emptyElement();
         }
 
+        // 项目文件树组件（项目 tab，常驻）：Render 进布局并 reflect box，
+        // 供 App 侧点击/滚轮命中转发到组件（目录展开/收起、文件打开、滚动）。
+        Element project_tree_elem;
+        if (m_vm.tabs.active == SidebarTab::kProjects) {
+            project_tree_elem = m_project_tree->Render() | ftxui::reflect(m_project_box);
+        } else {
+            m_project_box = ftxui::Box{1, 0, 1, 0};
+            project_tree_elem = ftxui::emptyElement();
+        }
+
+        // 文件查看器组件（文件 tab，可关）：Render 进布局并 reflect box，
+        // 供 App 侧滚轮命中转发到组件（文件滚动）。返回 emptyElement 因组件
+        // Render 已内联完整布局（含路径栏/分隔线/状态栏），勿二次包裹。
+        Element file_viewer_elem;
+        if (m_vm.tabs.active == SidebarTab::kFiles && m_vm.tabs.file_open &&
+            !m_vm.tabs.file.path.empty()) {
+            file_viewer_elem = m_file_viewer->Render() | ftxui::reflect(m_file_box);
+        } else {
+            m_file_box = ftxui::Box{1, 0, 1, 0};
+            file_viewer_elem = ftxui::emptyElement();
+        }
+
         // 后台任务：渲染时只读查询 TaskManager（原子字段，无锁安全）
         refresh_background_tasks();
 
-        Element sidebar_elem = build_sidebar_elem(sub_menu_elem, change_viewer_elem);
+        Element sidebar_elem = build_sidebar_elem(sub_menu_elem, change_viewer_elem,
+                                                  project_tree_elem, file_viewer_elem);
         // 侧栏折叠时清空 tab / 区块 / 子 Agent 菜单命中区，避免陈旧 box 误命中内容区点击
         if (!show_sidebar_body) {
             m_tab_hits.clear();
             m_section_hits.clear();
             m_sub_box = ftxui::Box{1, 0, 1, 0};  // 空 box（IsEmpty=true），禁用点击命中
             m_change_box = ftxui::Box{1, 0, 1, 0};
+            m_project_box = ftxui::Box{1, 0, 1, 0};
+            m_file_box = ftxui::Box{1, 0, 1, 0};
         }
         // 输出区域按层级切换：主会话 → 转录区；子 Agent → 第二层独立记录渲染
         Element output_elem;
@@ -3011,6 +3058,16 @@ void App::run() {
                 }
             }
             if (e.mouse().button == ftxui::Mouse::WheelUp) {
+                // 光标在文件查看器 box 内 → 转发滚动到文件组件
+                if (!m_file_box.IsEmpty() && m_file_box.Contain(e.mouse().x, e.mouse().y) &&
+                    m_file_viewer && m_file_viewer->OnEvent(e)) {
+                    return true;
+                }
+                // 光标在项目文件树 box 内 → 滚动项目树而非主输出
+                if (!m_project_box.IsEmpty() && m_project_box.Contain(e.mouse().x, e.mouse().y)) {
+                    scroll_project(-3);
+                    return true;
+                }
                 if (m_vm.output_level == OutputLevel::SubAgent) {
                     m_sub_follow = false;
                     m_sub_scroll = std::max(0, m_sub_scroll - 3);
@@ -3022,6 +3079,16 @@ void App::run() {
                 return true;
             }
             if (e.mouse().button == ftxui::Mouse::WheelDown) {
+                // 光标在文件查看器 box 内 → 转发滚动到文件组件
+                if (!m_file_box.IsEmpty() && m_file_box.Contain(e.mouse().x, e.mouse().y) &&
+                    m_file_viewer && m_file_viewer->OnEvent(e)) {
+                    return true;
+                }
+                // 光标在项目文件树 box 内 → 滚动项目树而非主输出
+                if (!m_project_box.IsEmpty() && m_project_box.Contain(e.mouse().x, e.mouse().y)) {
+                    scroll_project(3);
+                    return true;
+                }
                 if (m_vm.output_level == OutputLevel::SubAgent) {
                     m_sub_scroll += 3;
                 } else {
@@ -3066,6 +3133,13 @@ void App::run() {
                 if (!m_change_box.IsEmpty() &&
                     m_change_box.Contain(e.mouse().x, e.mouse().y)) {
                     m_change_viewer->OnEvent(e);
+                    m_screen.RequestAnimationFrame();
+                    return true;
+                }
+                // 项目文件树组件：点击转发（目录展开/收起、文件打开）
+                if (!m_project_box.IsEmpty() &&
+                    m_project_box.Contain(e.mouse().x, e.mouse().y)) {
+                    m_project_tree->OnEvent(e);
                     m_screen.RequestAnimationFrame();
                     return true;
                 }
@@ -3428,6 +3502,206 @@ void App::refresh_background_tasks() {
         lite.status = st == agent::TaskStatus::Running ? "Running" : "Pending";
         m_vm.tabs.background_tasks.push_back(std::move(lite));
     }
+}
+
+// ---------------------------------------------------------------------------
+// 项目文件树（项目 tab，常驻）：后台 git 扫描 + 树构建 + 打开/滚动
+// ---------------------------------------------------------------------------
+namespace {
+
+/// @brief 运行 git 命令（cwd 下），返回 stdout 非空行（空格分隔参数，本场景无参数含空格）
+std::vector<std::string> run_git_lines(const std::string& cwd, const char* args_joined) {
+    agent::process::ExecOptions opts;
+    opts.cwd = cwd;
+    opts.timeout = std::chrono::milliseconds(15000);
+    std::string cur;
+    for (const char c : std::string(args_joined)) {
+        if (c == ' ') {
+            if (!cur.empty()) { opts.args.push_back(cur); cur.clear(); }
+        } else {
+            cur += c;
+        }
+    }
+    if (!cur.empty()) opts.args.push_back(cur);
+    auto res = agent::process::exec("git", opts);
+    if (!res.is_ok()) return {};
+    std::vector<std::string> lines;
+    std::string t;
+    for (const char c : res.value().stdout_text) {
+        if (c == '\n') {
+            if (!t.empty()) lines.push_back(t);
+            t.clear();
+        } else {
+            t += c;
+        }
+    }
+    if (!t.empty()) lines.push_back(t);
+    return lines;
+}
+
+/// @brief 向树根插入一条文件路径（按 '/' 分段；目录由父段隐式合成），并把 git 状态写回叶子
+void add_node_path(std::vector<ProjectNode>& root, const std::string& rel,
+                   const std::map<std::string, char>& status) {
+    std::vector<std::string> comps;
+    std::size_t pos = 0;
+    while (pos <= rel.size()) {
+        const auto idx = rel.find('/', pos);
+        if (idx == std::string::npos) { comps.push_back(rel.substr(pos)); break; }
+        comps.push_back(rel.substr(pos, idx - pos));
+        pos = idx + 1;
+    }
+    std::vector<ProjectNode>* level = &root;
+    std::string run;
+    for (std::size_t i = 0; i < comps.size(); ++i) {
+        const bool last = (i + 1 == comps.size());
+        run = run.empty() ? comps[i] : run + "/" + comps[i];
+        ProjectNode* slot = nullptr;
+        for (auto& nd : *level)
+            if (nd.name == comps[i] && nd.rel_path == run) { slot = &nd; break; }
+        if (!slot) {
+            level->push_back(ProjectNode{});
+            slot = &level->back();
+            slot->name = comps[i];
+            slot->rel_path = run;
+            slot->is_dir = !last;
+        }
+        if (last && !status.empty()) {
+            const auto it = status.find(rel);
+            if (it != status.end()) { slot->status = it->second; slot->has_status = (it->second != ' '); }
+        }
+        level = &slot->children;
+    }
+}
+
+/// @brief 目录优先 + 名称（不区分大小写）排序，递归
+void sort_project_tree(std::vector<ProjectNode>& nodes) {
+    const auto lower = [](const std::string& s) {
+        std::string r;
+        r.reserve(s.size());
+        for (const unsigned char c : s) r += static_cast<char>(std::tolower(c));
+        return r;
+    };
+    std::stable_sort(nodes.begin(), nodes.end(),
+                     [&](const ProjectNode& a, const ProjectNode& b) {
+        if (a.is_dir != b.is_dir) return a.is_dir;  // 目录优先
+        const auto la = lower(a.name), lb = lower(b.name);
+        if (la != lb) return la < lb;
+        return a.name < b.name;
+    });
+    for (auto& nd : nodes)
+        if (nd.is_dir) sort_project_tree(nd.children);
+}
+
+/// @brief 由文件路径集合 + git 状态表构造排序文件树
+std::vector<ProjectNode> build_project_tree(const std::set<std::string>& paths,
+                                            const std::map<std::string, char>& status) {
+    std::vector<ProjectNode> root;
+    for (const auto& p : paths) add_node_path(root, p, status);
+    sort_project_tree(root);
+    return root;
+}
+
+/// @brief 非 git 仓库时的文件系统遍历（跳过重型目录，限制条目数）
+void walk_fs(const std::string& root, std::set<std::string>& out) {
+    namespace fs = std::filesystem;
+    static const std::set<std::string> kSkip = {
+        ".git", ".svn", ".hg", "node_modules", "build", "dist", "target", "out",
+        "__pycache__", ".venv", "venv", "cmake-build-debug", "cmake-build-release",
+        ".idea", ".vscode",
+    };
+    const std::string slash = std::string(1, '/');
+    std::error_code ec;
+    fs::recursive_directory_iterator it(fs::path(root),
+                                        fs::directory_options::skip_permission_denied, ec);
+    const fs::recursive_directory_iterator end;
+    int guard = 0;
+    try {
+        for (; it != end; it.increment(ec)) {
+            if (ec) break;
+            if (it->is_directory(ec)) {
+                if (kSkip.count(it->path().filename().string()))
+                    it.disable_recursion_pending();
+                continue;
+            }
+            if (!it->is_regular_file(ec)) continue;
+            if (++guard > 20000) break;
+            const std::string rel = fs::relative(it->path(), root, ec).generic_string();
+            if (!rel.empty()) out.insert(rel);
+        }
+    } catch (...) {
+    }
+}
+
+}  // namespace
+
+/// @brief 后台扫描项目文件树 + git 状态并推送 UI（项目 tab）
+/// @details 先推 loading 占位；线程内构造本地树并 m_queue.push 快照（不触碰 UI 状态）。
+///          git 仓库：git ls-files（已跟踪）+ git status --porcelain（改动/未跟踪）取并集，
+///          天然忽略被 ignore 的文件；非 git：文件系统遍历回退（无状态点）。
+void App::start_project_scan() {
+    if (m_project_scan_thread.joinable()) return;
+    const std::string root = std::filesystem::current_path().string();
+    m_queue.push(ActionProjectFiles{.root = root, .loading = true});
+    m_project_scan_thread = std::thread([this, root] {
+        ActionProjectFiles act;
+        act.root = root;
+        act.loading = false;
+        bool is_git = std::filesystem::is_directory(std::filesystem::path(root) / ".git");
+        act.is_git = is_git;
+        if (is_git) {
+            std::set<std::string> paths;
+            std::map<std::string, char> status;
+            for (auto& line : run_git_lines(root, "ls-files")) {
+                if (line.empty()) continue;
+                paths.insert(line);
+                status[line] = ' ';
+            }
+            for (auto& line : run_git_lines(root, "status --porcelain --untracked-files=all")) {
+                if (line.size() < 3) continue;
+                const char x = line[0], y = line[1];
+                std::string p = line.substr(3);  // 跳 "XY " / "?? "
+                if (!p.empty() && p.front() == '"' && p.size() >= 2 && p.back() == '"')
+                    p = p.substr(1, p.size() - 2);
+                const auto arrow = p.find(" -> ");  // 重命名/复制取新名
+                if (arrow != std::string::npos) p = p.substr(arrow + 4);
+                if (p.empty()) continue;
+                const char code = (x == '?' && y == '?') ? '?'
+                                 : (y != ' ' ? y : x);
+                paths.insert(p);
+                status[p] = code;
+            }
+            act.tree = build_project_tree(paths, status);
+        } else {
+            std::set<std::string> paths;
+            walk_fs(root, paths);
+            act.tree = build_project_tree(paths, {});
+        }
+        m_queue.push(std::move(act));
+    });
+}
+
+/// @brief 点击项目文件行打开查看器（相对项目根 → /view）
+void App::open_project_file(const std::string& rel_path) {
+    std::string abs = rel_path;
+    if (!m_vm.tabs.project.root.empty()) {
+        std::error_code ec;
+        const std::string joined =
+            (std::filesystem::path(m_vm.tabs.project.root) / rel_path)
+                .lexically_normal().string();
+        const std::filesystem::path canon = std::filesystem::weakly_canonical(joined, ec);
+        abs = ec ? joined : canon.string();
+    }
+    cmd_view(abs);
+}
+
+/// @brief 项目树方向键/滚轮滚动（钳制并请求重绘）
+void App::scroll_project(int delta) {
+    auto& p = m_vm.tabs.project;
+    const int total = static_cast<int>(flatten_project_rows(p.tree).size());
+    const int visible = std::max(1, ftxui::Terminal::Size().dimy - 7);
+    const int max_scroll = std::max(0, total - visible);
+    p.scroll = std::clamp(p.scroll + delta, 0, max_scroll);
+    m_screen.RequestAnimationFrame();
 }
 
 }  // namespace ftxtui
