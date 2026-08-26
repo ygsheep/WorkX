@@ -156,7 +156,9 @@ $lightArgs = @(
     "-b", $StagingDir,
     "-b", $PSScriptRoot,
     "-ext", "WixUIExtension",
-    "-o", $msiPath
+    "-o", $msiPath,
+    # light 默认在 MSI 旁生成 .wixpdb 调试符号；重定向到构建目录，避免混入发布
+    "-pdbout", (Join-Path $wixObjDir "workx-$version-x64.wixpdb")
 )
 if ($wixLang) {
     $lightArgs += @("-cultures:zh-CN", "-loc", $wixLang)
