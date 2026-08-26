@@ -344,8 +344,8 @@ int main(int argc, char** argv) {
     deps.agent_name = (session && !session->session_id().empty())
                           ? session->session_id()
                           : "default";
-    deps.on_submit = [&](const std::string& text) {
-        if (session) session->send_message(text);
+    deps.on_submit = [&](const std::string& text, const std::vector<std::string>& images) {
+        if (session) session->send_message(text, images);
     };
     // /provider 热切换：以目标供应商条目自身配置为准创建后端，
     // 自定义条目（非 preset）也能正确使用其 base_url/api_key，避免依赖旧全局 cfg

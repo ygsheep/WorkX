@@ -87,7 +87,9 @@ struct AppDeps {
     std::shared_ptr<agent::mcp::McpClientManager> mcp_manager;
 
     /// @brief 提交一条用户消息（由 main 的实现路由到会话/处理器）
-    std::function<void(const std::string&)> on_submit;
+    /// @param text 用户文本
+    /// @param images 图片附件绝对路径（@ 图片引用自动提取，可为空）
+    std::function<void(const std::string&, const std::vector<std::string>&)> on_submit;
 
     /// @brief 请求模型切换后回调（main 注入，刷新侧栏/状态行）
     std::function<void()> on_model_changed;

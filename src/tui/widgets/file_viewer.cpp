@@ -1,6 +1,7 @@
 #include "widgets/file_viewer.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <map>
 #include <string>
 #include <string_view>
@@ -39,35 +40,46 @@ std::size_t rune_byte_len(std::string_view s) {
     return 1;
 }
 
+/// @brief 折行后的一段（保留在原逻辑行中的字节区间，供 span 着色定位）
+struct WrappedSeg {
+    std::string text;  ///< 本段文本
+    uint32_t start = 0;  ///< 在原逻辑行中的字节起点（含）
+    uint32_t end = 0;    ///< 在原逻辑行中的字节终点（不含）
+};
+
 /// @brief 按显示宽度折行（UTF-8 安全、rune 边界分段）
 /// @return 每段为一行（空行返回单空段）
-std::vector<std::string> wrap_line(std::string_view line, int width) {
-    std::vector<std::string> out;
+std::vector<WrappedSeg> wrap_line(std::string_view line, int width) {
+    std::vector<WrappedSeg> out;
     const std::size_t n = line.size();
     if (n == 0) {
-        out.emplace_back();
+        out.push_back({std::string(), 0, 0});
         return out;
     }
     if (width < 1) width = 1;
     std::string seg;
     seg.reserve(n);
     int seg_w = 0;
+    uint32_t seg_start = 0;
     std::size_t i = 0;
     while (i < n) {
         const std::size_t rune_len =
             std::min(rune_byte_len(line.substr(i)), n - i);
         const std::string_view rune = line.substr(i, rune_len);
+        const std::size_t rune_i = i;
         i += rune_len;
         const int rw = ftxui::string_width(rune);
         if (seg_w + rw > width && !seg.empty()) {
-            out.push_back(std::move(seg));
+            out.push_back({std::move(seg), seg_start,
+                           static_cast<uint32_t>(rune_i)});
             seg.clear();
             seg_w = 0;
+            seg_start = static_cast<uint32_t>(rune_i);
         }
         seg += rune;
         seg_w += rw;
     }
-    out.push_back(std::move(seg));
+    out.push_back({std::move(seg), seg_start, static_cast<uint32_t>(n)});
     return out;
 }
 
@@ -76,6 +88,10 @@ struct FlatRow {
     int disp_no = 0;      ///< 展示行号（0=续行/无行号）
     std::string text;     ///< 本行文本
     Color bg = Color::Black;  ///< 背景色（Black=无）
+    uint32_t seg_start = 0;  ///< 本段在原逻辑行中的字节起点（语法高亮定位用）
+    uint32_t seg_end = 0;    ///< 本段在原逻辑行中的字节终点
+    int line_idx = 0;        ///< 逻辑行索引（span 着色取整行文本用）
+    const std::vector<HighlightSpan>* spans = nullptr;  ///< 该逻辑行 span（可空）
 };
 
 /// @brief 行内内容可用宽度（扣除前缀 2 空格 + │行号列 + 1 空格）
@@ -87,8 +103,11 @@ int row_content_width(int avail_width, int num_width) {
 
 /// @brief 构建扁平可视行（含折行）。avail_width<=0 时不折行。
 /// @param[out] num_w 行号列宽度
-static std::vector<FlatRow> build_flat_rows(const FileViewState& file,
-                                            int avail_width, int* num_w) {
+/// @param[out] line_spans 逐逻辑行语法高亮 span（可为空，仅统计行数时跳过高亮）。
+///             FlatRow::spans 指向该数组，调用方须保证其生命周期覆盖返回的 flat。
+static std::vector<FlatRow> build_flat_rows(
+    const FileViewState& file, int avail_width, int* num_w,
+    std::vector<std::vector<HighlightSpan>>* line_spans) {
     std::vector<FlatRow> flat;
     const bool is_diff = codecard::looks_like_diff(file.lines);
 
@@ -115,8 +134,11 @@ static std::vector<FlatRow> build_flat_rows(const FileViewState& file,
                                 : dl.new_no;
             const Color bg = codecard::diff_row_background(dl.prefix);
             const auto segs = wrap_line(dl.content, cw);
-            for (std::size_t k = 0; k < segs.size(); ++k)
-                flat.push_back({k == 0 ? disp_no : 0, segs[k], bg});
+            for (std::size_t k = 0; k < segs.size(); ++k) {
+                const WrappedSeg& s = segs[k];
+                flat.push_back({k == 0 ? disp_no : 0, s.text, bg,
+                                s.start, s.end, 0, nullptr});
+            }
         }
         return flat;
     }
@@ -135,13 +157,21 @@ static std::vector<FlatRow> build_flat_rows(const FileViewState& file,
     }
     const Color mod_bg = codecard::diff_row_background(codecard::DiffPrefix::Add);
 
+    // 整文件 tree-sitter 高亮（逐逻辑行 span）；空 = 无 grammar，按行回退关键字
+    if (line_spans) *line_spans = highlight_block_spans(file.lines, file.lang);
+    const bool has_spans = line_spans && !line_spans->empty();
+
     flat.reserve(file.lines.size());
     for (std::size_t i = 0; i < file.lines.size(); ++i) {
         const int disp_no = static_cast<int>(i + 1);
         const Color bg = diff_mark.count(disp_no) != 0 ? mod_bg : Color::Black;
         const auto segs = wrap_line(file.lines[i], cw);
-        for (std::size_t k = 0; k < segs.size(); ++k)
-            flat.push_back({k == 0 ? disp_no : 0, segs[k], bg});
+        for (std::size_t k = 0; k < segs.size(); ++k) {
+            const WrappedSeg& s = segs[k];
+            flat.push_back({k == 0 ? disp_no : 0, s.text, bg, s.start, s.end,
+                            static_cast<int>(i),
+                            has_spans ? &(*line_spans)[i] : nullptr});
+        }
     }
     return flat;
 }
@@ -150,7 +180,14 @@ namespace {
 
 /// @brief 单行渲染：2 空格 + 行号/空列 + 语法高亮内容（自动折行续行对齐）
 Element row_element(const FlatRow& r, int num_w, const FileViewState& file) {
-    Element content = highlight_code_line(r.text, file.lang);
+    Element content;
+    if (r.spans && !r.spans->empty() && r.seg_end > r.seg_start &&
+        r.line_idx >= 0 && r.line_idx < static_cast<int>(file.lines.size())) {
+        content = render_spans_range(file.lines[r.line_idx], r.seg_start,
+                                     r.seg_end, *r.spans);
+    } else {
+        content = highlight_code_line(r.text, file.lang);
+    }
     if (r.bg != Color::Black) content = content | ftxui::bgcolor(r.bg);
     Element prefix;
     if (r.disp_no > 0) {
@@ -182,7 +219,9 @@ Element build_file_viewer(const FileViewState& file, int avail_width) {
     }
 
     int num_w = 1;
-    std::vector<FlatRow> flat = build_flat_rows(file, avail_width, &num_w);
+    std::vector<std::vector<HighlightSpan>> line_spans;
+    std::vector<FlatRow> flat =
+        build_flat_rows(file, avail_width, &num_w, &line_spans);
     const int visible = visible_line_count();
     const int scroll = std::clamp(file.scroll, 0,
                                   std::max(0, static_cast<int>(flat.size()) - visible));
@@ -235,7 +274,8 @@ public:
         const int visible = visible_line_count();
         const int avail = m_box.IsEmpty() ? 0 : (m_box.x_max - m_box.x_min + 1);
         int num_w = 1;
-        const std::size_t flat_size = build_flat_rows(*m_file, avail, &num_w).size();
+        const std::size_t flat_size =
+            build_flat_rows(*m_file, avail, &num_w, nullptr).size();
         const int max_scroll = std::max(0, static_cast<int>(flat_size) - visible);
         if (event == ftxui::Event::ArrowUp) {
             m_file->scroll = std::max(0, m_file->scroll - 1);
@@ -253,7 +293,9 @@ public:
             m_file->scroll = std::min(max_scroll, m_file->scroll + visible);
             return true;
         }
-        if (event.is_mouse() && m_box.Contain(event.mouse().x, event.mouse().y)) {
+        // 滚轮不依赖 m_box 命中：App 侧已确认光标落在文件区 box 内才转发到组件，
+        // 这里仅按按钮处理，避免组件内部 reflect box 与 App 侧 box 节奏不一致导致假阴性。
+        if (event.is_mouse()) {
             if (event.mouse().button == ftxui::Mouse::WheelUp) {
                 m_file->scroll = std::max(0, m_file->scroll - 3);
                 return true;

@@ -654,6 +654,11 @@ void App::apply_model(int index) {
     if (name.rfind(std::string(str::kModelListFailed), 0) == 0) return;  // 占位错误行，忽略
     if (m_deps.backend_admin) m_deps.backend_admin->set_model_name(name);
     m_vm.sidebar.model = name;
+    // 持久化模型名：写 backend.model_name 并落盘，否则重启读取旧配置还原为上一模型
+    if (m_deps.config_manager) {
+        m_deps.config_manager->set(agent::keys::MODEL_NAME, name);
+        if (m_deps.save_config) m_deps.save_config();
+    }
     // 上下文窗口：模型切换后经 resolver 重解析（provider→cfg→catalog→capability→preset→default）
     if (m_deps.config_manager) {
         int32_t sel_ctx = 0;
@@ -1663,7 +1668,22 @@ void App::send_input(const std::string& text) {
 
     // 真实链路：统一经 on_submit 路由到会话（B2：输入链单一入口）
     if (m_deps.on_submit) {
-        m_deps.on_submit(text);
+        // @图片引用（如 @a.png）→ 图片附件绝对路径（多模态随请求上传）：
+        // 仅普通文本路径提取，非图片 @ 文件引用保持原样发送（模型经工具读取）。
+        std::vector<std::string> images;
+        agent::input::InputParser parser;
+        const auto parsed = parser.parse(text);
+        if (parsed.type == agent::input::InputType::Text) {
+            for (const auto& p : parsed.image_paths) {
+                std::error_code ec;
+                const auto abs = std::filesystem::weakly_canonical(
+                    std::filesystem::absolute(p, ec), ec);
+                if (!ec && !abs.empty() && std::filesystem::exists(abs, ec)) {
+                    images.push_back(abs.string());
+                }
+            }
+        }
+        m_deps.on_submit(text, images);
         // 真实链路唤醒：busy 已置位但动画线程镜像同步发生在 drain（Custom 事件）。
         // 立即投递一次 Custom 让 UI 线程消费事件队列并唤醒动画线程；
         // 否则 publish_async 事件积压（事件总线仅入队、无泵线程），
@@ -1707,7 +1727,7 @@ void App::run_command(const std::string& cmd, const std::string& args) {
         if (!query.empty()) {
             m_vm.apply(ActionAppendMessage{.role = "user", .text = query});
             m_vm.apply(ActionSetBusy{.busy = true});
-            m_deps.on_submit(query);
+            m_deps.on_submit(query, {});
             m_screen.PostEvent(Event::Custom);  // 同 send_input：唤醒事件循环消费积压事件
         }
     }
@@ -3058,9 +3078,11 @@ void App::run() {
                 }
             }
             if (e.mouse().button == ftxui::Mouse::WheelUp) {
-                // 光标在文件查看器 box 内 → 转发滚动到文件组件
+                // 光标在文件查看器 box 内 → 转发滚动到文件组件并强制消费（不依赖组件返回值）
                 if (!m_file_box.IsEmpty() && m_file_box.Contain(e.mouse().x, e.mouse().y) &&
-                    m_file_viewer && m_file_viewer->OnEvent(e)) {
+                    m_file_viewer) {
+                    m_file_viewer->OnEvent(e);
+                    m_screen.RequestAnimationFrame();
                     return true;
                 }
                 // 光标在项目文件树 box 内 → 滚动项目树而非主输出
@@ -3079,9 +3101,11 @@ void App::run() {
                 return true;
             }
             if (e.mouse().button == ftxui::Mouse::WheelDown) {
-                // 光标在文件查看器 box 内 → 转发滚动到文件组件
+                // 光标在文件查看器 box 内 → 转发滚动到文件组件并强制消费（不依赖组件返回值）
                 if (!m_file_box.IsEmpty() && m_file_box.Contain(e.mouse().x, e.mouse().y) &&
-                    m_file_viewer && m_file_viewer->OnEvent(e)) {
+                    m_file_viewer) {
+                    m_file_viewer->OnEvent(e);
+                    m_screen.RequestAnimationFrame();
                     return true;
                 }
                 // 光标在项目文件树 box 内 → 滚动项目树而非主输出

@@ -3,6 +3,7 @@
 #   1. 编译慢：单一二进制需全量重编译+重链接；拆分后改动某模块只重编/重链该模块目标，
 #      且多个测试目标可并行编译（cmake --build -j N）。
 #   2. 运行慢：单一进程串行跑 919 个用例；拆分后各模块可经 ctest -j N 并行运行。
+message(STATUS "=== tui unit cmake loaded ===")
 #
 # 模块划分（与 src/ 分层对齐，每个目标只链接其依赖的最少库）：
 #   - core_unit_tests    : tests/unit/core/**    -> workx_core
@@ -91,6 +92,8 @@ if(TUI_TEST_SOURCES)
         ${WORKX_ROOT}/src/tui/widgets/sidebar_tabs.cpp
         ${WORKX_ROOT}/src/tui/widgets/file_viewer.cpp
         ${WORKX_ROOT}/src/tui/widgets/change_viewer.cpp
+        ${WORKX_ROOT}/src/tui/widgets/project_tree.cpp
+        ${WORKX_ROOT}/src/tui/render/code_card.cpp
         ${WORKX_ROOT}/src/tui/wizard.cpp
     )
     target_include_directories(tui_unit_tests PRIVATE

@@ -164,11 +164,11 @@ def resolve_all(rows):
 # ============================================================================
 COMMON_LANGS = {
     "c", "cpp", "bash", "json",
-    # "c_sharp", "cmake", "python", "javascript",
-    # "go", "typescript", "tsx", "html", "css", "markdown", "java",
-    # "yaml", "toml", "dockerfile", "lua", "ruby", "php",
-    # "kotlin", "swift", "scala", "perl", "dart", "haskell",
-    # "ini", "make", "rust",
+    "c_sharp", "cmake", "python", "javascript",
+    "go", "typescript", "tsx", "html", "css", "markdown", "java",
+    "yaml", "toml", "dockerfile", "lua", "ruby", "php",
+    "kotlin", "swift", "scala", "perl", "dart", "haskell",
+    "ini", "make", "rust"
 }
 
 # ----------------------------------------------------------------------------
@@ -181,9 +181,9 @@ COMMON_LANGS = {
 #     故钉 release tag 0.7.3-with-generated-files。
 # ----------------------------------------------------------------------------
 ALWAYS_INCLUDE = {
-    # "html": ("github.com/tree-sitter/tree-sitter-html", None),
-    # "nix":  ("github.com/cstrahan/tree-sitter-nix", None),   # 不在 wiki 官方列表, 手工指定
-    # "swift": ("github.com/alex-pinkus/tree-sitter-swift", "0.7.3-with-generated-files"),
+    "html": ("github.com/tree-sitter/tree-sitter-html", None),
+    "nix":  ("github.com/cstrahan/tree-sitter-nix", None),   # 不在 wiki 官方列表, 手工指定
+    "swift": ("github.com/alex-pinkus/tree-sitter-swift", "0.7.3-with-generated-files"),
 }
 
 # 需要改名/补 alias/subdir 的语言 (name -> dict)

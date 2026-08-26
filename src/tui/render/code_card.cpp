@@ -121,11 +121,22 @@ Element build_code_card(const std::vector<std::string>& code_lines,
     int max_no = 0;
     for (const int n : line_nums) max_no = std::max(max_no, n);
     const int num_width = calc_line_num_width(max_no);
+    // 统一走整块 tree-sitter 高亮（与主转录区一致；回退关键字按行）
+    const std::vector<Element> hl = highlight_code_block(code_lines, lang);
     Elements rows;
     rows.reserve(code_lines.size());
     for (size_t i = 0; i < code_lines.size(); ++i) {
         const int no = (i < line_nums.size()) ? line_nums[i] : 0;
-        rows.push_back(code_row(no, num_width, code_lines[i], lang));
+        Element content = (i < hl.size()) ? hl[i]
+                                          : highlight_code_line(code_lines[i], lang);
+        const Color bg = ftxui::Color::Black;
+        if (bg != ftxui::Color::Black) content = content | ftxui::bgcolor(bg);
+        Elements row;
+        row.push_back(ftxui::text("  "));
+        if (no > 0) row.push_back(line_num_prefix(no, num_width));
+        else row.push_back(ftxui::text(""));
+        row.push_back(ftxui::flex(std::move(content)));
+        rows.push_back(ftxui::hbox(std::move(row)));
     }
     return ftxui::vbox(std::move(rows)) | ftxui::bgcolor(theme::T::Panel);
 }

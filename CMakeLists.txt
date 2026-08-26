@@ -180,7 +180,17 @@ function(workx_fetch_ts_grammar name git_repo git_tag)
     target_include_directories("ts_${name}" PUBLIC "${_src_dir}")
     target_link_libraries("ts_${name}" PUBLIC ${WORKX_TS_RUNTIME_LIB})
     if(MSVC)
-        target_compile_options("ts_${name}" PRIVATE /utf-8)
+        # 本项目在根 CMakeLists 用 /we4700-4703 把「未初始化变量」类告警转错误。
+        # 命令行 /wd 无法降级已被 /we 提升的告警（/we 优先），但对 /FI 强制
+        # 注入的源码级 #pragma warning(disable:...) 则不生效于该策略，故只有
+        # force-include 抑制头能豁免 vendored 目标。此处复用 ftxui 的通用
+        # MSVC 告警抑制头，并顺带压掉第三方 scanner 常见噪音告警（4244/4100
+        # /4267/4293），保证集成到 workx 的语法库能在本项目的告警策略下编译通过。
+        target_compile_options("ts_${name}" PRIVATE
+            /utf-8
+            "/FI${CMAKE_SOURCE_DIR}/third_party/ftxui/suppress_msvc_warnings.h"
+            /wd4244 /wd4100 /wd4267 /wd4293 /wd4456
+        )
     endif()
 
     # 部分第三方 grammar 的 scanner.c 定义了非 static 的通用函数

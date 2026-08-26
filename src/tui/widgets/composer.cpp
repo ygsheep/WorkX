@@ -101,9 +101,9 @@ size_t byte_pos_at_col(const std::string& s, size_t start, size_t col, size_t en
     return std::min(i, end);
 }
 
-/// @brief 块状光标（白色实心单元）
+/// @brief 块状光标（主题强调色实心单元，与输入框左边框同色 #5c9cf5）
 Element cursor_block() {
-    return ftxui::text(" ") | ftxui::bgcolor(Color::White);
+    return ftxui::text(" ") | ftxui::bgcolor(theme::T::Accent);
 }
 
 /// @brief 把控制台/IME 光标锚定到给定元素所在单元（focused 时）。
@@ -131,7 +131,7 @@ Element render_line_with_cursor(const std::string& line, size_t col, bool focuse
     size_t clen = char_len_at(line, col);
     Element at = ftxui::text(line.substr(col, clen));
     if (focused) {
-        at = mark_cursor(at | ftxui::bgcolor(Color::White) | ftxui::color(Color::Black));
+        at = mark_cursor(at | ftxui::bgcolor(theme::T::Accent) | ftxui::color(Color::White));
     } else {
         at |= ftxui::color(theme::T::Text);
     }

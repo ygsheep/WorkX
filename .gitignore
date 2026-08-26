@@ -81,6 +81,11 @@ __pycache__/
 # 发布打包产物（scripts/package_release.py 输出）
 /dist/
 
+# WiX 构建中间产物与暂存目录（scripts/build-msi.ps1 可再生成）
+/scripts/wixobj/
+/scripts/staging/
+/scripts/*.wixpdb
+
 # 运行时生成的窗口布局文件（不提交，避免每次运行产生差异）
 imgui.ini
 

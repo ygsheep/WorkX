@@ -37,6 +37,18 @@ TEST_CASE("parser maps ctrl-enter kitty sequence to Special event",
     REQUIRE(received[0].input() == seq);
 }
 
+TEST_CASE("parser maps shift-enter kitty sequence to Special event",
+          "[composer][parser]") {
+    std::vector<ftxui::Event> received;
+    ftxui::TerminalInputParser parser(
+        [&](ftxui::Event e) { received.push_back(std::move(e)); });
+    const std::string seq = "\x1b[13;2u";
+    for (char c : seq) parser.Add(c);
+    REQUIRE(received.size() == 1);
+    REQUIRE_FALSE(received[0].is_character());
+    REQUIRE(received[0].input() == seq);
+}
+
 TEST_CASE("parser maps ctrl-left kitty sequence to Special event",
           "[composer][parser]") {
     std::vector<ftxui::Event> received;
@@ -124,4 +136,14 @@ TEST_CASE("composer Ctrl+Enter not consumed without panel",
     const bool handled = h.comp->OnEvent(ftxui::Event::Special("\x1b[13;5u"));
     REQUIRE_FALSE(handled);
     REQUIRE_FALSE(h.insert_called);
+}
+
+TEST_CASE("composer Shift+Enter inserts newline without submitting",
+          "[composer][suggest]") {
+    ComposerHarness h;
+    const bool handled = h.comp->OnEvent(ftxui::Event::Special("\x1b[13;2u"));
+    REQUIRE(handled);
+    REQUIRE(h.buf == "@src\n");
+    REQUIRE(h.cursor == 5);
+    REQUIRE_FALSE(h.submit_called);
 }

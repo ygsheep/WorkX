@@ -1356,12 +1356,43 @@ size_t App::Internal::FetchTerminalEvents() {
           continue;
         }
         const wchar_t wc = key_event.uChar.UnicodeChar;
+        // Shift+Enter（ConPTY 字符流路径）：ENABLE_VIRTUAL_TERMINAL_INPUT
+        // 下 ReadConsoleInput 把按键转成 VT 字符流，Enter/Shift+Enter 都以
+        // wc=='\r'（或 '\n'）到达且 wVirtualKeyCode 未必是 VK_RETURN、
+        // dwControlKeyState 不含 SHIFT 位。此处按字符 + Shift 检测（优先
+        // 记录里的 SHIFT 位，回退 GetAsyncKeyState 物理键），改写为 kitty
+        // 序列 \x1b[13;2u，上层按 Special 事件识别（composer 插入换行，
+        // 而非提交）。
+        if ((wc == L'\r' || wc == L'\n') &&
+            (((key_event.dwControlKeyState & SHIFT_PRESSED) != 0) ||
+             (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0)) {
+          const std::string seq = "\x1b[13;2u";
+          for (char c : seq) {
+            terminal_input_parser.Add(c);
+          }
+          continue;
+        }
         // Ctrl+Enter：Windows 控制台把 Enter 与 Ctrl+Enter 都报为 0x0D，
         // 无法区分。改写为 kitty 键盘协议序列 \x1b[13;5u，上层按 Special 事件识别。
         if (key_event.wVirtualKeyCode == VK_RETURN &&
             (key_event.dwControlKeyState &
              (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0) {
           const std::string seq = "\x1b[13;5u";
+          for (char c : seq) {
+            terminal_input_parser.Add(c);
+          }
+          continue;
+        }
+        // Shift+Enter：Windows 控制台/ConPTY 对 Enter 与 Shift+Enter 都可能报为
+        // VK_RETURN+0x0D，且 dwControlKeyState 的 SHIFT 位在部分终端（ConPTY）
+        // 不可靠（Ctrl 位可靠、SHIFT 位常缺失）。改写为 kitty 序列 \x1b[13;2u，
+        // 上层按 Special 事件识别（composer 插入换行，而非提交）。
+        // 用 GetAsyncKeyState 直接查物理 Shift 键，覆盖 dwControlKeyState
+        // 不报告 SHIFT 的情况（Windows Terminal 常见）。
+        if (key_event.wVirtualKeyCode == VK_RETURN &&
+            ((key_event.dwControlKeyState & SHIFT_PRESSED) != 0 ||
+             (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0)) {
+          const std::string seq = "\x1b[13;2u";
           for (char c : seq) {
             terminal_input_parser.Add(c);
           }
