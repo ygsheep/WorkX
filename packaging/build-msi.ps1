@@ -200,6 +200,8 @@ $files = Query-Msi $db 'SELECT * FROM `File`'
 Write-Host "  File count: $($files.Count)"
 $fileNames = @()
 foreach ($f in $files) {
+    # MSI COM Record 被 Fetch() 复用时会偶发返回空/null 行，跳过以保稳健
+    if ($null -eq $f -or $f.Count -lt 3) { continue }
     $fn = $f[2]
     if ($fn) { $fileNames += $fn; Write-Host "    File: $fn" }
 }
@@ -208,6 +210,7 @@ foreach ($f in $files) {
 $envRows = Query-Msi $db 'SELECT * FROM `Environment`'
 Write-Host "  Environment entries:"
 foreach ($e in $envRows) {
+    if ($null -eq $e -or $e.Count -lt 4) { continue }
     Write-Host "    Name=$($e[1]) Value=$($e[2]) Component=$($e[3])"
 }
 
@@ -220,7 +223,7 @@ if (-not ($fileNames | Where-Object { $_ -match 'workx.*\.exe' })) {
     $ok = $false; Write-Host "  [FAIL] workx.exe not in File table"
 }
 $pathEntry = $envRows | Where-Object {
-    $_[1] -match 'PATH' -and $_[2] -match '\[INSTALLDIR\]'
+    $null -ne $_ -and $_.Count -ge 3 -and $_[1] -match 'PATH' -and $_[2] -match '\[INSTALLDIR\]'
 }
 if (-not $pathEntry) {
     $ok = $false; Write-Host "  [FAIL] no Environment (PATH += INSTALLDIR) entry"
