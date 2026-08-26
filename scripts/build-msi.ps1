@@ -4,7 +4,7 @@
 # Steps:
 #   1. Locate WiX Toolset (candle.exe / light.exe / heat.exe)
 #   2. Read version from cmake/version.cmake
-#   3. Stage build output (exe + dlls + tools/) into packaging/staging
+#   3. Stage build output (exe + dlls + tools/) into scripts/staging
 #      (adds VC runtime DLLs as private DLLs if available on this machine)
 #   4. Harvest staged files with heat.exe -> components.wxs
 #   5. Compile with candle.exe
@@ -12,8 +12,8 @@
 #   7. Verify MSI structure via Windows Installer COM
 #
 # Usage:
-#   powershell -ExecutionPolicy Bypass -File packaging\build-msi.ps1
-#   powershell -ExecutionPolicy Bypass -File packaging\build-msi.ps1 -BuildDir build\bin\Release
+#   powershell -ExecutionPolicy Bypass -File scripts\build-msi.ps1
+#   powershell -ExecutionPolicy Bypass -File scripts\build-msi.ps1 -BuildDir build\bin\Release
 # ============================================================
 param(
     [string]$BuildDir = "$PSScriptRoot\..\build\bin\Release",

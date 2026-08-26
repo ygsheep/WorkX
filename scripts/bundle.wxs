@@ -6,7 +6,7 @@
     candle bundle.wxs -ext WixBalExtension -dWorkxVersion=0.6.0 \
                       -dIconPath=src\icon.ico -dMsiPath=dist\workx-0.6.0-x64.msi
     light bundle.wixobj -ext WixBalExtension -ext WixUtilExtension \
-                        -b packaging -b dist -o dist\setup.exe
+                        -b scripts -b dist -o dist\setup.exe
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
      xmlns:bal="http://schemas.microsoft.com/wix/BalExtension">

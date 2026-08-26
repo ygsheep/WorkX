@@ -7,7 +7,7 @@
 # Prerequisite: build-msi.ps1 has been run (dist/workx-<ver>-x64.msi exists)
 #
 # Usage:
-#   powershell -ExecutionPolicy Bypass -File packaging\build-bundle.ps1
+#   powershell -ExecutionPolicy Bypass -File scripts\build-bundle.ps1
 # ============================================================
 param(
     [string]$OutDir = "$PSScriptRoot\..\dist",

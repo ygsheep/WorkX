@@ -77,7 +77,7 @@ jobs:
         shell: pwsh
         run: |
           $msi = Join-Path "${{ github.workspace }}" "dist"
-          & ".\packaging\build-msi.ps1" `
+          & ".\scripts\build-msi.ps1" `
             -BuildDir "${{ github.workspace }}\${{ matrix.build_dir }}" `
             -OutDir $msi `
             -WixBin $env:WIX_BIN

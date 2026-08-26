@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""生成 packaging/license.rtf（中文 MIT 许可，RTF \\uN 转义）"""
+"""生成 scripts/license.rtf（中文 MIT 许可，RTF \\uN 转义）"""
+import os
 import sys
 
 license_text = """Workx 终端智能助手
@@ -47,6 +48,8 @@ rtf = (
     + "}"
 )
 
-with open("packaging/license.rtf", "w", encoding="ascii") as f:
+# 与脚本同目录输出，不依赖调用方 cwd
+out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "license.rtf")
+with open(out_path, "w", encoding="ascii") as f:
     f.write(rtf)
 print("license.rtf OK, size:", len(rtf))

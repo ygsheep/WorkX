@@ -5,7 +5,7 @@
   - Auto-append C:\Program Files\Workx to User PATH (HKCU\Environment)
   - Chinese UI via WixUI_zh-CN.wxl localization
   - Workx icon embedded (package icon + Add/Remove Programs + Start Menu shortcut)
-  Compile (via packaging/build-msi.ps1):
+  Compile (via scripts/build-msi.ps1):
     candle workx.wxs components.wxs -dWorkxVersion=0.6.0 -dIconPath=... -dWixUILangPath=...
     light  workx.wixobj components.wixobj -cultures zh-CN -ext WixUIExtension -o workx-0.6.0-x64.msi
 -->
