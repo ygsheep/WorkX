@@ -641,7 +641,8 @@ std::string sanitize_utf8(std::string_view text) {
         const unsigned char c = static_cast<unsigned char>(data[i]);
 
         if (c < 0x80) {
-            // ASCII 或合法 1 字节
+            // ASCII 或合法 1 字节：直接保留
+            result.push_back(static_cast<char>(c));
             ++i;
             continue;
         }
