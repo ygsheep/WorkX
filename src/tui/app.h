@@ -335,7 +335,10 @@ private:
     /// @brief 项目文件树组件（项目 tab 可交互：点击目录/文件、滚轮滚动）
     ftxui::Component m_project_tree;
     ftxui::Box m_project_box;          ///< 项目树组件渲染 box（点击命中用；折叠时置空）
-    std::thread m_project_scan_thread; ///< 后台 git 扫描线程（生命周期内 join）
+    /// @brief 项目树常驻后台扫描线程（首扫 + 项目 tab 可见时周期重扫，生命周期内 join）
+    std::thread m_project_watch_thread;
+    std::atomic<bool> m_project_watch_run{false};  ///< 扫描线程运行开关（置 false 请求退出）
+    std::atomic<bool> m_project_tab_active{false}; ///< 项目 tab 是否可见（仅可见时周期重扫）
 
     // ---- 输出区域层级导航（标题栏下子列表）----
     /// @brief 层级子列表命中区（面包屑项：主会话/子 Agent；每帧由 build_breadcrumb 重建）

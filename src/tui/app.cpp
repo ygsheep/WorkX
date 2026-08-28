@@ -339,7 +339,9 @@ App::~App() {
     if (m_stream_thread.joinable()) m_stream_thread.join();
     // 复制提示自清除线程不触碰任何成员（析构安全）；join 等待它结束时 m_screen 仍存活。
     if (m_copy_flash_thread.joinable()) m_copy_flash_thread.join();
-    if (m_project_scan_thread.joinable()) m_project_scan_thread.join();
+    // 先置停止信号并 join 项目扫描线程，确保无在途入队后，再停桥接清空队列。
+    m_project_watch_run.store(false);
+    if (m_project_watch_thread.joinable()) m_project_watch_thread.join();
     m_bridge.stop();
 }
 
@@ -2931,6 +2933,8 @@ void App::run() {
                                           const ftxui::Element& change_viewer_elem,
                                           const ftxui::Element& project_tree_elem,
                                           const ftxui::Element& file_viewer_elem) {
+            // 镜像"项目 tab 可见"给后台扫描线程：仅可见时周期重扫，避免无谓扫描。
+            m_project_tab_active.store(m_vm.tabs.active == SidebarTab::kProjects);
             return build_sidebar_tabs(m_vm.tabs, m_vm.sidebar, &m_tab_hits, &m_section_hits,
                                       sub_menu_elem, change_viewer_elem, project_tree_elem,
                                       file_viewer_elem)
@@ -3786,12 +3790,15 @@ void App::retry_message(int msg_idx) {
     m_screen.PostEvent(Event::Custom);  // 唤醒事件循环消费积压事件
 }
 
-/// @brief 关闭侧边栏可开合 tab（变更记录/文件），返回任务调度
+/// @brief 关闭侧边栏可开合 tab（变更记录/文件）
+/// @details 关闭活动 tab 后回到常驻内容 tab：文件查看器关闭跳转「项目」文件树，
+///          变更记录关闭跳转「任务调度」。
 void App::close_sidebar_tab(SidebarTab tab) {
     if (tab == SidebarTab::kChanges) m_vm.tabs.changes_open = false;
     if (tab == SidebarTab::kFiles) m_vm.tabs.file_open = false;
     if (m_vm.tabs.active == tab) {
-        m_vm.tabs.active = SidebarTab::kTasks;
+        m_vm.tabs.active =
+            (tab == SidebarTab::kFiles) ? SidebarTab::kProjects : SidebarTab::kTasks;
         if (m_composer) m_composer->TakeFocus();  // 关闭后交还输入栏焦点
     }
 }
@@ -3994,48 +4001,67 @@ void walk_fs(const std::string& root, std::set<std::string>& out) {
 }  // namespace
 
 /// @brief 后台扫描项目文件树 + git 状态并推送 UI（项目 tab）
-/// @details 先推 loading 占位；线程内构造本地树并 m_queue.push 快照（不触碰 UI 状态）。
+/// @details 单个常驻线程：先首扫（含 loading 占位）；随后仅在项目 tab 可见时周期重扫，
+///          自动反映磁盘文件变化。重扫不置 loading（避免每帧闪烁"扫描项目文件中…"），
+///          apply_variant 内 merge_project_expand 保留既有目录展开态。
 ///          git 仓库：git ls-files（已跟踪）+ git status --porcelain（改动/未跟踪）取并集，
 ///          天然忽略被 ignore 的文件；非 git：文件系统遍历回退（无状态点）。
 void App::start_project_scan() {
-    if (m_project_scan_thread.joinable()) return;
+    if (m_project_watch_run.exchange(true)) return;
     const std::string root = std::filesystem::current_path().string();
-    m_queue.push(ActionProjectFiles{.root = root, .loading = true});
-    m_project_scan_thread = std::thread([this, root] {
-        ActionProjectFiles act;
-        act.root = root;
-        act.loading = false;
-        bool is_git = std::filesystem::is_directory(std::filesystem::path(root) / ".git");
-        act.is_git = is_git;
-        if (is_git) {
-            std::set<std::string> paths;
-            std::map<std::string, char> status;
-            for (auto& line : run_git_lines(root, "ls-files")) {
-                if (line.empty()) continue;
-                paths.insert(line);
-                status[line] = ' ';
+    m_project_watch_thread = std::thread([this, root] {
+        const auto scan = [root]() {
+            ActionProjectFiles act;
+            act.root = root;
+            act.loading = false;
+            const bool is_git =
+                std::filesystem::is_directory(std::filesystem::path(root) / ".git");
+            act.is_git = is_git;
+            if (is_git) {
+                std::set<std::string> paths;
+                std::map<std::string, char> status;
+                for (auto& line : run_git_lines(root, "ls-files")) {
+                    if (line.empty()) continue;
+                    paths.insert(line);
+                    status[line] = ' ';
+                }
+                for (auto& line : run_git_lines(root, "status --porcelain --untracked-files=all")) {
+                    if (line.size() < 3) continue;
+                    const char x = line[0], y = line[1];
+                    std::string p = line.substr(3);  // 跳 "XY " / "?? "
+                    if (!p.empty() && p.front() == '"' && p.size() >= 2 && p.back() == '"')
+                        p = p.substr(1, p.size() - 2);
+                    const auto arrow = p.find(" -> ");  // 重命名/复制取新名
+                    if (arrow != std::string::npos) p = p.substr(arrow + 4);
+                    if (p.empty()) continue;
+                    const char code = (x == '?' && y == '?') ? '?'
+                                     : (y != ' ' ? y : x);
+                    paths.insert(p);
+                    status[p] = code;
+                }
+                act.tree = build_project_tree(paths, status);
+            } else {
+                std::set<std::string> paths;
+                walk_fs(root, paths);
+                act.tree = build_project_tree(paths, {});
             }
-            for (auto& line : run_git_lines(root, "status --porcelain --untracked-files=all")) {
-                if (line.size() < 3) continue;
-                const char x = line[0], y = line[1];
-                std::string p = line.substr(3);  // 跳 "XY " / "?? "
-                if (!p.empty() && p.front() == '"' && p.size() >= 2 && p.back() == '"')
-                    p = p.substr(1, p.size() - 2);
-                const auto arrow = p.find(" -> ");  // 重命名/复制取新名
-                if (arrow != std::string::npos) p = p.substr(arrow + 4);
-                if (p.empty()) continue;
-                const char code = (x == '?' && y == '?') ? '?'
-                                 : (y != ' ' ? y : x);
-                paths.insert(p);
-                status[p] = code;
-            }
-            act.tree = build_project_tree(paths, status);
-        } else {
-            std::set<std::string> paths;
-            walk_fs(root, paths);
-            act.tree = build_project_tree(paths, {});
+            return act;
+        };
+
+        // 首轮：loading 占位 + 完整扫描快照（PostEvent 唤醒事件循环消费并重绘）
+        m_queue.push(ActionProjectFiles{.root = root, .loading = true});
+        m_queue.push(scan());
+        m_screen.PostEvent(Event::Custom);
+
+        // 周期重扫：仅当项目 tab 可见，避免后台无谓拉起 git 进程
+        constexpr auto kInterval = std::chrono::seconds(2);
+        while (m_project_watch_run.load()) {
+            std::this_thread::sleep_for(kInterval);
+            if (!m_project_watch_run.load()) break;
+            if (!m_project_tab_active.load()) continue;
+            m_queue.push(scan());
+            m_screen.PostEvent(Event::Custom);  // 唤醒 UI 消费并重绘，实现自动更新可见
         }
-        m_queue.push(std::move(act));
     });
 }
 
