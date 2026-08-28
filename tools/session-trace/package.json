@@ -1,0 +1,24 @@
+{
+  "name": "workx-session-trace",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "WorkX 会话轨迹调试器：浏览 ~/.workx/projects 下的 JSONL 会话记录，时序图 + 时间线双视图",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@azurity/pure-nerd-font": "^3.0.5",
+    "dompurify": "^3.4.14",
+    "marked": "^18.0.11",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "fontkit": "^2.0.4",
+    "vite": "^5.4.11"
+  }
+}
