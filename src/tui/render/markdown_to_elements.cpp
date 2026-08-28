@@ -1451,6 +1451,14 @@ int estimate_tool_title_lines(const ToolCallNode& t, int width) {
     return lines;
 }
 
+/// 是否为"手动调用技能"注入的合成 Skill 卡片节点
+///（空正文 + 唯一 Skill 工具卡且 call_id 为空；真实模型调 Skill 工具的卡 call_id 非空）
+/// 此类卡片上下零间距（紧贴相邻消息/卡片），不参与通用首/末卡空行。
+bool is_synthetic_skill_card(const MessageNode& m) {
+    return m.tool_calls.size() == 1 && m.tool_calls[0].tool_name == "Skill" &&
+           m.tool_calls[0].call_id.empty() && m.text.empty();
+}
+
 int estimate_message_height(const MessageNode& msg, int width) {
     // 与 build_message 的视觉结构逐行对齐（A3 单一布局源）：
     // - 用户块：markdown 内容（上下留白由转录音区统一追加，自身不记）
@@ -1461,9 +1469,10 @@ int estimate_message_height(const MessageNode& msg, int width) {
         return std::max(1, estimate_markdown_height(t, w));
     };
     if (msg.role == MsgRole::User) {
-        int h = 0;  // 上下留白由转录音区统一追加（每条消息后 +1 行）
+        int h = 0;
+        // 内容 + 上下各空一行（与 build_message 的 UserMessageBox 布局对齐）
         if (!msg.text.empty() || msg.streaming)
-            h += std::max(1, estimate_markdown_height(msg.text, user_body_width(width), /*compact=*/true));
+            h += std::max(1, estimate_markdown_height(msg.text, user_body_width(width), /*compact=*/true)) + 2;
         return h;
     }
 
@@ -1487,8 +1496,8 @@ int estimate_message_height(const MessageNode& msg, int width) {
         }
     }
     // 卡片间距：文本与卡片直接相邻；仅首卡（无正文在前）前空 1 行 + 末卡后无正文时空 1 行
-    //（与 build_message 交错循环对齐）
-    if (!msg.tool_calls.empty()) {
+    //（与 build_message 交错循环对齐）。合成 Skill 卡上下零间距，跳过该间距。
+    if (!msg.tool_calls.empty() && !is_synthetic_skill_card(msg)) {
         const std::size_t pos0 = std::min(msg.tool_calls[0].text_pos, msg.text.size());
         if (pos0 == 0) ++h;  // 首卡无正文在前 → 前空一行
         std::size_t max_pos = 0;
@@ -1505,15 +1514,17 @@ int estimate_message_height(const MessageNode& msg, int width) {
 Element build_message(const MessageNode& msg, int width, std::size_t anim_frame,
                       std::deque<CardHit>* card_hits) {
     // 用户消息：深色背景块 + 左边框线，无角色头，内容左缩进 2 格。
-    // 上下间距由转录音区统一追加（每条消息后 +1 行），自身不再留白，
-    // 保证用户消息上/下间隔对称。
+    // 内容上下各空一行，使背景块/左边框上下留白，消息间隔视觉更舒展；
+    // 转录音区每条消息后仍统一追加 +1 行，整体上/下间隔保持对称。
     if (msg.role == MsgRole::User) {
         Elements body;
         if (!msg.text.empty() || msg.streaming) {
             // 可用宽 = width - 外层缩进 2 - 边框 1 - 内层缩进 2
             // compact：普通段落每物理行占 1 行，块高即文本行数，不产生段落尾随空行
+            body.push_back(ftxui::text(" "));  // 上方空行
             body.push_back(ftxui::hbox({ftxui::text("  "),
                                         ftxui::flex(build_markdown(msg.text, user_body_width(width), /*compact=*/true))}));
+            body.push_back(ftxui::text(" "));  // 下方空行
         }
         return std::make_shared<UserMessageBox>(ftxui::vbox(std::move(body)));
     }
@@ -1689,7 +1700,8 @@ Element build_message(const MessageNode& msg, int width, std::size_t anim_frame,
                 first_card = false;
             }
             // 文本与卡片直接相邻；仅首卡（无正文在前）前空一行，与思考卡/消息顶分隔
-            if (first_card) rows.push_back(ftxui::text(" "));
+            //（合成 Skill 卡上下零间距）
+            if (first_card && !is_synthetic_skill_card(msg)) rows.push_back(ftxui::text(" "));
             rows.push_back(render_tool_card(ti, t));
             first_card = false;
         }
@@ -1701,7 +1713,8 @@ Element build_message(const MessageNode& msg, int width, std::size_t anim_frame,
             }));
         } else {
             // 末卡后无正文：空一行（与流式游标/消息分隔）
-            rows.push_back(ftxui::text(" "));
+            //（合成 Skill 卡上下零间距，不插末行空行）
+            if (!is_synthetic_skill_card(msg)) rows.push_back(ftxui::text(" "));
         }
     }
 

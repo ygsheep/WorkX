@@ -102,6 +102,12 @@ public:
     /// @brief 添加系统提示词
     void set_system_prompt(const std::string& prompt);
 
+    /// @brief 设置系统提示词重建回调（方案 A）
+    /// @details 会话在切换工作模式（极简/标准/计划）时调用该回调，按目标模式重建
+    ///          系统提示词（极简模式只拼白名单工具说明），使提示词的工具介绍段
+    ///          与 function-calling schema 过滤保持联动。nullptr 表示不重建。
+    void set_system_prompt_builder(std::function<std::string(tool::SessionMode)> builder);
+
     /// @brief 获取系统提示词（返回拷贝，线程安全）
     std::string system_prompt() const;
 
@@ -166,6 +172,11 @@ public:
     ///          - run() 返回后批量 append 新增的 assistant/tool 消息
     ///          - restore_from_file 加载的历史不会重复持久化
     void set_session_store(std::shared_ptr<agent::session::SessionStore> store);
+
+    /// @brief 追加手动调用技能事件（合成 Skill 卡持久化，/resume 重建转录显示）
+    /// @details 需在首条消息后、store 可用时调用；无 store 时静默忽略。
+    ///          query 字段用于 /resume 时定位对应会话 user 消息，转为其"原始输入 + Skill 卡"。
+    void append_skill_event(const agent::session::SkillEvent& ev);
 
     /// @brief 配置懒创建 SessionStore 的参数（首条 user 消息时才创建文件）
     /// @details factory 调用此方法传入配置，不立即创建文件。
@@ -397,9 +408,18 @@ private:
     ///          仅在提示词内容相对上次记录有变化时落盘，避免重复快照。
     void persist_system_prompt(const std::string& reason);
 
+    /// @brief 按当前会话模式重建系统提示词（方案 A）
+    /// @details 调用方必须已持有 m_state_mutex。回调非空且重建结果与现提示词不同时
+    ///          覆写 m_system_prompt 并返回落盘 reason（changed/initial），无变化返回空串。
+    /// @return 非空表示需要锁外调用 persist_system_prompt 落盘
+    std::string rebuild_system_prompt_locked();
+
     std::unique_ptr<ICompletionProvider> m_provider;
     std::vector<ChatMessage> m_messages;
     std::string m_system_prompt;
+    /// @brief 系统提示词重建回调（方案 A，由 m_state_mutex 保护）
+    /// @details 模式切换时按目标模式重建提示词（极简只拼白名单工具说明）；nullptr 不重建。
+    std::function<std::string(tool::SessionMode)> m_system_prompt_builder;
     std::string m_session_id;           ///< 会话标识（switch_session 可变更，由 m_state_mutex 保护）
     std::string m_cwd;                  ///< 会话启动时的工作目录（构造时捕获，注入到 ReActLoop）
 

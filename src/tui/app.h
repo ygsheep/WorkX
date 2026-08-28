@@ -129,6 +129,10 @@ private:
     /// @brief 冒烟驱动（B5）：自动投递 mock 对话，完成后请求退出
     void start_smoke_driver();
     void send_input(const std::string& text);
+    /// @brief 技能命令任意位置调用：回显原始输入 + 注入合成 Skill 卡片 + 路由模型
+    void handle_skill_invocation(const std::string& raw_input,
+                                 const std::string& name,
+                                 const std::string& args);
     /// @brief 统一命令执行入口（斜杠命令经 InputProcessor → CommandExecutor）
     void run_command(const std::string& cmd, const std::string& args);
     void start_mock_stream(const std::string& user_text);

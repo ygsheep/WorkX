@@ -3,6 +3,7 @@
 #include "liblogger/logger.h"
 
 #include <algorithm>
+#include <optional>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -858,10 +859,33 @@ void App::load_session_transcript() {
     m_vm.messages.clear();
     invalidate_msg_cache();
     const auto history = m_deps.session->get_messages();
+
+    // 手动调用技能恢复：把对应 user 消息（技能展开的 query）还原为「原始输入回显 + Skill 卡」。
+    // 读取当前会话文件中的 skill 事件，按写入顺序匹配；压缩重建同样覆盖（共享本入口）。
+    std::vector<agent::session::SkillEvent> skills;
+    const std::string cur_sid = m_deps.session->session_id();
+    if (!cur_sid.empty()) {
+        const auto skill_path =
+            std::filesystem::path(m_deps.session_dir) / (cur_sid + ".jsonl");
+        skills = agent::session::SessionStore::load_skills(skill_path.string());
+    }
+    std::size_t skill_idx = 0;
+
     int open_idx = -1;  // 正在合并的工具调用 assistant 节点索引（-1=无）
     for (const auto& cm : history) {
         if (cm.role == agent::ChatMessage::Role::User) {
             open_idx = -1;  // 用户消息分隔回合
+            // 命中技能事件：该 user 消息是展开的 query → 还原为原始输入回显 + Skill 卡
+            if (skill_idx < skills.size() && cm.content == skills[skill_idx].query) {
+                const auto& ev = skills[skill_idx];
+                ++skill_idx;
+                if (!ev.raw_input.empty() && ev.raw_input != cm.content)
+                    m_vm.apply(ActionAppendMessage{.role = "user", .text = ev.raw_input});
+                m_vm.apply(ActionAppendSkill{.name = ev.name,
+                                             .input = ev.input,
+                                             .is_error = ev.is_error});
+                continue;
+            }
             m_vm.apply(ActionAppendMessage{.role = "user", .text = cm.content});
         } else if (cm.role == agent::ChatMessage::Role::Assistant) {
             if (!cm.tool_uses.empty()) {
@@ -1765,6 +1789,47 @@ void App::run_setting(int action) {
     }
 }
 
+// —— 技能命令任意位置调用 ——
+namespace {
+/// /name 后边界判定：name 之后第一个字符（input[pos]）
+/// 到行尾 / 空白 / 标点 / 非 ASCII（含 CJK）→ 视为参数起始（边界成立）；
+/// ASCII 字母数字 - _ 视为名字延续（非边界，避免正则 "/verify" 误吞 "/verify-check"）。
+bool is_skill_boundary_after(const std::string& input, std::size_t pos) {
+    if (pos >= input.size()) return true;
+    const unsigned char c = static_cast<unsigned char>(input[pos]);
+    if (c >= 0x80) return true;
+    const bool word = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+                      (c >= 'A' && c <= 'Z') || c == '-' || c == '_';
+    return !word;
+}
+
+/// 在 input 任意位置查找首个已注册技能命令 "/name"，返回命中信息。
+/// 技能判定：命令注册表中 type()=="prompt"（内置命令均为 local，技能为 prompt）。
+struct SkillHit {
+    std::string name;
+    std::string args;  ///< /name 之后到行尾的参数文本
+};
+std::optional<SkillHit> find_skill_command_anywhere(
+    const std::string& input, const agent::command::CommandRegistry& reg) {
+    std::vector<std::string> names;
+    for (const auto& c : reg.get_user_invocable_commands())
+        if (c->type() == "prompt") names.push_back(c->name());
+    if (names.empty() || input.empty()) return std::nullopt;
+    std::sort(names.begin(), names.end(),
+              [](const std::string& a, const std::string& b) { return a.size() > b.size(); });
+    for (std::size_t i = 0; i < input.size(); ++i) {
+        if (input[i] != '/') continue;
+        for (const auto& n : names) {
+            if (input.compare(i + 1, n.size(), n) != 0) continue;
+            if (is_skill_boundary_after(input, i + 1 + n.size())) {
+                return SkillHit{n, input.substr(i + 1 + n.size())};
+            }
+        }
+    }
+    return std::nullopt;
+}
+}  // namespace
+
 void App::send_input(const std::string& text) {
     // 输入历史：提交即追加并落盘（含斜杠命令，便于重复调用）
     if (!text.empty()) {
@@ -1772,7 +1837,16 @@ void App::send_input(const std::string& text) {
         m_input_history.save();
     }
 
-    // 本地命令：不发送给模型
+    // 技能命令任意位置调用：/skill-name 可出现在消息任何位置（含开头）。
+    // 命中即：回显原始输入 + 注入合成 Skill 卡片 + 本地解析后路由模型。
+    if (!text.empty() && m_deps.command_registry) {
+        if (auto hit = find_skill_command_anywhere(text, *m_deps.command_registry)) {
+            handle_skill_invocation(text, hit->name, hit->args);
+            return;
+        }
+    }
+
+    // 本地命令：不发送给模型（技能已在上方拦截，此处剩余为非技能斜杠命令）
     if (!text.empty() && text[0] == '/') {
         // B2 统一命令：斜杠命令全部经 run_command 执行（单一命令路径）
         run_command(text, "");
@@ -1814,6 +1888,79 @@ void App::send_input(const std::string& text) {
         m_screen.PostEvent(Event::Custom);
     } else {
         m_vm.apply(ActionSetBusy{.busy = false});
+    }
+}
+
+void App::handle_skill_invocation(const std::string& raw_input,
+                                  const std::string& name,
+                                  const std::string& args) {
+    // 1. 回显用户原始输入（含 /skill-name 指令文本）
+    m_vm.apply(ActionAppendMessage{.role = "user", .text = raw_input});
+    m_vm.apply(ActionSetBusy{.busy = true});
+    m_follow = true;
+
+    if (!m_command_processor) {
+        m_vm.apply(ActionAppendSkill{.name = name, .input = args, .is_error = true});
+        m_vm.apply(ActionAppendMessage{.role = "assistant",
+                                       .text = std::string(str::kProcessorUnavailable)});
+        return;
+    }
+
+    // 2. 本地解析技能 → 展开提示词
+    std::string invoke = "/" + name + (args.empty() ? "" : (" " + args));
+    agent::command::CommandContext ctx;
+    auto result = m_command_processor->process(invoke, ctx);
+
+    // 计算实际发往模型的展开提示词（/resume 时用于定位对应 user 消息）
+    std::string query;
+    if (result.should_query) {
+        query = result.output_text;
+        if (query.empty()) {
+            for (const auto& m : result.messages) {
+                if (!query.empty()) query += "\n\n";
+                query += m;
+            }
+        }
+    }
+
+    // 注入合成 Skill 卡片（本地解析完成态；仅 ViewModel 展示，不进模型上下文）
+    m_vm.apply(ActionAppendSkill{.name = name, .input = args, .is_error = result.is_error});
+
+    // skill 事件载荷（/resume 按 query 匹配恢复为「原始输入回显 + Skill 卡」）
+    const agent::session::SkillEvent skill_ev{
+        .name = name,
+        .input = args,
+        .raw_input = raw_input,
+        .query = query,
+        .is_error = result.is_error,
+    };
+    // 落盘（须在 user 消息持久化之后：SessionStore 在首条 user 消息时懒创建，
+    // 若 skill 是首条消息且先于 on_submit 落盘，store 尚不存在会被静默丢弃 → /resume 恢复失败）
+    auto persist_skill = [this](const agent::session::SkillEvent& ev) {
+        if (m_deps.session) m_deps.session->append_skill_event(ev);
+    };
+
+    if (result.is_error) {
+        persist_skill(skill_ev);
+        if (!result.output_text.empty()) m_vm.apply(ActionError{.message = result.output_text});
+        return;
+    }
+
+    // 4. 本地命令型技能（should_query=false）直接输出
+    if (!result.output_text.empty() && !result.should_query) {
+        persist_skill(skill_ev);
+        m_vm.apply(ActionAppendMessage{.role = "assistant", .text = result.output_text});
+        return;
+    }
+
+    // 5. 需要模型：先把展开后的提示词交给 on_submit（同步持久化 user 消息、创建 store），
+    //    再落盘 skill 事件（保证事件晚于其 query 消息，/resume 按 query 内容匹配即可恢复）。
+    if (result.should_query && m_deps.on_submit) {
+        if (!query.empty()) {
+            m_deps.on_submit(query, {});
+            persist_skill(skill_ev);
+            m_screen.PostEvent(Event::Custom);  // 同 run_command：唤醒事件循环消费积压事件
+        }
     }
 }
 

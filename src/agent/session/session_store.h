@@ -62,6 +62,24 @@ void to_json(nlohmann::json& j, const SubAgentEvent& ev);
 /// @brief 从 JSON 反序列化（缺省字段用默认值）
 void from_json(const nlohmann::json& j, SubAgentEvent& ev);
 
+/// @brief 手动调用技能持久化事件（UI 注入合成 Skill 卡片 /resume 时重建转录显示）
+/// @details 由 handle_skill_invocation 落盘。query 记录实际发往模型的展开提示词，
+///          /resume 重建转录区时按 query 匹配对应会话 user 消息，转为其"原始输入回显
+///          + Skill 卡"。本事件仅影响转录区显示，不进入模型上下文。
+struct SkillEvent {
+    std::string name;        ///< 技能名（不含前导 /）
+    std::string input;       ///< 用户输入的参数文本
+    std::string raw_input;   ///< 用户完整原始输入（回显用）
+    std::string query;       ///< 实际发往模型的展开提示词（用于恢复时定位对应 user 消息）
+    bool is_error = false;   ///< 技能本地解析是否出错
+};
+
+/// @brief 序列化到 JSON（外层 type 恒为 "skill"）
+void to_json(nlohmann::json& j, const SkillEvent& ev);
+
+/// @brief 从 JSON 反序列化（缺省字段用默认值）
+void from_json(const nlohmann::json& j, SkillEvent& ev);
+
 /// @brief 会话元信息（用于列表展示）
 struct SessionMeta {
     std::string session_id;        ///< 会话 ID
@@ -148,6 +166,10 @@ public:
     /// @details append-only：按事件发生顺序逐条追加，/resume 时按序重放恢复。
     bool append_sub_agent(const SubAgentEvent& ev);
 
+    /// @brief 追加手动调用技能事件（合成 Skill 卡持久化）
+    /// @details append-only：按发生顺序逐条追加，/resume 重建转录区时按 query 匹配恢复。
+    bool append_skill(const SkillEvent& ev);
+
     // ============================================================
     // 静态工具方法
     // ============================================================
@@ -174,6 +196,10 @@ public:
     /// @brief 从 JSONL 文件加载子 Agent 事件（按写入顺序）
     /// @return 子 Agent 事件列表（无则空）
     static std::vector<SubAgentEvent> load_sub_agents(const std::string& file_path);
+
+    /// @brief 从 JSONL 文件加载手动调用技能事件（按写入顺序）
+    /// @return 技能事件列表（无则空）
+    static std::vector<SkillEvent> load_skills(const std::string& file_path);
 
 private:
     std::string m_file_path;

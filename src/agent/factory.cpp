@@ -240,11 +240,17 @@ SessionResult create_session(IConfigManager& cfg,
     result.session->set_file_index_invalidator([] { global_file_index().mark_dirty(); });
 
     // 系统提示词
-    std::string sys_prompt = build_system_prompt(
-        cfg.get_or<std::string>(keys::SYSTEM_PROMPT, ""), *tool_registry);
+    const std::string user_prompt = cfg.get_or<std::string>(keys::SYSTEM_PROMPT, "");
+    std::string sys_prompt = build_system_prompt(user_prompt, *tool_registry);
     if (!sys_prompt.empty()) {
         result.session->set_system_prompt(sys_prompt);
     }
+    // 极简/标准模式切换时重建系统提示词（方案 A）：工具说明段随模式收窄/恢复。
+    // 会话持有构建回调（捕获 user_prompt 与注册表），切换模式时由会话调用。
+    result.session->set_system_prompt_builder(
+        [user_prompt, tool_registry](tool::SessionMode mode) -> std::string {
+            return build_system_prompt(user_prompt, *tool_registry, mode);
+        });
 
     // DS_CACHE H-4：从 provider preset 或 cfg 注入上下文窗口到压缩器
     // 优先级：cfg.backend.context_length > preset.default_context_length > 0（压缩器内部 fallback 1M）
@@ -471,7 +477,8 @@ std::string build_environment_context() {
 } // anonymous namespace
 
 std::string build_system_prompt(const std::string& user_prompt,
-                                const tool::ToolRegistry& registry) {
+                                const tool::ToolRegistry& registry,
+                                tool::SessionMode mode) {
     std::string sys_prompt = user_prompt;
 
     // 注入环境上下文（<env> 段，对齐 Claude Code）
@@ -486,8 +493,11 @@ std::string build_system_prompt(const std::string& user_prompt,
         sys_prompt += project_memory;
     }
 
-    // 拼接工具 prompt
+    // 拼接工具 prompt（极简模式仅白名单工具：Skill/Bash/Read/Write/Edit）
     for (const auto& t : registry.get_all_tools()) {
+        if (mode == tool::SessionMode::Minimal && !tool::is_minimal_mode_tool(t->name())) {
+            continue;
+        }
         sys_prompt += "\n\n";
         sys_prompt += t->prompt();
     }

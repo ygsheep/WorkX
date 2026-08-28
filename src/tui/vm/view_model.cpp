@@ -45,6 +45,31 @@ bool ViewModel::apply_variant(const ActionAppendMessage& a) {
     return true;
 }
 
+bool ViewModel::apply_variant(const ActionAppendSkill& a) {
+    MessageNode n;
+    n.role = MsgRole::Assistant;
+    n.sealed = true;
+    ToolCallNode t;
+    t.tool_name = "Skill";
+    t.call_id = "";  // 本地合成，无真实 tool_call id
+    // arguments 需为 {"name":...} JSON，skill_name_from_args 据此显示「Skills：名」
+    t.arguments = nlohmann::json{{"name", a.name}}.dump();
+    if (a.is_error) {
+        t.result = "(技能本地解析失败)";
+    } else {
+        t.result = "(技能已本地解析，指令已交由模型处理" +
+                   (a.input.empty() ? std::string{} : std::string("：") + a.input) + ")";
+    }
+    t.done = true;     // 本地技能同步解析完成
+    t.running = false;
+    t.is_error = a.is_error;
+    t.expanded = a.is_error;  // 出错默认展开
+    t.text_pos = n.text.size();
+    n.tool_calls.push_back(std::move(t));
+    messages.push_back(std::move(n));
+    return true;
+}
+
 bool ViewModel::apply_variant(const ActionTokenDelta& a) {
     auto& m = active_stream();
     m.streaming = true;

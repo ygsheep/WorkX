@@ -32,6 +32,16 @@ struct ActionAppendMessage {
     std::string text;
 };
 
+/// @brief 手动调用技能：注入合成 Skill 卡片（本地解析完成态）
+/// @details 用户在消息任意位置输入 /skill-name 时，UI 回显原始输入后注入此卡，
+///          以复用现有「Skills：名」工具卡渲染。卡片仅存在于 ViewModel 转录区，
+///          不进入会话模型上下文（实际发往模型的仍是技能展开后的提示词）。
+struct ActionAppendSkill {
+    std::string name;      ///< 技能名（不含前导 /）
+    std::string input;     ///< 用户传入的参数文本（卡内展示）
+    bool is_error = false; ///< 技能本地解析是否出错
+};
+
 /// @brief 流式正文增量（追加到当前流式消息节点）
 struct ActionTokenDelta {
     std::string content_delta;
@@ -257,6 +267,7 @@ struct ActionProjectFiles {
 /// @brief 统一动作类型
 using Action = std::variant<
     ActionAppendMessage,
+    ActionAppendSkill,
     ActionTokenDelta,
     ActionReasoningDelta,
     ActionStepDone,

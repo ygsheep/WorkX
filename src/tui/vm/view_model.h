@@ -206,6 +206,7 @@ public:
 private:
     // 单 action 分派（由 apply 的 std::visit 调用）
     bool apply_variant(const ActionAppendMessage&);
+    bool apply_variant(const ActionAppendSkill&);
     bool apply_variant(const ActionTokenDelta&);
     bool apply_variant(const ActionReasoningDelta&);
     bool apply_variant(const ActionStepDone&);

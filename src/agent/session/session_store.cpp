@@ -87,6 +87,29 @@ void from_json(const nlohmann::json& j, SubAgentEvent& ev) {
 }
 
 // ============================================================
+// SkillEvent 序列化
+// ============================================================
+
+void to_json(nlohmann::json& j, const SkillEvent& ev) {
+    j = nlohmann::json{
+        {"type", "skill"},
+        {"name", ev.name},
+        {"input", ev.input},
+        {"rawInput", ev.raw_input},
+        {"query", ev.query},
+        {"isError", ev.is_error},
+    };
+}
+
+void from_json(const nlohmann::json& j, SkillEvent& ev) {
+    ev.name = j.value("name", std::string{});
+    ev.input = j.value("input", std::string{});
+    ev.raw_input = j.value("rawInput", std::string{});
+    ev.query = j.value("query", std::string{});
+    ev.is_error = j.value("isError", false);
+}
+
+// ============================================================
 // 生命周期
 // ============================================================
 
@@ -235,6 +258,13 @@ bool SessionStore::append_todo(const std::vector<core::todo::TodoItem>& todos) {
 }
 
 bool SessionStore::append_sub_agent(const SubAgentEvent& ev) {
+    nlohmann::json j = ev;
+    j["sessionId"] = m_session_id;
+    j["timestamp"] = now_iso();
+    return append_line(j);
+}
+
+bool SessionStore::append_skill(const SkillEvent& ev) {
     nlohmann::json j = ev;
     j["sessionId"] = m_session_id;
     j["timestamp"] = now_iso();
@@ -409,6 +439,15 @@ std::vector<SubAgentEvent> SessionStore::load_sub_agents(const std::string& file
     for (const auto& j : read_all(file_path)) {
         if (j.value("type", "") != "sub_agent") continue;
         events.push_back(j.get<SubAgentEvent>());
+    }
+    return events;
+}
+
+std::vector<SkillEvent> SessionStore::load_skills(const std::string& file_path) {
+    std::vector<SkillEvent> events;
+    for (const auto& j : read_all(file_path)) {
+        if (j.value("type", "") != "skill") continue;
+        events.push_back(j.get<SkillEvent>());
     }
     return events;
 }

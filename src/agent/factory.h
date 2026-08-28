@@ -19,6 +19,8 @@
 
 #include "core/config/i_config_manager.h"
 
+#include "agent/tool/context.h"
+
 namespace agent { namespace tool { class ToolRegistry; } }
 namespace agent::session { class SessionStore; }
 namespace agent::mcp { class McpClientManager; }
@@ -108,8 +110,10 @@ void register_builtin_tools(tool::ToolRegistry& registry,
 /// @brief 拼接系统提示词（含环境上下文、项目记忆和工具 prompt）
 /// @param user_prompt 用户配置的系统提示词（可为空）
 /// @param registry 已注册工具的工具注册表
+/// @param mode 会话工作模式；极简模式（Minimal）下只拼白名单工具的 prompt
 /// @return 拼接后的完整系统提示词
 std::string build_system_prompt(const std::string& user_prompt,
-                                const tool::ToolRegistry& registry);
+                                const tool::ToolRegistry& registry,
+                                tool::SessionMode mode = tool::SessionMode::Standard);
 
 } // namespace agent

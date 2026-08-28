@@ -280,6 +280,12 @@ void ChatSession::set_system_prompt(const std::string& prompt) {
     persist_system_prompt(reason);
 }
 
+void ChatSession::set_system_prompt_builder(
+    std::function<std::string(tool::SessionMode)> builder) {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    m_system_prompt_builder = std::move(builder);
+}
+
 std::string ChatSession::system_prompt() const {
     std::lock_guard<std::mutex> lock(m_state_mutex);
     return m_system_prompt;
@@ -352,6 +358,15 @@ void ChatSession::set_compactor_archive_dir(const std::string& dir) {
 void ChatSession::set_session_store(std::shared_ptr<agent::session::SessionStore> store) {
     std::lock_guard<std::mutex> lock(m_state_mutex);
     m_session_store = std::move(store);
+}
+
+void ChatSession::append_skill_event(const agent::session::SkillEvent& ev) {
+    std::shared_ptr<agent::session::SessionStore> store;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        store = m_session_store;
+    }
+    if (store) store->append_skill(ev);
 }
 
 void ChatSession::configure_session_store(const std::string& project_dir,
@@ -872,38 +887,60 @@ tool::SessionMode ChatSession::session_mode() const {
 }
 
 void ChatSession::set_session_mode(tool::SessionMode mode) {
-    std::lock_guard<std::mutex> lock(m_state_mutex);
-    // 离开 Plan：恢复进入前的权限模式（与 ExitPlanMode 工具语义一致）
-    if (m_session_mode == tool::SessionMode::Plan && mode != tool::SessionMode::Plan) {
-        m_permission_mode = m_permission_mode_before_plan;
+    std::string persist_reason;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        // 离开 Plan：恢复进入前的权限模式（与 ExitPlanMode 工具语义一致）
+        if (m_session_mode == tool::SessionMode::Plan && mode != tool::SessionMode::Plan) {
+            m_permission_mode = m_permission_mode_before_plan;
+        }
+        // 进入 Plan：记录 before_plan 并强制只读（对齐 EnterPlanMode 工具语义）
+        if (mode == tool::SessionMode::Plan && m_session_mode != tool::SessionMode::Plan) {
+            m_permission_mode_before_plan = m_permission_mode;
+            m_permission_mode = tool::PermissionMode::Plan;
+        }
+        m_session_mode = mode;
+        // 方案 A：模式变化后按目标模式重建系统提示词（工具说明随模式收窄/恢复）
+        persist_reason = rebuild_system_prompt_locked();
     }
-    // 进入 Plan：记录 before_plan 并强制只读（对齐 EnterPlanMode 工具语义）
-    if (mode == tool::SessionMode::Plan && m_session_mode != tool::SessionMode::Plan) {
-        m_permission_mode_before_plan = m_permission_mode;
-        m_permission_mode = tool::PermissionMode::Plan;
-    }
-    m_session_mode = mode;
+    if (!persist_reason.empty()) persist_system_prompt(persist_reason);
 }
 
 void ChatSession::toggle_session_mode() {
-    std::lock_guard<std::mutex> lock(m_state_mutex);
-    switch (m_session_mode) {
-        case tool::SessionMode::Standard:
-            // 标准 → 计划：记录 before_plan（退出计划恢复用）
-            m_permission_mode_before_plan = m_permission_mode;
-            m_permission_mode = tool::PermissionMode::Plan;
-            m_session_mode = tool::SessionMode::Plan;
-            break;
-        case tool::SessionMode::Plan:
-            // 计划 → 极简：退出计划，恢复进入前的权限模式
-            m_permission_mode = m_permission_mode_before_plan;
-            m_session_mode = tool::SessionMode::Minimal;
-            break;
-        case tool::SessionMode::Minimal:
-            // 极简 → 标准
-            m_session_mode = tool::SessionMode::Standard;
-            break;
+    std::string persist_reason;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        switch (m_session_mode) {
+            case tool::SessionMode::Standard:
+                // 标准 → 计划：记录 before_plan（退出计划恢复用）
+                m_permission_mode_before_plan = m_permission_mode;
+                m_permission_mode = tool::PermissionMode::Plan;
+                m_session_mode = tool::SessionMode::Plan;
+                break;
+            case tool::SessionMode::Plan:
+                // 计划 → 极简：退出计划，恢复进入前的权限模式
+                m_permission_mode = m_permission_mode_before_plan;
+                m_session_mode = tool::SessionMode::Minimal;
+                break;
+            case tool::SessionMode::Minimal:
+                // 极简 → 标准
+                m_session_mode = tool::SessionMode::Standard;
+                break;
+        }
+        // 方案 A：模式变化后按目标模式重建系统提示词
+        persist_reason = rebuild_system_prompt_locked();
     }
+    if (!persist_reason.empty()) persist_system_prompt(persist_reason);
+}
+
+std::string ChatSession::rebuild_system_prompt_locked() {
+    std::string reason;
+    if (!m_system_prompt_builder) return reason;
+    std::string rebuilt = m_system_prompt_builder(m_session_mode);
+    if (rebuilt == m_system_prompt) return reason;
+    m_system_prompt = std::move(rebuilt);
+    reason = m_system_prompt_recorded ? "changed" : "initial";
+    return reason;
 }
 
 std::vector<ChatMessage> ChatSession::get_messages() const {
