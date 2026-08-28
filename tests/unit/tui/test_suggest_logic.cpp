@@ -214,6 +214,38 @@ TEST_CASE("filter_search_entries keywords field participates", "[palette][filter
     REQUIRE(hits[0] == 0);
 }
 
+TEST_CASE("filter_search_entries mode selector entries match by title/keywords", "[palette][filter][mode]") {
+    // 模式选择面板条目（标准/计划/极简 + 介绍副标题）
+    std::vector<SearchEntry> entries;
+    auto push = [&](std::string title, std::string desc, std::string kw, bool active) {
+        SearchEntry e;
+        e.category = SearchCategory::Setting;
+        e.title = std::move(title);
+        e.subtitle = std::move(desc);
+        e.keywords = std::move(kw);
+        e.active = active;
+        entries.push_back(std::move(e));
+    };
+    push("标准模式", "全部工具可用，权限独立切换", "standard", true);
+    push("计划模式", "只读规划：禁止写文件与执行命令", "plan", false);
+    push("极简模式", "仅支持 Skill / Bash / Read / Write / Edit", "minimal", false);
+
+    // 空查询：全部命中
+    REQUIRE(filter_search_entries(entries, "").size() == 3);
+    // 按标题中文命中
+    auto zh = filter_search_entries(entries, "极简");
+    REQUIRE(zh.size() == 1);
+    REQUIRE(zh[0] == 2);
+    // 按关键字（英文标签）命中
+    auto en = filter_search_entries(entries, "plan");
+    REQUIRE(en.size() == 1);
+    REQUIRE(en[0] == 1);
+    // 副标题（模式介绍）参与搜索
+    auto desc = filter_search_entries(entries, "只读");
+    REQUIRE(desc.size() == 1);
+    REQUIRE(desc[0] == 1);
+}
+
 TEST_CASE("filter_search_entries is case insensitive", "[palette][filter]") {
     std::vector<SearchEntry> entries = {
         make_entry(SearchCategory::File, "src/core/utils.cpp"),

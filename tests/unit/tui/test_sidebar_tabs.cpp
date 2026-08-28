@@ -256,7 +256,7 @@ TEST_CASE("sidebar tabs records section hit boxes", "[sidebar_tabs][hit]") {
 TEST_CASE("sidebar tabs changes tab appears with close button when open", "[sidebar_tabs][render]") {
     SidebarTabsModel tabs = make_tabs();
     tabs.changes_open = true;
-    const auto text = render_elem(build_sidebar_tabs(tabs, SidebarModel{}));
+    const auto text = render_elem(build_sidebar_tabs(tabs, SidebarModel{}), 40, 24);
     REQUIRE(text.find("变更记录") != std::string::npos);
     REQUIRE(text.find("✕") != std::string::npos);
 }
@@ -323,12 +323,12 @@ TEST_CASE("sidebar tabs records hit boxes for visible tabs", "[sidebar_tabs][hit
     tabs.changes_open = true;
     tabs.file_open = true;
     std::deque<TabHit> hits;
-    // 3 个 CJK tab + 边框总宽约 38 列，30 列侧栏放不下会按比例压缩导致
-    // 最后一个 tab 的 box 反转（x_max < x_min）。此处用 40 列验证命中区逻辑。
-    render_elem(build_sidebar_tabs(tabs, SidebarModel{}, &hits), 40, 24);
+    // 4 个 CJK tab + 边框 + 关闭按钮总宽较大，需足够宽度避免末 tab box 反转
+    render_elem(build_sidebar_tabs(tabs, SidebarModel{}, &hits), 60, 24);
 
-    // 3 个可见 tab：每个 1 个切换区 + 2 个可关闭 tab 各 1 个关闭区 = 5
-    REQUIRE(hits.size() == 5);
+    // 4 个可见 tab（任务调度/项目/变更记录/文件）：每个 1 个切换区 +
+    // 2 个可关闭 tab 各 1 个关闭区 = 6
+    REQUIRE(hits.size() == 6);
 
     int tasks_switch = 0, changes_switch = 0, files_switch = 0;
     int changes_close = 0, files_close = 0;
@@ -354,11 +354,12 @@ TEST_CASE("sidebar tabs records hit boxes for visible tabs", "[sidebar_tabs][hit
     REQUIRE(files_close == 1);
 }
 
-TEST_CASE("sidebar tabs no hit boxes when only tasks tab", "[sidebar_tabs][hit]") {
+TEST_CASE("sidebar tabs no hit boxes when only resident tabs", "[sidebar_tabs][hit]") {
     SidebarTabsModel tabs = make_tabs();
     std::deque<TabHit> hits;
     render_elem(build_sidebar_tabs(tabs, SidebarModel{}, &hits));
-    REQUIRE(hits.size() == 1);  // 仅任务调度切换区
+    // 常驻 2 tab（任务调度/项目）：各 1 个切换区；可关闭 tab 未打开无关闭区
+    REQUIRE(hits.size() == 2);
     REQUIRE(hits[0].tab == SidebarTab::kTasks);
     REQUIRE(!hits[0].close);
 }

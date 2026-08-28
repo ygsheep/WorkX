@@ -79,6 +79,9 @@ Element build_row(const ProjectNode& node, int depth, bool is_dir) {
     parts.push_back(ftxui::text(indent) | ftxui::color(theme::T::TextFaint));
 
     if (is_dir) {
+        // 展开态文件夹：图标 + 名字统一主题强调色（Accent 蓝），收起态用默认主题色
+        const Color dir_color = node.expanded ? theme::T::Accent : theme::T::TextDim;
+        const Color name_color = node.expanded ? theme::T::Accent : theme::T::Text;
         // 引导列：展开/收起 chevron
         parts.push_back(ftxui::text(std::string(
             node.expanded ? theme::icon_chevron_down() : theme::icon_chevron_right()))
@@ -86,9 +89,9 @@ Element build_row(const ProjectNode& node, int depth, bool is_dir) {
         parts.push_back(ftxui::text(" "));
         parts.push_back(ftxui::text(std::string(
             node.expanded ? theme::icon_folder_open() : theme::icon_folder()))
-            | ftxui::color(theme::T::TextDim));
+            | ftxui::color(dir_color));
         parts.push_back(ftxui::text(" "));
-        parts.push_back(ftxui::text(node.name) | ftxui::color(theme::T::Text));
+        parts.push_back(ftxui::text(node.name) | ftxui::color(name_color));
         // 目录名后缀提示（ASCII 下仍可辨认目录）
         parts.push_back(ftxui::text(std::string(str::kProjectsDirSuffix))
                         | ftxui::color(theme::T::TextFaint));

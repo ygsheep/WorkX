@@ -39,6 +39,8 @@ bool ViewModel::apply_variant(const ActionAppendMessage& a) {
     n.role = a.role == "user" ? MsgRole::User : MsgRole::Assistant;
     n.text = a.text;
     n.sealed = true;
+    // assistant 追加均为 UI 通知/命令输出，非模型回复 → 不显示重试/复制按钮栏
+    n.notice = (n.role == MsgRole::Assistant);
     messages.push_back(std::move(n));
     return true;
 }
@@ -172,6 +174,12 @@ bool ViewModel::apply_variant(const ActionSetBusy& a) {
 bool ViewModel::apply_variant(const ActionPermissions& a) {
     if (sidebar.permission == a.label) return false;
     sidebar.permission = a.label;
+    return true;
+}
+
+bool ViewModel::apply_variant(const ActionSetMode& a) {
+    if (sidebar.mode == a.label) return false;
+    sidebar.mode = a.label;
     return true;
 }
 

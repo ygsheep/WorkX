@@ -134,6 +134,8 @@ private:
     void start_mock_stream(const std::string& user_text);
     void cmd_resume(const std::string& args);
     void cmd_rename(const std::string& args);
+    /// @brief /new：新建会话并切换（保留旧会话文件；设置面板 NewSession 动作共用）
+    void cmd_new();
     /// @brief /clear：删除当前会话文件并新建会话（设置面板 Clear 动作共用）
     void cmd_clear();
     /// @brief /view：打开文件只读查看器（读取 + 行号 + 虚拟化滚动）
@@ -148,12 +150,22 @@ private:
     void cmd_test_askuser();
     /// @brief 恢复指定会话（switch_session + 历史载入；cmd_resume 与搜索面板共用）
     void resume_session(const std::string& file_path, const std::string& title);
+    /// @brief 从当前会话重建转录区（resume 历史载入 / 压缩上下文后刷新共用）
+    void load_session_transcript();
+    /// @brief 手动压缩上下文（搜索面板「压缩上下文」与 /compact 命令共用）
+    void compact_context();
     /// @brief 新建会话后重置 UI 状态（/clear 与 /new 共用：清空消息/子 Agent/变更/统计/标题）
     void reset_vm_for_new_session();
     void open_model_selector();
     void apply_model(int index);
     /// @brief 从 m_model_items 重建 /model 面板条目（active = 当前模型）
     void rebuild_model_entries();
+    /// @brief 打开模式选择面板（Ctrl+P → 切换模式，与 /model 同款悬浮选择）
+    void open_mode_selector();
+    /// @brief 应用选中的工作模式（标准 / 计划 / 极简）
+    void apply_mode(int index);
+    /// @brief 重建模式面板条目（active = 当前模式，subtitle = 模式介绍）
+    void rebuild_mode_entries();
     /// @brief 打开 /resume 会话选择面板（仅会话条目）
     void open_resume_palette();
     /// @brief 打开供应商管理面板（读配置 backend.providers）
@@ -200,6 +212,12 @@ private:
     /// @brief 返回主会话层级
     void show_main_level();
     static std::string mode_label(agent::tool::PermissionMode m);
+    /// @brief 会话工作模式 → 状态行标签（"standard" / "plan" / "minimal"）
+    static std::string session_mode_label(agent::tool::SessionMode m);
+    /// @brief 权限两态切换（手动审批 ↔ 完全访问；Shift+Tab / 设置面板）
+    void toggle_permission();
+    /// @brief 工作模式三态切换（标准 → 计划 → 极简 → 标准）
+    void toggle_mode();
     /// @brief 触发「已复制 N 字符」短暂提示（底层单线程，1.5s 后自动清除后重绘）
     void flash_copy_message(std::size_t char_count);
     /// @brief 选区文本变化回调：缓存最新选中内容，供鼠标释放时写入剪贴板
@@ -292,10 +310,12 @@ private:
     std::vector<SessionLite> m_session_metas;    ///< 会话列表缓存（后台加载）
     bool m_sessions_loading = false;             ///< 会话列表正在后台加载
 
-    // ---- 统一悬浮面板：/resume 会话 · /model 模型 · /provider 供应商 ----
+    // ---- 统一悬浮面板：/resume 会话 · /model 模型 · 模式选择 · /provider 供应商 ----
     std::vector<SearchEntry> m_session_entries;  ///< /resume 面板条目（仅会话）
     bool m_resume_open = false;
     std::vector<SearchEntry> m_model_entries;    ///< /model 面板条目（由 m_model_items 派生）
+    std::vector<SearchEntry> m_mode_entries;     ///< 模式选择面板条目（标准/计划/极简 + 介绍）
+    bool m_mode_open = false;
     bool m_provider_open = false;
     std::vector<agent::ProviderConfigEntry> m_providers;  ///< 配置中的供应商列表
     std::string m_current_provider;              ///< 当前供应商 id（backend.provider）
@@ -366,7 +386,8 @@ private:
 
     std::vector<std::string> m_model_items;  ///< 模型列表（/model 面板）
     std::vector<agent::ModelInfo> m_model_infos;  ///< list_models 完整信息（apply_model 取 context_length）
-    int m_mock_perm_cycle = 0;   ///< mock 下 Shift+Tab 权限循环序号（""→plan→bypass）
+    int m_mock_perm_cycle = 0;   ///< mock 下 Shift+Tab 权限循环序号（""→bypass）
+    int m_mock_mode_cycle = 0;   ///< mock 下模式切换循环序号（standard→plan→minimal）
 
     // 思考动画（busy 时推进帧并持续重绘）
     std::size_t m_anim_frame = 0;        ///< 动画帧号（UI 线程自增）
@@ -395,6 +416,7 @@ private:
     ftxui::Component m_palette_comp;
     ftxui::Component m_resume_comp;
     ftxui::Component m_model_comp;
+    ftxui::Component m_mode_comp;
     ftxui::Component m_provider_comp;
 
     // ---- 拖拽选中 → 复制剪贴板（FTXUI 原生 Selection + 系统剪贴板）----

@@ -10,6 +10,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -52,6 +53,34 @@ enum class PermissionMode : uint8_t {
     Plan = 2,
     BypassPermissions = 3,
 };
+
+/// @brief 会话工作模式（模式列表：标准 / 计划 / 极简）
+/// @details 与权限模式正交：模式是用户侧的顶层选择（状态栏最前位展示），
+///          权限（手动审批 / 完全访问）在模式内部独立切换。
+///          - Standard：标准模式，全部工具可用
+///          - Plan：计划模式，只读规划（进入时联动权限 Plan，退出时恢复）
+///          - Minimal：极简模式，仅暴露 Skill/Bash/Read/Write/Edit 五个工具
+enum class SessionMode : uint8_t {
+    Standard = 0,  ///< 标准模式：全部工具 + 权限独立
+    Plan = 1,      ///< 计划模式：只读规划（对齐 PermissionMode::Plan）
+    Minimal = 2,   ///< 极简模式：仅 Skill/Bash/Read/Write/Edit
+};
+
+/// @brief 极简模式工具白名单（SessionMode::Minimal 下唯一允许调用的工具）
+/// @details schema 过滤（LLM 看不到的工具不会调用）与 ToolExecutor 守卫（幻觉
+///          工具名直接拒绝）共用此单一来源，避免两处漂移。
+inline constexpr const char* kMinimalModeToolNames[] = {
+    "Skill", "Bash", "Read", "Write", "Edit",
+};
+inline constexpr int kMinimalModeToolCount = 5;
+
+/// @brief 判断工具名是否在极简模式白名单内
+inline bool is_minimal_mode_tool(std::string_view name) {
+    for (int i = 0; i < kMinimalModeToolCount; ++i) {
+        if (name == kMinimalModeToolNames[i]) return true;
+    }
+    return false;
+}
 
     /// @brief 工具 touch 回调类型
     /// @details 工具执行过程中上报访问过的文件路径（绝对路径），
@@ -96,6 +125,11 @@ struct ToolContext {
     /// @details 默认 Default；宿主可在构造时注入（如 CLI 的 --bypass-permissions）。
     ///          工具 check_permissions 依据该模式决定放行/确认/拒绝。
     PermissionMode permission_mode{PermissionMode::Default};
+
+    /// @brief 会话工作模式（标准 / 计划 / 极简）
+    /// @details 由 ReActLoop 在 turn 开始时注入。ToolExecutor 依据该模式做
+    ///          第二道守卫：Minimal 下仅允许白名单工具（幻觉工具名直接拒绝）。
+    SessionMode session_mode{SessionMode::Standard};
 
     /// @brief 权限模式变更回调类型（#28：EnterPlanMode/ExitPlanMode 注入路径）
     /// @details 工具通过 set_permission_mode() 请求模式切换，由宿主（ReActLoop）

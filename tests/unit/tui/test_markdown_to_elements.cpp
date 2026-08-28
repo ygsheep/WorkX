@@ -295,8 +295,9 @@ TEST_CASE("estimate_message_height syncs with Read tool result layout",
         "  3\u2192}\n"
         "\n"
         "(read lines 1-3, total 3, truncated)");
-    // 卡边框2+头1 + 卡vPad 2 + fpath 1 + 状态 1 + 代码 3 + 代码区vPad 2 + 元数据 2 = 14
-    REQUIRE(estimate_message_height(msg, 240) == 14);
+    // 与 render 对齐：前空1 + 边框2 + 头1 + 标题1 + 标题下空1 + fpath1 +
+    //  状态1 + 代码3 + 代码区vPad2 + 元数据2 + 末卡后空1 = 16
+    REQUIRE(estimate_message_height(msg, 240) == 16);
 }
 
 // ============================================================================

@@ -77,7 +77,8 @@ TEST_CASE("file viewer shows line numbers and content", "[file_viewer][render]")
 TEST_CASE("file viewer scrolls to offset slice", "[file_viewer][render]") {
     FileViewState f = make_file({"line0", "line1", "line2", "line3", "line4", "line5"},
                                 "f.txt", "", 3);
-    const auto text = render_elem(build_file_viewer(f), 40, 24);
+    // 显式视口高度 3 行（绕过终端探测，保证 scroll=3 → line0/1/2 出视口）
+    const auto text = render_elem(build_file_viewer(f, 40, 3), 40, 24);
     INFO("RENDERED:\n" << text);
     // scroll=3：从 line3 开始显示，line0/1/2 不可见
     REQUIRE(text.find("line3") != std::string::npos);

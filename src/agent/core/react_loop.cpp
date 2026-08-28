@@ -905,6 +905,8 @@ ReActResult ReActLoop::run(
             m_permission_mode = mode;
             notify_permission_state();  // H-1：回写宿主，统一状态源
         };
+        // 注入会话工作模式（极简模式白名单守卫依据）
+        ctx.session_mode = m_session_mode;
         // #26：注入推理提供者 + 工具注册表（AgentTool 启动子 Agent 用）
         ctx.provider_ptr = m_provider;
         ctx.tool_registry = m_registry;

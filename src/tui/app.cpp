@@ -32,6 +32,7 @@
 #include "agent/api/i_backend_admin.h"
 #include "agent/api/chat_types.h"
 #include "agent/command/inclaude/registry.h"
+#include "agent/compact/cache_aware_compactor.h"  // 手动压缩上下文（搜索面板 / /compact）
 #include "agent/compact/token_count.h"  // /resume 上下文统计还原
 #include "agent/config/app_config.h"
 #include "agent/core/chat_session.h"
@@ -42,6 +43,7 @@
 #include "agent/mcp/mcp_client_manager.h"  // #27 M4：MCP server 状态查询
 #include "agent/session/session_store.h"
 #include "agent/skill/inclaude/skill_loader.h"
+#include "agent/skill/inclaude/skill_prompt.h"  // build_skills_prompt_section：skills 摘要注入 System Prompt
 #include "command/builtins.h"
 #include "core/events/stream_events.h"
 #include "core/process/subprocess.h"
@@ -264,11 +266,8 @@ App::App(AppDeps deps)
         .on_resume = [this](const std::string& args) { cmd_resume(args); },
         .on_rename = [this](const std::string& args) { cmd_rename(args); },
         .on_clear = [this] { cmd_clear(); },
-        .on_new = [this] {
-            if (!m_deps.session) return;
-            m_deps.session->new_session();
-            reset_vm_for_new_session();
-        },
+        .on_new = [this] { cmd_new(); },
+        .on_compact = [this] { compact_context(); },
         .on_view = [this](const std::string& args) { cmd_view(args); },
         .on_edit = [this](const std::string& args) { cmd_edit(args); },
         .on_nvim = [this] { cmd_nvim(); },
@@ -288,7 +287,17 @@ App::App(AppDeps deps)
         const auto skills = agent::skill::load_skills_from_dirs(base_dirs);
         for (const auto& s : skills) m_deps.command_registry->register_command(s);
         // conditional skills：会话持有命令注册表（激活匹配 SkillTool 用）
-        if (m_deps.session) m_deps.session->set_command_registry(m_deps.command_registry);
+        if (m_deps.session) {
+            m_deps.session->set_command_registry(m_deps.command_registry);
+            // skills 摘要注入 System Prompt：仅列 name + description + when_to_use，
+            // 让模型知晓可用技能而无需加载全文（减少/避免触发 Skill 全文加载导致上下文溢出）。
+            const std::string skills_section =
+                agent::skill::build_skills_prompt_section(*m_deps.command_registry);
+            if (!skills_section.empty()) {
+                auto cur = m_deps.session->system_prompt();
+                m_deps.session->set_system_prompt(cur + skills_section);
+            }
+        }
     }
 
     m_bridge.set_wake_callback([this] { m_screen.PostEvent(Event::Custom); });
@@ -612,6 +621,7 @@ void App::open_model_selector() {
     // 面板互斥：同一时刻只开一个悬浮面板
     m_palette_open = false;
     m_resume_open = false;
+    m_mode_open = false;
     m_provider_open = false;
     m_model_items.clear();
     rebuild_model_entries();  // 空列表（加载中）
@@ -684,6 +694,68 @@ void App::apply_model(int index) {
     if (m_deps.on_model_changed) m_deps.on_model_changed();
 }
 
+// ---------------------------------------------------------------------------
+// 模式选择（Ctrl+P → 切换模式：与 /model 同款悬浮选择 + 模式介绍）
+// ---------------------------------------------------------------------------
+
+void App::open_mode_selector() {
+    // 面板互斥：同一时刻只开一个悬浮面板
+    m_palette_open = false;
+    m_resume_open = false;
+    m_model_open = false;
+    m_provider_open = false;
+    rebuild_mode_entries();  // 3 个模式条目 + active 标记 + 介绍副标题
+    m_mode_open = true;
+    if (m_mode_comp) m_mode_comp->TakeFocus();
+}
+
+void App::rebuild_mode_entries() {
+    m_mode_entries.clear();
+    const std::string& cur = m_vm.sidebar.mode;  // 当前模式（空=标准）
+    struct ModeItem {
+        std::string_view label;   ///< "standard" / "plan" / "minimal"
+        std::string_view title;   ///< 中文模式名
+        std::string_view desc;    ///< 模式介绍（副标题）
+    };
+    static const ModeItem kModes[] = {
+        {"standard", str::kStatusStandard, str::kModeStandardDesc},
+        {"plan", str::kStatusPlan, str::kModePlanDesc},
+        {"minimal", str::kStatusMinimal, str::kModeMinimalDesc},
+    };
+    constexpr size_t kModeCount = 3;
+    for (size_t i = 0; i < kModeCount; ++i) {
+        const bool active = kModes[i].label == cur || (cur.empty() && i == 0);
+        m_mode_entries.push_back(SearchEntry{
+            .category = SearchCategory::Setting,
+            .title = std::string(kModes[i].title),
+            .subtitle = std::string(kModes[i].desc),
+            .keywords = std::string(kModes[i].label),
+            .payload = static_cast<int>(i),
+            .active = active,
+        });
+    }
+}
+
+void App::apply_mode(int index) {
+    if (index < 0 || index >= 3) return;
+    static const char* kLabels[] = {"standard", "plan", "minimal"};
+    const std::string label = kLabels[index];
+    // 真实模式：session 侧设置（计划联动权限 Plan，退出恢复）并回读；
+    // mock 模式：本地直接生效
+    if (m_deps.session) {
+        switch (index) {
+            case 1: m_deps.session->set_session_mode(agent::tool::SessionMode::Plan); break;
+            case 2: m_deps.session->set_session_mode(agent::tool::SessionMode::Minimal); break;
+            default: m_deps.session->set_session_mode(agent::tool::SessionMode::Standard); break;
+        }
+        m_vm.sidebar.mode = session_mode_label(m_deps.session->session_mode());
+    } else {
+        m_vm.sidebar.mode = label;
+        m_mock_mode_cycle = index;  // 与循环切换保持同源
+    }
+    m_vm.apply(ActionSetMode{.label = m_vm.sidebar.mode});
+}
+
 void App::cmd_resume(const std::string& args) {
     if (!m_deps.session || m_deps.session_dir.empty()) {
         m_vm.apply(ActionAppendMessage{.role = "assistant",
@@ -726,13 +798,64 @@ void App::resume_session(const std::string& file_path, const std::string& title)
     }
 
     // 载入历史消息（含思考/工具卡片；tool 结果按 call_id 回填）
-    m_vm.messages.clear();
     m_vm.tabs.sub_agents.clear();
     m_vm.tabs.sub_selected = -1;
     m_vm.tabs.changes.changes.clear();
     m_vm.sub_records.clear();  // 切换会话：清空旧子 Agent 记录
     m_vm.sub_active = -1;
     m_vm.output_level = OutputLevel::Main;
+    load_session_transcript();
+
+    // 恢复子 Agent 第二层记录（sub_records）：按写入顺序重放持久化事件，
+    // 复用 ViewModel 的 apply 逻辑（含 observation 合并到 action 的语义），
+    // 同时重建侧边栏任务调度 tab 条目与 Agent 工具卡 sub_task_id 关联。
+    for (const auto& ev : agent::session::SessionStore::load_sub_agents(file_path)) {
+        if (ev.type == "completed") {
+            m_vm.apply(ActionSubAgentCompleted{
+                .task_id = ev.task_id,
+                .final_answer = ev.final_answer,
+                .was_error = ev.was_error,
+                .duration_ms = ev.duration_ms,
+            });
+        } else {
+            m_vm.apply(ActionSubAgentProgress{
+                .task_id = ev.task_id,
+                .step_number = ev.step_number,
+                .step_type = ev.step_type,
+                .content = ev.content,
+                .thought_text = ev.thought_text,
+                .tool_name = ev.tool_name,
+                .tool_input = ev.tool_input,
+                .observation = ev.observation,
+                .is_error = ev.is_error,
+                .duration_ms = ev.duration_ms,
+            });
+        }
+    }
+
+    // 还原上下文窗口统计：按历史消息估算已用 token，使侧栏进度条立即反映
+    // 恢复会话的占用（而非从 0 开始，对齐 src/tui restore_from_history）
+    const auto history = m_deps.session->get_messages();
+    const int32_t estimated = agent::compact::estimate_messages_tokens(history);
+    m_vm.sidebar.context_used = estimated;
+    m_vm.sidebar.total_tokens = estimated;
+    m_vm.sidebar.cache_read_tokens = 0;
+    // #65：历史消息无法还原命中/分项，从 0 起累计（对齐 cache_read_tokens）
+    m_vm.sidebar.prompt_tokens = 0;
+    m_vm.sidebar.generated_tokens = 0;
+    m_vm.sidebar.cache_hit_tokens = 0;
+    m_vm.sidebar.cache_miss_tokens = 0;
+
+    m_scroll = 0;
+    m_follow = true;
+    m_vm.sidebar.title = title;
+    m_vm.apply(ActionAppendMessage{.role = "assistant",
+        .text = std::string(str::kResumedPrefix) + title + std::string(str::kMdBoldEnd)});
+}
+
+/// @brief 从当前会话重建转录区（resume 历史载入 / 压缩上下文后刷新共用）
+void App::load_session_transcript() {
+    m_vm.messages.clear();
     invalidate_msg_cache();
     const auto history = m_deps.session->get_messages();
     int open_idx = -1;  // 正在合并的工具调用 assistant 节点索引（-1=无）
@@ -811,51 +934,51 @@ void App::resume_session(const std::string& file_path, const std::string& title)
             }
         }
     }
+}
 
-    // 恢复子 Agent 第二层记录（sub_records）：按写入顺序重放持久化事件，
-    // 复用 ViewModel 的 apply 逻辑（含 observation 合并到 action 的语义），
-    // 同时重建侧边栏任务调度 tab 条目与 Agent 工具卡 sub_task_id 关联。
-    for (const auto& ev : agent::session::SessionStore::load_sub_agents(file_path)) {
-        if (ev.type == "completed") {
-            m_vm.apply(ActionSubAgentCompleted{
-                .task_id = ev.task_id,
-                .final_answer = ev.final_answer,
-                .was_error = ev.was_error,
-                .duration_ms = ev.duration_ms,
-            });
-        } else {
-            m_vm.apply(ActionSubAgentProgress{
-                .task_id = ev.task_id,
-                .step_number = ev.step_number,
-                .step_type = ev.step_type,
-                .content = ev.content,
-                .thought_text = ev.thought_text,
-                .tool_name = ev.tool_name,
-                .tool_input = ev.tool_input,
-                .observation = ev.observation,
-                .is_error = ev.is_error,
-                .duration_ms = ev.duration_ms,
-            });
-        }
+/// @brief 手动压缩上下文（搜索面板「压缩上下文」与 /compact 命令共用）
+void App::compact_context() {
+    if (!m_deps.session) return;
+    // 生成中安全：压缩会就地改写会话消息，先拒绝（不打断正在进行的推理）
+    if (m_deps.session->is_generating()) {
+        m_vm.apply(ActionAppendMessage{.role = "assistant",
+            .text = std::string(str::kCompactBusy)});
+        m_screen.RequestAnimationFrame();
+        return;
     }
+    auto result = m_deps.session->compact_context();
+    std::string notice;
+    switch (result.action) {
+        case agent::CacheAwareCompactor::Action::None:
+            notice = std::string(str::kCompactNoNeed);
+            break;
+        case agent::CacheAwareCompactor::Action::SoftNotice:
+            notice = std::string(str::kCompactSoft);
+            break;
+        case agent::CacheAwareCompactor::Action::Stuck:
+            notice = std::string(str::kCompactStuck);
+            break;
+        default:
+            // 会话消息已被压缩器就地改写：重建转录区
+            load_session_transcript();
+            notice = std::string(str::kCompactDonePrefix)
+                     + std::to_string(result.tokens_before)
+                     + std::string(str::kCompactTokensArrow)
+                     + std::to_string(result.tokens_after)
+                     + std::string(str::kCompactTokensSuffix);
+            break;
+    }
+    // 刷新侧栏上下文占用统计（还原 / 恢复会话对齐）
+    m_vm.sidebar.context_used = result.tokens_after;
+    m_vm.sidebar.total_tokens = result.tokens_after;
+    m_vm.apply(ActionAppendMessage{.role = "assistant", .text = std::move(notice)});
+    m_screen.RequestAnimationFrame();
+}
 
-    // 还原上下文窗口统计：按历史消息估算已用 token，使侧栏进度条立即反映
-    // 恢复会话的占用（而非从 0 开始，对齐 src/tui restore_from_history）
-    const int32_t estimated = agent::compact::estimate_messages_tokens(history);
-    m_vm.sidebar.context_used = estimated;
-    m_vm.sidebar.total_tokens = estimated;
-    m_vm.sidebar.cache_read_tokens = 0;
-    // #65：历史消息无法还原命中/分项，从 0 起累计（对齐 cache_read_tokens）
-    m_vm.sidebar.prompt_tokens = 0;
-    m_vm.sidebar.generated_tokens = 0;
-    m_vm.sidebar.cache_hit_tokens = 0;
-    m_vm.sidebar.cache_miss_tokens = 0;
-
-    m_scroll = 0;
-    m_follow = true;
-    m_vm.sidebar.title = title;
-    m_vm.apply(ActionAppendMessage{.role = "assistant",
-        .text = std::string(str::kResumedPrefix) + title + std::string(str::kMdBoldEnd)});
+void App::cmd_new() {
+    if (!m_deps.session) return;
+    m_deps.session->new_session();
+    reset_vm_for_new_session();
 }
 
 void App::cmd_clear() {
@@ -1242,6 +1365,7 @@ void App::open_resume_palette() {
     // 面板互斥：同一时刻只开一个悬浮面板
     m_palette_open = false;
     m_model_open = false;
+    m_mode_open = false;
     m_provider_open = false;
     ensure_sessions_loaded();
     m_session_entries.clear();
@@ -1269,6 +1393,7 @@ void App::open_provider_palette() {
     m_palette_open = false;
     m_resume_open = false;
     m_model_open = false;
+    m_mode_open = false;
     m_providers = agent::load_provider_configs(*m_deps.config_manager);
     m_current_provider =
         m_deps.config_manager->get_or<std::string>(agent::keys::PROVIDER, "");
@@ -1456,11 +1581,13 @@ namespace {
 
 /// @brief 设置动作（搜索面板「设置」类 payload）
 enum class SettingAction {
-    PermCycle,      ///< 切换权限模式
+    ModeCycle,      ///< 切换工作模式（标准 / 计划 / 极简）
+    PermCycle,      ///< 切换权限模式（手动审批 / 完全访问）
     ModelSelector,  ///< 打开模型选择器
     ProviderSelector, ///< 打开供应商切换面板
-    ToggleThinking, ///< 折叠 / 展开思考
     ToggleSidebar,  ///< 切换侧边栏位置（左 / 右）
+    NewSession,     ///< 新建会话
+    CompactContext, ///< 压缩上下文
     Clear,          ///< 清空会话
     Exit,           ///< 退出
 };
@@ -1548,14 +1675,18 @@ std::vector<SearchEntry> App::assemble_search_entries() {
     }
 
     // 设置：静态条目
+    push_setting(out, SettingAction::ModeCycle, str::kSettingMode, str::kSettingModeDesc,
+                 "mode 模式 标准 计划 极简");
     push_setting(out, SettingAction::PermCycle, str::kSettingPerm, str::kSettingPermDesc,
-                 "permission plan bypass 权限");
+                 "permission bypass 权限 审批 访问");
     push_setting(out, SettingAction::ModelSelector, str::kSettingModel, str::kSettingModelDesc,
                  "model 模型");
     push_setting(out, SettingAction::ProviderSelector, str::kSettingProvider,
                  str::kSettingProviderDesc, "provider 供应商");
-    push_setting(out, SettingAction::ToggleThinking, str::kSettingThinking,
-                 str::kSettingThinkingDesc, "think reasoning 思考");
+    push_setting(out, SettingAction::NewSession, str::kSettingNewSession,
+                 str::kSettingNewSessionDesc, "new session 新建 会话");
+    push_setting(out, SettingAction::CompactContext, str::kSettingCompact,
+                 str::kSettingCompactDesc, "compact 压缩 上下文");
     push_setting(out, SettingAction::ToggleSidebar, str::kSettingSidebar,
                  str::kSettingSidebarDesc, "sidebar side 侧边栏 位置");
     push_setting(out, SettingAction::Clear, str::kSettingClear, str::kSettingClearDesc,
@@ -1602,16 +1733,11 @@ void App::apply_search_entry(int index) {
 
 void App::run_setting(int action) {
     switch (static_cast<SettingAction>(action)) {
+        case SettingAction::ModeCycle:
+            open_mode_selector();  // 模式选择面板（与 /model 同款，含模式介绍）
+            break;
         case SettingAction::PermCycle:
-            if (m_deps.session) {
-                m_deps.session->toggle_permission_mode();
-                m_vm.sidebar.permission = mode_label(m_deps.session->permission_mode());
-            } else {
-                static const char* kCycle[] = {"", "plan", "bypass"};
-                m_mock_perm_cycle = (m_mock_perm_cycle + 1) % 3;
-                m_vm.sidebar.permission = kCycle[m_mock_perm_cycle];
-            }
-            m_vm.apply(ActionPermissions{.label = m_vm.sidebar.permission});
+            toggle_permission();
             break;
         case SettingAction::ModelSelector:
             open_model_selector();
@@ -1619,14 +1745,11 @@ void App::run_setting(int action) {
         case SettingAction::ProviderSelector:
             open_provider_palette();
             break;
-        case SettingAction::ToggleThinking:
-            if (!m_vm.messages.empty()) {
-                auto& m = m_vm.messages.back();
-                if (m.reasoned) {
-                    m.reasoning_expanded = !m.reasoning_expanded;
-                    m_screen.RequestAnimationFrame();
-                }
-            }
+        case SettingAction::NewSession:
+            cmd_new();
+            break;
+        case SettingAction::CompactContext:
+            compact_context();
             break;
         case SettingAction::ToggleSidebar:
             m_sidebar_left = !m_sidebar_left;
@@ -2436,8 +2559,10 @@ void App::run() {
             if (t.status == core::todo::TodoStatus::Completed) ++todo_done;
         }
         ftxui::Element line = build_status_line(m_vm.sidebar.model,
+                                                m_vm.sidebar.mode,
                                                 m_vm.sidebar.permission,
                                                 m_vm.busy,
+                                                m_anim_frame,
                                                 todo_done, todo_total);
         // Ctrl+C 提示：单次按下后 1 秒内显示「再次按 Ctrl+C 退出」，超时自动隐藏
         if (m_ctrl_c_hint) {
@@ -2473,18 +2598,8 @@ void App::run() {
     comp_opt.buffer = &m_input_buffer;
     comp_opt.cursor = &m_composer_cursor;
     comp_opt.on_submit = [this](const std::string& t) { send_input(t); };
-    comp_opt.on_perm_toggle = [this] {
-        // 真实模式：session 侧切换并回读；mock 模式：本地循环 "" → plan → bypass
-        if (m_deps.session) {
-            m_deps.session->toggle_permission_mode();
-            m_vm.sidebar.permission = mode_label(m_deps.session->permission_mode());
-        } else {
-            static const char* kCycle[] = {"", "plan", "bypass"};
-            m_mock_perm_cycle = (m_mock_perm_cycle + 1) % 3;
-            m_vm.sidebar.permission = kCycle[m_mock_perm_cycle];
-        }
-        m_vm.apply(ActionPermissions{.label = m_vm.sidebar.permission});
-    };
+    comp_opt.on_perm_toggle = [this] { toggle_permission(); };
+    comp_opt.on_mode_toggle = [this] { toggle_mode(); };
     comp_opt.on_toggle_thinking = [this] {
         if (!m_vm.messages.empty()) {
             auto& m = m_vm.messages.back();
@@ -2529,9 +2644,9 @@ void App::run() {
         [this](int idx) {
             m_palette_open = false;
             apply_search_entry(idx);
-            // 选中动作可能已打开新面板（模型/供应商），焦点归新面板；
+            // 选中动作可能已打开新面板（模型/模式/供应商），焦点归新面板；
             // 仅无面板打开时恢复输入栏焦点
-            if (!m_model_open && !m_resume_open && !m_provider_open) {
+            if (!m_model_open && !m_mode_open && !m_resume_open && !m_provider_open) {
                 if (m_composer) m_composer->TakeFocus();
             }
         },
@@ -2550,6 +2665,18 @@ void App::run() {
         m_model_open,
         [this] { if (m_composer) m_composer->TakeFocus(); },
         std::string(str::kPaletteModelTitle));
+
+    // 模式选择面板：与 /model 同款（标题 + 输入框；active = 当前模式，副标题 = 模式介绍）
+    m_mode_comp = make_search_palette(
+        m_mode_entries,
+        [this](int idx) {
+            m_mode_open = false;
+            apply_mode(idx);
+            if (m_composer) m_composer->TakeFocus();
+        },
+        m_mode_open,
+        [this] { if (m_composer) m_composer->TakeFocus(); },
+        std::string(str::kPaletteModeTitle));
 
     // /resume 会话面板：仅会话条目（复用 m_session_metas 缓存）
     m_resume_comp = make_search_palette(
@@ -2819,6 +2946,8 @@ void App::run() {
             layers.push_back(ftxui::center(m_palette_comp->Render()));
         if (m_model_open)
             layers.push_back(ftxui::center(m_model_comp->Render()));
+        if (m_mode_open)
+            layers.push_back(ftxui::center(m_mode_comp->Render()));
         if (m_resume_open)
             layers.push_back(ftxui::center(m_resume_comp->Render()));
         if (m_provider_open)
@@ -2908,6 +3037,7 @@ void App::run() {
             if (ctrl_p) {
                 // 面板互斥：同一时刻只开一个悬浮面板
                 m_model_open = false;
+                m_mode_open = false;
                 m_resume_open = false;
                 m_provider_open = false;
                 // 打开前装配聚合条目（会话列表未加载则后台加载，面板刷新时自动出现）
@@ -2929,6 +3059,26 @@ void App::run() {
         if (e == ftxui::Event::Special("\x1b[1;5D")) {
             adjust_sidebar_width(m_sidebar_left ? -2 : +2);
             return true;
+        }
+        // 悬浮面板打开时，把键盘事件手动路由给当前活动面板组件。
+        // 面板组件（SearchPalette / ProviderManager）不在 FTXUI 标准焦点树中
+        //（App 手动 Render，仅对鼠标手动路由 OnEvent），若不在此转发，
+        // ↑↓ / Enter / 字符 / Backspace / Esc 等键盘事件都到不了面板，
+        // 表现为「面板上下键没反应」也无法确认。鼠标事件仍走下方原路由。
+        if ((m_palette_open || m_model_open || m_mode_open || m_resume_open ||
+             m_provider_open) && !e.is_mouse()) {
+            ftxui::Component active_panel = nullptr;
+            if (m_palette_open) active_panel = m_palette_comp;
+            else if (m_model_open) active_panel = m_model_comp;
+            else if (m_mode_open) active_panel = m_mode_comp;
+            else if (m_resume_open) active_panel = m_resume_comp;
+            else if (m_provider_open) active_panel = m_provider_comp;
+            if (active_panel && active_panel->OnEvent(e)) {
+                m_screen.RequestAnimationFrame();
+                return true;
+            }
+            // 面板未消费的 Esc：放行让面板自行处理（先清空搜索再关闭）。
+            if (e == Event::Escape) return false;
         }
         // Esc：打断模型回复 / 工具调用（刷新 / AskUser / 面板的 Esc 已在上方各自处理）
         if (e == Event::Escape) {
@@ -3038,6 +3188,7 @@ void App::run() {
             ftxui::Component active_panel = nullptr;
             if (m_palette_open) active_panel = m_palette_comp;
             else if (m_model_open) active_panel = m_model_comp;
+            else if (m_mode_open) active_panel = m_mode_comp;
             else if (m_resume_open) active_panel = m_resume_comp;
             else if (m_provider_open) active_panel = m_provider_comp;
             if (active_panel && active_panel->OnEvent(e)) {
@@ -3391,10 +3542,47 @@ void App::start_smoke_driver() {
 
 std::string App::mode_label(agent::tool::PermissionMode m) {
     switch (m) {
-        case agent::tool::PermissionMode::Plan: return "plan";
         case agent::tool::PermissionMode::BypassPermissions: return "bypass";
         default: return "";
     }
+}
+
+/// @brief 权限两态切换（手动审批 ↔ 完全访问；Shift+Tab / 设置面板）
+/// @details 真实模式：session 侧切换并回读；mock 模式：本地循环 "" → bypass
+void App::toggle_permission() {
+    if (m_deps.session) {
+        m_deps.session->toggle_permission_mode();
+        m_vm.sidebar.permission = mode_label(m_deps.session->permission_mode());
+    } else {
+        static const char* kCycle[] = {"", "bypass"};
+        m_mock_perm_cycle = (m_mock_perm_cycle + 1) % 2;
+        m_vm.sidebar.permission = kCycle[m_mock_perm_cycle];
+    }
+    m_vm.apply(ActionPermissions{.label = m_vm.sidebar.permission});
+}
+
+/// @brief 会话工作模式 → 状态行标签（"standard" / "plan" / "minimal"）
+std::string App::session_mode_label(agent::tool::SessionMode m) {
+    switch (m) {
+        case agent::tool::SessionMode::Plan: return "plan";
+        case agent::tool::SessionMode::Minimal: return "minimal";
+        default: return "standard";
+    }
+}
+
+/// @brief 工作模式三态切换（标准 → 计划 → 极简 → 标准；模式切换键 / 设置面板）
+/// @details 真实模式：session 侧切换（计划联动权限 Plan，退出恢复）并回读；
+///          mock 模式：本地循环 standard → plan → minimal
+void App::toggle_mode() {
+    if (m_deps.session) {
+        m_deps.session->toggle_session_mode();
+        m_vm.sidebar.mode = session_mode_label(m_deps.session->session_mode());
+    } else {
+        static const char* kModeCycle[] = {"standard", "plan", "minimal"};
+        m_mock_mode_cycle = (m_mock_mode_cycle + 1) % 3;
+        m_vm.sidebar.mode = kModeCycle[m_mock_mode_cycle];
+    }
+    m_vm.apply(ActionSetMode{.label = m_vm.sidebar.mode});
 }
 
 // ---------------------------------------------------------------------------

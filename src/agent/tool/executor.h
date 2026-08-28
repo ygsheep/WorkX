@@ -142,6 +142,21 @@ public:
                          tool_name};
         }
 
+        // 1.5 极简模式守卫：仅放行白名单工具（Skill/Bash/Read/Write/Edit）
+        //     第二道防线——schema 过滤后 LLM 仍可能幻觉出其他工具名，这里直接拒绝。
+        if (ctx.session_mode == SessionMode::Minimal &&
+            !is_minimal_mode_tool(tool_name)) {
+            LOG_WARN("[tool_executor] tool={} denied by minimal mode", tool_name);
+            audit::AuditLogger::instance().log_tool_invoke(
+                tool_name, input, ctx.session_id, ctx.request_id,
+                "deny", "minimal mode: tool not allowed", 0);
+            return Error{Error::Code::PermissionDenied,
+                         "Tool '" + tool_name +
+                             "' is not available in minimal mode "
+                             "(only Skill/Bash/Read/Write/Edit)",
+                         tool_name};
+        }
+
         // 2. 检查取消信号
         if (ctx.is_cancelled()) {
             LOG_INFO("[tool_executor] tool={} cancelled before execution", tool_name);

@@ -322,6 +322,12 @@ public:
         m_in_plan_mode = in_plan;
     }
 
+    /// @brief 设置会话工作模式（标准 / 计划 / 极简）
+    /// @details 每轮新建 ReActLoop 时由宿主注入（与 apply_permission_state 同路径），
+    ///          构造 ToolContext 时携带，ToolExecutor 据此执行极简模式白名单守卫。
+    void set_session_mode(tool::SessionMode mode) { m_session_mode = mode; }
+    tool::SessionMode session_mode() const { return m_session_mode; }
+
     /// @brief H-1（PR #46 评审）：权限状态变更通知回调（宿主 ChatSession 注入）
     /// @details 工具路径回调（on_permission_mode_changed / on_enter_plan_mode /
     ///          on_exit_plan_mode）修改 ReActLoop 投影状态后调用，宿主据此回写
@@ -469,6 +475,7 @@ private:
     tool::PermissionMode m_permission_mode{tool::PermissionMode::Default};  ///< #28：会话级权限模式
     tool::PermissionMode m_permission_mode_before_plan{tool::PermissionMode::Default};  ///< #28 评审 #1：进入计划模式前保存的原模式，退出时恢复
     bool m_in_plan_mode{false};  ///< #28 评审 #1/#3：是否处于计划模式（幂等进入判定）
+    tool::SessionMode m_session_mode{tool::SessionMode::Standard};  ///< 会话工作模式（标准/计划/极简）
     /// @brief H-1（PR #46 评审）：权限状态变更通知回调（宿主 ChatSession 注入，回写持久状态）
     PermissionStateChangedCallback m_perm_state_changed_cb;
 };

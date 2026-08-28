@@ -1,7 +1,8 @@
 /**
  * @file composer.h
  * @brief 底部输入组件（ftxui::Input + 快捷键处理）
- * @details Enter 提交；Shift+Tab 切换权限；Ctrl+P 命令面板。
+ * @details Enter 提交；Shift+Tab 切换权限；Ctrl+T 切换工作模式（标准/计划/极简）；
+ *          Ctrl+P 命令面板。
  *          MVP 为单行输入（ftxui Input 原生不支持多行 textarea），后续可用
  *          Renderer 自绘多行编辑器替代。
  */
@@ -21,6 +22,7 @@ struct ComposerOptions {
     size_t* cursor = nullptr;                           ///< 光标位置（外部持有，可为空）
     std::function<void(const std::string&)> on_submit;  ///< 提交（Enter）
     std::function<void()> on_perm_toggle;               ///< 权限切换（Shift+Tab）
+    std::function<void()> on_mode_toggle;               ///< 工作模式切换（Ctrl+T）
     std::function<void()> on_toggle_thinking;           ///< 思考视图（Ctrl+O）
 
     // ---- 输入栏提示面板（App 侧状态机；返回 true = 已消费）----

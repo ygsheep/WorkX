@@ -21,7 +21,10 @@
 namespace ftxtui {
 
 /// @brief 渲染整段 Markdown 为纵向元素
-ftxui::Element build_markdown(std::string_view text, int width);
+/// @param compact 紧凑模式：普通段落每物理行占 1 行（不做 ×2 行距），
+///                供用户消息使用——块高即文本行数，不产生段落尾随空行，
+///                与转录区统一间距叠加后不会出现"多一行"。
+ftxui::Element build_markdown(std::string_view text, int width, bool compact = false);
 
 /// @brief 文件路径扩展名 → 语法高亮语言标签；未知返回空
 /// @details 供工具卡 / 文件查看器（/view）复用同一套扩展名映射
@@ -29,7 +32,8 @@ std::string lang_from_path(const std::string& path);
 
 /// @brief 估算 Markdown 渲染行数（与 build_markdown 布局逐行一致；A3 单一布局源）
 /// @param width 正文折行的单行最大显示列宽；代码行/表格不折行
-int estimate_markdown_height(std::string_view text, int width);
+/// @param compact 与 build_markdown 的 compact 对应，普通段落按每物理行 1 行计数
+int estimate_markdown_height(std::string_view text, int width, bool compact = false);
 
 /// @brief 估算整条消息渲染行数（与 build_message 布局逐行一致；A3 单一布局源）
 /// @details 供转录滚动/视口高度估算使用，消除 app 侧手工复刻的布局漂移。

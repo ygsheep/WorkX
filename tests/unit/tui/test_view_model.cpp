@@ -295,6 +295,21 @@ TEST_CASE("ViewModel permissions updates and deduplicates", "[view_model][misc]"
     REQUIRE(vm.sidebar.permission == "bypass");
 }
 
+TEST_CASE("ViewModel mode updates and deduplicates", "[view_model][misc][mode]") {
+    ViewModel vm;
+    // 默认标准模式
+    REQUIRE(vm.sidebar.mode.empty());
+    REQUIRE(vm.apply(ActionSetMode{.label = "plan"}));
+    REQUIRE(vm.sidebar.mode == "plan");
+    REQUIRE_FALSE(vm.apply(ActionSetMode{.label = "plan"}));  // 相同不变化
+    REQUIRE(vm.apply(ActionSetMode{.label = "minimal"}));
+    REQUIRE(vm.sidebar.mode == "minimal");
+    // 权限位独立于模式位（互不干扰）
+    REQUIRE(vm.apply(ActionPermissions{.label = "bypass"}));
+    REQUIRE(vm.sidebar.permission == "bypass");
+    REQUIRE(vm.sidebar.mode == "minimal");
+}
+
 TEST_CASE("ViewModel shutdown raises pending_exit", "[view_model][misc]") {
     ViewModel vm;
     REQUIRE(vm.apply(ActionShutdown{}));

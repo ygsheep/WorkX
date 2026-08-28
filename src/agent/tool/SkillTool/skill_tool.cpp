@@ -14,6 +14,14 @@
 
 namespace agent::tool {
 
+namespace {
+// 技能全文一次注入上下文的长度上限（字符）。
+// 当一个技能全文过长时，若整体作为 tool 结果返回会在单条消息内撑爆模型上下文
+// （实测 cpp-code-review 等技能可到 1W+ token）。超过该上限即截断，
+// 并在末尾附返回值：让模型在确实需要完整指令时用 FileRead 读取 SKILL.md。
+constexpr std::size_t kMaxSkillTextLength = 20000;
+}  // namespace
+
 SkillTool::SkillTool(std::shared_ptr<command::CommandRegistry> registry)
     : registry_(std::move(registry)) {}
 
@@ -97,6 +105,15 @@ ResultV2<ToolResult> SkillTool::call(
         if (block.type != command::PromptBlockType::Text) continue;
         if (!text.empty()) text += "\n";
         text += block.text;
+    }
+
+    // 超长技能截断，防止单条 tool 结果撑爆上下文（详见 kMaxSkillTextLength）
+    const std::string skill_name = prompt_cmd->name();
+    if (text.size() > kMaxSkillTextLength) {
+        text.resize(kMaxSkillTextLength);
+        text += "\n\n[技能 '" + skill_name +
+            "' 全文过长已截断（仅保留前段）。如需完整指令，请用 FileRead 工具读取该技能 "
+            "目录下的 SKILL.md 文件。]";
     }
     return ResultV2<ToolResult>::ok(ToolResult::ok(std::move(text)));
 }

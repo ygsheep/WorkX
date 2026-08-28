@@ -26,6 +26,8 @@ std::unique_ptr<ReActLoop> ReActLoopFactory::make(
     loop->apply_permission_state(
         deps.permission_mode, deps.permission_mode_before_plan,
         deps.permission_mode == tool::PermissionMode::Plan);
+    // 会话工作模式（标准/计划/极简）注入循环（极简模式白名单守卫依据）
+    loop->set_session_mode(deps.session_mode);
     if (deps.permission_state_changed_cb) {
         loop->set_permission_state_changed_callback(deps.permission_state_changed_cb);
     }

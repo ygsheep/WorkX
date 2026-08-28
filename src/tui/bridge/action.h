@@ -98,7 +98,14 @@ struct ActionSetBusy {
 
 /// @brief 权限模式标签更新
 struct ActionPermissions {
-    std::string label;  ///< "" / "plan" / "bypass"
+    std::string label;  ///< "" / "bypass"
+};
+
+/// @brief 工作模式标签更新（标准 / 计划 / 极简）
+/// @details 由 TUI 模式切换键、EnterPlanModeEvent/ExitPlanModeEvent（事件桥）
+///          与 ActionPermissions 解耦：模式为顶层选择，权限在模式内独立切换。
+struct ActionSetMode {
+    std::string label;  ///< "standard" / "plan" / "minimal"
 };
 
 /// @brief AskUser 模态请求（携带回填 promise）
@@ -260,6 +267,7 @@ using Action = std::variant<
     ActionAgentDone,
     ActionSetBusy,
     ActionPermissions,
+    ActionSetMode,
     ActionAskUser,
     ActionAskUserTimeout,
     ActionOpenPlan,

@@ -22,6 +22,7 @@ void QueryEngine::apply_permission(std::unique_ptr<ReActLoop>& loop) const {
     loop->apply_permission_state(
         m_deps.permission_mode, m_deps.permission_mode_before_plan,
         m_deps.permission_mode == tool::PermissionMode::Plan);
+    loop->set_session_mode(m_deps.session_mode);
     if (m_deps.permission_state_changed_cb) {
         loop->set_permission_state_changed_callback(m_deps.permission_state_changed_cb);
     }

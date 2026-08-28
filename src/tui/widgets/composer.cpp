@@ -330,6 +330,10 @@ Component make_composer(ComposerOptions& opt) {
             return (e.is_character() && e.character() == s) ||
                    e == ftxui::Event::Special(s);
         };
+        if (is_ctrl(0x14)) {  // Ctrl+T：工作模式切换（标准 → 计划 → 极简）
+            if (opt.on_mode_toggle) opt.on_mode_toggle();
+            return true;
+        }
         if (is_ctrl(0x0f)) {  // Ctrl+O 思考视图
             if (opt.on_toggle_thinking) opt.on_toggle_thinking();
             return true;

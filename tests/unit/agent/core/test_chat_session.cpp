@@ -640,31 +640,25 @@ TEST_CASE("ChatSession regenerate_from keeps later turns when retrying last repl
 }
 
 // ============================================================
-// #45：会话级权限模式三态切换（Shift+Tab：Default → Plan → Bypass → Default）
+// #45：会话级权限两态切换（Shift+Tab：Default ↔ Bypass，计划模式独立为工作模式）
 // ============================================================
 
-TEST_CASE("ChatSession permission mode tri-state toggle", "[session][permission][45]") {
+TEST_CASE("ChatSession permission mode two-state toggle", "[session][permission][45]") {
     MockConfigManager cfg;
     auto session = make_test_session(cfg);
 
     // 初始态：Default
     REQUIRE(session->permission_mode() == tool::PermissionMode::Default);
 
-    // Default → Plan
-    session->toggle_permission_mode();
-    REQUIRE(session->permission_mode() == tool::PermissionMode::Plan);
-
-    // Plan → Bypass
+    // Default → Bypass
     session->toggle_permission_mode();
     REQUIRE(session->permission_mode() == tool::PermissionMode::BypassPermissions);
 
-    // Bypass → Default（不经过 Plan，避开"Bypass 禁止降级到 Plan"约束）
+    // Bypass → Default
     session->toggle_permission_mode();
     REQUIRE(session->permission_mode() == tool::PermissionMode::Default);
 
-    // 循环稳定：连续一轮回到 Plan
-    session->toggle_permission_mode();
-    REQUIRE(session->permission_mode() == tool::PermissionMode::Plan);
+    // 循环稳定：连续一轮回到 Bypass
     session->toggle_permission_mode();
     REQUIRE(session->permission_mode() == tool::PermissionMode::BypassPermissions);
     session->toggle_permission_mode();
@@ -679,9 +673,66 @@ TEST_CASE("ChatSession set_permission_mode injects bypass", "[session][permissio
     session->set_permission_mode(tool::PermissionMode::BypassPermissions);
     REQUIRE(session->permission_mode() == tool::PermissionMode::BypassPermissions);
 
-    // 注入后仍可三态循环（Bypass → Default → Plan）
+    // 注入后仍可两态循环（Bypass → Default → Bypass）
     session->toggle_permission_mode();
     REQUIRE(session->permission_mode() == tool::PermissionMode::Default);
     session->toggle_permission_mode();
+    REQUIRE(session->permission_mode() == tool::PermissionMode::BypassPermissions);
+}
+
+// ============================================================
+// 会话工作模式三态切换（标准 → 计划 → 极简 → 标准）+ 计划联动权限
+// ============================================================
+
+TEST_CASE("ChatSession session mode toggle cycles and links plan permission",
+          "[session][mode]" ) {
+    MockConfigManager cfg;
+    auto session = make_test_session(cfg);
+
+    // 初始态：标准模式 + Default 权限
+    REQUIRE(session->session_mode() == tool::SessionMode::Standard);
+    REQUIRE(session->permission_mode() == tool::PermissionMode::Default);
+
+    // 标准 → 计划：权限联动 Plan（保存 before_plan=Default）
+    session->toggle_session_mode();
+    REQUIRE(session->session_mode() == tool::SessionMode::Plan);
     REQUIRE(session->permission_mode() == tool::PermissionMode::Plan);
+
+    // 计划模式下权限切换被忽略（由模式统一管理）
+    session->toggle_permission_mode();
+    REQUIRE(session->permission_mode() == tool::PermissionMode::Plan);
+
+    // 计划 → 极简：退出计划，权限恢复 before_plan=Default
+    session->toggle_session_mode();
+    REQUIRE(session->session_mode() == tool::SessionMode::Minimal);
+    REQUIRE(session->permission_mode() == tool::PermissionMode::Default);
+
+    // 极简 → 标准
+    session->toggle_session_mode();
+    REQUIRE(session->session_mode() == tool::SessionMode::Standard);
+
+    // 循环稳定：标准 → 计划 再验证 before_plan 随 Bypass 权限保存/恢复
+    session->set_permission_mode(tool::PermissionMode::BypassPermissions);
+    session->toggle_session_mode();  // → Plan
+    REQUIRE(session->permission_mode() == tool::PermissionMode::Plan);
+    session->toggle_session_mode();  // → Minimal，恢复 Bypass
+    REQUIRE(session->session_mode() == tool::SessionMode::Minimal);
+    REQUIRE(session->permission_mode() == tool::PermissionMode::BypassPermissions);
+    session->toggle_session_mode();  // → Standard
+    REQUIRE(session->session_mode() == tool::SessionMode::Standard);
+}
+
+TEST_CASE("ChatSession set_session_mode enters and exits plan", "[session][mode]") {
+    MockConfigManager cfg;
+    auto session = make_test_session(cfg);
+
+    session->set_permission_mode(tool::PermissionMode::BypassPermissions);
+    session->set_session_mode(tool::SessionMode::Plan);
+    REQUIRE(session->session_mode() == tool::SessionMode::Plan);
+    REQUIRE(session->permission_mode() == tool::PermissionMode::Plan);
+
+    // 退出计划：恢复进入前的权限（Bypass）
+    session->set_session_mode(tool::SessionMode::Standard);
+    REQUIRE(session->session_mode() == tool::SessionMode::Standard);
+    REQUIRE(session->permission_mode() == tool::PermissionMode::BypassPermissions);
 }

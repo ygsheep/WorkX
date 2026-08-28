@@ -41,6 +41,8 @@ inline std::string_view icon_chevron_down() { return icon("\uF078", "v"); }
 inline std::string_view icon_chevron_right() { return icon("\uF054", ">"); }
 /// @brief 工具（扳手 nf-fa-wrench）→ 无图标
 inline std::string_view icon_tool() { return icon("\uF0AD", ""); }
+/// @brief 技能（魔杖 nf-fa-magic-wand-sparkles）→ "S"
+inline std::string_view icon_skill() { return icon("\uF0D0", "S"); }
 /// @brief 计划模式（剪贴板 nf-fa-clipboard）→ "P"
 inline std::string_view icon_plan() { return icon("\uF044", "P"); }
 /// @brief 完全访问（key nf-cod-key）→ "A"

@@ -108,13 +108,22 @@ inline constexpr std::string_view kEditChangePurpose = "手动编辑";
 inline constexpr std::string_view kEditChangeReason  = "用户通过 /edit 命令手动修改";
 
 // ----------------------------------------------------------------------------
-// 状态行
+// 状态行（模式置顶：标准 / 计划 / 极简 · 权限：手动审批 / 完全访问）
 // ----------------------------------------------------------------------------
-inline constexpr std::string_view kStatusGenerating  = "● 生成中";
-inline constexpr std::string_view kStatusPlan        = "计划模式";
-inline constexpr std::string_view kStatusFullAccess  = "完全访问";
-inline constexpr std::string_view kStatusManual      = "手动审批";
-inline constexpr std::string_view kStatusCtrlC       = "再次按 Ctrl+C 退出";
+inline constexpr std::string_view kStatusStandard   = "标准模式";
+inline constexpr std::string_view kStatusPlan       = "计划模式";
+inline constexpr std::string_view kStatusMinimal    = "极简模式";
+inline constexpr std::string_view kStatusFullAccess = "完全访问";
+inline constexpr std::string_view kStatusManual     = "手动审批";
+inline constexpr std::string_view kStatusCtrlC      = "再次按 Ctrl+C 退出";
+
+// ----------------------------------------------------------------------------
+// 模式选择面板（Ctrl+P → 切换模式，与 /model 同款悬浮选择）
+// ----------------------------------------------------------------------------
+inline constexpr std::string_view kPaletteModeTitle   = "切换模式";
+inline constexpr std::string_view kModeStandardDesc   = "全部工具可用，权限独立切换";
+inline constexpr std::string_view kModePlanDesc       = "只读规划：禁止写文件与执行命令";
+inline constexpr std::string_view kModeMinimalDesc    = "仅支持 Skill / Bash / Read / Write / Edit";
 
 // ----------------------------------------------------------------------------
 // composer / 输入
@@ -153,13 +162,17 @@ inline constexpr std::string_view kSuggestIndexing  = "  索引构建中…";
 // 设置条目（聚合搜索面板「设置」类）
 // ----------------------------------------------------------------------------
 inline constexpr std::string_view kSettingPerm     = "切换权限模式";
-inline constexpr std::string_view kSettingPermDesc = "默认 / 计划 / 完全访问";
+inline constexpr std::string_view kSettingPermDesc = "手动审批 / 完全访问";
+inline constexpr std::string_view kSettingMode     = "切换模式";
+inline constexpr std::string_view kSettingModeDesc = "标准 / 计划 / 极简";
 inline constexpr std::string_view kSettingModel    = "切换模型";
     inline constexpr std::string_view kSettingModelDesc = "打开模型选择器";
     inline constexpr std::string_view kSettingProvider    = "切换供应商";
-    inline constexpr std::string_view kSettingProviderDesc = "打开供应商切换面板";
-inline constexpr std::string_view kSettingThinking = "折叠 / 展开思考";
-inline constexpr std::string_view kSettingThinkingDesc = "快捷键 Ctrl+O";
+inline constexpr std::string_view kSettingProviderDesc = "打开供应商切换面板";
+inline constexpr std::string_view kSettingNewSession  = "新建会话";
+inline constexpr std::string_view kSettingNewSessionDesc = "等价 /new";
+inline constexpr std::string_view kSettingCompact     = "压缩上下文";
+inline constexpr std::string_view kSettingCompactDesc = "手动触发上下文压缩";
 inline constexpr std::string_view kSettingClear    = "清空会话";
 inline constexpr std::string_view kSettingClearDesc = "等价 /clear";
 inline constexpr std::string_view kSettingExit     = "退出";
@@ -209,12 +222,22 @@ inline constexpr std::string_view kProviderBusy       = "（正在生成中，�
 inline constexpr std::string_view kProviderSwitchFailedPrefix = "（供应商切换失败：";
 inline constexpr std::string_view kProviderSwitchedPrefix = "已切换供应商：**";
 
+// ---- 压缩上下文（搜索面板「压缩上下文」 / /compact）----
+inline constexpr std::string_view kCompactBusy       = "（正在生成中，暂无法压缩上下文）\n";
+inline constexpr std::string_view kCompactNoNeed     = "（上下文无需压缩）\n";
+inline constexpr std::string_view kCompactSoft       = "（上下文已达软水位，暂未折叠）\n";
+inline constexpr std::string_view kCompactStuck      = "（压缩已触发卡死保护，暂被暂停）\n";
+inline constexpr std::string_view kCompactDonePrefix = "上下文已压缩：**";
+inline constexpr std::string_view kCompactTokensArrow = " → ";
+inline constexpr std::string_view kCompactTokensSuffix = " tokens**\n";
+
 inline constexpr std::string_view kCmdHelpDesc     = "显示可用命令列表";
 inline constexpr std::string_view kHelpIntro        = "可用命令：\n";
 inline constexpr std::string_view kCmdExitDesc     = "退出程序";
 inline constexpr std::string_view kCmdQuitDesc     = "退出程序（别名）";
 inline constexpr std::string_view kCmdClearDesc    = "删除当前会话并新建";
 inline constexpr std::string_view kCmdNewDesc      = "新建会话并切换";
+inline constexpr std::string_view kCmdCompactDesc  = "压缩上下文";
 inline constexpr std::string_view kCmdModelDesc    = "切换模型";
 inline constexpr std::string_view kCmdProviderDesc = "切换供应商";
 inline constexpr std::string_view kCmdResumeDesc   = "恢复历史会话";

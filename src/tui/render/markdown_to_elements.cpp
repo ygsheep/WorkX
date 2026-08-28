@@ -107,6 +107,19 @@ std::string tool_card_subject(std::string_view args_json) {
     return {};
 }
 
+/// @brief Skill 工具参数中提取技能名（{\"name\":\"...\"}）；无法解析返回空
+std::string skill_name_from_args(std::string_view args_json) {
+    if (args_json.empty()) return {};
+    try {
+        const auto j = nlohmann::json::parse(args_json);
+        const auto it = j.find("name");
+        if (it != j.end() && it->is_string()) return it->get<std::string>();
+    } catch (const nlohmann::json::exception&) {
+        // 非 JSON 参数：无法解析技能名
+    }
+    return {};
+}
+
 /// @brief 按显示列宽（CJK=2）截断长文本，超出在末尾补省略号
 std::string truncate_display(std::string_view s, int max_cols) {
     if (ftxui::string_width(s) <= max_cols) return std::string(s);
@@ -781,7 +794,8 @@ std::vector<std::string> split_lines(std::string_view text) {
 ///          - 代码块 → 每代码行 1 行（不折行）+ 语言标签 1 行（仅当有内容时渲染）
 ///          - 表格  → 表头+分隔+数据行固定布局
 /// @param width 正文折行的单行最大显示列宽（列表项额外减 4 列子弹缩进）
-int count_markdown_lines(const std::vector<std::string>& lines, int width) {
+/// @param compact 紧凑模式：普通段落每物理行计 1 行（不做 ×kParagraphLineHeight）
+int count_markdown_lines(const std::vector<std::string>& lines, int width, bool compact) {
     const int safe_w = std::max(1, width);
     int h = 0;
     bool in_code = false;
@@ -790,8 +804,11 @@ int count_markdown_lines(const std::vector<std::string>& lines, int width) {
 
     auto flush_code = [&]() {
         if (in_code && !code_lines.empty()) {
-            h += static_cast<int>(code_lines.size()) + 2;  // 上下留白各 1 行（vPad）
+            h += static_cast<int>(code_lines.size());
             if (!code_lang.empty()) ++h;  // 语言标签行
+            // 上下留白：非紧凑（assistant 等）各 1 行（vPad）；紧凑（用户消息）不追加，
+            // 与 build_markdown flush_code 的 compact 分支保持一致
+            if (!compact) h += 2;
         }
         in_code = false;
         code_lang.clear();
@@ -844,8 +861,9 @@ int count_markdown_lines(const std::vector<std::string>& lines, int width) {
         else if (is_hr(line))
             h += 1;  // 水平分隔线：恒定 1 行，与 build_markdown 的 separator 一致（不走行距）
         else
-            // 普通段落：与 paragraph_block 一致，每物理行占 kParagraphLineHeight 行高
-            h += kParagraphLineHeight *
+            // 普通段落：compact 模式每物理行占 1 行，否则与 paragraph_block 一致
+            // 每物理行占 kParagraphLineHeight 行高
+            h += (compact ? 1 : kParagraphLineHeight) *
                  static_cast<int>(wrap_text(line, safe_w).size());
     }
     flush_code();
@@ -911,9 +929,15 @@ Element paragraph_block(std::string_view src, int wrap_w) {
     return ftxui::vbox(std::move(es));
 }
 
-Element build_markdown(std::string_view text, int width) {
+Element build_markdown(std::string_view text, int width, bool compact) {
     const int safe_w = std::max(1, width);
     if (text.empty()) return ftxui::text("");
+
+    // 紧凑段落：每物理行占 1 行（不做 ×kParagraphLineHeight），避免段落尾随空行，
+    // 供用户消息使用——块高即文本行数，与转录区统一间距叠加后不产生"多一行"。
+    auto paragraph = [&](std::string_view line) {
+        return compact ? wrap_block(line, safe_w) : paragraph_block(line, safe_w);
+    };
 
     const std::vector<std::string> lines = split_lines(text);
 
@@ -942,8 +966,13 @@ Element build_markdown(std::string_view text, int width) {
                 });
                 code_elem = ftxui::vbox({lang_elem, code_elem});
             }
-            // 代码块统一上下留白（README「代码上下一行距离」），Panel 背景
-            blocks.push_back(theme::vPad(code_elem | ftxui::bgcolor(theme::T::Panel)));
+            // 代码块上下留白：默认（assistant 等）维持 vPad（README「代码上下一行距离」），
+            // compact（用户消息）不追加任何留白——用户消息块不带内边距，
+            // 上下间距完全由转录音区每条消息后统一追加的 text(" ") 承担，
+            // 避免代码块底部空行与转录区间距叠加成"下面多一行"。
+            auto code_bg = code_elem | ftxui::bgcolor(theme::T::Panel);
+            blocks.push_back(compact ? std::move(code_bg)
+                                     : theme::vPad(std::move(code_bg)));
         }
         in_code = false;
         code_lang.clear();
@@ -1023,12 +1052,12 @@ Element build_markdown(std::string_view text, int width) {
         // 孤立 | 行（无分隔行）：降级为普通行内文本（保留 | 分隔，可读）
         if (is_table_row(line)) {
             blocks.push_back(ftxui::color(theme::T::Text)(
-                paragraph_block(line, safe_w)));
+                paragraph(line)));
             continue;
         }
 
-        // 普通段落：按显示宽度折行，行距放大（中文字体可读性）
-        blocks.push_back(paragraph_block(line, safe_w));
+        // 普通段落：按显示宽度折行；默认行距放大（中文字体可读性），compact 模式每行 1 行
+        blocks.push_back(paragraph(line));
     }
     flush_code();
     return ftxui::vbox(std::move(blocks));
@@ -1379,10 +1408,10 @@ int estimate_tool_result_lines(const ToolCallNode& t, int width) {
     return std::max(1, h);
 }
 
-int estimate_markdown_height(std::string_view text, int width) {
+int estimate_markdown_height(std::string_view text, int width, bool compact) {
     // build_markdown 入口对空输入返回 text("")（FTXUI 空文本 min_y=1）
     if (text.empty()) return 1;
-    return count_markdown_lines(split_lines(text), width);
+    return count_markdown_lines(split_lines(text), width, compact);
 }
 
 /// @brief shell 结果行数估算：与 render_shell_result 逐行对齐（A3 单一布局源）
@@ -1424,7 +1453,7 @@ int estimate_tool_title_lines(const ToolCallNode& t, int width) {
 
 int estimate_message_height(const MessageNode& msg, int width) {
     // 与 build_message 的视觉结构逐行对齐（A3 单一布局源）：
-    // - 用户块：上/下留白各 1 行 + markdown 内容
+    // - 用户块：markdown 内容（上下留白由转录音区统一追加，自身不记）
     // - 思考/工具卡：圆角边框 2 行 + 头行 1 行 + 展开内容
     // - 流式游标 1 行；正文行恒 ≥1 行（左侧缩进 text("  ") 占 1 行）
     // 正文行数随 width 变化（按显示列宽折行）→ 传入与 build_message 相同的宽度。
@@ -1432,9 +1461,9 @@ int estimate_message_height(const MessageNode& msg, int width) {
         return std::max(1, estimate_markdown_height(t, w));
     };
     if (msg.role == MsgRole::User) {
-        int h = 2;  // 顶部/底部留白各 1 行
+        int h = 0;  // 上下留白由转录音区统一追加（每条消息后 +1 行）
         if (!msg.text.empty() || msg.streaming)
-            h += content_lines(msg.text, user_body_width(width));
+            h += std::max(1, estimate_markdown_height(msg.text, user_body_width(width), /*compact=*/true));
         return h;
     }
 
@@ -1468,23 +1497,24 @@ int estimate_message_height(const MessageNode& msg, int width) {
         if (max_pos >= msg.text.size()) ++h;  // 末卡后无正文 → 后空一行
     }
     if (msg.streaming) ++h;  // 流式游标
-    // 操作按钮栏（复制/重试）：仅正常回复（有正文），思考/工具调用专用消息不显示
-    if (msg.role == MsgRole::Assistant && msg.sealed && !trim_copy(msg.text).empty()) ++h;
+    // 操作按钮栏（复制/重试）：仅模型回复正文（非 notice、有正文），思考/工具调用专用消息不显示
+    if (msg.role == MsgRole::Assistant && msg.sealed && !msg.notice && !trim_copy(msg.text).empty()) ++h;
     return h;
 }
 
 Element build_message(const MessageNode& msg, int width, std::size_t anim_frame,
                       std::deque<CardHit>* card_hits) {
-    // 用户消息：深色背景块 + 左边框线，无角色头，内容左缩进 2 格、上下留白各 1 行
+    // 用户消息：深色背景块 + 左边框线，无角色头，内容左缩进 2 格。
+    // 上下间距由转录音区统一追加（每条消息后 +1 行），自身不再留白，
+    // 保证用户消息上/下间隔对称。
     if (msg.role == MsgRole::User) {
         Elements body;
-        body.push_back(ftxui::text(" "));  // 顶部间距
         if (!msg.text.empty() || msg.streaming) {
             // 可用宽 = width - 外层缩进 2 - 边框 1 - 内层缩进 2
+            // compact：普通段落每物理行占 1 行，块高即文本行数，不产生段落尾随空行
             body.push_back(ftxui::hbox({ftxui::text("  "),
-                                        ftxui::flex(build_markdown(msg.text, user_body_width(width)))}));
+                                        ftxui::flex(build_markdown(msg.text, user_body_width(width), /*compact=*/true))}));
         }
-        body.push_back(ftxui::text(" "));  // 底部间距
         return std::make_shared<UserMessageBox>(ftxui::vbox(std::move(body)));
     }
 
@@ -1545,25 +1575,34 @@ Element build_message(const MessageNode& msg, int width, std::size_t anim_frame,
 
     // 工具块：圆角卡片，头行可点击展开/收起
     auto render_tool_card = [&](std::size_t ti, const ToolCallNode& t) -> Element {
+        // Skill 工具：独立 Skills 卡片（技能魔杖图标 + "Skills：<技能名>"），
+        // 不再作为普通工具卡回填到所在消息，让技能加载动作清晰可辨。
+        const bool is_skill = (t.tool_name == "Skill");
+        const std::string skill_subject = is_skill
+            ? ("Skills：" + skill_name_from_args(t.arguments))
+            : std::string{};
+        // skill 的状态文案即含完整主题，标题行不必再重复显示 subject
+        const std::string subject =
+            is_skill ? std::string{} : tool_card_subject(t.arguments);
+
         std::string status;
         Color c = Color::YellowLight;
         if (t.running) {
             // 运行中：Braille 旋转动画 + 橙黄渐变（src/tui 同款）
-            status = std::string(kSpinnerFrames[anim_frame % kSpinnerFrameCount]) + " " + t.tool_name;
+            status = std::string(kSpinnerFrames[anim_frame % kSpinnerFrameCount])
+                     + " " + (is_skill ? skill_subject : std::string(t.tool_name));
             c = spinner_color(anim_frame);
         }
-        else if (t.is_error) { status = "✖ " + t.tool_name; c = Color::RedLight; }
-        else { status = "✓ " + t.tool_name; c = Color::GreenLight; }
+        else if (t.is_error) { status = "✖ " + (is_skill ? skill_subject : std::string(t.tool_name)); c = Color::RedLight; }
+        else { status = "✓ " + (is_skill ? skill_subject : std::string(t.tool_name)); c = Color::GreenLight; }
 
         Elements card_rows;
-        // 命令/文件标题：文件工具显示路径，命令工具显示命令串
-        std::string subject = tool_card_subject(t.arguments);
         const bool expanded = t.done && t.expanded;
         // 头行：图标 + 状态；折叠态标题单行截断跟在状态后
         Elements header;
         header.push_back(ftxui::text("  "));
-        // 工具图标（Nerd Font 不支持时降级为空）
-        header.push_back(ftxui::text(std::string(theme::icon_tool()) + " "));
+        // 工具图标（Nerd Font 不支持时降级为空/S；Skill 用技能魔杖图标）
+        header.push_back(ftxui::text(std::string(is_skill ? theme::icon_skill() : theme::icon_tool()) + " "));
         header.push_back(ftxui::color(c)(ftxui::text(status)));
         if (!expanded && !subject.empty()) {
             // 为图标/状态预留边界（含 2 空格空隙），长标题尽量铺满整行、短标题自然收缩
@@ -1671,8 +1710,8 @@ Element build_message(const MessageNode& msg, int width, std::size_t anim_frame,
         rows.push_back(ftxui::hbox({ftxui::text("  "), ftxui::text("▋") | ftxui::color(theme::T::TextFaint)}));
     }
 
-    // 消息操作按钮栏（复制 / 重试）：仅正常回复（有正文），思考/工具调用专用消息不显示
-    if (msg.role == MsgRole::Assistant && msg.sealed && !trim_copy(msg.text).empty()) {
+    // 消息操作按钮栏（复制 / 重试）：仅模型回复正文（非 notice），思考/工具调用专用与通知文本不显示
+    if (msg.role == MsgRole::Assistant && msg.sealed && !msg.notice && !trim_copy(msg.text).empty()) {
         auto make_btn = [&](int kind, std::string_view icon, std::string_view label) {
             Element e = ftxui::color(theme::T::TextFaint)(
                 ftxui::text(std::string(icon) + " " + std::string(label)));

@@ -10,6 +10,8 @@
  *          - assistant：助手消息（含 reasoning_content / tool_uses）
  *          - tool：工具结果消息
  *          - title：会话标题（append-only，/rename 追加新事件覆盖旧标题）
+ *          - system_prompt：系统提示词快照（append-only，reason 区分 initial/changed/resume，
+ *            含 hash 便于前端检测变更，调试会话轨迹用）
  *          - session_end：会话结束标记
  *
  *          存储路径：~/.workx/projects/<编码路径>/<sessionId>.jsonl
@@ -129,6 +131,13 @@ public:
     /// @brief 追加 title 事件（/rename 或首条消息自动生成标题时调用）
     /// @details append-only：新 title 事件覆盖旧标题，读取时取最后一条
     bool append_title(const std::string& title);
+
+    /// @brief 追加 system_prompt 事件（系统提示词快照，会话轨迹调试用）
+    /// @param reason 记录原因：initial（会话初始）/ changed（运行时变更）/ resume（恢复会话）
+    /// @param content 系统提示词全文
+    /// @details append-only：每次变更追加一条快照（含 djb2 hash），前端据此
+    ///          检测提示词是否变化并高亮 diff。
+    bool append_system_prompt(const std::string& reason, const std::string& content);
 
     /// @brief 追加 todo 事件（#24：待办清单全量快照）
     /// @details append-only：每次变更追加一条完整快照，读取时取最后一条。

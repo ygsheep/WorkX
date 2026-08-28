@@ -28,7 +28,7 @@
 #include "agent/message/types.h"
 #include "agent/tool/registry.h"
 #include "agent/tool/executor.h"
-#include "agent/tool/context.h"  // #45：PermissionMode（会话级三态权限模式）
+#include "agent/tool/context.h"  // #45：PermissionMode / SessionMode（会话级权限 + 工作模式）
 #include "agent/compact/prefix_shape.h"  // DS_CACHE: 前缀形状追踪
 #include "agent/compact/cache_aware_compactor.h"  // DS_CACHE H-3: 跨 turn 持久化的压缩器
 #include "agent/session/session_store.h"  // 项目会话恢复：JSONL 持久化
@@ -150,9 +150,15 @@ public:
     void set_compactor_context_window(int32_t context_window_tokens);
 
     /// @brief DS_CACHE M-1：配置压缩器归档目录（compact 折叠前归档原消息）
-    /// @details 必须在首次 send_message 前调用。非空时折叠的中段消息会被
+    /// @details 必须在首次 maybe_compact 前调用。非空时折叠的中段消息会被
     ///          序列化到 <archive_dir>/<timestamp>.jsonl，保证可追溯。
     void set_compactor_archive_dir(const std::string& dir);
+
+    /// @brief 手动压缩上下文（搜索面板「压缩上下文」/ /compact 命令调用）
+    /// @details 在 m_state_mutex 保护下就地压缩 m_messages（与 ReActLoop 构建请求
+    ///          前自动压缩同一入口）；返回压缩结果。调用方须先确认
+    ///          is_generating()==false，避免与后台任务竞争 m_messages。
+    CacheAwareCompactor::Result compact_context();
 
     /// @brief 设置 SessionStore（可选，设置后每条消息实时持久化到 JSONL）
     /// @details 必须在首次 send_message 前调用。设置后：
@@ -244,10 +250,27 @@ public:
     /// @brief #45：获取当前权限模式（线程安全）
     tool::PermissionMode permission_mode() const;
 
-    /// @brief #45：三态切换权限模式（Default → Plan → Bypass → Default）
-    /// @details Shift+Tab 触发。进入 Plan 时记录 before_plan（ExitPlanMode 工具
-    ///          退出恢复用）。线程安全（受 m_state_mutex 保护）。
+    /// @brief #45：两态切换权限模式（Default ↔ BypassPermissions）
+    /// @details Shift+Tab 触发。计划模式已从权限循环独立为工作模式（toggle_session_mode
+    ///          统一管理，进入 Plan 联动权限并记录 before_plan，退出时恢复）。
+    ///          计划模式下直接忽略（避免与模式状态机打架）。线程安全。
     void toggle_permission_mode();
+
+    /// @brief 获取当前会话工作模式（标准 / 计划 / 极简）
+    /// @details 线程安全（受 m_state_mutex 保护）。模式与权限正交：
+    ///          模式为顶层选择，权限（手动审批 / 完全访问）在模式内部切换。
+    tool::SessionMode session_mode() const;
+
+    /// @brief 设置会话工作模式
+    /// @details 跨 turn 生效（下一轮 ReActLoop 注入；极简模式同时过滤工具 schema）。
+    ///          进入 Plan 时联动权限=Plan（保存 before_plan），退出 Plan 时恢复原权限。
+    ///          线程安全（受 m_state_mutex 保护）。
+    void set_session_mode(tool::SessionMode mode);
+
+    /// @brief 三态循环切换工作模式（Standard → Plan → Minimal → Standard）
+    /// @details 模式切换键触发（TUI）。进入 Plan 记录 before_plan；离开 Plan 恢复。
+    ///          线程安全（受 m_state_mutex 保护）。
+    void toggle_session_mode();
 
     /// @brief 是否正在生成
     bool is_generating() const { return m_generating.load(); }
@@ -368,16 +391,25 @@ private:
     ///          回调捕获 store 的 shared_ptr，TodoStore 每次变更时追加全量快照。
     void wire_todo_persistence();
 
+    /// @brief 记录 system_prompt 事件到 SessionStore（会话轨迹调试）
+    /// @param reason 记录原因：initial / changed / resume
+    /// @details store 未创建时置 m_pending_system_prompt，待懒创建后补写 initial。
+    ///          仅在提示词内容相对上次记录有变化时落盘，避免重复快照。
+    void persist_system_prompt(const std::string& reason);
+
     std::unique_ptr<ICompletionProvider> m_provider;
     std::vector<ChatMessage> m_messages;
     std::string m_system_prompt;
     std::string m_session_id;           ///< 会话标识（switch_session 可变更，由 m_state_mutex 保护）
     std::string m_cwd;                  ///< 会话启动时的工作目录（构造时捕获，注入到 ReActLoop）
 
-    // #45：会话级权限模式（三态：Default/Plan/Bypass），由 m_state_mutex 保护
+    // #45：会话级权限模式（两态 UI：Default/Plan/Bypass，由 m_state_mutex 保护）
     tool::PermissionMode m_permission_mode{tool::PermissionMode::Default};
     ///< 进入 Plan 前的原模式（Plan 退出恢复用，由 m_state_mutex 保护）
     tool::PermissionMode m_permission_mode_before_plan{tool::PermissionMode::Default};
+
+    // 会话工作模式（标准 / 计划 / 极简），由 m_state_mutex 保护
+    tool::SessionMode m_session_mode{tool::SessionMode::Standard};
     std::atomic<bool> m_generating{false};
 
     // DS_CACHE M-3：移除 m_cache_hit_total/m_cache_miss_total 死代码
@@ -422,6 +454,10 @@ private:
     std::string m_store_cwd;
     std::string m_store_model;
     std::string m_store_git_branch;
+
+    // system_prompt 事件记录状态（由 m_state_mutex 保护）
+    bool m_system_prompt_recorded = false;  ///< 当前提示词是否已落盘
+    bool m_pending_system_prompt = false;   ///< store 未创建时待补写的 initial 快照
 
     // H-3：重试策略统一由 HttpRetryPolicy 管理
     HttpRetryPolicy m_retry_policy;

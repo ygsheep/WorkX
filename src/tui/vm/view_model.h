@@ -38,7 +38,8 @@ struct SidebarModel {
     int context_limit = 0;      ///< 上下文上限（token）
     int context_used = 0;       ///< 已用（token）
     double cost_usd = 0.0;      ///< 会话成本
-    std::string permission;     ///< 权限模式标签 ""/"plan"/"bypass"
+    std::string permission;     ///< 权限模式标签 "" / "bypass"（手动审批 / 完全访问）
+    std::string mode;           ///< 工作模式标签 "standard" / "plan" / "minimal"
     bool visible = true;        ///< 侧栏是否可见（窄屏折叠）
 
     // 3.1 统计指标（来自 ActionTurnDone 用量，会话累计）
@@ -215,6 +216,7 @@ private:
     bool apply_variant(const ActionAgentDone&);
     bool apply_variant(const ActionSetBusy&);
     bool apply_variant(const ActionPermissions&);
+    bool apply_variant(const ActionSetMode&);
     bool apply_variant(const ActionAskUser&);
     bool apply_variant(const ActionAskUserTimeout&);
     bool apply_variant(const ActionOpenPlan&);

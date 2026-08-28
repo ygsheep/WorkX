@@ -269,8 +269,15 @@ void ChatSession::cancel_and_wait_current_task() {
 }
 
 void ChatSession::set_system_prompt(const std::string& prompt) {
-    std::lock_guard<std::mutex> lock(m_state_mutex);
-    m_system_prompt = prompt;
+    std::string reason;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        if (prompt == m_system_prompt) return;
+        m_system_prompt = prompt;
+        // 已落盘过 → 运行时变更；首次设置 → 待懒创建 store 后补写 initial
+        reason = m_system_prompt_recorded ? "changed" : "initial";
+    }
+    persist_system_prompt(reason);
 }
 
 std::string ChatSession::system_prompt() const {
@@ -374,6 +381,11 @@ bool ChatSession::restore_from_file(const std::string& file_path) {
     return true;
 }
 
+CacheAwareCompactor::Result ChatSession::compact_context() {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    return m_compactor.maybe_compact(m_messages);
+}
+
 void ChatSession::import_messages(std::vector<ChatMessage> messages) {
     // 生成中安全：与 switch_session 同理，先取消并等待当前任务，避免与 ReActLoop 竞争 m_messages。
     cancel_and_wait_current_task();
@@ -437,6 +449,10 @@ bool ChatSession::switch_session(const std::string& file_path) {    // 加载历
     auto todos = agent::session::SessionStore::load_todos(file_path);
     tool::TodoStore::instance().restore_todos(new_session_id, std::move(todos));
     wire_todo_persistence();
+    // 会话轨迹调试：切换后记录当前系统提示词为 resume 快照（file 已打开）
+    if (!m_system_prompt.empty()) {
+        persist_system_prompt("resume");
+    }
     // 审计：切换到恢复的会话
     audit::AuditLogger::instance().log_session_lifecycle(
         audit::EventType::SessionStart, new_session_id);
@@ -465,6 +481,9 @@ void ChatSession::new_session() {
         m_last_prefix_shape = PrefixShape{};
         m_touch_collector.clear();
         m_activated_skills.clear();
+        // 新会话文件懒创建后补写 initial system_prompt 快照（会话轨迹调试）
+        m_system_prompt_recorded = false;
+        m_pending_system_prompt = !m_system_prompt.empty();
         // 懒创建参数（m_store_configured 等）保持不变，复用启动时配置
     }  // 释放 m_state_mutex
 
@@ -550,6 +569,10 @@ void ChatSession::persist_message(const ChatMessage& msg) {
                 m_session_store = new_store;
             }
             store = new_store;
+            // 补写待记录的 initial system_prompt 快照（会话轨迹调试）
+            if (m_pending_system_prompt) {
+                persist_system_prompt("initial");
+            }
             // #24：接线 TodoStore 持久化回调（新会话从空清单开始）
             wire_todo_persistence();
         } catch (const std::exception&) {
@@ -639,6 +662,25 @@ void ChatSession::persist_messages_range(size_t start_idx, const std::string& pa
         }
         current_parent = uuid;  // 链式传递 parent_uuid
     }
+}
+
+void ChatSession::persist_system_prompt(const std::string& reason) {
+    std::shared_ptr<agent::session::SessionStore> store;
+    std::string prompt;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        store = m_session_store;
+        prompt = m_system_prompt;
+        if (!store) {
+            // store 未创建（首条 user 消息前）：置 pending，懒创建后补写 initial 快照
+            m_pending_system_prompt = true;
+            return;
+        }
+    }
+    store->append_system_prompt(reason, prompt);
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    m_system_prompt_recorded = true;
+    m_pending_system_prompt = false;
 }
 
 std::string ChatSession::summarize_with_llm(const std::vector<ChatMessage>& middle) {
@@ -787,7 +829,7 @@ void ChatSession::send_message(const std::string& text,
     run_completion(text, images);
 }
 
-// #45：会话级权限模式（三态切换 Default → Plan → Bypass → Default）
+// #45：会话级权限模式（两态切换 Default ↔ Bypass，Plan 归入工作模式管理）
 void ChatSession::set_permission_mode(tool::PermissionMode mode) {
     std::lock_guard<std::mutex> lock(m_state_mutex);
     m_permission_mode = mode;
@@ -798,24 +840,69 @@ tool::PermissionMode ChatSession::permission_mode() const {
     return m_permission_mode;
 }
 
+/// @brief 权限两态切换（手动审批 ↔ 完全访问）
+/// @details 计划模式已从权限循环中独立为工作模式（m_session_mode），
+///          故 Shift+Tab 仅在 Default / BypassPermissions 之间循环。
+///          计划模式联动由 toggle_session_mode / EnterPlanMode 工具负责。
 void ChatSession::toggle_permission_mode() {
     std::lock_guard<std::mutex> lock(m_state_mutex);
+    // 计划模式下不直接切换权限（由模式切换统一管理，退出计划时恢复）
+    if (m_session_mode == tool::SessionMode::Plan) {
+        return;
+    }
     switch (m_permission_mode) {
         case tool::PermissionMode::Default:
-            // 进入 Plan：记录 before_plan（ExitPlanMode 退出恢复用）
-            m_permission_mode_before_plan = tool::PermissionMode::Default;
-            m_permission_mode = tool::PermissionMode::Plan;
-            break;
-        case tool::PermissionMode::Plan:
-            // 退出 Plan，进入 Bypass（完全放行）
             m_permission_mode = tool::PermissionMode::BypassPermissions;
             break;
         case tool::PermissionMode::BypassPermissions:
-            // 回归常规（不经过 Plan，避开"Bypass 禁止降级到 Plan"约束）
+            m_permission_mode = tool::PermissionMode::Default;
+            break;
+        case tool::PermissionMode::Plan:
+            // 理论不可达（Plan 由模式管理）；保守回退到 Default
             m_permission_mode = tool::PermissionMode::Default;
             break;
         case tool::PermissionMode::AcceptEdits:
-            break;  // 占位模式，不参与三态循环
+            break;  // 占位模式，不参与循环
+    }
+}
+
+tool::SessionMode ChatSession::session_mode() const {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    return m_session_mode;
+}
+
+void ChatSession::set_session_mode(tool::SessionMode mode) {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    // 离开 Plan：恢复进入前的权限模式（与 ExitPlanMode 工具语义一致）
+    if (m_session_mode == tool::SessionMode::Plan && mode != tool::SessionMode::Plan) {
+        m_permission_mode = m_permission_mode_before_plan;
+    }
+    // 进入 Plan：记录 before_plan 并强制只读（对齐 EnterPlanMode 工具语义）
+    if (mode == tool::SessionMode::Plan && m_session_mode != tool::SessionMode::Plan) {
+        m_permission_mode_before_plan = m_permission_mode;
+        m_permission_mode = tool::PermissionMode::Plan;
+    }
+    m_session_mode = mode;
+}
+
+void ChatSession::toggle_session_mode() {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    switch (m_session_mode) {
+        case tool::SessionMode::Standard:
+            // 标准 → 计划：记录 before_plan（退出计划恢复用）
+            m_permission_mode_before_plan = m_permission_mode;
+            m_permission_mode = tool::PermissionMode::Plan;
+            m_session_mode = tool::SessionMode::Plan;
+            break;
+        case tool::SessionMode::Plan:
+            // 计划 → 极简：退出计划，恢复进入前的权限模式
+            m_permission_mode = m_permission_mode_before_plan;
+            m_session_mode = tool::SessionMode::Minimal;
+            break;
+        case tool::SessionMode::Minimal:
+            // 极简 → 标准
+            m_session_mode = tool::SessionMode::Standard;
+            break;
     }
 }
 
@@ -906,7 +993,15 @@ void ChatSession::run_completion(const std::string& user_text,
             // ---- 构建 tools_schema ----
             nlohmann::json tools_schema = nlohmann::json::array();
             if (m_tool_registry && m_tool_registry->size() > 0) {
-                tools_schema = m_tool_registry->get_all_schemas();
+                // 极简模式：仅暴露 Skill/Bash/Read/Write/Edit 五个工具
+                //（其余工具对 LLM 不可见，配合 ToolExecutor 守卫双重保障）
+                if (session_mode() == tool::SessionMode::Minimal) {
+                    tools_schema = m_tool_registry->get_schemas_by_names(
+                        {tool::kMinimalModeToolNames,
+                         tool::kMinimalModeToolNames + tool::kMinimalModeToolCount});
+                } else {
+                    tools_schema = m_tool_registry->get_all_schemas();
+                }
             }
 
             // ---- 0.6.x：QueryEngine 统一编排入口（验收标准：唯一 loop 入口）----
@@ -938,19 +1033,28 @@ void ChatSession::run_completion(const std::string& user_text,
             // 由 QueryEngine 落到 ReAct 循环与 GoalGuarded 内部循环（后者此前缺失）。
             // 回调写回 ChatSession（受 m_state_mutex 保护）统一状态源，对齐
             // EnterPlanMode/ExitPlanModeV2/on_permission_mode_changed（H-1 PR #46 评审）。
-            {
+            {   
                 std::lock_guard<std::mutex> lock(m_state_mutex);
                 query_engine.set_permission(PermissionSnapshot{
                     .mode = m_permission_mode,
                     .before_plan = m_permission_mode_before_plan,
                     .on_changed = [this](tool::PermissionMode mode,
                                          tool::PermissionMode before_plan,
-                                         bool /*in_plan*/) {
+                                         bool in_plan) {
                         std::lock_guard<std::mutex> lk(m_state_mutex);
                         m_permission_mode = mode;
                         m_permission_mode_before_plan = before_plan;
+                        // 工具路径（EnterPlanMode/ExitPlanModeV2）同步工作模式：
+                        // 进入计划 → 模式=计划；退出计划 → 回落到标准模式
+                        if (in_plan) {
+                            m_session_mode = tool::SessionMode::Plan;
+                        } else if (m_session_mode == tool::SessionMode::Plan) {
+                            m_session_mode = tool::SessionMode::Standard;
+                        }
                     },
                 });
+                // 注入会话工作模式（标准/计划/极简）：极简模式白名单守卫依据
+                query_engine.set_session_mode(m_session_mode);
             }
 
             // 3.2：使用 IReActObserver 接口替代 lambda 回调
@@ -1355,9 +1459,16 @@ ChatSession::deserialize_state(const nlohmann::json& j) {
 // C-1：一次性加锁提交状态到成员
 void ChatSession::commit_state(std::vector<ChatMessage> messages,
                                 std::string system_prompt) {
-    std::lock_guard<std::mutex> lock(m_state_mutex);
-    m_messages = std::move(messages);
-    m_system_prompt = std::move(system_prompt);
+    bool record_resume = !system_prompt.empty();
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        m_messages = std::move(messages);
+        m_system_prompt = std::move(system_prompt);
+    }
+    // 会话轨迹调试：恢复的提示词落盘一条 resume 快照（store 已配置时）
+    if (record_resume) {
+        persist_system_prompt("resume");
+    }
 }
 
 // ============================================================

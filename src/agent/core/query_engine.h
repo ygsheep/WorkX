@@ -44,6 +44,11 @@ public:
     /// @brief 注入会话级权限状态（Default/Plan/Bypass），落到内部循环
     void set_permission(PermissionSnapshot snap);
 
+    /// @brief 注入会话工作模式（标准/计划/极简），落到内部循环
+    /// @details 极简模式同时由 ChatSession 侧过滤工具 schema（对 LLM 不可见），
+    ///          此处注入供 ReActLoop 构造 ToolContext，Executor 做白名单守卫。
+    void set_session_mode(tool::SessionMode mode) { m_deps.session_mode = mode; }
+
     /// @brief 构造并注册一种 Agent 类型的执行器（未实现/未知返回 nullptr）
     /// @param type 目标类型（ReAct / GoalGuarded 落地；其余返回 nullptr 占位）
     std::unique_ptr<IAgentLoop> make_loop(AgentType type) const;

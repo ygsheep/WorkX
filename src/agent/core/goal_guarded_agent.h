@@ -52,6 +52,8 @@ struct GoalAgentDeps {
     /// 0.6.x：注入内部单步 ReActLoop，修复 GoalGuarded 路由丢失权限状态的缺口。
     tool::PermissionMode permission_mode{tool::PermissionMode::Default};
     tool::PermissionMode permission_mode_before_plan{tool::PermissionMode::Default};
+    /// 会话工作模式（标准/计划/极简）：注入内部 ReActLoop，供极简模式白名单守卫
+    tool::SessionMode session_mode{tool::SessionMode::Standard};
     /// 权限模式变更回调（空则不挂，宿主用来自查鼠标路径统一状态源）
     std::function<void(tool::PermissionMode /*mode*/, tool::PermissionMode /*before_plan*/,
                        bool /*in_plan*/)> permission_state_changed_cb;

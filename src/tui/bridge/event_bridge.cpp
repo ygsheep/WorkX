@@ -89,11 +89,13 @@ void EventBridge::start() {
     subscribe_typed<agent::AskUserTimeoutEvent>(
         [this](const agent::AskUserTimeoutEvent&) { push(ActionAskUserTimeout{}); });
 
+    // 计划模式已从权限循环中独立为工作模式：进入/退出计划同步模式位
+    //（权限位由 ChatSession on_changed 回调统一回写，此处只动模式）
     subscribe_typed<agent::EnterPlanModeEvent>(
-        [this](const agent::EnterPlanModeEvent&) { push(ActionPermissions{.label = "plan"}); });
+        [this](const agent::EnterPlanModeEvent&) { push(ActionSetMode{.label = "plan"}); });
 
     subscribe_typed<agent::ExitPlanModeEvent>(
-        [this](const agent::ExitPlanModeEvent&) { push(ActionPermissions{.label = ""}); });
+        [this](const agent::ExitPlanModeEvent&) { push(ActionSetMode{.label = "standard"}); });
 
     // 方案预览：退出规划模式时在侧边栏打开方案 markdown 文件
     subscribe_typed<agent::PlanPreviewEvent>(

@@ -191,7 +191,16 @@ Element row_element(const FlatRow& r, int num_w, const FileViewState& file) {
     if (r.bg != Color::Black) content = content | ftxui::bgcolor(r.bg);
     Element prefix;
     if (r.disp_no > 0) {
-        prefix = codecard::line_num_prefix(r.disp_no, num_w);
+        if (r.bg != Color::Black) {
+            // 内联 diff 标记行：行号前加 + 标记，标示该行为新增/修改（未变更行无标记）
+            const std::string num_str = std::to_string(r.disp_no);
+            const int pad = std::max(0, num_w - static_cast<int>(num_str.size()));
+            prefix = ftxui::color(theme::T::TextDim)(
+                ftxui::text(std::string("\u2502") + "+" +
+                            std::string(pad, ' ') + num_str + " "));
+        } else {
+            prefix = codecard::line_num_prefix(r.disp_no, num_w);
+        }
     } else {
         // 续行：保留 │ 竖线分隔（无数字、同宽对齐），避免换行后竖线消失
         prefix = ftxui::text(std::string("\u2502") +
@@ -206,7 +215,8 @@ Element row_element(const FlatRow& r, int num_w, const FileViewState& file) {
 
 }  // namespace
 
-Element build_file_viewer(const FileViewState& file, int avail_width) {
+Element build_file_viewer(const FileViewState& file, int avail_width,
+                          int avail_height) {
     if (file.path.empty()) {
         return ftxui::vbox({
             ftxui::text(" "),
@@ -222,7 +232,7 @@ Element build_file_viewer(const FileViewState& file, int avail_width) {
     std::vector<std::vector<HighlightSpan>> line_spans;
     std::vector<FlatRow> flat =
         build_flat_rows(file, avail_width, &num_w, &line_spans);
-    const int visible = visible_line_count();
+    const int visible = avail_height > 0 ? avail_height : visible_line_count();
     const int scroll = std::clamp(file.scroll, 0,
                                   std::max(0, static_cast<int>(flat.size()) - visible));
 

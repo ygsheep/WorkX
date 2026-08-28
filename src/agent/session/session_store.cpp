@@ -10,7 +10,9 @@
 #include <algorithm>
 #include <chrono>
 #include <ctime>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <system_error>
 
 #include "core/utils/path_encoder.h"
@@ -32,6 +34,15 @@ std::string now_iso() {
     char buf[32];
     std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tm);
     return buf;
+}
+
+/// @brief 稳定字符串 hash（djb2），用于检测系统提示词是否变化
+std::string djb2_hex(const std::string& s) {
+    unsigned long h = 5381;
+    for (unsigned char c : s) h = h * 33 + c;
+    std::ostringstream oss;
+    oss << std::hex << std::setw(8) << std::setfill('0') << h;
+    return oss.str();
 }
 
 } // anonymous namespace
@@ -199,6 +210,18 @@ bool SessionStore::append_title(const std::string& title) {
     j["sessionId"] = m_session_id;
     j["timestamp"] = now_iso();
     j["title"] = title;
+    return append_line(j);
+}
+
+bool SessionStore::append_system_prompt(const std::string& reason,
+                                        const std::string& content) {
+    nlohmann::json j;
+    j["type"] = "system_prompt";
+    j["sessionId"] = m_session_id;
+    j["timestamp"] = now_iso();
+    j["reason"] = reason;
+    j["content"] = content;
+    j["hash"] = djb2_hex(content);
     return append_line(j);
 }
 

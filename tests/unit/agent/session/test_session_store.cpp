@@ -6,6 +6,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <thread>
 #include <chrono>
 
@@ -42,6 +44,15 @@ public:
 private:
     std::filesystem::path path_;
 };
+
+/// @brief 与 session_store.cpp 内部 djb2_hex 保持一致的稳定 hash 计算（测试断言用）
+std::string djb2_for_test(const std::string& s) {
+    unsigned long h = 5381;
+    for (unsigned char c : s) h = h * 33 + c;
+    std::ostringstream oss;
+    oss << std::hex << std::setw(8) << std::setfill('0') << h;
+    return oss.str();
+}
 
 } // anonymous namespace
 
@@ -98,6 +109,35 @@ TEST_CASE("session_store: append is idempotent (no truncate)", "[session][store]
     REQUIRE(events.size() == 2);
     REQUIRE(events[0]["content"] == "first");
     REQUIRE(events[1]["content"] == "second");
+}
+
+// ============================================================
+// system_prompt 事件
+// ============================================================
+
+TEST_CASE("session_store: system_prompt records reason/content/hash", "[session][store]") {
+    TempFile tmp("workx_test_sysprompt.jsonl");
+
+    {
+        SessionStore store(tmp.string(), "test-session-id");
+        REQUIRE(store.open());
+        REQUIRE(store.append_system_prompt("initial", "you are a helpful assistant"));
+        REQUIRE(store.append_system_prompt("changed", "you are a strict reviewer"));
+        store.close();
+    }
+
+    auto events = SessionStore::read_all(tmp.string());
+    REQUIRE(events.size() == 2);
+    REQUIRE(events[0]["type"] == "system_prompt");
+    REQUIRE(events[0]["reason"] == "initial");
+    REQUIRE(events[0]["content"] == "you are a helpful assistant");
+    REQUIRE(events[0]["sessionId"] == "test-session-id");
+    REQUIRE_FALSE(events[0]["hash"].get<std::string>().empty());
+    REQUIRE(events[1]["reason"] == "changed");
+    // 内容不同 → hash 必须不同（前端据此检测提示词变更）
+    REQUIRE(events[0]["hash"].get<std::string>() != events[1]["hash"].get<std::string>());
+    // hash 稳定：相同内容两次写入得到相同 hash
+    REQUIRE(events[0]["hash"].get<std::string>() == djb2_for_test("you are a helpful assistant"));
 }
 
 // ============================================================
