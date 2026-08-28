@@ -55,7 +55,7 @@ let
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "workx";
-  version = "0.6.5";
+  version = "0.7.0";
 
   inherit src;
 
