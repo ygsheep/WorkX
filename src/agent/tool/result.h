@@ -12,6 +12,7 @@
 
 #include <string>
 #include <nlohmann/json.hpp>
+#include "agent/tool/encoding.h"
 
 namespace agent::tool {
 
@@ -47,11 +48,14 @@ struct ToolResult {
 
     /// @brief 格式化为 LLM 可读的文本
     /// @return 格式化后的文本
+    /// @note 文本与 JSON 数据在序列化前均做 UTF-8 清洗，避免工具输出
+    ///       含非 UTF-8 字节（如 GBK 子进程 stdout）时在 nlohmann::json
+    ///       dump() 阶段抛出 type_error.316。
     std::string to_string() const {
         if (type == Type::Json) {
-            return data.dump(2);
+            return sanitize_json_strings(data).dump(2);
         }
-        return text;
+        return sanitize_utf8(text);
     }
 };
 

@@ -27,6 +27,7 @@
 #include "registry.h"
 #include "result.h"
 #include "context.h"
+#include "agent/tool/encoding.h"
 #include "agent/audit/audit_logger.h"
 
 namespace agent::tool {
@@ -124,8 +125,13 @@ public:
         const nlohmann::json& input,
         const ToolContext& ctx
     ) const {
+        // 仅在可能抛出的序列化处加保护（工具入参可能含非 UTF-8 字节）
+        size_t input_size = 0;
+        try { input_size = input.dump().size(); }
+        catch (const std::exception&) { input_size = 0; }
+
         LOG_INFO("[tool_executor] begin, tool={}, input_size={}, thread={}",
-                 tool_name, input.dump().size(),
+                 tool_name, input_size,
                  std::hash<std::thread::id>{}(std::this_thread::get_id()));
 
         const auto t0 = std::chrono::steady_clock::now();
@@ -287,6 +293,10 @@ private:
         ExecutionResult exec_result;
         exec_result.tool_name = tool_name;
         exec_result.result = std::move(result);
+
+        // UTF-8 清洗：去除工具输出中的非法 UTF-8 字节（如 GBK 子进程 stdout），
+        // 避免下游 json 序列化（审计/to_string）抛 type_error.316
+        exec_result.result.text = sanitize_utf8(exec_result.result.text);
 
         // 3.4：结果截断（防止 grep/bash 长输出撑爆上下文）
         if (!exec_result.result.text.empty() &&
