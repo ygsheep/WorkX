@@ -3,7 +3,7 @@
  * @brief Skill 磁盘加载器实现
  * @details 目录遍历 + SKILL.md 解析 + PromptCommand 构建。
  *          仅支持 <name>/SKILL.md 目录格式（对齐 example/cc）。
- * @version 1.0.0
+ * @version 1.0.1
  * @date 2026-08
  */
 

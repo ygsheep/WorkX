@@ -3,7 +3,7 @@
  * @brief Skill 文件 frontmatter 解析实现
  * @details 极简 key: value 解析器：按行解析，不支持嵌套 YAML。
  *          当前字段均为扁平标量，够用即可；未来需要嵌套结构再引入 yaml-cpp。
- * @version 1.0.0
+ * @version 1.0.1
  * @date 2026-08
  */
 

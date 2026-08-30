@@ -2,7 +2,7 @@
  * @file chat_session.cpp
  * @brief 对话状态机实现
  * @details 编排用户输入、ReAct 循环、流式事件发布、自动重试、会话持久化
- * @version 3.1.1
+ * @version 3.1.2
  * @date 2026-07
  */
 

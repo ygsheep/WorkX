@@ -3,7 +3,7 @@
  * @brief 通用 Hook 事件系统 — 事件枚举 / 上下文负载 / 执行结果 / 注册定义
  * @details Issue #50。定义 8 个 Hook 事件、4 种 Hook 类型，以及执行器返回
  *          的 Promise 语义（blockingError / preventContinuation 对齐 cc）。
- * @version 1.0.0
+ * @version 1.0.1
  * @date 2026-08
  */
 

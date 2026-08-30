@@ -3,7 +3,7 @@
  * @brief Agent 编排事件类型（H-10：从 events.h 按域拆分）
  * @details Agent 推理步骤、工具调用、工具结果、Agent 编排完成等事件。
  *          订阅方按需 include 本文件，避免引入系统/流式事件。
- * @version 1.1.0
+ * @version 1.2.0
  * @date 2026-07
  */
 

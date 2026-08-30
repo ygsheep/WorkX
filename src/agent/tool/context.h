@@ -3,7 +3,7 @@
  * @brief ToolContext — 工具执行上下文
  * @details 在工具执行过程中传递的运行时信息：会话 ID、工作目录、权限模式、取消信号、
  *          任务管理器、进度回调
- * @version 1.3.0
+ * @version 1.4.0
  * @date 2026-07
  */
 

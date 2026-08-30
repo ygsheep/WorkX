@@ -2,7 +2,7 @@
  * @file command.h
  * @brief Command 基类 + 三种命令类型
  * @details CommandBase 抽象基类、PromptCommand（模型执行）、LocalCommand（本地执行）
- * @version 1.0.0
+ * @version 1.0.1
  * @date 2026-07
  */
 

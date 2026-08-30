@@ -1,7 +1,7 @@
 /**
  * @file hook_match.cpp
  * @brief HookMatcher — permission-rule 语法解析 + glob 匹配
- * @version 1.0.0
+ * @version 1.0.1
  * @date 2026-08
  */
 

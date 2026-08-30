@@ -2,7 +2,7 @@
  * @file agent_tool.cpp
  * @brief AgentTool 实现
  * @details 子 Agent 调度工具的具体实现
- * @version 1.3.1
+ * @version 1.4.0
  * @date 2026-07
  */
 

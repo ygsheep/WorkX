@@ -1,7 +1,7 @@
 /**
  * @file hook_event.h -> hook_event.cpp
  * @brief 事件枚举字符串转换 + HookDefinition::from_json
- * @version 1.0.0
+ * @version 1.0.1
  * @date 2026-08
  */
 

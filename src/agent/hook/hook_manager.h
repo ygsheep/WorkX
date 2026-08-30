@@ -5,7 +5,7 @@
  *          顺序），dispatch(event, ctx) 时先用一次性编译的 HookMatcher 过滤，
  *          再逐条执行 command/http/prompt/agent 类型的 hook，聚合 blockingError /
  *          preventContinuation / message。进度通过 IEventBus 发布可选。
- * @version 1.0.0
+ * @version 1.0.1
  * @date 2026-08
  */
 

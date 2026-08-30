@@ -2,7 +2,7 @@
  * @file react_loop.cpp
  * @brief ReActLoop 实现
  * @details Thought / Action / Observation 三阶段循环逻辑
- * @version 1.1.0
+ * @version 1.1.1
  * @date 2026-07
  */
 

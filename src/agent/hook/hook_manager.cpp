@@ -1,7 +1,7 @@
 /**
  * @file hook_manager.cpp
  * @brief HookManager — 调度核心实现
- * @version 1.0.0
+ * @version 1.0.1
  * @date 2026-08
  */
 

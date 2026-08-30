@@ -5,7 +5,7 @@
  *          一次编译成 matcher，dispatch 时 O(1) 判断命中，避免每次重新解析。
  *          语法：`ToolName(arg pattern)`，多个以 `||` 连接；
  *          空 match = 匹配所有（全命中）。
- * @version 1.0.0
+ * @version 1.0.1
  * @date 2026-08
  */
 

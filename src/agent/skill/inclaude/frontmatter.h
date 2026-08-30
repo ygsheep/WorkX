@@ -3,7 +3,7 @@
  * @brief Skill 文件 frontmatter 解析
  * @details 解析 .claude/skills/<name>/SKILL.md 的 YAML 风格 frontmatter 头
  *          （仅扁平 key: value，不支持嵌套），分离正文
- * @version 1.0.0
+ * @version 1.1.0
  * @date 2026-08
  */
 
