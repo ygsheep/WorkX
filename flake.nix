@@ -7,7 +7,7 @@
     { self, nixpkgs }:
     let
       # 版本号单一事实源：cmake/version.cmake 会校验此字面量
-      version = "0.7.0";
+      version = "0.8.0";
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
 
