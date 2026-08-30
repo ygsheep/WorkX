@@ -41,7 +41,8 @@ std::unique_ptr<IAgentLoop> QueryEngine::make_loop(AgentType type) const {
                 m_deps.provider, m_deps.registry, make_react_config(),
                 m_deps.config_manager, m_deps.task_manager, m_deps.cwd,
                 m_deps.external_compactor, m_deps.event_bus, m_deps.touch_collector,
-                m_deps.file_index_invalidator, m_deps.session_id);
+                m_deps.file_index_invalidator, m_deps.session_id,
+                m_deps.queue_inject_cb);
             apply_permission(loop);
             return std::make_unique<ReActLoopAdapter>(std::move(loop));
         }
@@ -77,7 +78,8 @@ std::unique_ptr<IAgentLoop> QueryEngine::make_loop(AgentType type) const {
                 m_deps.provider, m_deps.registry, make_react_config(),
                 m_deps.config_manager, m_deps.task_manager, m_deps.cwd,
                 m_deps.external_compactor, m_deps.event_bus, m_deps.touch_collector,
-                m_deps.file_index_invalidator, m_deps.session_id);
+                m_deps.file_index_invalidator, m_deps.session_id,
+                m_deps.queue_inject_cb);
             apply_permission(loop);
             return std::make_unique<ReActLoopAdapter>(std::move(loop));
     }

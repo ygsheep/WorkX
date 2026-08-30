@@ -184,6 +184,9 @@ AgentRunResult BackgroundLoopAdapter::run(AgentRunContext ctx) {
 
     // 拷贝需要跨 run() 存活的值语义依赖（字符串 / json），指针仅保留会话稳定的。
     GoalAgentDeps deps = m_deps;
+    // 消息队列归属主会话前台循环：后台任务在独立消息缓冲中运行，不消费主会话队列
+    //（否则后台/前台并发冲刷时队列可能被后台任务抢先注入，与用户预期不符）。
+    deps.queue_inject_cb = nullptr;
     const std::string system_prompt = std::move(ctx.system_prompt);
     // P2-3：后台不暴露 AgentTool（防异步递归派生子 Agent/后台任务）
     const nlohmann::json tools_schema = strip_background_forbidden_tools(

@@ -199,6 +199,15 @@ inline constexpr std::string_view kAskSingleHint      =
 inline constexpr std::string_view kAskInputPlaceholder = "输入答案…";
 
 // ----------------------------------------------------------------------------
+// 消息队列卡片（模型忙碌时前端入队的用户消息）
+// ----------------------------------------------------------------------------
+inline constexpr std::string_view kQueueIcon          = "⏸ ";
+inline constexpr std::string_view kQueueTitlePrefix   = "条消息排队中";
+inline constexpr std::string_view kQueueCtrlHint      = "Ctrl+Enter 立即发送";
+inline constexpr std::string_view kQueueRemove        = " ✕";
+inline constexpr std::string_view kQueueEmpty         = "（队列已空）";
+
+// ----------------------------------------------------------------------------
 // 命令 / 会话操作（App 提示与内置命令描述）
 // ----------------------------------------------------------------------------
 inline constexpr std::string_view kNoBackendModels    = "（无后端，无法列出模型）\n";

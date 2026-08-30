@@ -60,6 +60,9 @@ struct GoalAgentDeps {
     /// 0.6.x：查询追踪器（可选）。非空时每轮 Verdict 结果写入 tracker 的
     /// 当前记录（verdict_history），供 QueryEngine→queryTracking 调用链溯源。
     class QueryTracker* tracker = nullptr;
+    /// 消息队列冲刷回调（可选，ChatSession 注入）：模型忙碌时前端入队的用户消息，
+    /// 在 ReAct 工具轮边界合并为单条 user 消息注入当前循环的 messages。
+    std::function<void(std::vector<ChatMessage>&)> queue_inject_cb;
 };
 
 /// @brief 构造 GoalGuardedAgent 内部 ReActLoop 的工厂（供 QueryEngine 复用注入逻辑）

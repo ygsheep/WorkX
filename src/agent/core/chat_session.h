@@ -14,6 +14,7 @@
 #include <memory>
 #include <atomic>
 #include <mutex>
+#include <deque>
 #include <condition_variable>
 #include <functional>
 #include <unordered_set>
@@ -23,6 +24,7 @@
 #include "agent/api/retry.h"  // H-3：HttpRetryPolicy
 #include "agent/core/react_observer.h"
 #include "core/events/event_bus.h"
+#include "core/events/agent_events.h"  // QueuedMessageItem / MessageQueueUpdatedEvent
 #include "core/config/config_manager.h"
 #include "core/utils/result.h"
 #include "agent/message/types.h"
@@ -278,7 +280,7 @@ public:
     ///          线程安全（受 m_state_mutex 保护）。
     void set_session_mode(tool::SessionMode mode);
 
-    /// @brief 三态循环切换工作模式（Standard → Plan → Minimal → Standard）
+    /// @brief 三态循环切换工作模式（Standard → Minimal → Plan → Standard）
     /// @details 模式切换键触发（TUI）。进入 Plan 记录 before_plan；离开 Plan 恢复。
     ///          线程安全（受 m_state_mutex 保护）。
     void toggle_session_mode();
@@ -294,7 +296,39 @@ public:
     /// @brief 提交用户消息，触发 LLM 推理
     /// @param text 用户文本
     /// @param images 图片附件绝对路径（多模态，可为空）
+    /// @details 模型忙碌（is_generating）时自动入队（不直接发送），空闲时正常触发推理。
     void send_message(const std::string& text, const std::vector<std::string>& images = {});
+
+    // ============================================================
+    // 消息队列（模型忙碌时缓存用户输入）
+    // ============================================================
+
+    /// @brief 入队一条用户消息（模型忙碌时缓存，空闲时直接发送不走队列）
+    /// @details 线程安全。入队后发布 MessageQueueUpdatedEvent（TUI 队列卡片刷新）。
+    ///          不影响 m_messages（未发送前不持久化）。返回是否实际入队
+    ///          （模型空闲时入队无意义，调用方应直接 send_message）。
+    /// @return true=已入队（模型忙碌）；false=未入队（模型空闲，应走 send_message）
+    bool enqueue_message(const std::string& text, const std::vector<std::string>& images = {});
+
+    /// @brief 请求立即冲刷队列（Ctrl+Enter）
+    /// @details 置位 m_flush_requested，ReActLoop 在下一个工具轮边界调用
+    ///          inject_pending_queue 把队列合并为单条 user 消息注入当前循环。
+    void request_flush();
+
+    /// @brief 单条移除队列消息（TUI 队列卡片 ✕ 按钮）
+    /// @param id QueuedMessageItem.id
+    void remove_queued_message(const std::string& id);
+
+    /// @brief 清空队列（clear_history / new_session 时调用）
+    void clear_pending_queue();
+
+    /// @brief 获取当前队列快照（返回拷贝，线程安全）
+    std::vector<QueuedMessageItem> queued_messages() const;
+
+    /// @brief 合并排队消息为单条 user 消息文本（序号 + 分隔线）
+    /// @details 公开为 public 以便单元测试直接验证合并格式（纯静态函数，无成员依赖）。
+    /// @param items 排队消息（非空）
+    static std::string merge_queued_text(const std::vector<QueuedMessageItem>& items);
 
     /// @brief 保存对话历史到文件
     /// @details H-6：仅做 serialize_state() → ofstream，序列化逻辑在 serialize_state() 中
@@ -359,6 +393,19 @@ private:
 
     /// @brief 取消中断订阅
     void unsubscribe_interrupt();
+
+    /// @brief 发布当前队列快照事件（TUI 队列卡片刷新；锁外调用，内部持 m_queue_mutex）
+    void publish_queue_update();
+
+    /// @brief 工具轮边界冲刷：请求冲刷且队列非空时，合并为单条 user 消息注入 messages
+    /// @param messages 当前循环的消息列表（ReActLoop 线程直接写入，无额外锁）
+    /// @details 由 ReActLoop 通过 GoalAgentDeps.queue_injector 回调调用。
+    void inject_pending_queue(std::vector<ChatMessage>& messages);
+
+    /// @brief 整轮收尾冲刷：run_completion 结束时若队列仍有未发送消息，自动开启新一轮
+    /// @details 合并队列为单条 user 消息并调用 run_completion 继续发送；
+    ///          仅在 m_generating 已复位为 false 后调用（防止与当前任务并发）。
+    void flush_pending_after_run();
 
     /// @brief 订阅子 Agent 进度/完成事件并持久化到 SessionStore
     /// @details 第二层（子 Agent 记录）持久化：SubAgentProgressEvent/SubAgentCompletedEvent
@@ -495,6 +542,13 @@ private:
     std::condition_variable m_task_cv;
     /// 本会话已分发的后台任务 id（P1-1 定向取消；受 m_state_mutex 保护）
     std::vector<std::string> m_background_task_ids;
+
+    // ---- 消息队列（模型忙碌时缓存用户输入）----
+    /// 排队消息（FIFO；受 m_queue_mutex 保护）
+    std::deque<QueuedMessageItem> m_pending_queue;
+    mutable std::mutex m_queue_mutex;
+    /// 冲刷请求（Ctrl+Enter 置位，工具轮边界注入后复位；原子读避免持锁）
+    std::atomic<bool> m_flush_requested{false};
 };
 
 } // namespace agent

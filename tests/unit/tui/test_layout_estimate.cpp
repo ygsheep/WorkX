@@ -177,9 +177,8 @@ TEST_CASE("estimate_message_height matches user message", "[layout][message]") {
     m.sealed = true;
     REQUIRE(estimate_message_height(m, 240) == rendered_height(m));
     // 紧凑段落：私信 1 行×1 + 代码块（1 代码行 + 1 lang 行，compact 无上下留白 = 2） = 3
-    //（用户消息块不带内边距，上下间距仅由转录区统一追加的 text(" ") 承担，
-    //  无段落尾随空行，避免与转录区间距叠加成"下面多一行"）
-    REQUIRE(estimate_message_height(m, 240) == 3);
+    // 用户消息块自带上下各 1 空行（build_message 的 UserMessageBox 布局约束，+2） → 5
+    REQUIRE(estimate_message_height(m, 240) == 5);
 }
 
 TEST_CASE("estimate_message_height matches user message with empty text", "[layout][message]") {

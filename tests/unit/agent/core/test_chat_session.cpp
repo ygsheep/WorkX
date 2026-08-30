@@ -9,8 +9,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
+#include <thread>
 #include "agent/core/chat_session.h"
 #include "agent/session/session_store.h"  // 项目会话恢复
 #include "core/events/event_bus.h"
@@ -34,6 +36,38 @@ std::unique_ptr<ChatSession> make_test_session(MockConfigManager& cfg) {
         cfg
     );
 }
+
+/// @brief 可阻塞的流式读取器：next() 挂起直到 release()，用于制造"模型忙碌"窗口
+/// @details 继承 MockStreamReader 以便传给 MockCompletionProvider::set_next_reader
+class BlockingStreamReader : public MockStreamReader {
+public:
+    void release() {
+        {
+            std::lock_guard<std::mutex> lock(m_);
+            released_ = true;
+        }
+        cv_.notify_all();
+    }
+
+    StreamState next(std::function<bool()> /*should_stop*/, StreamChunk& out) override {
+        {
+            std::unique_lock<std::mutex> lock(m_);
+            cv_.wait(lock, [this] { return released_; });
+        }
+        out = StreamChunk{};
+        out.is_final = true;
+        out.prompt_tokens = 10;
+        out.generated_tokens = 5;
+        return StreamState::Complete;
+    }
+
+    void cancel() override {}
+
+private:
+    std::mutex m_;
+    std::condition_variable cv_;
+    bool released_ = false;
+};
 
 } // anonymous namespace
 
@@ -681,7 +715,7 @@ TEST_CASE("ChatSession set_permission_mode injects bypass", "[session][permissio
 }
 
 // ============================================================
-// 会话工作模式三态切换（标准 → 计划 → 极简 → 标准）+ 计划联动权限
+// 会话工作模式三态切换（标准 → 极简 → 计划 → 标准）+ 计划联动权限
 // ============================================================
 
 TEST_CASE("ChatSession session mode toggle cycles and links plan permission",
@@ -693,7 +727,12 @@ TEST_CASE("ChatSession session mode toggle cycles and links plan permission",
     REQUIRE(session->session_mode() == tool::SessionMode::Standard);
     REQUIRE(session->permission_mode() == tool::PermissionMode::Default);
 
-    // 标准 → 计划：权限联动 Plan（保存 before_plan=Default）
+    // 标准 → 极简：纯降级，权限不变
+    session->toggle_session_mode();
+    REQUIRE(session->session_mode() == tool::SessionMode::Minimal);
+    REQUIRE(session->permission_mode() == tool::PermissionMode::Default);
+
+    // 极简 → 计划：权限联动 Plan（保存 before_plan=Default）
     session->toggle_session_mode();
     REQUIRE(session->session_mode() == tool::SessionMode::Plan);
     REQUIRE(session->permission_mode() == tool::PermissionMode::Plan);
@@ -702,24 +741,21 @@ TEST_CASE("ChatSession session mode toggle cycles and links plan permission",
     session->toggle_permission_mode();
     REQUIRE(session->permission_mode() == tool::PermissionMode::Plan);
 
-    // 计划 → 极简：退出计划，权限恢复 before_plan=Default
+    // 计划 → 标准：退出计划，权限恢复 before_plan=Default
     session->toggle_session_mode();
-    REQUIRE(session->session_mode() == tool::SessionMode::Minimal);
+    REQUIRE(session->session_mode() == tool::SessionMode::Standard);
     REQUIRE(session->permission_mode() == tool::PermissionMode::Default);
 
-    // 极简 → 标准
-    session->toggle_session_mode();
-    REQUIRE(session->session_mode() == tool::SessionMode::Standard);
-
-    // 循环稳定：标准 → 计划 再验证 before_plan 随 Bypass 权限保存/恢复
+    // 循环稳定：标准 → 极简 → 计划 再验证 before_plan 随 Bypass 权限保存/恢复
     session->set_permission_mode(tool::PermissionMode::BypassPermissions);
-    session->toggle_session_mode();  // → Plan
-    REQUIRE(session->permission_mode() == tool::PermissionMode::Plan);
-    session->toggle_session_mode();  // → Minimal，恢复 Bypass
+    session->toggle_session_mode();  // → Minimal，权限保持 Bypass
     REQUIRE(session->session_mode() == tool::SessionMode::Minimal);
     REQUIRE(session->permission_mode() == tool::PermissionMode::BypassPermissions);
-    session->toggle_session_mode();  // → Standard
+    session->toggle_session_mode();  // → Plan，权限联动 Plan
+    REQUIRE(session->permission_mode() == tool::PermissionMode::Plan);
+    session->toggle_session_mode();  // → Standard，恢复 Bypass
     REQUIRE(session->session_mode() == tool::SessionMode::Standard);
+    REQUIRE(session->permission_mode() == tool::PermissionMode::BypassPermissions);
 }
 
 TEST_CASE("ChatSession set_session_mode enters and exits plan", "[session][mode]") {
@@ -735,4 +771,138 @@ TEST_CASE("ChatSession set_session_mode enters and exits plan", "[session][mode]
     session->set_session_mode(tool::SessionMode::Standard);
     REQUIRE(session->session_mode() == tool::SessionMode::Standard);
     REQUIRE(session->permission_mode() == tool::PermissionMode::BypassPermissions);
+}
+
+// ============================================================
+// 消息队列：模型忙碌时缓存用户输入（enqueue/remove/clear/merge）
+// ============================================================
+
+TEST_CASE("ChatSession queue rejects enqueue when idle", "[session][queue]") {
+    MockConfigManager cfg;
+    auto session = make_test_session(cfg);
+    REQUIRE_FALSE(session->is_generating());
+
+    // 空闲时入队无意义：返回 false，调用方（TUI）应回退到直接发送路径
+    REQUIRE_FALSE(session->enqueue_message("hello"));
+    REQUIRE(session->queued_messages().empty());
+}
+
+TEST_CASE("ChatSession queue merges text with numbering", "[session][queue][merge]") {
+    std::vector<QueuedMessageItem> items;
+    QueuedMessageItem a;
+    a.id = "a";
+    a.text = "第一条";
+    a.queued_at_ms = 1;
+    QueuedMessageItem b;
+    b.id = "b";
+    b.text = "第二条";
+    b.queued_at_ms = 2;
+    items.push_back(a);
+    items.push_back(b);
+
+    const std::string merged = ChatSession::merge_queued_text(items);
+    REQUIRE(merged.find("[排队消息 1/2]") != std::string::npos);
+    REQUIRE(merged.find("第一条") != std::string::npos);
+    REQUIRE(merged.find("[排队消息 2/2]") != std::string::npos);
+    REQUIRE(merged.find("第二条") != std::string::npos);
+    // 序号从 1 开始
+    REQUIRE(merged.find("[排队消息 0/") == std::string::npos);
+}
+
+TEST_CASE("ChatSession queue enqueue/remove/clear while busy", "[session][queue]") {
+    MockConfigManager cfg;
+    auto session = make_test_session(cfg);
+
+    // 用阻塞 reader 挂起生成，制造"模型忙碌"窗口
+    auto blocking = std::make_shared<BlockingStreamReader>();
+    auto* provider = static_cast<MockCompletionProvider*>(session->completion_provider());
+    provider->set_next_reader(blocking);
+
+    session->send_message("hello");
+    // 轮询等待 m_generating 置位（后台任务挂起在 next()）
+    int tries = 0;
+    while (!session->is_generating() && tries++ < 5000)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    REQUIRE(session->is_generating());
+
+    // 忙碌：入队成功（模型空闲时的 false 分支见前一用例）
+    REQUIRE(session->enqueue_message("q2"));
+    auto q1 = session->queued_messages();
+    REQUIRE(q1.size() == 1);
+    REQUIRE(q1[0].text == "q2");
+    REQUIRE_FALSE(q1[0].id.empty());
+
+    // 单条移除（✕ 按钮路径）
+    session->remove_queued_message(q1[0].id);
+    REQUIRE(session->queued_messages().empty());
+
+    // 再入 2 条后整体清空（clear_history / new_session 路径）
+    REQUIRE(session->enqueue_message("q3"));
+    REQUIRE(session->enqueue_message("q4"));
+    REQUIRE(session->queued_messages().size() == 2);
+    session->clear_pending_queue();
+    REQUIRE(session->queued_messages().empty());
+
+    // 释放阻塞，让生成正常完成
+    blocking->release();
+    TaskManager::instance().waitForAll();
+    REQUIRE_FALSE(session->is_generating());
+}
+
+TEST_CASE("ChatSession queue removed message cannot be removed twice",
+          "[session][queue]") {
+    MockConfigManager cfg;
+    auto session = make_test_session(cfg);
+
+    // 空队列移除：无副作用（不崩溃、无新条目）
+    session->remove_queued_message("nonexistent-id");
+    REQUIRE(session->queued_messages().empty());
+    session->clear_pending_queue();  // 空队列清空同样安全
+    REQUIRE(session->queued_messages().empty());
+}
+
+TEST_CASE("ChatSession queue auto-sends after current loop ends",
+          "[session][queue][autosend]") {
+    MockConfigManager cfg;
+    auto session = make_test_session(cfg);
+    auto* provider =
+        static_cast<MockCompletionProvider*>(session->completion_provider());
+
+    // 第一轮：阻塞 reader 挂起生成，制造"模型忙碌"窗口
+    auto blocking = std::make_shared<BlockingStreamReader>();
+    provider->set_next_reader(blocking);
+    // 第二轮（队列收尾冲刷）：正常 reader 产生回复
+    auto turn2 = std::make_shared<MockStreamReader>();
+    turn2->add_content_chunk("reply2");
+    provider->set_next_reader(turn2);
+
+    session->send_message("first");
+    int tries = 0;
+    while (!session->is_generating() && tries++ < 5000)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    REQUIRE(session->is_generating());
+
+    // 忙碌窗口内入队：期望当前循环结束后自动冲刷为新一轮
+    REQUIRE(session->enqueue_message("queued-msg"));
+
+    // 释放阻塞 → 第一轮完成 → flush_pending_after_run 应自动开启第二轮
+    blocking->release();
+    tries = 0;
+    while (session->is_generating() && tries++ < 5000)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    REQUIRE_FALSE(session->is_generating());
+
+    // 断言：整个会话消息里同时出现合并后的排队 user 消息与第二轮回复，
+    // 证明排队消息确实被自动发送（而非停留在队列/丢失）
+    const auto msgs = session->get_messages();
+    REQUIRE(msgs.size() >= 4);  // user(first) + assistant + user(queued合并) + assistant(reply2)
+    const auto& last = msgs.back();
+    REQUIRE(last.role == ChatMessage::Role::Assistant);
+    REQUIRE(last.content.find("reply2") != std::string::npos);
+    bool found_queued_user = false;
+    for (const auto& m : msgs) {
+        if (m.role == ChatMessage::Role::User && m.content.find("queued-msg") != std::string::npos)
+            found_queued_user = true;
+    }
+    REQUIRE(found_queued_user);
 }

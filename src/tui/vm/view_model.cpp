@@ -239,6 +239,16 @@ bool ViewModel::apply_variant(const ActionCompactionPaused& a) {
     return true;
 }
 
+bool ViewModel::apply_variant(const ActionQueueUpdate& a) {
+    // 消息队列更新：替换为最新快照（空 = 已清空/已发送，卡片消失）
+    message_queue.items = a.items;
+    // 队列清空时复位展开态（避免下次入队残留展开状态）
+    if (message_queue.items.empty()) {
+        message_queue.expanded = false;
+    }
+    return true;
+}
+
 bool ViewModel::apply_variant(const ActionSubAgentProgress& a) {
     // 子任务进度：不混入主转录区，存入第二层独立记录（sub_records）
     if (a.step_type == "final") {

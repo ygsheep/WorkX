@@ -93,6 +93,7 @@ if(TUI_TEST_SOURCES)
         ${WORKX_ROOT}/src/tui/widgets/file_viewer.cpp
         ${WORKX_ROOT}/src/tui/widgets/change_viewer.cpp
         ${WORKX_ROOT}/src/tui/widgets/project_tree.cpp
+        ${WORKX_ROOT}/src/tui/widgets/provider_manager.cpp
         ${WORKX_ROOT}/src/tui/render/code_card.cpp
         ${WORKX_ROOT}/src/tui/wizard.cpp
     )

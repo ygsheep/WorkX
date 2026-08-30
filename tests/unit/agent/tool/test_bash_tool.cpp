@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "agent/tool/BashTool/bash_tool.h"
+#include "agent/tool/ShellTool/shell_detector.h"  // detect()：按实际 shell 选命令
 #include "agent/tool/context.h"
 #include "agent/tool/result.h"
 #include "core/task/task_manager.h"
@@ -145,11 +146,11 @@ TEST_CASE("BashTool executes echo command successfully", "[tool][bash][sync]") {
 TEST_CASE("BashTool reports non-zero exit code", "[tool][bash][sync]") {
     BashTool tool;
     ToolContext ctx; fill_ctx(ctx);
-#ifdef _WIN32
-    nlohmann::json input = {{"command", "exit /b 42"}};
-#else
-    nlohmann::json input = {{"command", "exit 42"}};
-#endif
+    // 命令按实际检测到的 shell 语法选择：Git Bash/POSIX 用 `exit N`，
+    // cmd.exe 用 `exit /b N`（BashTool 内部同样按 detect() 选 shell，两者必须一致）
+    const auto& sh = shell_detect::detect();
+    nlohmann::json input = {
+        {"command", sh.type == shell_detect::ShellType::CmdExe ? "exit /b 42" : "exit 42"}};
 
     auto r = tool.call(input, ctx);
     REQUIRE(r.is_ok());

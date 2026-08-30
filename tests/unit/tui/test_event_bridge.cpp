@@ -42,6 +42,8 @@ size_t bridge_subscriber_count(MockEventBus& bus) {
     n += bus.subscriber_count_typed<agent::SubAgentCompletedEvent>();
     n += bus.subscriber_count_typed<agent::TodoUpdatedEvent>();  // #24：待办清单更新
     n += bus.subscriber_count_typed<agent::McpStatusChangedEvent>();  // #27 M4：MCP 状态
+    n += bus.subscriber_count_typed<agent::MessageQueueUpdatedEvent>();  // 消息队列更新
+    n += bus.subscriber_count_typed<agent::QueuedMessagesFlushedEvent>();  // 队列冲刷回显
     n += bus.subscriber_count_typed<agent::ShutdownEvent>();
     return n;
 }
@@ -54,8 +56,8 @@ TEST_CASE("EventBridge start subscribes all UI events", "[event_bridge][start]")
     EventBridge bridge(bus, queue);
     bridge.start();
 
-    REQUIRE(bridge_subscriber_count(bus) == 19);
-    REQUIRE(bus.total_subscriber_count() == 19);
+    REQUIRE(bridge_subscriber_count(bus) == 21);
+    REQUIRE(bus.total_subscriber_count() == 21);
 }
 
 TEST_CASE("EventBridge stop unsubscribes every registered event", "[event_bridge][stop]") {
@@ -151,6 +153,31 @@ TEST_CASE("EventBridge dispatch maps McpStatusChangedEvent to ActionMcpStatus",
     REQUIRE(status->servers[1].name == "broken");
     REQUIRE(status->servers[1].state == 2);
     REQUIRE(status->servers[1].error == "spawn failed");
+}
+
+TEST_CASE("EventBridge dispatch maps QueuedMessagesFlushedEvent to user echo + busy",
+          "[event_bridge][dispatch][queue]") {
+    MockEventBus bus;
+    ActionQueue queue;
+    EventBridge bridge(bus, queue);
+    bridge.start();
+    bus.set_dispatch_enabled(true);
+
+    const std::string merged = "[排队消息 1/1]\n你好\n━━━━━━━━━━";
+    bus.publish(agent::QueuedMessagesFlushedEvent{
+        .session_id = "s",
+        .merged_text = merged,
+    });
+    auto actions = queue.drain();
+    REQUIRE(actions.size() == 2);
+    // 先回显 user 消息，再置 busy=true（为新一轮流式回复建立上下文）
+    const auto* append = std::get_if<ActionAppendMessage>(&actions[0]);
+    REQUIRE(append != nullptr);
+    REQUIRE(append->role == "user");
+    REQUIRE(append->text == merged);
+    const auto* busy = std::get_if<ActionSetBusy>(&actions[1]);
+    REQUIRE(busy != nullptr);
+    REQUIRE(busy->busy == true);
 }
 
 TEST_CASE("EventBridge plan events map to ActionSetMode", "[event_bridge][dispatch][mode]") {

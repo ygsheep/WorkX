@@ -20,7 +20,7 @@ std::unique_ptr<ReActLoop> ReActLoopFactory::make(
         deps.provider, std::move(registry), std::move(cfg),
         deps.config_manager, deps.task_manager, deps.cwd,
         deps.external_compactor, deps.event_bus, deps.touch_collector,
-        deps.file_index_invalidator, deps.session_id);
+        deps.file_index_invalidator, deps.session_id, deps.queue_inject_cb);
     // 0.6.x：把会话级权限三态应用到循环 + 注册变更回调，
     // 修复路由（此前权限状态只在 chat_session 手动 ReAct 分支上应用）的缺口。
     loop->apply_permission_state(

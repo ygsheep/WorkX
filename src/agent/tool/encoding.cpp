@@ -688,9 +688,16 @@ std::string sanitize_utf8(std::string_view text) {
             append_valid(i, static_cast<size_t>(seq_len));
             i += static_cast<size_t>(seq_len);
         } else {
-            // 非法序列 / 续字节缺失，替换首个字节
+            // 非法序列 / 续字节缺失：按 maximal subpart 策略合并替换，
+            // 跳过能构成最长合法前缀的续字节（如截断的 3 字节序列 E6 96 → 单个 U+FFFD，
+            // 而非逐字节各替换一个）
+            size_t consumed = 1;
+            while (i + consumed < len &&
+                   (static_cast<unsigned char>(data[i + consumed]) & 0xC0) == 0x80) {
+                ++consumed;
+            }
             result += kUfffd;
-            ++i;
+            i += consumed;
         }
     }
 

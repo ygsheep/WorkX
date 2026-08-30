@@ -336,6 +336,8 @@ void ChatSession::clear_history() {
     m_activated_skills.clear();
     // #24：清空待办清单（写空快照到 JSONL 防止 /resume 恢复旧清单，保留持久化回调）
     tool::TodoStore::instance().reset_session(m_session_id);
+    // 消息队列：清空待发送缓存（避免残留消息进入新历史/被误冲刷）
+    clear_pending_queue();
     // 审计：会话结束（清空历史）
     audit::AuditLogger::instance().log_session_lifecycle(
         audit::EventType::SessionEnd, m_session_id);
@@ -499,6 +501,8 @@ void ChatSession::new_session() {
         // 新会话文件懒创建后补写 initial system_prompt 快照（会话轨迹调试）
         m_system_prompt_recorded = false;
         m_pending_system_prompt = !m_system_prompt.empty();
+        // 消息队列：清空待发送缓存（新会话从空队列开始）
+        clear_pending_queue();
         // 懒创建参数（m_store_configured 等）保持不变，复用启动时配置
     }  // 释放 m_state_mutex
 
@@ -833,15 +837,132 @@ void ChatSession::regenerate_from(const std::string& user_text) {
 void ChatSession::send_message(const std::string& text,
                                const std::vector<std::string>& images) {
     if (m_generating.load()) {
-        m_event_bus.get().publish_async(StreamErrorEvent{
-            .session_id = m_session_id,
-            .message = "Still generating, please wait or press Ctrl+C to interrupt",
-            .retryable = true
-        });
+        // 模型忙碌：进入待发送队列（不丢消息；Ctrl+Enter 由 TUI 先行 request_flush）
+        enqueue_message(text, images);
         return;
     }
 
     run_completion(text, images);
+}
+
+// ============================================================
+// 消息队列（模型忙碌时缓存用户输入，工具轮边界/整轮结束冲刷）
+// ============================================================
+
+bool ChatSession::enqueue_message(const std::string& text,
+                                  const std::vector<std::string>& images) {
+    // 模型空闲时入队无意义：调用方（TUI send_input）应走 send_message 直接发送。
+    // 返回 false 让调用方回退到直接发送路径。
+    if (!m_generating.load()) return false;
+
+    QueuedMessageItem item;
+    item.id = core::util::generate_uuid();
+    item.text = text;
+    item.images = images;
+    item.queued_at_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    {
+        std::lock_guard<std::mutex> lock(m_queue_mutex);
+        m_pending_queue.push_back(std::move(item));
+    }
+    publish_queue_update();
+    return true;
+}
+
+void ChatSession::request_flush() {
+    // 冲刷请求：ReActLoop 在下一个工具轮边界调用 inject_pending_queue 时消费。
+    // 置位不持锁（原子），避免与后台线程持锁顺序冲突。
+    m_flush_requested.store(true);
+}
+
+void ChatSession::remove_queued_message(const std::string& id) {
+    bool removed = false;
+    {
+        std::lock_guard<std::mutex> lock(m_queue_mutex);
+        for (auto it = m_pending_queue.begin(); it != m_pending_queue.end(); ++it) {
+            if (it->id == id) {
+                m_pending_queue.erase(it);
+                removed = true;
+                break;
+            }
+        }
+    }
+    if (removed) publish_queue_update();
+}
+
+void ChatSession::clear_pending_queue() {
+    bool had_items = false;
+    {
+        std::lock_guard<std::mutex> lock(m_queue_mutex);
+        had_items = !m_pending_queue.empty();
+        m_pending_queue.clear();
+        m_flush_requested.store(false);
+    }
+    if (had_items) publish_queue_update();
+}
+
+std::vector<QueuedMessageItem> ChatSession::queued_messages() const {
+    std::lock_guard<std::mutex> lock(m_queue_mutex);
+    return {m_pending_queue.begin(), m_pending_queue.end()};
+}
+
+void ChatSession::publish_queue_update() {
+    m_event_bus.get().publish_async(MessageQueueUpdatedEvent{
+        .session_id = m_session_id,
+        .items = queued_messages(),
+    });
+}
+
+void ChatSession::inject_pending_queue(std::vector<ChatMessage>& messages) {
+    // 仅在显式请求冲刷（Ctrl+Enter）时在工具轮边界注入；
+    // 普通 Enter 入队的消息由 flush_pending_after_run 在整轮结束统一冲刷。
+    if (!m_flush_requested.load()) return;
+
+    std::vector<QueuedMessageItem> items;
+    {
+        std::lock_guard<std::mutex> lock(m_queue_mutex);
+        if (m_pending_queue.empty()) return;
+        items.assign(m_pending_queue.begin(), m_pending_queue.end());
+        m_pending_queue.clear();
+        m_flush_requested.store(false);
+    }
+    const std::string merged = merge_queued_text(items);
+    messages.push_back(ChatMessage::user(merged));
+    publish_queue_update();
+    // 通知 UI 在转录区回显该合并 user 消息（Ctrl+Enter 工具轮边界冲刷）
+    m_event_bus.get().publish_async(QueuedMessagesFlushedEvent{
+        .session_id = m_session_id,
+        .merged_text = merged,
+    });
+}
+
+void ChatSession::flush_pending_after_run() {
+    std::vector<QueuedMessageItem> items;
+    {
+        std::lock_guard<std::mutex> lock(m_queue_mutex);
+        if (m_pending_queue.empty() || m_generating.load()) return;
+        items.assign(m_pending_queue.begin(), m_pending_queue.end());
+        m_pending_queue.clear();
+        m_flush_requested.store(false);
+    }
+    publish_queue_update();
+    // 通知 UI 在转录区回显该合并 user 消息 + 置 busy（整轮收尾冲刷开启新一轮）
+    m_event_bus.get().publish_async(QueuedMessagesFlushedEvent{
+        .session_id = m_session_id,
+        .merged_text = merge_queued_text(items),
+    });
+    // 队列消息合并为单条 user 消息，开启新一轮推理
+    run_completion(merge_queued_text(items));
+}
+
+std::string ChatSession::merge_queued_text(
+    const std::vector<QueuedMessageItem>& items) {
+    std::string merged;
+    for (size_t i = 0; i < items.size(); ++i) {
+        merged += std::format("[排队消息 {}/{}]\n{}\n━━━━━━━━━━\n",
+                              i + 1, items.size(), items[i].text);
+    }
+    return merged;
 }
 
 // #45：会话级权限模式（两态切换 Default ↔ Bypass，Plan 归入工作模式管理）
@@ -912,18 +1033,18 @@ void ChatSession::toggle_session_mode() {
         std::lock_guard<std::mutex> lock(m_state_mutex);
         switch (m_session_mode) {
             case tool::SessionMode::Standard:
-                // 标准 → 计划：记录 before_plan（退出计划恢复用）
+                // 标准 → 极简：纯降级，权限不变
+                m_session_mode = tool::SessionMode::Minimal;
+                break;
+            case tool::SessionMode::Minimal:
+                // 极简 → 计划：记录 before_plan（退出计划恢复用）
                 m_permission_mode_before_plan = m_permission_mode;
                 m_permission_mode = tool::PermissionMode::Plan;
                 m_session_mode = tool::SessionMode::Plan;
                 break;
             case tool::SessionMode::Plan:
-                // 计划 → 极简：退出计划，恢复进入前的权限模式
+                // 计划 → 标准：退出计划，恢复进入前的权限模式
                 m_permission_mode = m_permission_mode_before_plan;
-                m_session_mode = tool::SessionMode::Minimal;
-                break;
-            case tool::SessionMode::Minimal:
-                // 极简 → 标准
                 m_session_mode = tool::SessionMode::Standard;
                 break;
         }
@@ -1063,6 +1184,12 @@ void ChatSession::run_completion(const std::string& user_text,
                 .touch_collector = &m_touch_collector,
                 .file_index_invalidator = m_file_index_invalidator,
                 .session_id = m_session_id,
+                // 消息队列：模型忙碌时前端入队的用户消息，在 ReAct 工具轮边界
+                // 合并为单条 user 消息注入循环（Ctrl+Enter 显式冲刷请求）。
+                // 本 lambda 运行于任务线程，this 生命周期由 ChatSession 任务管理保证。
+                .queue_inject_cb = [this](std::vector<ChatMessage>& messages) {
+                    inject_pending_queue(messages);
+                },
             };
             QueryEngine query_engine(std::move(gdeps));
 
@@ -1195,6 +1322,7 @@ void ChatSession::run_completion(const std::string& user_text,
                     .reasoning_ms = react_result.reasoning_ms
                 });
                 m_generating.store(false);
+                flush_pending_after_run();  // 队列收尾冲刷（中断也算本轮结束）
                 return;
             }
 
@@ -1221,6 +1349,7 @@ void ChatSession::run_completion(const std::string& user_text,
                     while (std::chrono::steady_clock::now() < wait_until) {
                         if (should_cancel) {
                             m_generating.store(false);
+                            flush_pending_after_run();  // 等待期被打断：本轮终止，收尾冲刷
                             return;
                         }
                         std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -1231,6 +1360,9 @@ void ChatSession::run_completion(const std::string& user_text,
                         // ReAct loop 在流式失败时不会添加 partial assistant 消息，
                         // 所以 m_messages 中只有成功的 round，直接重试即可
                         run_completion(user_text, {}, retry_attempt + 1);
+                        // 递归重试已接管 m_generating（保持 true），本任务退出；
+                        // 队列由重试任务的终止路径冲刷，此处不重复冲刷。
+                        return;
                     }
                     break;
                 }
@@ -1247,6 +1379,7 @@ void ChatSession::run_completion(const std::string& user_text,
                     break;
                 }
                 m_generating.store(false);
+                flush_pending_after_run();  // 不可重试错误终止：收尾冲刷
                 return;
             }
 
@@ -1301,6 +1434,7 @@ void ChatSession::run_completion(const std::string& user_text,
             });
 
             m_generating.store(false);
+            flush_pending_after_run();  // 成功完成：队列仍有未发消息则开启新一轮
 
             } // end try
             catch (const std::exception& e) {
@@ -1310,6 +1444,7 @@ void ChatSession::run_completion(const std::string& user_text,
                     .retryable = false
                 });
                 m_generating.store(false);
+                flush_pending_after_run();
             } catch (...) {
                 m_event_bus.get().publish_async(StreamErrorEvent{
                     .session_id = m_session_id,
@@ -1317,6 +1452,7 @@ void ChatSession::run_completion(const std::string& user_text,
                     .retryable = false
                 });
                 m_generating.store(false);
+                flush_pending_after_run();
             }
         },
         TaskType::Normal

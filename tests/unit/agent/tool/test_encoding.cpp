@@ -29,14 +29,15 @@ TEST_CASE("sanitize_utf8 keeps mixed ascii+utf8 intact", "[tool][encoding]") {
 
 TEST_CASE("sanitize_utf8 replaces invalid lone continuation byte", "[tool][encoding]") {
     // 0x88 为孤立续字节（GBK 次字节），应替换为 U+FFFD (EF BF BD)
-    const std::string input = "a\x88b";
+    // 拆分转义：MSVC 将 "\x88b" 贪婪解析为单个 \x88b（越界），需 "\x88" "b"
+    const std::string input = "a\x88" "b";
     const std::string expected = "a\xEF\xBF\xBD" "b";
     REQUIRE(sanitize_utf8(input) == expected);
 }
 
 TEST_CASE("sanitize_utf8 replaces truncated sequence tail", "[tool][encoding]") {
     // 3 字节序列只剩 2 字节（截断），尾字节替换为 U+FFFD
-    const std::string input = "ab\xE6\x96";
+    const std::string input = "ab\xE6" "\x96";
     const std::string expected = "ab\xEF\xBF\xBD";
     REQUIRE(sanitize_utf8(input) == expected);
 }

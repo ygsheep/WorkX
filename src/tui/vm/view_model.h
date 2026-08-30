@@ -176,6 +176,12 @@ struct SidebarTabsModel {
     ChangeViewState changes; ///< 变更记录 tab 状态（会话内全部修改）
 };
 
+/// @brief 消息队列状态（模型忙碌时前端入队的用户消息；输入框上方队列卡片）
+struct MessageQueueState {
+    std::vector<QueueItemLite> items;  ///< 排队消息（空 = 无排队，卡片隐藏）
+    bool expanded = false;             ///< 队列条是否展开（展开显示逐条预览）
+};
+
 /// @brief 顶层视图模型
 class ViewModel {
 public:
@@ -186,6 +192,7 @@ public:
     std::string prompt_echo;    ///< 待显示的命令回显/提示
     bool pending_exit = false;  ///< 收到 /exit，UI 应退出
     CardDefaults card_defaults; ///< 折叠卡片默认配置
+    MessageQueueState message_queue;  ///< 消息队列（模型忙碌时缓存用户输入）
 
     // ---- 输出区域层级（标题栏下子列表导航）----
     OutputLevel output_level = OutputLevel::Main;  ///< 当前输出层级（主会话 / 子 Agent）
@@ -223,6 +230,7 @@ private:
     bool apply_variant(const ActionOpenPlan&);
     bool apply_variant(const ActionCacheDiagnostics&);
     bool apply_variant(const ActionCompactionPaused&);
+    bool apply_variant(const ActionQueueUpdate&);
     bool apply_variant(const ActionSubAgentProgress&);
     bool apply_variant(const ActionSubAgentCompleted&);
     bool apply_variant(const ActionShutdown&);

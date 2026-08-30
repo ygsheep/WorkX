@@ -1,8 +1,8 @@
 /**
  * @file test_composer.cpp
  * @brief 输入组件快捷键行为无头单元测试
- * @details 覆盖：Ctrl+Enter（文件面板插入 @路径 引用）与 Enter（直接 nvim 打开）
- *          的区分、无面板时 Ctrl+Enter 不消费，以及 Windows 补丁产生的
+ * @details 覆盖：Ctrl+Enter（文件面板插入 @路径 引用 / 无面板时提交并请求立即冲刷）
+ *          与 Enter（直接 nvim 打开）的区分，以及 Windows 补丁产生的
  *          kitty 序列 \x1b[13;5u 被解析为 Special 事件。
  * @note 测试名用英文：Windows 上 CMake catch_discover_tests 对 GBK 管道
  *       捕获 UTF-8 中文名会损坏 JSON（既有环境行为）。
@@ -87,6 +87,7 @@ struct ComposerHarness {
     bool insert_called = false;
     bool enter_called = false;
     bool submit_called = false;
+    bool ctrl_submit_called = false;
     ComposerOptions opt;  // 必须与组件同生命周期（make_composer 捕获其引用）
     ftxui::Component comp;
 
@@ -103,6 +104,9 @@ struct ComposerHarness {
             return true;
         };
         opt.on_submit = [this](const std::string&) { submit_called = true; };
+        opt.on_submit_ctrl = [this](const std::string&) {
+            ctrl_submit_called = true;
+        };
         comp = make_composer(opt);
     }
 };
@@ -129,13 +133,18 @@ TEST_CASE("composer Enter calls suggest_enter when panel active",
     REQUIRE_FALSE(h.submit_called);
 }
 
-TEST_CASE("composer Ctrl+Enter not consumed without panel",
+TEST_CASE("composer Ctrl+Enter submits via on_submit_ctrl without panel",
           "[composer][suggest]") {
     ComposerHarness h;
     h.panel_active = false;
+    h.buf = "queued msg";
+    h.cursor = h.buf.size();
     const bool handled = h.comp->OnEvent(ftxui::Event::Special("\x1b[13;5u"));
-    REQUIRE_FALSE(handled);
+    REQUIRE(handled);
+    REQUIRE(h.ctrl_submit_called);
     REQUIRE_FALSE(h.insert_called);
+    REQUIRE_FALSE(h.submit_called);
+    REQUIRE(h.buf.empty());  // 提交后清空输入缓冲
 }
 
 TEST_CASE("composer Shift+Enter inserts newline without submitting",

@@ -253,4 +253,37 @@ struct McpStatusChangedEvent {
     std::vector<McpServerStatusLite> servers;  ///< 全部配置 server 的状态快照
 };
 
+// ============================================================
+// 消息队列（模型忙碌时缓存用户输入，工具轮边界/整轮结束冲刷）
+// ============================================================
+
+/// @brief 排队消息条目（ChatSession 队列元素，TUI 队列卡片展示 + 单条移除）
+/// @details 由 ChatSession::enqueue_message 生成，仅存在于内存队列：
+///          未发送前不持久化、不进入 m_messages（发送时才合并为 user 消息）。
+struct QueuedMessageItem {
+    std::string id;                      ///< uuid（单条移除用）
+    std::string text;                    ///< 用户文本
+    std::vector<std::string> images;     ///< 图片附件绝对路径（可为空）
+    int64_t queued_at_ms = 0;            ///< 入队时刻（毫秒时间戳）
+};
+
+/// @brief 消息队列更新事件（ChatSession → TUI 队列卡片）
+/// @details 入队/移除/冲刷后发布当前队列全量快照（空 = 已清空，卡片消失）。
+struct MessageQueueUpdatedEvent {
+    std::string session_id;
+    std::vector<QueuedMessageItem> items;  ///< 当前队列快照（空=无排队消息）
+};
+
+/// @brief 队列冲刷事件（ChatSession → TUI 转录区回显）
+/// @details 排队消息被合并为单条 user 消息注入 ReAct 循环（整轮收尾冲刷 / 工具轮
+///          边界 Ctrl+Enter 冲刷）时发布，携带合并后的文本。UI 据此在转录区回显
+///          该 user 消息并置 busy=true，为新一轮流式回复建立上下文；否则排队消息
+///          只停留在队列卡片、冲刷后消失，新一轮回复也成了无前置消息的孤儿节点
+///          （仅 /resume 全量重建才可见）。publish 先于新一轮 run_completion，
+///          经 FIFO 异步队列保证本事件先于该轮 StreamTokenEvent 被 UI 处理。
+struct QueuedMessagesFlushedEvent {
+    std::string session_id;
+    std::string merged_text;  ///< merge_queued_text() 合并后的 user 消息文本
+};
+
 } // namespace agent

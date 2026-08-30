@@ -128,7 +128,10 @@ private:
     bool advance_ask();
     /// @brief 冒烟驱动（B5）：自动投递 mock 对话，完成后请求退出
     void start_smoke_driver();
-    void send_input(const std::string& text);
+    /// @brief 发送用户输入（B2 输入链单一入口）
+    /// @param text 用户文本
+    /// @param force_flush 模型忙碌时是否请求下个工具轮边界立即冲刷（Ctrl+Enter）
+    void send_input(const std::string& text, bool force_flush = false);
     /// @brief 技能命令任意位置调用：回显原始输入 + 注入合成 Skill 卡片 + 路由模型
     void handle_skill_invocation(const std::string& raw_input,
                                  const std::string& name,
@@ -207,6 +210,10 @@ private:
     void run_setting(int action);
     ftxui::Element build_transcript(int width);
     ftxui::Element build_ask_modal() const;
+    /// @brief 消息队列卡片（模型忙碌时前端入队的用户消息；输入框上方可折叠条）
+    /// @details 折叠态单行摘要（条数 + Ctrl+Enter 提示）；展开态逐条预览 + ✕ 移除。
+    ///          命中区写入 m_queue_hits（标题行切换展开，✕ 移除对应条目）。
+    ftxui::Element build_queue_bar();
     /// @brief 标题栏下的层级子列表（面包屑导航）：主会话 / 子 Agent 记录
     ftxui::Element build_breadcrumb();
     /// @brief 第二层：子 Agent 独立记录渲染（不混入主转录区）
@@ -220,7 +227,7 @@ private:
     static std::string session_mode_label(agent::tool::SessionMode m);
     /// @brief 权限两态切换（手动审批 ↔ 完全访问；Shift+Tab / 设置面板）
     void toggle_permission();
-    /// @brief 工作模式三态切换（标准 → 计划 → 极简 → 标准）
+    /// @brief 工作模式三态切换（标准 → 极简 → 计划 → 标准；Tab / Ctrl+T）
     void toggle_mode();
     /// @brief 触发「已复制 N 字符」短暂提示（底层单线程，1.5s 后自动清除后重绘）
     void flash_copy_message(std::size_t char_count);
@@ -308,6 +315,12 @@ private:
     /// @brief 提示面板候选行渲染后的屏幕 box（每帧重建；deque 保证 reflect 地址稳定）
     std::deque<ftxui::Box> m_suggest_hits;
 
+    // ---- 消息队列卡片（模型忙碌时缓存用户输入；输入框上方可折叠条）----
+    /// @brief 队列卡片命中区（每帧由 build_queue_bar 重建）
+    /// @details CardHit.msg_idx = 队列条目下标；button = -1 标题行（切换展开/折叠），
+    ///          button >= 0 该条目的 ✕ 移除按钮。
+    std::deque<CardHit> m_queue_hits;
+
     // ---- 聚合搜索面板（Ctrl+P）----
     std::vector<PaletteCommand> m_palette_cmds;      ///< 命令条目（注册表派生，搜索/提示共用）
     std::vector<SearchEntry> m_search_entries;   ///< 面板打开时装配的条目（on_select 映射）
@@ -394,7 +407,7 @@ private:
     std::vector<std::string> m_model_items;  ///< 模型列表（/model 面板）
     std::vector<agent::ModelInfo> m_model_infos;  ///< list_models 完整信息（apply_model 取 context_length）
     int m_mock_perm_cycle = 0;   ///< mock 下 Shift+Tab 权限循环序号（""→bypass）
-    int m_mock_mode_cycle = 0;   ///< mock 下模式切换循环序号（standard→plan→minimal）
+    int m_mock_mode_cycle = 0;   ///< mock 下模式切换循环序号（standard→minimal→plan）
 
     // 思考动画（busy 时推进帧并持续重绘）
     std::size_t m_anim_frame = 0;        ///< 动画帧号（UI 线程自增）

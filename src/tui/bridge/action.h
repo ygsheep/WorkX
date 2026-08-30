@@ -152,6 +152,21 @@ struct ActionCompactionPaused {
     std::string notice;                 ///< 人类可读说明
 };
 
+/// @brief 排队消息条目（TUI 侧轻量拷贝，避免 action.h 依赖 agent 层 QueuedMessageItem）
+struct QueueItemLite {
+    std::string id;           ///< uuid（单条移除用）
+    std::string text;         ///< 用户文本（队列卡片展示）
+    int64_t queued_at_ms = 0; ///< 入队时刻（毫秒时间戳）
+};
+
+/// @brief 消息队列更新（模型忙碌时前端入队的用户消息）
+/// @details ChatSession → MessageQueueUpdatedEvent → 本动作；空 items = 已清空，
+///          队列卡片消失。TUI 据此重绘输入框上方的可折叠队列条。
+struct ActionQueueUpdate {
+    std::string session_id;
+    std::vector<QueueItemLite> items;
+};
+
 /// @brief 子 Agent 进度增量（AgentTool → 订阅者）
 /// @details v1.3.0：补充结构化字段，供第二层卡片渲染复用主会话 UI（思考卡/工具卡）。
 struct ActionSubAgentProgress {
@@ -284,6 +299,7 @@ using Action = std::variant<
     ActionOpenPlan,
     ActionCacheDiagnostics,
     ActionCompactionPaused,
+    ActionQueueUpdate,
     ActionSubAgentProgress,
     ActionSubAgentCompleted,
     ActionShutdown,

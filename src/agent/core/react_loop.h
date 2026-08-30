@@ -217,6 +217,8 @@ public:
     /// @param touch_collector 工具 touch 收集器（可选，用于 conditional skills）
     /// @param file_index_invalidator 宿主文件索引失效回调（可选，FileWriteTool 写文件后调用，
     ///                                无宿主时为 nullptr）
+    /// @param queue_inject_cb 消息队列冲刷回调（可选，模型忙碌时前端入队的用户消息，
+    ///                        在工具轮边界合并为单条 user 消息注入 messages；空 = 无队列）
     ReActLoop(ICompletionProvider* provider,
               std::shared_ptr<tool::ToolRegistry> registry,
               Config config,
@@ -227,7 +229,8 @@ public:
               IEventBus* event_bus = nullptr,
               skill::TouchCollector* touch_collector = nullptr,
               std::function<void()> file_index_invalidator = nullptr,
-              std::string session_id = "");
+              std::string session_id = "",
+              std::function<void(std::vector<ChatMessage>&)> queue_inject_cb = {});
 
     /// @brief 构造（使用默认配置）
     /// @param config_manager 配置管理器（H-5：必须非空，注入到 ToolContext）
@@ -455,6 +458,17 @@ private:
         }
     }
 
+    /// @brief 工具轮边界冲刷队列（消息队列：模型忙碌时前端入队的用户消息）
+    /// @details 仅在显式请求冲刷（Ctrl+Enter）时注入；普通 Enter 入队的消息
+    ///          由 ChatSession::flush_pending_after_run 在整轮结束统一冲刷。
+    ///          注入到 messages（下一轮 Thought 一并发送）。空回调 = 无队列。
+    /// @param messages 会话历史（会被追加合并后的 user 消息）
+    void maybe_inject_queue(std::vector<ChatMessage>& messages) {
+        if (m_queue_inject_cb) {
+            m_queue_inject_cb(messages);
+        }
+    }
+
     // ============================================================
     // 成员
     // ============================================================
@@ -478,6 +492,8 @@ private:
     tool::SessionMode m_session_mode{tool::SessionMode::Standard};  ///< 会话工作模式（标准/计划/极简）
     /// @brief H-1（PR #46 评审）：权限状态变更通知回调（宿主 ChatSession 注入，回写持久状态）
     PermissionStateChangedCallback m_perm_state_changed_cb;
+    /// @brief 消息队列冲刷回调（可选；工具轮边界把排队用户消息注入 messages）
+    std::function<void(std::vector<ChatMessage>&)> m_queue_inject_cb;
 };
 
 } // namespace agent

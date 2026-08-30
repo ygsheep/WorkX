@@ -124,6 +124,31 @@ void EventBridge::start() {
             });
         });
 
+    // 消息队列更新（模型忙碌时前端入队的用户消息）→ 队列卡片重绘
+    subscribe_typed<agent::MessageQueueUpdatedEvent>(
+        [this](const agent::MessageQueueUpdatedEvent& e) {
+            std::vector<QueueItemLite> items;
+            items.reserve(e.items.size());
+            for (const auto& it : e.items) {
+                items.push_back(QueueItemLite{
+                    .id = it.id,
+                    .text = it.text,
+                    .queued_at_ms = it.queued_at_ms,
+                });
+            }
+            push(ActionQueueUpdate{.session_id = e.session_id, .items = std::move(items)});
+        });
+
+    // 队列冲刷：排队消息合并为真实 user 消息注入 ReAct 循环
+    //（运行中的 ChatSession 内部完成，绕过 send_input，UI 不会自行回显）。
+    // 先回显 user 消息、再置 busy，为新一轮流式回复建立上下文，否则该条 user
+    // 消息只停留在队列卡片、冲刷后消失，新一轮回复成为无前置消息的孤儿节点。
+    subscribe_typed<agent::QueuedMessagesFlushedEvent>(
+        [this](const agent::QueuedMessagesFlushedEvent& e) {
+            push(ActionAppendMessage{.role = "user", .text = e.merged_text});
+            push(ActionSetBusy{.busy = true});
+        });
+
     subscribe_typed<agent::SubAgentProgressEvent>(
         [this](const agent::SubAgentProgressEvent& e) {
             push(ActionSubAgentProgress{

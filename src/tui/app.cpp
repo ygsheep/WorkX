@@ -722,8 +722,8 @@ void App::rebuild_mode_entries() {
     };
     static const ModeItem kModes[] = {
         {"standard", str::kStatusStandard, str::kModeStandardDesc},
-        {"plan", str::kStatusPlan, str::kModePlanDesc},
         {"minimal", str::kStatusMinimal, str::kModeMinimalDesc},
+        {"plan", str::kStatusPlan, str::kModePlanDesc},
     };
     constexpr size_t kModeCount = 3;
     for (size_t i = 0; i < kModeCount; ++i) {
@@ -741,14 +741,14 @@ void App::rebuild_mode_entries() {
 
 void App::apply_mode(int index) {
     if (index < 0 || index >= 3) return;
-    static const char* kLabels[] = {"standard", "plan", "minimal"};
+    static const char* kLabels[] = {"standard", "minimal", "plan"};
     const std::string label = kLabels[index];
     // 真实模式：session 侧设置（计划联动权限 Plan，退出恢复）并回读；
     // mock 模式：本地直接生效
     if (m_deps.session) {
         switch (index) {
-            case 1: m_deps.session->set_session_mode(agent::tool::SessionMode::Plan); break;
-            case 2: m_deps.session->set_session_mode(agent::tool::SessionMode::Minimal); break;
+            case 1: m_deps.session->set_session_mode(agent::tool::SessionMode::Minimal); break;
+            case 2: m_deps.session->set_session_mode(agent::tool::SessionMode::Plan); break;
             default: m_deps.session->set_session_mode(agent::tool::SessionMode::Standard); break;
         }
         m_vm.sidebar.mode = session_mode_label(m_deps.session->session_mode());
@@ -808,6 +808,11 @@ void App::resume_session(const std::string& file_path, const std::string& title)
     m_vm.sub_active = -1;
     m_vm.output_level = OutputLevel::Main;
     load_session_transcript();
+
+    // #24：同步恢复侧边栏 Todo 清单（与 switch_session 内 restore_todos 同源：
+    // load_todos 取 JSONL 最后一条 todo 快照）。避免依赖异步 TodoUpdatedEvent
+    // 到达前显示上一会话的清单（事件缺失时 UI 永远错误）。
+    m_vm.sidebar.todos = agent::session::SessionStore::load_todos(file_path);
 
     // 恢复子 Agent 第二层记录（sub_records）：按写入顺序重放持久化事件，
     // 复用 ViewModel 的 apply 逻辑（含 observation 合并到 action 的语义），
@@ -1043,6 +1048,9 @@ void App::reset_vm_for_new_session() {
     m_vm.tabs.changes.changes.clear();
     // 标题栏回退「新会话」；统计从零开始（新会话上下文）
     m_vm.sidebar.title.clear();
+    // #24：新会话清空 Todo 清单（与 ChatSession::new_session 的 restore_todos
+    // 空快照同源；同步清空避免异步 TodoUpdatedEvent 到达前残留旧会话清单）
+    m_vm.sidebar.todos.clear();
     m_vm.sidebar.context_used = 0;
     m_vm.sidebar.total_tokens = 0;
     m_vm.sidebar.prompt_tokens = 0;
@@ -1410,6 +1418,7 @@ void App::open_resume_palette() {
 }
 
 void App::open_provider_palette() {
+    log_run("provider: open_provider_palette");
     if (!m_deps.config_manager) {
         m_vm.apply(ActionAppendMessage{.role = "assistant",
             .text = std::string(str::kNoProviderConfig)});
@@ -1430,7 +1439,11 @@ void App::open_provider_palette() {
 void App::switch_provider(int index) {
     if (index < 0 || index >= static_cast<int>(m_providers.size())) return;
     const agent::ProviderConfigEntry entry = m_providers[static_cast<size_t>(index)];
+    log_run("provider: switch_provider index=" + std::to_string(index) +
+            " name=" + entry.name + " id=" + entry.id +
+            " providers_size=" + std::to_string(m_providers.size()));
     if (!m_deps.create_provider) {
+        log_run("provider: switch_provider FAILED no create_provider dep");
         m_vm.apply(ActionAppendMessage{.role = "assistant",
             .text = std::string(str::kProviderSwitchFailedPrefix) + entry.name
                     + std::string(str::kCloseParenNl)});
@@ -1438,6 +1451,7 @@ void App::switch_provider(int index) {
     }
     // 正在生成中拒绝热切换（ReAct 循环持有 provider；run_completion 期间换后端竞态）
     if (m_deps.session && m_deps.session->is_generating()) {
+        log_run("provider: switch_provider REJECTED session generating");
         m_vm.apply(ActionAppendMessage{.role = "assistant",
             .text = std::string(str::kProviderBusy) + entry.name
                     + std::string(str::kCloseParenNl)});
@@ -1449,10 +1463,13 @@ void App::switch_provider(int index) {
     std::thread([this, entry] {
         auto result = m_deps.create_provider(entry);
         if (!result.provider) {
+            log_run("provider: create FAILED url=" + entry.base_url +
+                    " model=" + result.model_name);
             m_queue.push(ActionProviderSwitchFailed{.provider_name = entry.name});
             m_screen.PostEvent(Event::Custom);
             return;
         }
+        log_run("provider: create OK model=" + result.model_name);
         m_queue.push(ActionProviderSwitched{
             .provider = std::move(result.provider),
             .model_name = result.model_name,
@@ -1465,10 +1482,31 @@ void App::switch_provider(int index) {
 void App::handle_provider_switched(std::unique_ptr<agent::ICompletionProvider> provider,
                                    const std::string& model_name,
                                    const agent::ProviderConfigEntry& entry) {
-    if (!m_deps.session) return;
+    log_run("provider: handle_provider_switched name=" + entry.name);
+    // 持久化切换始终执行（即使当前无会话）：apply_provider_switch 只写内存，
+    // 必须落盘 provider/remote_url/model，否则重启读取旧配置还原为上一供应商
+    if (m_deps.config_manager)
+        agent::apply_provider_switch(*m_deps.config_manager, entry);
+    if (m_deps.save_config) m_deps.save_config();
+
+    // 无会话（启动时自定义供应商未装配后端 / mock 模式）：仅更新配置与界面显示。
+    // 新增后端随之析构；下次启动按新 provider 经 create_session 兜底装配会话。
+    if (!m_deps.session) {
+        log_run("provider: switched CONFIG-ONLY (no session) name=" + entry.name);
+        if (!model_name.empty()) {
+            m_vm.sidebar.model = model_name;
+            if (m_deps.on_model_changed) m_deps.on_model_changed();
+        }
+        rebuild_model_entries();
+        m_vm.apply(ActionAppendMessage{.role = "assistant",
+            .text = std::string(str::kProviderSwitchedPrefix) + entry.name
+                    + std::string(str::kMdBoldEnd)});
+        return;
+    }
     // 保留当前对话继续（import_messages 重置上下文压缩基线，不丢历史）
     auto messages = m_deps.session->get_messages();
     if (!m_deps.session->set_provider(std::move(provider))) {
+        log_run("provider: set_provider REJECTED session busy");
         // 竞态（处理时已开始生成）：拒绝本次切换，新后端随 unique_ptr 析构
         m_vm.apply(ActionAppendMessage{.role = "assistant",
             .text = std::string(str::kProviderBusy) + entry.name
@@ -1479,11 +1517,8 @@ void App::handle_provider_switched(std::unique_ptr<agent::ICompletionProvider> p
     // 刷新 admin 句柄（旧指针已随旧 provider 失效）
     if (auto* p = m_deps.session->completion_provider())
         m_deps.backend_admin = dynamic_cast<agent::IBackendAdmin*>(p);
-    // 持久化切换（成功后写配置，避免失败残留）
-    if (m_deps.config_manager)
-        agent::apply_provider_switch(*m_deps.config_manager, entry);
-    // apply_provider_switch 仅写内存；必须落盘，否则重启读取旧配置还原为上一供应商
-    if (m_deps.save_config) m_deps.save_config();
+    log_run("provider: switched OK name=" + entry.name +
+            " model=" + model_name);
     // 更新侧栏模型显示与模型列表 active 标记
     if (!model_name.empty()) {
         m_vm.sidebar.model = model_name;
@@ -1496,6 +1531,7 @@ void App::handle_provider_switched(std::unique_ptr<agent::ICompletionProvider> p
 }
 
 void App::handle_provider_switch_failed(const std::string& provider_name) {
+    log_run("provider: switch FAILED name=" + provider_name);
     m_vm.apply(ActionAppendMessage{.role = "assistant",
         .text = std::string(str::kProviderSwitchFailedPrefix) + provider_name
                 + std::string(str::kCloseParenNl)});
@@ -1832,7 +1868,7 @@ std::optional<SkillHit> find_skill_command_anywhere(
 }
 }  // namespace
 
-void App::send_input(const std::string& text) {
+void App::send_input(const std::string& text, bool force_flush) {
     // 输入历史：提交即追加并落盘（含斜杠命令，便于重复调用）
     if (!text.empty()) {
         m_input_history.push(text);
@@ -1855,20 +1891,9 @@ void App::send_input(const std::string& text) {
         return;
     }
 
-    // 回显用户消息
-    m_vm.apply(ActionAppendMessage{.role = "user", .text = text});
-    m_vm.apply(ActionSetBusy{.busy = true});
-    m_follow = true;
-
-    if (m_deps.mock_mode) {
-        start_mock_stream(text);
-        return;
-    }
-
-    // 真实链路：统一经 on_submit 路由到会话（B2：输入链单一入口）
-    if (m_deps.on_submit) {
-        // @图片引用（如 @a.png）→ 图片附件绝对路径（多模态随请求上传）：
-        // 仅普通文本路径提取，非图片 @ 文件引用保持原样发送（模型经工具读取）。
+    // @图片引用（如 @a.png）→ 图片附件绝对路径（多模态随请求上传）：
+    // 仅普通文本路径提取，非图片 @ 文件引用保持原样发送（模型经工具读取）。
+    auto extract_images = [&]() -> std::vector<std::string> {
         std::vector<std::string> images;
         agent::input::InputParser parser;
         const auto parsed = parser.parse(text);
@@ -1882,7 +1907,37 @@ void App::send_input(const std::string& text) {
                 }
             }
         }
-        m_deps.on_submit(text, images);
+        return images;
+    };
+
+    // 模型忙碌：进入待发送队列（不丢消息）；Ctrl+Enter 请求下个工具轮边界立即冲刷。
+    // 不回显到转录区（由输入框上方队列卡片展示），不重复置 busy（已在生成中）。
+    if (m_deps.session && m_deps.session->is_generating()) {
+        if (force_flush) {
+            m_deps.session->request_flush();
+        }
+        if (m_deps.on_submit) {
+            // ChatSession::send_message 忙碌时自动入队 + 发布 MessageQueueUpdatedEvent
+            m_deps.on_submit(text, extract_images());
+            // 唤醒事件循环消费队列更新事件（事件总线仅入队、无泵线程）
+            m_screen.PostEvent(Event::Custom);
+        }
+        return;
+    }
+
+    // 回显用户消息
+    m_vm.apply(ActionAppendMessage{.role = "user", .text = text});
+    m_vm.apply(ActionSetBusy{.busy = true});
+    m_follow = true;
+
+    if (m_deps.mock_mode) {
+        start_mock_stream(text);
+        return;
+    }
+
+    // 真实链路：统一经 on_submit 路由到会话（B2：输入链单一入口）
+    if (m_deps.on_submit) {
+        m_deps.on_submit(text, extract_images());
         // 真实链路唤醒：busy 已置位但动画线程镜像同步发生在 drain（Custom 事件）。
         // 立即投递一次 Custom 让 UI 线程消费事件队列并唤醒动画线程；
         // 否则 publish_async 事件积压（事件总线仅入队、无泵线程），
@@ -2678,6 +2733,73 @@ Element App::build_ask_modal() const {
         | ftxui::bgcolor(theme::T::Panel);
 }
 
+/// @brief 消息队列卡片（模型忙碌时前端入队的用户消息；输入框上方可折叠条）
+/// @details 折叠态单行摘要（条数 + Ctrl+Enter 提示）；展开态逐条预览 + ✕ 移除。
+///          命中区写入 m_queue_hits：标题行（button=-1）切换展开/折叠，
+///          每条 ✕（button=条目下标）调用 ChatSession::remove_queued_message。
+Element App::build_queue_bar() {
+    m_queue_hits.clear();
+    const auto& items = m_vm.message_queue.items;
+    if (items.empty()) return ftxui::emptyElement();
+
+    const bool expanded = m_vm.message_queue.expanded;
+
+    // 标题行：图标 + 条数 + Ctrl+Enter 提示 + 展开/收起箭头；整行点击切换展开
+    m_queue_hits.push_back(CardHit{});
+    CardHit& title_hit = m_queue_hits.back();
+    title_hit.msg_idx = -1;
+    title_hit.tool_idx = -1;
+    title_hit.button = -1;  // 标题行（切换展开/折叠）
+    const std::string title = std::string(str::kQueueIcon) +
+                              std::to_string(items.size()) +
+                              std::string(str::kQueueTitlePrefix);
+    auto title_body = ftxui::hbox({
+        ftxui::text(title) | ftxui::color(theme::T::Text),
+        ftxui::text(std::string(" · ")) | ftxui::color(theme::T::TextFaint),
+        ftxui::text(std::string(str::kQueueCtrlHint))
+            | ftxui::color(theme::T::TextFaint),
+        ftxui::flex(ftxui::text("")),
+        ftxui::text(std::string(expanded ? theme::icon_chevron_down()
+                                         : theme::icon_chevron_right()))
+            | ftxui::color(theme::T::TextFaint),
+    }) | ftxui::reflect(title_hit.box);
+
+    Elements rows;
+    rows.push_back(ftxui::hbox({
+        ftxui::text("  "),
+        title_body | ftxui::flex,
+        ftxui::text("  "),
+    }) | ftxui::bgcolor(theme::T::Panel));
+
+    if (expanded) {
+        // 展开态：逐条预览 + 每条末尾 ✕ 移除按钮
+        for (std::size_t i = 0; i < items.size(); ++i) {
+            m_queue_hits.push_back(CardHit{});
+            CardHit& hit = m_queue_hits.back();
+            hit.msg_idx = static_cast<int>(i);
+            hit.tool_idx = -1;
+            hit.button = static_cast<int>(i);  // ✕ 移除该条
+
+            // 预览：取首行单行展示（超宽由 text 裁剪，不换行）
+            std::string line = items[i].text;
+            const auto nl = line.find('\n');
+            if (nl != std::string::npos) line = line.substr(0, nl);
+            const std::string prefix = "  " + std::to_string(i + 1) + ". ";
+            rows.push_back(ftxui::hbox({
+                ftxui::text(prefix) | ftxui::color(theme::T::TextDim),
+                ftxui::text(line) | ftxui::color(theme::T::Text),
+                ftxui::flex(ftxui::text("")),
+                ftxui::text(std::string(str::kQueueRemove))
+                    | ftxui::color(theme::T::TextFaint)
+                    | ftxui::reflect(hit.box),
+                ftxui::text("  "),
+            }) | ftxui::bgcolor(theme::T::Panel));
+        }
+    }
+
+    return ftxui::vbox(std::move(rows));
+}
+
 // ---------------------------------------------------------------------------
 // 主循环
 // ---------------------------------------------------------------------------
@@ -2747,6 +2869,8 @@ void App::run() {
     comp_opt.buffer = &m_input_buffer;
     comp_opt.cursor = &m_composer_cursor;
     comp_opt.on_submit = [this](const std::string& t) { send_input(t); };
+    // Ctrl+Enter：模型忙碌时入队并请求下个工具轮边界立即冲刷
+    comp_opt.on_submit_ctrl = [this](const std::string& t) { send_input(t, true); };
     comp_opt.on_perm_toggle = [this] { toggle_permission(); };
     comp_opt.on_mode_toggle = [this] { toggle_mode(); };
     comp_opt.on_toggle_thinking = [this] {
@@ -3057,6 +3181,9 @@ void App::run() {
             m_suggest_mode, m_suggest_entries, m_suggest_selected,
             agent::global_file_index().is_ready(), &m_suggest_hits);
 
+        // 消息队列卡片（模型忙碌时前端入队的用户消息）：提示面板下方、输入区上方
+        Element queue_elem = build_queue_bar();
+
         // 左列：标题 + 层级子列表（面包屑导航）+ 转录 + 输入区（含内嵌状态行）
         Element content_col = ftxui::vbox({
             // 标题栏 = 面包屑（首项即当前会话标题），背景与输出区一致（Surface）
@@ -3064,6 +3191,7 @@ void App::run() {
             left_col | ftxui::yflex,
             build_ask_modal(),
             suggest_elem,
+            queue_elem,
             composer_zone,
         });
 
@@ -3505,6 +3633,27 @@ void App::run() {
                         }
                     }
                 }
+                // 消息队列卡片：标题行（button=-1）切换展开/折叠；✕（button=条目下标）移除该条
+                if (!m_queue_hits.empty()) {
+                    for (const auto& hit : m_queue_hits) {
+                        if (e.mouse().x >= hit.box.x_min && e.mouse().x <= hit.box.x_max &&
+                            e.mouse().y >= hit.box.y_min && e.mouse().y <= hit.box.y_max) {
+                            if (hit.button >= 0) {
+                                const auto& items = m_vm.message_queue.items;
+                                if (hit.button < static_cast<int>(items.size()) &&
+                                    m_deps.session) {
+                                    m_deps.session->remove_queued_message(
+                                        items[static_cast<std::size_t>(hit.button)].id);
+                                }
+                            } else {
+                                m_vm.message_queue.expanded =
+                                    !m_vm.message_queue.expanded;
+                            }
+                            m_screen.RequestAnimationFrame();
+                            return true;
+                        }
+                    }
+                }
                 for (const auto& hit : m_breadcrumb_hits) {
                     if (e.mouse().x >= hit.box.x_min && e.mouse().x <= hit.box.x_max &&
                         e.mouse().y >= hit.box.y_min && e.mouse().y <= hit.box.y_max) {
@@ -3721,15 +3870,15 @@ std::string App::session_mode_label(agent::tool::SessionMode m) {
     }
 }
 
-/// @brief 工作模式三态切换（标准 → 计划 → 极简 → 标准；模式切换键 / 设置面板）
+/// @brief 工作模式三态切换（标准 → 极简 → 计划 → 标准；Tab / Ctrl+T / 设置面板）
 /// @details 真实模式：session 侧切换（计划联动权限 Plan，退出恢复）并回读；
-///          mock 模式：本地循环 standard → plan → minimal
+///          mock 模式：本地循环 standard → minimal → plan
 void App::toggle_mode() {
     if (m_deps.session) {
         m_deps.session->toggle_session_mode();
         m_vm.sidebar.mode = session_mode_label(m_deps.session->session_mode());
     } else {
-        static const char* kModeCycle[] = {"standard", "plan", "minimal"};
+        static const char* kModeCycle[] = {"standard", "minimal", "plan"};
         m_mock_mode_cycle = (m_mock_mode_cycle + 1) % 3;
         m_vm.sidebar.mode = kModeCycle[m_mock_mode_cycle];
     }

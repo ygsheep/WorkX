@@ -123,7 +123,8 @@ ReActLoop::ReActLoop(ICompletionProvider* provider,
                      IEventBus* event_bus,
                      skill::TouchCollector* touch_collector,
                      std::function<void()> file_index_invalidator,
-                     std::string session_id)
+                     std::string session_id,
+                     std::function<void(std::vector<ChatMessage>&)> queue_inject_cb)
     : m_provider(provider)
     , m_registry(std::move(registry))
     , m_config(config)
@@ -137,6 +138,7 @@ ReActLoop::ReActLoop(ICompletionProvider* provider,
     , m_session_id(std::move(session_id))
     , m_touch_collector(touch_collector)
     , m_file_index_invalidator(std::move(file_index_invalidator))
+    , m_queue_inject_cb(std::move(queue_inject_cb))
 {
     // issue #15-F: 构造函数不变量从 assert 改为 throw，避免 Debug 构建直接 abort
     // 构造失败抛 std::invalid_argument 是 C++ 标准模式，调用方可用 try/catch 处理
@@ -854,6 +856,8 @@ ReActResult ReActLoop::run(
 
                 result.total_tool_calls++;
             }
+            // 工具轮边界：冲刷排队用户消息（Ctrl+Enter）——注入下一轮 Thought 一并发送
+            maybe_inject_queue(messages);
             --budget;
             ++iteration;
             continue;  // 继续下一轮 Thought（无执行器以错误回传，预算照常消耗）
@@ -1047,6 +1051,10 @@ ReActResult ReActLoop::run(
             LOG_INFO("[react_loop] tool={} completed, is_error={}, duration={}ms",
                      exec.tool_name, tool_error, action_ms);
         }
+
+        // 工具轮边界：冲刷排队用户消息（Ctrl+Enter）——注入下一轮 Thought 一并发送
+        // 位于 Action + Observation 全部完成后、预算递减前
+        maybe_inject_queue(messages);
 
         // 继续下一轮 Thought（LLM 根据 tool_result 决定下一步）
         --budget;

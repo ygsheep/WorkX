@@ -191,6 +191,24 @@ SessionResult create_session(IConfigManager& cfg,
 
     // 复用 create_backend：URL/Model 解析 + 后端创建与初始化
     auto backend_result = create_backend(cfg, preset, event_bus);
+
+    // 兜底：当前 provider 为自定义条目（无 preset 默认 URL，且顶层未显式配置
+    // remote_url）时，create_backend 解析不出 URL → 启动无会话 → 之后 /provider
+    // 热切换因 session==null 静默失效（面板关闭但配置/界面无任何变化）。
+    // 此时按 cfg.PROVIDER 在 providers 列表中定位活动条目，以条目自身配置创建后端。
+    if (!backend_result.provider) {
+        const std::string active = cfg.get_or<std::string>(keys::PROVIDER, "");
+        if (!active.empty()) {
+            for (const auto& e : load_provider_configs(cfg)) {
+                if (e.id == active || e.name == active) {
+                    auto entry_result = create_backend_for_entry(cfg, e, event_bus);
+                    if (entry_result.provider) backend_result = std::move(entry_result);
+                    break;
+                }
+            }
+        }
+    }
+
     result.remote_url = backend_result.remote_url;
     result.model_name = backend_result.model_name;
 
