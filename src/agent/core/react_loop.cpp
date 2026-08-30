@@ -11,6 +11,7 @@
 #include "agent/api/i_stream_reader.h"
 #include "agent/compact/prefix_shape.h"  // DS_CACHE M-2: normalize_tools_schema
 #include "agent/config/app_config.h"     // #30：agent::keys::MODEL_NAME
+#include "agent/hook/hook_manager.h"     // Issue #50：通用 Hook 事件系统
 #include "agent/skill/inclaude/conditional.h"
 #include "core/process/subprocess.h"  // #30：git 环境探测
 #include "core/utils/uuid.h"          // #30：每次 turn 生成 request_id
@@ -952,7 +953,31 @@ ReActResult ReActLoop::run(
             }
         }
 
-        // 2. 异步并行执行所有 tool_use
+        // 2. Issue #50：PreToolUse 事件（并行执行前同步调度，可拦截危险操作）
+        //    构造统一 hook 上下文；对任一 tool_use 命中 blockingError 的，
+        //    跳过其执行并在 Observation 阶段注入 blocker 错误。
+        std::vector<bool> blocked(thought.tool_uses.size(), false);
+        std::vector<std::string> blocked_text(thought.tool_uses.size());
+        if (m_config.hooks && !m_config.hooks->empty()) {
+            for (size_t i = 0; i < thought.tool_uses.size(); ++i) {
+                hook::HookContext hctx;
+                hctx.session_id = m_session_id.empty() ? std::string("default") : m_session_id;
+                hctx.cwd = m_cwd;
+                hctx.request_id = turn_request_id;
+                hctx.tool_name = thought.tool_uses[i].name;
+                hctx.tool_input = thought.tool_uses[i].input;
+                auto hres = m_config.hooks->dispatch(hook::HookEvent::PreToolUse, hctx);
+                if (hres.blockingError && !hres.blockingError->empty()) {
+                    blocked[i] = true;
+                    blocked_text[i] = std::format("Error: tool '{}' blocked by PreToolUse hook: {}",
+                                                  thought.tool_uses[i].name, *hres.blockingError);
+                    LOG_WARN("[react_loop] PreToolUse blocked tool={}: {}",
+                             thought.tool_uses[i].name, *hres.blockingError);
+                }
+            }
+        }
+
+        // 3. 异步并行执行所有 tool_use
         struct ToolExecution {
             std::string tool_use_id;
             std::string tool_name;
@@ -962,7 +987,17 @@ ReActResult ReActLoop::run(
         std::vector<ToolExecution> executions;
         executions.reserve(thought.tool_uses.size());
 
-        for (const auto& tu : thought.tool_uses) {
+        for (size_t i = 0; i < thought.tool_uses.size(); ++i) {
+            const auto& tu = thought.tool_uses[i];
+            if (blocked[i]) {
+                // 被 PreToolUse 拦截：构造【就绪】的 future（error/即时完成），
+                // Observation 轮询 wait_for 才能立即返回。deferred future 的
+                // wait_for 恒返回 deferred，会导致下方 while 死循环。
+                std::promise<std::pair<std::string, bool>> ready_promise;
+                ready_promise.set_value({blocked_text[i], true});
+                executions.push_back({tu.id, tu.name, ready_promise.get_future()});
+                continue;
+            }
             LOG_DEBUG("[react_loop] launching async tool_use, id={}, name={}",
                       tu.id, tu.name);
             auto future = std::async(std::launch::async,
@@ -987,7 +1022,7 @@ ReActResult ReActLoop::run(
             result.total_tool_calls++;
         }
 
-        // 3. 等待所有工具完成，按原始顺序生成 Observation
+        // 4. 等待所有工具完成，按原始顺序生成 Observation
         for (auto& exec : executions) {
             auto action_start = std::chrono::steady_clock::now();
 
@@ -1016,6 +1051,19 @@ ReActResult ReActLoop::run(
             // 添加 tool_result 消息到对话历史
             messages.push_back(ChatMessage::tool_result(
                 exec.tool_use_id, exec.tool_name, result_text, tool_error));
+
+            // Issue #50：PostToolUse 事件（工具执行后，含被 PreToolUse 拦截的场景）
+            if (m_config.hooks && !m_config.hooks->empty()) {
+                hook::HookContext hctx;
+                hctx.session_id = m_session_id.empty() ? std::string("default") : m_session_id;
+                hctx.cwd = m_cwd;
+                hctx.request_id = turn_request_id;
+                hctx.tool_name = exec.tool_name;
+                hctx.tool_result = result_text;
+                hctx.tool_error = tool_error;
+                auto hres = m_config.hooks->dispatch(hook::HookEvent::PostToolUse, hctx);
+                (void)hres;  // 本版本 PostToolUse 仅记录；blockingError 不在此事件生效
+            }
 
             // 累计评审用工具历史（每条取观察首行，最多 kMaxToolHistory 条）
             {
@@ -1123,6 +1171,35 @@ ReActResult ReActLoop::run(
                  result.total_iterations, result.total_duration_ms,
                  result.total_tool_calls, result.was_interrupted, result.was_error,
                  graceful_stop);
+    }
+
+    // Issue #50：Stop 事件（Agent 停止——统一在循环收尾后触发一次）
+    //    blockingError → 注入 user 消息并终止继续；preventContinuation → 后续不继续
+    if (m_config.hooks && !m_config.hooks->empty()) {
+        hook::HookContext hctx;
+        hctx.session_id = m_session_id.empty() ? std::string("default") : m_session_id;
+        hctx.cwd = m_cwd;
+        hctx.request_id = turn_request_id;
+        hctx.final_answer = result.final_answer;
+        if (result.was_interrupted) hctx.stop_reason = "interrupted";
+        else if (result.was_error) hctx.stop_reason = "error";
+        else if (graceful_stop) hctx.stop_reason = "at_limit";
+        else hctx.stop_reason = "completed";
+        auto hres = m_config.hooks->dispatch(hook::HookEvent::Stop, hctx);
+        if (hres.blockingError && !hres.blockingError->empty()) {
+            // 注入 user 角色修正消息（用户视角的阻断指引），并重置 continue 语义
+            messages.push_back(ChatMessage::user(*hres.blockingError));
+            result.was_error = true;
+            result.error_message = *hres.blockingError;
+            if (!result.final_answer.empty()) {
+                result.final_answer = *hres.blockingError;
+            }
+            LOG_WARN("[react_loop] Stop hook blockingError injected: {}", *hres.blockingError);
+        }
+        if (hres.preventContinuation && !result.final_answer.empty()) {
+            // 语义：停止后续 query 循环（本 turn 已结束，等效清空 final_answer 以防继续）
+            LOG_WARN("[react_loop] Stop hook preventContinuation=true (turn already ended)");
+        }
     }
 
     return result;

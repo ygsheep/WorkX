@@ -95,6 +95,14 @@ namespace keys {
     constexpr const char* WEB_SEARCH_TAVILY_KEY   = "web.search.tavily_api_key";
     /// SearXNG 实例地址（免 Key 兜底；默认公共实例，可换自建）
     constexpr const char* WEB_SEARCH_SEARXNG_URL  = "web.search.searxng_url";
+
+    // Hooks（#50 通用 Hook 事件系统）
+    /// Hook 总开关（false 时全部禁用，QueryEngine 不构建 HookManager）
+    constexpr const char* HOOKS_ENABLED   = "hooks.enabled";
+    /// hook 定义 JSON 数组（元素为 hook.HookDefinition 对象）
+    constexpr const char* HOOKS_DEFINITIONS = "hooks.definitions";
+    /// 全局默认 hook 超时（毫秒，单条未指定时使用）
+    constexpr const char* HOOKS_TIMEOUT_MS = "hooks.timeout_ms";
 }
 
 /// @brief 注册所有配置项的结构化 Schema（类型/默认值/范围/枚举/环境变量映射）

@@ -107,6 +107,11 @@ target_sources(workx_agent PRIVATE
     skill/source/conditional.cpp
     skill/source/hooks.cpp
 
+    # hook: 通用 Hook 事件系统（#50）
+    hook/hook_event.cpp
+    hook/hook_match.cpp
+    hook/hook_manager.cpp
+
     # compact
     compact/token_count.cpp
     compact/prefix_shape.cpp
