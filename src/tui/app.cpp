@@ -342,6 +342,15 @@ App::~App() {
     // 先置停止信号并 join 项目扫描线程，确保无在途入队后，再停桥接清空队列。
     m_project_watch_run.store(false);
     if (m_project_watch_thread.joinable()) m_project_watch_thread.join();
+    // Ctrl+G 异步编辑轮询线程：先停轮询再 join，避免析构期在途读文件/PostEvent
+    m_prompt_editing.store(false);
+    if (m_prompt_watch_thread.joinable()) m_prompt_watch_thread.join();
+#ifdef _WIN32
+    if (m_prompt_editor_proc) {
+        CloseHandle(static_cast<HANDLE>(m_prompt_editor_proc));
+        m_prompt_editor_proc = nullptr;
+    }
+#endif
     m_bridge.stop();
 }
 
@@ -1271,6 +1280,248 @@ void App::cmd_nvim() {
         m_vm.apply(ActionAppendMessage{.role = "assistant",
             .text = std::string(str::kEditFailed)});
     }
+    m_screen.RequestAnimationFrame();
+}
+
+/// @brief Ctrl+G：打开系统默认编辑器编辑当前输入（Prompt 文件双向同步）
+void App::edit_prompt() {
+    namespace fs = std::filesystem;
+    // 1. Prompt 文件路径（与输入历史同目录约定：~/.workx/prompt.md）
+    const fs::path prompt = agent::default_config_path().parent_path() / "prompt.md";
+    std::error_code ec;
+    fs::create_directories(prompt.parent_path(), ec);
+
+    // 2. 把当前输入框内容同步到 Prompt 文件
+    {
+        std::ofstream out(prompt, std::ios::binary | std::ios::trunc);
+        if (out) out.write(m_input_buffer.data(),
+                           static_cast<std::streamsize>(m_input_buffer.size()));
+    }
+
+    // 3. 解析默认编辑器（$WORKX_EDITOR → $EDITOR；否则 Windows=记事本，POSIX=nvim/vim/nano）
+    std::string editor_cmd;
+    std::vector<std::string> editor_args;
+    // 环境变量可能形如 "code --wait"，拆分首 token 为命令名、余下为前置参数
+    auto split_first = [](const std::string& s, std::string& cmd,
+                          std::vector<std::string>& args) {
+        const auto sp = s.find(' ');
+        if (sp == std::string::npos) { cmd = s; return; }
+        cmd = s.substr(0, sp);
+        std::string rest = s.substr(sp + 1);
+        size_t b = 0;
+        while (b < rest.size()) {
+            while (b < rest.size() && rest[b] == ' ') ++b;
+            if (b >= rest.size()) break;
+            const size_t en = rest.find(' ', b);
+            args.push_back(rest.substr(b, en == std::string::npos ? rest.size() : en - b));
+            b = en == std::string::npos ? rest.size() : en;
+        }
+    };
+    const char* env = std::getenv("WORKX_EDITOR");
+    if (!env || !*env) env = std::getenv("EDITOR");
+    if (env && *env) {
+        split_first(env, editor_cmd, editor_args);
+    } else {
+#ifdef _WIN32
+        editor_cmd = "notepad.exe";
+#else
+        auto pick = [&](const char* name) {
+            if (!editor_cmd.empty()) return;
+            if (auto p = agent::process::ToolRegistry::instance().find_executable(name))
+                editor_cmd = *p;
+        };
+        pick("nvim");
+        pick("vim");
+        pick("nano");
+#endif
+    }
+
+    if (editor_cmd.empty()) {
+        m_vm.apply(ActionAppendMessage{.role = "assistant",
+            .text = std::string("Ctrl+G：未找到可用编辑器，请设置 $EDITOR 或安装 nvim/vim/nano 之一")});
+        m_screen.RequestAnimationFrame();
+        return;
+    }
+
+    // 4a. Windows 记事本：走异步分支（TUI 与 GUI 记事本窗口并存，后台轮询实时同步，
+    //     按 Esc 收尾）。规避 Win11 Store 版 notepad stub 进程提前退出、
+    //     无法以「进程退出」作为编辑完成信号的问题。
+    m_prompt_path = prompt.string();
+#ifdef _WIN32
+    {
+        std::string low = editor_cmd;
+        for (char& c : low)
+            c = (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+        if (low == "notepad" || low == "notepad.exe") {
+            start_prompt_editor_async();
+            return;
+        }
+    }
+#endif
+
+    // 4b. 终端型编辑器（POSIX 或 Windows 自定义 TUI 编辑器）：阻塞式全屏编辑
+    const std::string path_str = prompt.string();
+    bool launched = false;
+    auto edit = m_screen.WithRestoredIO([&] {
+        std::vector<std::string> args = editor_args;
+        args.push_back(path_str);
+        auto r = agent::process::exec_interactive(editor_cmd, args);
+        if (r.is_ok()) launched = true;
+    });
+    edit();
+
+    if (!launched) {
+        m_vm.apply(ActionAppendMessage{.role = "assistant",
+            .text = std::string("Ctrl+G：编辑器启动失败，输入内容未更改")});
+        m_screen.RequestAnimationFrame();
+        return;
+    }
+
+    // 5. 编辑器退出后读回 Prompt 文件（与磁盘一致）
+    m_input_buffer = load_prompt_file(path_str);
+    m_composer_cursor = m_input_buffer.size();
+    if (m_composer) m_composer->TakeFocus();
+    m_screen.RequestAnimationFrame();
+}
+
+/// @brief 读 Prompt 文件并归一化（剥 UTF-8 BOM、CRLF/孤立 CR→LF、去尾换行）
+std::string App::load_prompt_file(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    std::string content((std::istreambuf_iterator<char>(in)),
+                        std::istreambuf_iterator<char>());
+    if (content.size() >= 3 && static_cast<unsigned char>(content[0]) == 0xEF &&
+        static_cast<unsigned char>(content[1]) == 0xBB &&
+        static_cast<unsigned char>(content[2]) == 0xBF)
+        content.erase(0, 3);
+    std::string lf;
+    lf.reserve(content.size());
+    for (size_t i = 0; i < content.size(); ++i) {
+        const char ch = content[i];
+        if (ch == '\r') {
+            if (i + 1 < content.size() && content[i + 1] == '\n') continue;  // CRLF → LF
+            lf.push_back('\n');  // 孤立 CR → LF
+        } else {
+            lf.push_back(ch);
+        }
+    }
+    while (!lf.empty() && lf.back() == '\n') lf.pop_back();
+    return lf;
+}
+
+/// @brief Windows notepad 异步分支：后台线程轮询 Prompt 文件实时同步输入框，Esc 结束
+void App::start_prompt_editor_async() {
+    if (m_prompt_editing.load()) return;  // 防重入：编辑会话已在进行
+    if (m_prompt_path.empty()) return;
+
+    // 记录本轮基线，清空残留 pending
+    {
+        std::lock_guard<std::mutex> lock(m_prompt_mutex);
+        m_prompt_last.clear();
+        m_prompt_pending.clear();
+        m_prompt_pending_dirty = false;
+    }
+    m_prompt_editing.store(true);
+
+#ifdef _WIN32
+    {
+        // UTF-8 路径 → 宽字符（notepad 命令行用）
+        auto to_wide = [](const std::string& s) {
+            const int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
+            std::wstring w(static_cast<size_t>(n > 0 ? n : 1), L'\0');
+            if (n > 0) MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, w.data(), n);
+            return w;
+        };
+        std::wstring wpath = to_wide(m_prompt_path);
+        std::wstring cmdline = L"notepad.exe \"" + wpath + L"\"";
+        STARTUPINFOW si{};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi{};
+        if (!CreateProcessW(nullptr, cmdline.data(), nullptr, nullptr, FALSE,
+                            CREATE_UNICODE_ENVIRONMENT, nullptr, nullptr, &si, &pi)) {
+            m_prompt_editing.store(false);
+            m_vm.apply(ActionAppendMessage{.role = "assistant",
+                .text = std::string("Ctrl+G：记事本启动失败，输入内容未更改")});
+            m_screen.RequestAnimationFrame();
+            return;
+        }
+        CloseHandle(pi.hThread);
+        m_prompt_editor_proc = pi.hProcess;
+    }
+#endif
+
+    // 后台轮询线程：
+    //  1) 检测到 Prompt 文件内容变化（保存）→ 投递 Custom，UI 同步输入框（保存即同步）；
+    //  2) 自动检测记事本关闭：首轮判 stub（启动即退出的 Win11 Store 版 stub 按进程退出
+    //     检测永远为真、无法当作「关窗」信号），真实长命记事本在首轮后退出 = 关闭窗口，
+    //     置 m_prompt_auto_done 由 UI 线程自动收尾读回（关闭时自动保存）。
+    m_prompt_watch_thread = std::thread([this] {
+        bool first_check = true;   // 首次是否已做 stub 判定
+        bool stub = false;         // 启动早期即退出的 stub（禁用自动关闭检测）
+        while (m_prompt_editing.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            // —— 同步：文件变化（保存）→ 投递 UI ——
+            std::string lf = load_prompt_file(m_prompt_path);
+            {
+                std::lock_guard<std::mutex> lock(m_prompt_mutex);
+                if (lf != m_prompt_last) {
+                    m_prompt_last = lf;
+                    m_prompt_pending = lf;
+                    m_prompt_pending_dirty = true;
+                    m_screen.PostEvent(ftxui::Event::Custom);
+                }
+            }
+            // —— 自动关闭检测（Windows）——
+#ifdef _WIN32
+            const HANDLE proc = static_cast<HANDLE>(m_prompt_editor_proc);
+            if (proc) {
+                const DWORD st = WaitForSingleObject(proc, 0);
+                if (first_check) {
+                    first_check = false;
+                    if (st == WAIT_OBJECT_0) stub = true;  // 启动即已退出 → stub，禁用自动检测
+                }
+                if (!stub && st == WAIT_OBJECT_0) {  // 真实记事本进程退出 = 关闭窗口
+                    m_prompt_auto_done.store(true);
+                    m_screen.PostEvent(ftxui::Event::Custom);
+                    break;
+                }
+            }
+#endif
+        }
+    });
+
+    if (m_composer) m_composer->TakeFocus();
+    m_screen.RequestAnimationFrame();
+}
+
+/// @brief 结束异步编辑会话（Esc）：停轮询线程 + 最后读回 Prompt 文件同步输入框
+void App::finish_prompt_editor() {
+    if (!m_prompt_editing.load()) return;
+    m_prompt_editing.store(false);
+    if (m_prompt_watch_thread.joinable()) m_prompt_watch_thread.join();
+#ifdef _WIN32
+    if (m_prompt_editor_proc) {
+        CloseHandle(static_cast<HANDLE>(m_prompt_editor_proc));
+        m_prompt_editor_proc = nullptr;
+    }
+#endif
+    if (!m_prompt_path.empty())
+        m_input_buffer = load_prompt_file(m_prompt_path);
+    m_composer_cursor = m_input_buffer.size();
+    if (m_composer) m_composer->TakeFocus();
+    m_screen.RequestAnimationFrame();
+}
+
+/// @brief UI 线程消费轮询线程的最新内容（Custom 事件）
+void App::drain_prompt_pending() {
+    std::string content;
+    {
+        std::lock_guard<std::mutex> lock(m_prompt_mutex);
+        if (!m_prompt_pending_dirty) return;
+        m_prompt_pending_dirty = false;
+        content = std::move(m_prompt_pending);
+    }
+    m_input_buffer = std::move(content);
+    m_composer_cursor = m_input_buffer.size();
     m_screen.RequestAnimationFrame();
 }
 
@@ -2848,6 +3099,15 @@ void App::run() {
                 });
             }
         }
+        // Ctrl+G 异步编辑（Windows 记事本）进行中：状态行右侧常驻「编辑中」提示
+        if (m_prompt_editing.load()) {
+            line = ftxui::hbox({
+                std::move(line),
+                ftxui::text("  "),
+                ftxui::text(std::string("✎ Prompt 编辑中 · Esc 完成"))
+                    | ftxui::color(theme::T::Accent),
+            });
+        }
         return line;
     };
 
@@ -2882,6 +3142,7 @@ void App::run() {
             }
         }
     };
+    comp_opt.on_edit = [this] { edit_prompt(); };
     // 输入栏提示面板（/ 命令 · @ 文件）：状态机回调
     comp_opt.suggest_active = [this] { return m_suggest_mode != SuggestMode::None; };
     comp_opt.suggest_move = [this](int delta) { suggest_move(delta); };
@@ -3244,6 +3505,10 @@ void App::run() {
     auto root = layout | ftxui::CatchEvent([&](Event e) {
         if (e == Event::Custom) {
             drain();
+            // Ctrl+G 异步编辑：消费轮询线程投递的最新 Prompt 内容，同步到输入框
+            drain_prompt_pending();
+            // Ctrl+G 异步编辑：检测到记事本关闭（真实进程退出）→ 自动收尾保存
+            if (m_prompt_auto_done.exchange(false)) finish_prompt_editor();
             // 冒烟模式：UI 线程消费 driver 请求（投递消息 / 请求退出）
             if (m_smoke_submit.exchange(false)) {
                 send_input("smoke: 渲染与滚动验证");
@@ -3361,6 +3626,11 @@ void App::run() {
         }
         // Esc：打断模型回复 / 工具调用（刷新 / AskUser / 面板的 Esc 已在上方各自处理）
         if (e == Event::Escape) {
+            // Ctrl+G 异步编辑（Windows 记事本）进行中：Esc 结束编辑会话并同步输入框
+            if (m_prompt_editing.load()) {
+                finish_prompt_editor();
+                return true;
+            }
             // 输入栏"/"命令 / "@"文件提示面板激活时，Esc 优先关闭它。
             // 根 CatchEvent 先于 composer 收到 Esc（事件自上而下分发），
             // 若在此不放行，composer 的 Esc 分支永远跑不到，面板会关不掉。

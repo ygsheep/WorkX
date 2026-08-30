@@ -26,6 +26,9 @@ struct ComposerOptions {
     std::function<void()> on_perm_toggle;               ///< 权限切换（Shift+Tab）
     std::function<void()> on_mode_toggle;               ///< 工作模式切换（Tab / Ctrl+T）
     std::function<void()> on_toggle_thinking;           ///< 思考视图（Ctrl+O）
+    /// @brief 打开系统默认编辑器编辑当前输入（Ctrl+G）：同步输入到 Prompt 文件，
+    ///        编辑结束后把文件内容同步回输入框。nullptr = 不启用。
+    std::function<void()> on_edit;
 
     // ---- 输入栏提示面板（App 侧状态机；返回 true = 已消费）----
     std::function<bool()> suggest_active;   ///< 面板是否激活

@@ -151,6 +151,19 @@ private:
     void cmd_edit(const std::string& args);
     /// @brief /nvim：启动 nvim（当前目录，WithRestoredIO 全屏切换）
     void cmd_nvim();
+    /// @brief Ctrl+G：打开系统默认编辑器编辑当前输入（写入 ~/.workx/prompt.md，
+    ///        编辑器结束后读回并替换输入框内容）
+    void edit_prompt();
+    /// @brief Windows notepad 异步分支：后台线程轮询 Prompt 文件实时同步到输入框，
+    ///        按 Esc（finish_prompt_editor）结束；规避 Win11 Store 版 notepad stub
+    ///        进程提前退出导致无法以进程退出作为结束信号的问题。
+    void start_prompt_editor_async();
+    /// @brief 结束异步编辑会话（Esc）：停轮询线程 + 最后读回 Prompt 文件同步输入框
+    void finish_prompt_editor();
+    /// @brief UI 线程消费轮询线程的最新内容（Custom 事件）
+    void drain_prompt_pending();
+    /// @brief 读 Prompt 文件并归一化（剥 UTF-8 BOM、CRLF/孤立 CR→LF、去尾换行）
+    static std::string load_prompt_file(const std::string& path);
     /// @brief 重读当前文件 tab 内容（/edit 返回后与磁盘保持一致）
     void reload_file();
     /// @brief /Test:askuser：弹出 AskUser 提问弹窗（开发调试 TUI 渲染/交互用）
@@ -438,6 +451,19 @@ private:
     ftxui::Component m_model_comp;
     ftxui::Component m_mode_comp;
     ftxui::Component m_provider_comp;
+
+    // ---- Ctrl+G Prompt 编辑（Windows notepad 异步：后台轮询 + Esc 收尾）----
+    /// @brief 异步编辑会话进行中（UI 线程写，轮询线程读）
+    std::atomic<bool> m_prompt_editing{false};
+    std::thread m_prompt_watch_thread;      ///< Windows notepad 文件轮询线程
+    std::mutex m_prompt_mutex;              ///< 保护下列字段
+    std::string m_prompt_last;              ///< 轮询线程上次读到的文件内容（变化判定）
+    std::string m_prompt_pending;           ///< 有待 UI 线程消费的最新内容
+    bool m_prompt_pending_dirty = false;    ///< pending 尚未被 UI 消费
+    std::string m_prompt_path;              ///< 本轮 Prompt 文件路径（start 时记录）
+    void* m_prompt_editor_proc = nullptr;   ///< Windows notepad 进程句柄（finish 时关闭）
+    /// @brief 轮询线程检测到记事本窗口关闭（非 stub）后置位，UI 线程消费并自动收尾
+    std::atomic<bool> m_prompt_auto_done{false};
 
     // ---- 拖拽选中 → 复制剪贴板（FTXUI 原生 Selection + 系统剪贴板）----
     std::string m_selection_text;          ///< 最新选中文本（SelectionChange 回调维护）

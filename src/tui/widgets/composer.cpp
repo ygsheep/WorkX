@@ -351,6 +351,10 @@ Component make_composer(ComposerOptions& opt) {
             if (opt.on_toggle_thinking) opt.on_toggle_thinking();
             return true;
         }
+        if (is_ctrl(0x07)) {  // Ctrl+G：打开系统默认编辑器编辑当前输入
+            if (opt.on_edit) opt.on_edit();
+            return true;
+        }
         if (is_ctrl(0x01)) {  // Ctrl+A 行首
             cursor = line_range(text, cursor_line(text, cursor)).first;
             return true;
