@@ -10,6 +10,8 @@
 #include "agent/hook/hook_event.h"
 #include "agent/hook/hook_match.h"
 #include "agent/hook/hook_manager.h"
+#include "core/events/agent_events.h"  // HookProgressEvent（M-2）
+#include "helpers/mock_event_bus.h"    // MockEventBus（M-2 订阅断言）
 #include "helpers/mock_provider.h"
 
 using namespace agent::hook;
@@ -236,4 +238,48 @@ TEST_CASE("hook prompt allow verdict not blocking", "[hook][prompt]") {
     auto r = mgr.dispatch(HookEvent::PreToolUse, ctx);
     REQUIRE_FALSE(r.blockingError.has_value());
     REQUIRE_FALSE(r.preventContinuation);
+}
+
+// ============================================================
+// M-2：hook 进度事件（经 IEventBus 发布）
+// ============================================================
+
+TEST_CASE("hook dispatch publishes HookProgressEvent (M-2)", "[hook][progress]") {
+    using agent::test::MockEventBus;
+    MockEventBus bus;
+    bus.set_dispatch_enabled(true);   // 让订阅回调在 publish_raw 时被同步调用
+
+    HookManager mgr;
+    mgr.set_event_bus(&bus);
+    HookDefinition def;
+    def.event = HookEvent::Stop;
+    def.type = HookType::Command;
+#if defined(_WIN32)
+    def.command = "cd .";      // 成功退出码
+#else
+    def.command = ":";         // 成功，无副作用
+#endif
+    mgr.register_hook(def);
+
+    int start_count = 0;
+    int done_count = 0;
+    std::string last_hook_type;
+    bus.subscribe<agent::HookProgressEvent>(
+        [&](const agent::HookProgressEvent& ev) {
+            last_hook_type = ev.hook_type;
+            if (ev.phase == "start") ++start_count;
+            else if (ev.phase == "done") ++done_count;
+        });
+
+    HookContext ctx;
+    ctx.session_id = "s1";
+    ctx.cwd = ".";
+    ctx.tool_name = "SomeTool";
+    auto r = mgr.dispatch(HookEvent::Stop, ctx);
+    REQUIRE(r.message.find("[hook:command] ok") == 0);
+
+    bus.drain_async_events(8);
+    REQUIRE(start_count == 1);   // 每次 hook 执行发布 1 次 start
+    REQUIRE(done_count == 1);    // ……并发布 1 次 done
+    REQUIRE(last_hook_type == "command");
 }

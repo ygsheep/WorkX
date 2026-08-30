@@ -11,6 +11,8 @@
 
 #include "agent/api/i_completion_provider.h"
 #include "agent/api/remote/http_client.h"
+#include "core/events/agent_events.h"  // HookProgressEvent（M-2 进度可视化）
+#include "core/events/i_event_bus.h"   // IEventBus::publish_async
 #include "core/process/subprocess.h"
 #include "liblogger/logger.h"
 
@@ -119,13 +121,37 @@ HookResult HookManager::dispatch(HookEvent event, const HookContext& ctx) {
 // ============================================================
 
 HookResult HookManager::run_hook(const HookEntry& entry, const HookContext& ctx) {
-    switch (entry.def.type) {
-        case HookType::Command: return run_command(entry.def, ctx);
-        case HookType::Http:    return run_http(entry.def, ctx);
-        case HookType::Prompt:  return run_prompt(entry.def, ctx);
-        case HookType::Agent:   return run_agent(entry.def, ctx);
+    // M-2：发布 hook 执行开始事件（供 UI 展示 hook 进度；bus 为空则跳过）
+    if (event_bus_) {
+        agent::HookProgressEvent ev;
+        ev.session_id = ctx.session_id;
+        ev.event = to_string(entry.def.event);
+        ev.phase = "start";
+        ev.hook_type = type_to_string(entry.def.type);
+        ev.tool_name = ctx.tool_name;
+        event_bus_->publish_async(ev);
     }
-    return {};
+
+    HookResult r;
+    switch (entry.def.type) {
+        case HookType::Command: r = run_command(entry.def, ctx); break;
+        case HookType::Http:    r = run_http(entry.def, ctx);    break;
+        case HookType::Prompt:  r = run_prompt(entry.def, ctx);  break;
+        case HookType::Agent:   r = run_agent(entry.def, ctx);   break;
+    }
+
+    // M-2：发布 hook 执行完成/失败事件
+    if (event_bus_) {
+        agent::HookProgressEvent ev;
+        ev.session_id = ctx.session_id;
+        ev.event = to_string(entry.def.event);
+        ev.hook_type = type_to_string(entry.def.type);
+        ev.tool_name = ctx.tool_name;
+        ev.message = r.message;
+        ev.phase = (r.blockingError && !r.blockingError->empty()) ? "failed" : "done";
+        event_bus_->publish_async(ev);
+    }
+    return r;
 }
 
 void HookManager::aggregate(const HookResult& r, HookResult& out) const noexcept {

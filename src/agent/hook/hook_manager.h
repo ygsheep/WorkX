@@ -20,6 +20,7 @@
 
 namespace agent {
 class ICompletionProvider;
+class IEventBus;
 }
 
 namespace agent::hook {
@@ -63,12 +64,20 @@ public:
     size_t size() const noexcept { return entries_.size(); }
 
     /// @brief 注入 LLM provider（prompt/agent 类型需要；非拥有指针）
-    /// @note 必须在 dispatch 前设置；为 nullptr 时 prompt/agent hook 降级为未就绪消息
+    /// @note 生命周期约束（M-1）：调用方必须保证 provider 存活期 ≥ 本 HookManager，
+    ///       推荐由 QueryEngine 装配期注入（二者同源同生命周期）。
+    ///       调用方不得在 dispatch 过程中销毁 provider；违规会导致悬垂指针。
+    ///       为 nullptr 时 prompt/agent hook 降级为未就绪消息（不崩溃）。
     void set_provider(agent::ICompletionProvider* provider) noexcept { provider_ = provider; }
+
+    /// @brief 注入事件总线（可选；非拥有指针，用于发布 hook 进度事件）
+    /// @note 为 nullptr 时跳过进度事件发布（日志仍正常），测试/无 UI 环境可留空
+    void set_event_bus(agent::IEventBus* bus) noexcept { event_bus_ = bus; }
 
 private:
     std::vector<HookEntry> entries_;
     agent::ICompletionProvider* provider_ = nullptr;
+    agent::IEventBus* event_bus_ = nullptr;
 
     /// @brief 执行单条 hook，返回其 HookResult
     HookResult run_hook(const HookEntry& entry, const HookContext& ctx);

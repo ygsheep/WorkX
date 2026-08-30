@@ -98,6 +98,7 @@ ReActLoop::Config QueryEngine::make_react_config() const {
     if (hooks_enabled) {
         auto manager = std::make_shared<hook::HookManager>();
         manager->set_provider(m_deps.provider);  // prompt/agent 类型需要
+        manager->set_event_bus(m_deps.event_bus);  // M-2：hook 进度事件（可选）
         const std::string defs_json = m_deps.config_manager->get_or<std::string>(
             agent::keys::HOOKS_DEFINITIONS, "[]");
         try {
