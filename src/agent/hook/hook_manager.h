@@ -102,8 +102,11 @@ public:
 
     /// @brief 注入白名单来源 registry（agent 类型从中派生只读子工具集）
     /// @details 非拥有性（shared_ptr 持有权归宿主）；为空则 agent 退化为纯 prompt 判定。
+    ///          来源 registry 变化时使只读子工具集缓存失效（下次按新来源重建）。
     void set_tool_registry(std::shared_ptr<agent::tool::ToolRegistry> reg) noexcept {
+        std::lock_guard<std::mutex> lock(tool_mutex_);
         tool_registry_ = std::move(reg);
+        cached_sub_registry_.reset();
     }
 
 private:
@@ -112,7 +115,14 @@ private:
     agent::ICompletionProvider* provider_ = nullptr;
     agent::IConfigManager* config_manager_ = nullptr;
     agent::IEventBus* event_bus_ = nullptr;
-    std::shared_ptr<agent::tool::ToolRegistry> tool_registry_;  ///< agent 类型白名单来源
+    std::shared_ptr<agent::tool::ToolRegistry> tool_registry_;         ///< agent 类型白名单来源
+    mutable std::mutex tool_mutex_;                                    ///< 保护 tool_registry_ 与子工具集缓存
+    std::shared_ptr<agent::tool::ToolRegistry> cached_sub_registry_;   ///< 只读子工具集缓存（M-1 复用，来源稳定时不为空）
+
+    /// @brief 获取只读子工具集（懒构建 + 缓存；来源 registry 稳定时复用）
+    /// @details 线程安全：内部加锁，首次构建后缓存返回。调用方持返回值存活期即本次
+    ///          run_agent 期间，即使来源 registry 并发替换本快照仍有效。
+    std::shared_ptr<agent::tool::ToolRegistry> get_sub_registry();
 
     /// @brief 执行单条 hook，返回其 HookResult
     HookResult run_hook(const HookEntry& entry, const HookContext& ctx);

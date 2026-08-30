@@ -410,6 +410,19 @@ HookResult HookManager::run_prompt(const HookDefinition& def,
     return r;
 }
 
+std::shared_ptr<agent::tool::ToolRegistry> HookManager::get_sub_registry() {
+    std::lock_guard<std::mutex> lock(tool_mutex_);
+    if (cached_sub_registry_) return cached_sub_registry_;
+    auto sub = std::make_shared<tool::ToolRegistry>();
+    if (tool_registry_) {
+        for (const auto& t : tool_registry_->get_all_tools()) {
+            if (t->is_read_only()) sub->register_tool(t);
+        }
+    }
+    cached_sub_registry_ = sub;
+    return cached_sub_registry_;
+}
+
 HookResult HookManager::run_agent(const HookDefinition& def, const HookContext& ctx) {
     HookResult r;
     if (!provider_) {
@@ -427,15 +440,10 @@ HookResult HookManager::run_agent(const HookDefinition& def, const HookContext& 
         return r;
     }
 
-    // 受限子工具集：从来源 registry 派生"只读"白名单（安全护栏）。只读过滤已排除
-    // Agent/AskUser 等写/交互工具，杜绝 agent hook 递归启动子 Agent 或向用户提问。
-    // 未注入来源 registry 时退化：空工具集也能给出最终判定（纯 prompt 评估）。
-    auto sub_registry = std::make_shared<tool::ToolRegistry>();
-    if (tool_registry_) {
-        for (const auto& t : tool_registry_->get_all_tools()) {
-            if (t->is_read_only()) sub_registry->register_tool(t);
-        }
-    }
+    // 受限子工具集：从来源 registry 懒构建并缓存（M-1 复用，来源稳定时只建一次）。
+    // 只读过滤已排除 Agent/AskUser 等写/交互工具，杜绝 agent hook 递归启动子 Agent
+    // 或向用户提问。来源未注入时退化为空子工具集（纯 prompt 评估仍可给出最终判定）。
+    auto sub_registry = get_sub_registry();
 
     // 事件/工具上下文注入系统提示，供 verifier 核实
     std::string system_prompt =

@@ -128,3 +128,11 @@ hooks:
 `ChatSession` 逐条 `register_hook` 到会话级 HookManager，会话期间对 8 个事件
 生效。对象解析仅支持扁平 `key: value`（布尔/整数自动推断），值含逗号/括号
 等原样保留（取首个冒号分割）。
+
+> 解析限制（M-2）：当前 frontmatter 解析器仅支持扁平对象，即每个 `- key:`
+> 下只能跟一层 `子键: 值`，**不支持嵌套 YAML 结构**——例如
+> `headers: {Content-Type: application/json}` 此类嵌套映射、或 `allowedEnvVars`
+> 下的列表子结构都不会被解析（嵌套行会被忽略）。如需向 `HookDefinition` 的
+> `headers` / `allowedEnvVars` 等结构化字段传参，请改为命令行/HTTP/prompt 等
+> 无需嵌套的配置方式。未来引入 yaml-cpp 后可在不破坏现有文档语法前提下
+> 扩展支持嵌套。
