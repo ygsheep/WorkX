@@ -2,7 +2,7 @@
  * @file react_loop.cpp
  * @brief ReActLoop 实现
  * @details Thought / Action / Observation 三阶段循环逻辑
- * @version 1.1.0
+ * @version 1.1.1
  * @date 2026-07
  */
 
@@ -915,6 +915,8 @@ ReActResult ReActLoop::run(
         // #26：注入推理提供者 + 工具注册表（AgentTool 启动子 Agent 用）
         ctx.provider_ptr = m_provider;
         ctx.tool_registry = m_registry;
+        // #50：注入循环级 HookManager，工具线程可触发 PermissionRequest / Subagent* 事件
+        ctx.hook_manager_ptr = m_config.hooks;
         // #28 评审 #1/#3：进入计划模式——保存原模式、切换 Plan；Bypass 禁止降级、已在 Plan 则幂等拒绝
         ctx.on_enter_plan_mode = [this]() -> bool {
             if (m_permission_mode == tool::PermissionMode::BypassPermissions) {

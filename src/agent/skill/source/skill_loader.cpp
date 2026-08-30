@@ -3,7 +3,7 @@
  * @brief Skill 磁盘加载器实现
  * @details 目录遍历 + SKILL.md 解析 + PromptCommand 构建。
  *          仅支持 <name>/SKILL.md 目录格式（对齐 example/cc）。
- * @version 1.0.0
+ * @version 1.0.1
  * @date 2026-08
  */
 
@@ -116,6 +116,7 @@ std::vector<std::shared_ptr<command::PromptCommand>> build_commands(
         if (fm.context) cmd->set_context(*fm.context);
         if (fm.agent) cmd->set_agent(*fm.agent);
         if (!fm.hooks.empty()) cmd->set_hooks(fm.hooks);
+        if (!fm.hooks_json.empty()) cmd->set_hooks_json(fm.hooks_json);
         if (!fm.paths.empty()) cmd->set_paths(fm.paths);
         return cmd;
     };

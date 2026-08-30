@@ -4,7 +4,7 @@
  * @details 实现 Thought/Action/Observation 三阶段显式分离的 agent 循环，
  *          替代 ChatSession 中的扁平 while 循环。
  *          使用原生 function calling（Anthropic/OpenAI），不依赖文本解析。
- * @version 1.1.0
+ * @version 1.2.0
  * @date 2026-07
  */
 

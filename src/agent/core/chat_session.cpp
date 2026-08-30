@@ -2,7 +2,7 @@
  * @file chat_session.cpp
  * @brief 对话状态机实现
  * @details 编排用户输入、ReAct 循环、流式事件发布、自动重试、会话持久化
- * @version 3.1.1
+ * @version 3.1.2
  * @date 2026-07
  */
 
@@ -19,6 +19,7 @@
 #include "agent/skill/inclaude/conditional.h"
 #include "agent/skill/inclaude/hooks.h"
 #include "agent/config/app_config.h"
+#include "agent/hook/hook_manager.h"  // #50 通用 Hook 事件系统：会话级 SessionStart/End
 #include "agent/audit/audit_logger.h"  // 会话生命周期审计
 #include "core/task/task_manager.h"
 #include "core/config/config_manager.h"
@@ -198,11 +199,26 @@ ChatSession::ChatSession(std::unique_ptr<ICompletionProvider> provider,
     // #24：接线 TodoStore 事件总线（变更后发布 TodoUpdatedEvent → UI 侧边栏/StatusBar）
     tool::TodoStore::instance().set_event_bus(&m_event_bus.get());
 
+    // #50：装配会话级 HookManager（SessionStart/SessionEnd 事件；复用循环级同一装配逻辑）。
+    //      会话级无独立工具 registry，agent 类型 hook 在此降级为纯 prompt 判定（白名单可空）。
+    m_hooks = hook::make_hook_manager(m_config_manager.get(), nullptr,
+                                      m_provider.get(), &m_event_bus.get());
+
     subscribe_interrupt();
     subscribe_sub_agent_persistence();
 }
 
 ChatSession::~ChatSession() {
+    // #50 SessionEnd hook：会话析构收尾时触发一次（switch_session 不触发，语义与现有
+    //      持久化约定对齐——会话可被多次 resume 继续）。执行在本类成员仍存活期内。
+    if (m_hooks && !m_hooks->empty() && !m_session_end_hook_fired) {
+        m_session_end_hook_fired = true;
+        hook::HookContext hctx;
+        hctx.session_id = m_session_id;
+        hctx.cwd = m_cwd;
+        hctx.stop_reason = "session_ended";
+        m_hooks->dispatch(hook::HookEvent::SessionEnd, hctx);
+    }
     unsubscribe_sub_agent_persistence();
     unsubscribe_interrupt();
     if (m_provider) {
@@ -375,15 +391,35 @@ void ChatSession::configure_session_store(const std::string& project_dir,
                                            const std::string& cwd,
                                            const std::string& model,
                                            const std::string& git_branch) {
-    std::lock_guard<std::mutex> lock(m_state_mutex);
-    m_store_configured = true;
-    m_store_project_dir = project_dir;
-    m_store_cwd = cwd;
-    m_store_model = model;
-    m_store_git_branch = git_branch;
-    // 审计：会话开始（启动装配时必然调用，保证审计日志文件必然生成）
-    audit::AuditLogger::instance().log_session_lifecycle(
-        audit::EventType::SessionStart, m_session_id);
+    // 锁内仅做状态写入；SessionStart hook 派发在锁外执行（可长耗时，含 command/http/prompt）
+    std::string disp_hook_session_id;
+    std::string disp_hook_cwd;
+    bool dispatch_start = false;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        m_store_configured = true;
+        m_store_project_dir = project_dir;
+        m_store_cwd = cwd;
+        m_store_model = model;
+        m_store_git_branch = git_branch;
+        // 审计：会话开始（启动装配时必然调用，保证审计日志文件必然生成）
+        audit::AuditLogger::instance().log_session_lifecycle(
+            audit::EventType::SessionStart, m_session_id);
+
+        // #50 SessionStart hook：会话装配完成、首条消息前触发一次（每个 ChatSession 实例仅一次）
+        if (m_hooks && !m_hooks->empty() && !m_session_start_hook_fired) {
+            m_session_start_hook_fired = true;
+            dispatch_start = true;
+            disp_hook_session_id = m_session_id;
+            disp_hook_cwd = m_store_cwd;
+        }
+    }
+    if (dispatch_start) {
+        hook::HookContext hctx;
+        hctx.session_id = disp_hook_session_id;
+        hctx.cwd = disp_hook_cwd;
+        m_hooks->dispatch(hook::HookEvent::SessionStart, hctx);
+    }
 }
 
 bool ChatSession::restore_from_file(const std::string& file_path) {
@@ -1112,6 +1148,26 @@ void ChatSession::run_completion(const std::string& user_text,
                     const auto hook_block = skill::format_hook_output(hook_lines);
                     if (!hook_block.empty()) {
                         body = "[skill hooks]\n" + hook_block + "\n" + body;
+                    }
+                }
+                // 对象式通用 Hook：激活时注册到会话级 HookManager（会话期间生效）
+                if (m_hooks && !m_hooks->empty() && !sk->hooks_json().empty()) {
+                    for (const auto& json_str : sk->hooks_json()) {
+                        try {
+                            auto arr = nlohmann::json::parse(json_str);
+                            if (!arr.is_array()) continue;
+                            for (const auto& obj : arr) {
+                                hook::HookDefinition def = hook::HookDefinition::from_json(obj);
+                                if (def.command.empty() && def.url.empty() && def.prompt.empty()) {
+                                    LOG_WARN("[hook] frontmatter hook def missing command/url/prompt, skipped: {}",
+                                             obj.dump());
+                                    continue;
+                                }
+                                m_hooks->register_hook(std::move(def));
+                            }
+                        } catch (const std::exception& e) {
+                            LOG_WARN("[hook] invalid frontmatter hooks JSON, skipped: {}", e.what());
+                        }
                     }
                 }
                 prefix += "[Activated skill: " + sk->name() + "]\n" + body + "\n";

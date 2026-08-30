@@ -3,7 +3,7 @@
  * @brief Agent 编排事件类型（H-10：从 events.h 按域拆分）
  * @details Agent 推理步骤、工具调用、工具结果、Agent 编排完成等事件。
  *          订阅方按需 include 本文件，避免引入系统/流式事件。
- * @version 1.1.0
+ * @version 1.2.0
  * @date 2026-07
  */
 
@@ -91,11 +91,13 @@ struct AgentVerdictEvent {
 ///          订阅方（如 TUI 卡片/状态栏）决定。phase 取 "start" / "done" / "failed"。
 struct HookProgressEvent {
     std::string session_id;
+    uint64_t hook_id = 0;     ///< 单次 hook 执行唯一 id（HookManager 单调递增分配，供 start/done 关联）
     std::string event;        ///< 触发事件名（PreToolUse/Stop/...）
     std::string phase;        ///< "start" / "done" / "failed"
     std::string hook_type;    ///< command / http / prompt / agent
     std::string tool_name;    ///< 关联工具名（PreToolUse 等工具事件才有）
     std::string message;      ///< 执行结果摘要（done/failed 时填充）
+    std::string hook_label;   ///< 展示标签（command 内容 / prompt 摘要，UI 展示用）
 };
 
 /// @brief 缓存诊断事件（DeepSeek 硬盘缓存命中率劣化归因）

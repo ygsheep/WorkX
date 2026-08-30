@@ -2,7 +2,7 @@
  * @file app_config.cpp
  * @brief 应用配置加载实现
  * @details 配置 Schema 注册、环境变量加载、配置文件加载、默认路径
- * @version 2.0.0
+ * @version 2.0.1
  * @date 2026-07
  *
  * v2.0.0 变更（C-2/C-4）：

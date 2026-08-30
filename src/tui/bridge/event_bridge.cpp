@@ -198,6 +198,20 @@ void EventBridge::start() {
             push(ActionMcpStatus{std::move(servers)});
         });
 
+    // Issue #50 M-2：Hook 执行进度（start/done/failed）→ 输入区上方进度条
+    subscribe_typed<agent::HookProgressEvent>(
+        [this](const agent::HookProgressEvent& e) {
+            push(ActionHookProgress{
+                .hook_id = e.hook_id,
+                .event = e.event,
+                .phase = e.phase,
+                .hook_type = e.hook_type,
+                .tool_name = e.tool_name,
+                .message = e.message,
+                .hook_label = e.hook_label,
+            });
+        });
+
     subscribe_typed<agent::ShutdownEvent>(
         [this](const agent::ShutdownEvent&) { push(ActionShutdown{}); });
 }

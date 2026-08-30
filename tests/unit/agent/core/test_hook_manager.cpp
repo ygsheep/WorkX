@@ -10,7 +10,9 @@
 #include "agent/hook/hook_event.h"
 #include "agent/hook/hook_match.h"
 #include "agent/hook/hook_manager.h"
+#include "agent/skill/inclaude/frontmatter.h"  // frontmatter 对象式 hooks 解析
 #include "core/events/agent_events.h"  // HookProgressEvent（M-2）
+#include "helpers/mock_config_manager.h"  // MockConfigManager（agent 类型子循环装配）
 #include "helpers/mock_event_bus.h"    // MockEventBus（M-2 订阅断言）
 #include "helpers/mock_provider.h"
 
@@ -241,6 +243,79 @@ TEST_CASE("hook prompt allow verdict not blocking", "[hook][prompt]") {
 }
 
 // ============================================================
+// agent 类型：受限子 ReActLoop 做 agentic verifier
+// ============================================================
+
+TEST_CASE("hook agent without deps degrades gracefully", "[hook][agent]") {
+    HookManager mgr;  // 未注入 provider / config_manager
+    HookDefinition def;
+    def.event = HookEvent::PreToolUse;
+    def.type = HookType::Agent;
+    def.prompt = "verify";
+    mgr.register_hook(def);
+
+    HookContext ctx;
+    ctx.cwd = ".";
+    auto r = mgr.dispatch(HookEvent::PreToolUse, ctx);
+    REQUIRE(r.message.find("[hook:agent] not ready") == 0);
+    REQUIRE_FALSE(r.blockingError.has_value());
+}
+
+TEST_CASE("hook agent empty prompt skipped", "[hook][agent]") {
+    using agent::test::MockCompletionProvider;
+    using agent::test::MockConfigManager;
+
+    MockCompletionProvider provider;
+    MockConfigManager cfg;
+    HookManager mgr;
+    mgr.set_provider(&provider);
+    mgr.set_config_manager(&cfg);
+
+    HookDefinition def;
+    def.event = HookEvent::PreToolUse;
+    def.type = HookType::Agent;
+    mgr.register_hook(def);  // 空 prompt
+
+    HookContext ctx;
+    ctx.cwd = ".";
+    auto r = mgr.dispatch(HookEvent::PreToolUse, ctx);
+    REQUIRE(r.message.find("[hook:agent] empty prompt") == 0);
+    REQUIRE(provider.submit_count == 0);  // 未触发任何子循环
+}
+
+TEST_CASE("hook agent JSON verdict blocks tool", "[hook][agent]") {
+    using agent::test::MockCompletionProvider;
+    using agent::test::MockStreamReader;
+    using agent::test::MockConfigManager;
+
+    MockCompletionProvider provider;
+    // 无白名单 registry 注入 → 子循环空工具集，verifier 直接给出最终 JSON 判定
+    auto reader = std::make_shared<MockStreamReader>();
+    reader->add_content_chunk("{\"blockingError\":\"agent 判定危险\"}");
+    provider.set_next_reader(reader);
+
+    MockConfigManager cfg;
+    HookManager mgr;
+    mgr.set_provider(&provider);
+    mgr.set_config_manager(&cfg);
+
+    HookDefinition def;
+    def.event = HookEvent::PreToolUse;
+    def.type = HookType::Agent;
+    def.prompt = "verify bash command";
+    mgr.register_hook(def);
+
+    HookContext ctx;
+    ctx.cwd = ".";
+    ctx.tool_name = "Bash";
+    ctx.tool_input = {{"command", "rm -rf /"}};
+    auto r = mgr.dispatch(HookEvent::PreToolUse, ctx);
+    REQUIRE(r.blockingError.has_value());
+    REQUIRE(r.blockingError->find("agent 判定危险") != std::string::npos);
+    REQUIRE(provider.submit_count == 1);  // 仅一次子循环 LLM 调用
+}
+
+// ============================================================
 // M-2：hook 进度事件（经 IEventBus 发布）
 // ============================================================
 
@@ -264,11 +339,20 @@ TEST_CASE("hook dispatch publishes HookProgressEvent (M-2)", "[hook][progress]")
     int start_count = 0;
     int done_count = 0;
     std::string last_hook_type;
+    std::string last_hook_label;
+    uint64_t start_hook_id = 0;
+    uint64_t done_hook_id = 0;
     bus.subscribe<agent::HookProgressEvent>(
         [&](const agent::HookProgressEvent& ev) {
             last_hook_type = ev.hook_type;
-            if (ev.phase == "start") ++start_count;
-            else if (ev.phase == "done") ++done_count;
+            last_hook_label = ev.hook_label;
+            if (ev.phase == "start") {
+                ++start_count;
+                start_hook_id = ev.hook_id;
+            } else if (ev.phase == "done") {
+                ++done_count;
+                done_hook_id = ev.hook_id;
+            }
         });
 
     HookContext ctx;
@@ -282,4 +366,75 @@ TEST_CASE("hook dispatch publishes HookProgressEvent (M-2)", "[hook][progress]")
     REQUIRE(start_count == 1);   // 每次 hook 执行发布 1 次 start
     REQUIRE(done_count == 1);    // ……并发布 1 次 done
     REQUIRE(last_hook_type == "command");
+    REQUIRE(last_hook_label.find("[c] ") == 0);      // command 标签以 [c] 前缀
+    REQUIRE(start_hook_id != 0);                     // bus 注入了 hook_id
+    REQUIRE(done_hook_id == start_hook_id);          // start/done 关联同一条执行
+}
+
+// ============================================================
+// frontmatter 对象式 hooks
+// ============================================================
+
+TEST_CASE("frontmatter object hooks parsed to JSON", "[skill][frontmatter][hook]") {
+    const std::string content = R"fm(---
+hooks:
+  - event: PreToolUse
+    type: command
+    match: "Bash(rm *)"
+    command: "echo not allowed"
+    blockingError: "禁止执行 rm"
+    timeout: 5000
+  - event: PostToolUse
+    type: prompt
+    prompt: "check result"
+---
+Skill body
+)fm";
+
+    const auto parsed = agent::skill::parse_skill_content(content, "test-skill");
+    REQUIRE(parsed.frontmatter.hooks.empty());  // 传统 command hooks 为空
+    REQUIRE(parsed.frontmatter.hooks_json.size() == 1);
+
+    auto json = nlohmann::json::parse(parsed.frontmatter.hooks_json[0]);
+    REQUIRE(json.is_array());
+    REQUIRE(json.size() == 2);
+
+    REQUIRE(json[0]["event"] == "PreToolUse");
+    REQUIRE(json[0]["type"] == "command");
+    REQUIRE(json[0]["match"] == "Bash(rm *)");       // 括号保留
+    REQUIRE(json[0]["command"] == "echo not allowed");
+    REQUIRE(json[0]["blockingError"] == "禁止执行 rm");
+    REQUIRE(json[0]["timeout"] == 5000);             // 整数推断
+
+    REQUIRE(json[1]["event"] == "PostToolUse");
+    REQUIRE(json[1]["type"] == "prompt");
+    REQUIRE(json[1]["prompt"] == "check result");
+}
+
+TEST_CASE("frontmatter mix object and command hooks", "[skill][frontmatter][hook]") {
+    const std::string content = R"fm(---
+hooks:
+  - echo preactivate
+  - event: PreToolUse
+    type: command
+    match: "Bash(rm *)"
+    command: "echo blocked"
+  - event: PostToolUse
+    type: agent
+    prompt: "verify"
+---
+Skill body
+)fm";
+
+    const auto parsed = agent::skill::parse_skill_content(content, "mix-skill");
+    // 传统 command hook 保留，对象式 hook 归入 hooks_json
+    REQUIRE(parsed.frontmatter.hooks.size() == 1);
+    REQUIRE(parsed.frontmatter.hooks[0] == "echo preactivate");
+    REQUIRE(parsed.frontmatter.hooks_json.size() == 1);
+
+    auto json = nlohmann::json::parse(parsed.frontmatter.hooks_json[0]);
+    REQUIRE(json.size() == 2);
+    REQUIRE(json[0]["event"] == "PreToolUse");
+    REQUIRE(json[1]["event"] == "PostToolUse");
+    REQUIRE(json[1]["type"] == "agent");
 }
