@@ -1150,6 +1150,26 @@ void ChatSession::run_completion(const std::string& user_text,
                         body = "[skill hooks]\n" + hook_block + "\n" + body;
                     }
                 }
+                // 对象式通用 Hook：激活时注册到会话级 HookManager（会话期间生效）
+                if (m_hooks && !m_hooks->empty() && !sk->hooks_json().empty()) {
+                    for (const auto& json_str : sk->hooks_json()) {
+                        try {
+                            auto arr = nlohmann::json::parse(json_str);
+                            if (!arr.is_array()) continue;
+                            for (const auto& obj : arr) {
+                                hook::HookDefinition def = hook::HookDefinition::from_json(obj);
+                                if (def.command.empty() && def.url.empty() && def.prompt.empty()) {
+                                    LOG_WARN("[hook] frontmatter hook def missing command/url/prompt, skipped: {}",
+                                             obj.dump());
+                                    continue;
+                                }
+                                m_hooks->register_hook(std::move(def));
+                            }
+                        } catch (const std::exception& e) {
+                            LOG_WARN("[hook] invalid frontmatter hooks JSON, skipped: {}", e.what());
+                        }
+                    }
+                }
                 prefix += "[Activated skill: " + sk->name() + "]\n" + body + "\n";
                 m_activated_skills.insert(sk->name());
             }

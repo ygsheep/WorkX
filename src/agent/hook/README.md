@@ -97,11 +97,34 @@ build_hook_progress_elem()` 在输入区上方渲染多行进度条（进行中 
 - [x] 8 事件 + 4 类型骨架、matcher、配置加载、dispatch 线程安全
 - [x] 进度可视化事件 + TUI 进度条
 - [x] `command` / `http` / `prompt` / `agent` 执行器（agent 由只读子工具集 ReActLoop 做 verifier）
-- [ ] frontmatter 对象式 hooks 注册（`Scanner` 式生命周期，会话级清理）
+- [x] frontmatter 对象式 hooks 注册（`hooks:` 下 `- event: PreToolUse ...` 解析为 JSON，Skill 激活时注册到会话级 HookManager）
 
 ## 测试
 
 `tests/unit/agent/core/test_hook_manager.cpp`：事件枚举 round-trip、matcher 各
 语法、command 执行、`once` 语义、`from_json`、prompt 判定（阻断/放行）、agent
 类型（守卫降级 / 空 prompt 跳过 / JSON 判定阻断）、M-2 进度事件（`hook_id`
-关联 + `hook_label`）。
+关联 + `hook_label`）、frontmatter 对象式 hooks 解析（纯对象 / 传统命令混排）。
+
+## frontmatter 对象式 hooks
+
+Skill 的 `frontmatter.hooks` 支持两种形态，可混排：
+
+```yaml
+hooks:
+  - echo preactivate                       # 传统 PreActivate 命令
+  - event: PreToolUse                      # 对象式通用 Hook
+    type: command
+    match: "Bash(rm *)"
+    command: "echo not allowed"
+    blockingError: "禁止执行 rm"
+  - event: PostToolUse
+    type: prompt
+    prompt: "check result"
+```
+
+传统 `- cmd` 归入 `hooks`（激活时执行）；`- key: value` 对象按
+`HookDefinition` 字段解析为 JSON（`hooks_json`），在 Skill 激活时由
+`ChatSession` 逐条 `register_hook` 到会话级 HookManager，会话期间对 8 个事件
+生效。对象解析仅支持扁平 `key: value`（布尔/整数自动推断），值含逗号/括号
+等原样保留（取首个冒号分割）。

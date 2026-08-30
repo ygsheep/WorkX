@@ -10,6 +10,9 @@
 #include "agent/skill/inclaude/frontmatter.h"
 
 #include <cctype>
+#include <string_view>
+
+#include <nlohmann/json.hpp>
 
 namespace agent::skill {
 
@@ -84,6 +87,43 @@ std::string derive_description(const std::string& body) {
     return first_line;
 }
 
+/// @brief 将 frontmatter 中对象式 hook 的「原始对象块」转换为 JSON 数组字符串
+/// @details 每个 block 为一块多行文本（每行 `key: value`，键已小写、值已去引号），
+///          仅支持扁平对象（键值对逐行），兼容字段值内含逗号/括号等（取首个冒号分割）。
+///          标量推断：true/false → 布尔；纯数字 → 整数；其余 → 字符串。
+std::string yaml_objects_to_json(const std::vector<std::string>& blocks) {
+    nlohmann::json arr = nlohmann::json::array();
+    for (const auto& block : blocks) {
+        nlohmann::json obj = nlohmann::json::object();
+        size_t pos = 0;
+        while (pos <= block.size()) {
+            const size_t nl = block.find('\n', pos);
+            const auto raw = block.substr(pos, nl == std::string::npos ? block.size() - pos : nl - pos);
+            pos = nl == std::string::npos ? block.size() + 1 : nl + 1;
+            const auto line = trim(raw);
+            if (line.empty() || line.front() == '#') continue;
+            const size_t colon = line.find(':');
+            if (colon == std::string::npos) continue;  // 缺冒号（如子列表项）忽略
+            std::string key = trim(line.substr(0, colon));
+            if (key.empty()) continue;
+            std::string value = strip_quotes(trim(line.substr(colon + 1)));
+            if (value == "true") {
+                obj[key] = true;
+            } else if (value == "false") {
+                obj[key] = false;
+            } else {
+                bool is_int = !value.empty();
+                for (char c : value) {
+                    if (c < '0' || c > '9') { is_int = false; break; }
+                }
+                obj[key] = is_int ? nlohmann::json(std::stol(value)) : nlohmann::json(std::move(value));
+            }
+        }
+        arr.push_back(std::move(obj));
+    }
+    return arr.dump();
+}
+
 } // anonymous namespace
 
 ParsedSkill parse_skill_content(const std::string& content, const std::string& default_name) {
@@ -125,7 +165,10 @@ ParsedSkill parse_skill_content(const std::string& content, const std::string& d
 
     // 逐行解析 key: value
     size_t pos = 0;
-    std::string last_list_key;  // 最近一个列表 key（支持多行 `- item` 追加）
+    std::string last_list_key;             // 最近一个列表 key（支持多行 `- item` 追加）
+    bool obj_hook_open = false;            // 当前是否在收集一个对象式 hook
+    std::vector<std::string> obj_blocks;   // 已完成的原始对象块（每块为多行 `key: value`）
+    std::string cur_obj_block;             // 正在收集的原始对象块
     while (pos <= front_part.size()) {
         const size_t nl = front_part.find('\n', pos);
         const auto line = front_part.substr(pos, nl == std::string_view::npos ? front_part.size() - pos : nl - pos);
@@ -134,17 +177,53 @@ ParsedSkill parse_skill_content(const std::string& content, const std::string& d
         const auto trimmed = trim(line);
         if (trimmed.empty() || trimmed.front() == '#') continue;
 
-        // 多行列表项：`- item` 追加到上一个列表 key
-        if (!last_list_key.empty() && trimmed.front() == '-') {
-            const auto item = trim(trimmed.substr(1));
-            if (!item.empty()) {
-                if (last_list_key == "paths") {
-                    result.frontmatter.paths.push_back(strip_quotes(item));
-                } else if (last_list_key == "aliases") {
-                    result.frontmatter.aliases.push_back(strip_quotes(item));
-                } else if (last_list_key == "hooks") {
-                    result.frontmatter.hooks.push_back(strip_quotes(item));
+        size_t indent = 0;
+        while (indent < line.size() && (line[indent] == ' ' || line[indent] == '\t')) ++indent;
+        const bool starts_dash = trimmed.front() == '-';
+        const std::string item_text = starts_dash ? trim(trimmed.substr(1)) : std::string(trimmed);
+        const bool content_has_colon = item_text.find(':') != std::string::npos;
+
+        // ---- 对象式 hooks 状态机（`hooks:` 下的 `- event: ...` 列表） ----
+        if (last_list_key == "hooks") {
+            if (starts_dash) {
+                if (content_has_colon) {
+                    // 新对象项：flush 上一个对象块
+                    if (obj_hook_open && !cur_obj_block.empty()) {
+                        obj_blocks.push_back(cur_obj_block);
+                        cur_obj_block.clear();
+                    }
+                    obj_hook_open = true;
+                    cur_obj_block = item_text;
+                } else {
+                    // 传统 command hook（非对象）：结束对象模式
+                    if (obj_hook_open && !cur_obj_block.empty()) {
+                        obj_blocks.push_back(cur_obj_block);
+                        cur_obj_block.clear();
+                        obj_hook_open = false;
+                    }
+                    if (!item_text.empty()) result.frontmatter.hooks.push_back(strip_quotes(item_text));
                 }
+                continue;
+            }
+            if (obj_hook_open && indent > 0) {
+                // 对象续行（子键 `type: command` 等）：追加到当前对象块
+                cur_obj_block += "\n" + std::string(trimmed);
+                continue;
+            }
+            // 缩进为 0 的新字段：结束 hooks 块，回落做普通 key 解析
+            last_list_key.clear();
+            if (obj_hook_open && !cur_obj_block.empty()) {
+                obj_blocks.push_back(cur_obj_block);
+                cur_obj_block.clear();
+                obj_hook_open = false;
+            }
+        }
+
+        // 多行列表项：`- item` 追加到上一个列表 key（aliases / paths）
+        if (!last_list_key.empty() && starts_dash) {
+            if (!item_text.empty()) {
+                if (last_list_key == "paths") result.frontmatter.paths.push_back(strip_quotes(item_text));
+                else if (last_list_key == "aliases") result.frontmatter.aliases.push_back(strip_quotes(item_text));
             }
             continue;
         }
@@ -200,6 +279,14 @@ ParsedSkill parse_skill_content(const std::string& content, const std::string& d
             // 未知字段忽略（扩展点）
             last_list_key.clear();
         }
+    }
+
+    // 收尾：flush 最后一个对象块并序列化为 JSON
+    if (obj_hook_open && !cur_obj_block.empty()) {
+        obj_blocks.push_back(cur_obj_block);
+    }
+    if (!obj_blocks.empty()) {
+        result.frontmatter.hooks_json.push_back(yaml_objects_to_json(obj_blocks));
     }
 
     if (result.frontmatter.description.empty()) {

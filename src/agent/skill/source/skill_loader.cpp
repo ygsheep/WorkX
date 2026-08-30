@@ -116,6 +116,7 @@ std::vector<std::shared_ptr<command::PromptCommand>> build_commands(
         if (fm.context) cmd->set_context(*fm.context);
         if (fm.agent) cmd->set_agent(*fm.agent);
         if (!fm.hooks.empty()) cmd->set_hooks(fm.hooks);
+        if (!fm.hooks_json.empty()) cmd->set_hooks_json(fm.hooks_json);
         if (!fm.paths.empty()) cmd->set_paths(fm.paths);
         return cmd;
     };

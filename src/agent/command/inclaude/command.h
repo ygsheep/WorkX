@@ -99,6 +99,11 @@ public:
         return hooks_;
     }
 
+    /// 获取对象式通用 Hook（JSON 字符串数组，Skill 激活时注册到 HookManager）
+    virtual const std::vector<std::string>& hooks_json() const {
+        return hooks_json_;
+    }
+
     /// 获取 conditional 触发路径 glob 列表
     virtual const std::vector<std::string>& paths() const {
         return paths_;
@@ -152,6 +157,10 @@ public:
         std::lock_guard<std::mutex> lock(m_mutex);
         hooks_ = std::move(v);
     }
+    void set_hooks_json(std::vector<std::string> v) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        hooks_json_ = std::move(v);
+    }
     void set_paths(std::vector<std::string> v) {
         std::lock_guard<std::mutex> lock(m_mutex);
         paths_ = std::move(v);
@@ -175,6 +184,7 @@ protected:
     std::optional<std::string> context_;    ///< 适用上下文（skill frontmatter）
     std::optional<std::string> agent_;      ///< 关联 agent（空 = 不限）
     std::vector<std::string> hooks_;        ///< PreActivate 钩子命令
+    std::vector<std::string> hooks_json_;   ///< 对象式通用 Hook（JSON 字符串数组）
     std::vector<std::string> paths_;      ///< conditional 触发路径 glob（空 = 非 conditional）
 
     std::function<bool()> is_enabled_;

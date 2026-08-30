@@ -10,6 +10,7 @@
 #include "agent/hook/hook_event.h"
 #include "agent/hook/hook_match.h"
 #include "agent/hook/hook_manager.h"
+#include "agent/skill/inclaude/frontmatter.h"  // frontmatter 对象式 hooks 解析
 #include "core/events/agent_events.h"  // HookProgressEvent（M-2）
 #include "helpers/mock_config_manager.h"  // MockConfigManager（agent 类型子循环装配）
 #include "helpers/mock_event_bus.h"    // MockEventBus（M-2 订阅断言）
@@ -368,4 +369,72 @@ TEST_CASE("hook dispatch publishes HookProgressEvent (M-2)", "[hook][progress]")
     REQUIRE(last_hook_label.find("[c] ") == 0);      // command 标签以 [c] 前缀
     REQUIRE(start_hook_id != 0);                     // bus 注入了 hook_id
     REQUIRE(done_hook_id == start_hook_id);          // start/done 关联同一条执行
+}
+
+// ============================================================
+// frontmatter 对象式 hooks
+// ============================================================
+
+TEST_CASE("frontmatter object hooks parsed to JSON", "[skill][frontmatter][hook]") {
+    const std::string content = R"fm(---
+hooks:
+  - event: PreToolUse
+    type: command
+    match: "Bash(rm *)"
+    command: "echo not allowed"
+    blockingError: "禁止执行 rm"
+    timeout: 5000
+  - event: PostToolUse
+    type: prompt
+    prompt: "check result"
+---
+Skill body
+)fm";
+
+    const auto parsed = agent::skill::parse_skill_content(content, "test-skill");
+    REQUIRE(parsed.frontmatter.hooks.empty());  // 传统 command hooks 为空
+    REQUIRE(parsed.frontmatter.hooks_json.size() == 1);
+
+    auto json = nlohmann::json::parse(parsed.frontmatter.hooks_json[0]);
+    REQUIRE(json.is_array());
+    REQUIRE(json.size() == 2);
+
+    REQUIRE(json[0]["event"] == "PreToolUse");
+    REQUIRE(json[0]["type"] == "command");
+    REQUIRE(json[0]["match"] == "Bash(rm *)");       // 括号保留
+    REQUIRE(json[0]["command"] == "echo not allowed");
+    REQUIRE(json[0]["blockingError"] == "禁止执行 rm");
+    REQUIRE(json[0]["timeout"] == 5000);             // 整数推断
+
+    REQUIRE(json[1]["event"] == "PostToolUse");
+    REQUIRE(json[1]["type"] == "prompt");
+    REQUIRE(json[1]["prompt"] == "check result");
+}
+
+TEST_CASE("frontmatter mix object and command hooks", "[skill][frontmatter][hook]") {
+    const std::string content = R"fm(---
+hooks:
+  - echo preactivate
+  - event: PreToolUse
+    type: command
+    match: "Bash(rm *)"
+    command: "echo blocked"
+  - event: PostToolUse
+    type: agent
+    prompt: "verify"
+---
+Skill body
+)fm";
+
+    const auto parsed = agent::skill::parse_skill_content(content, "mix-skill");
+    // 传统 command hook 保留，对象式 hook 归入 hooks_json
+    REQUIRE(parsed.frontmatter.hooks.size() == 1);
+    REQUIRE(parsed.frontmatter.hooks[0] == "echo preactivate");
+    REQUIRE(parsed.frontmatter.hooks_json.size() == 1);
+
+    auto json = nlohmann::json::parse(parsed.frontmatter.hooks_json[0]);
+    REQUIRE(json.size() == 2);
+    REQUIRE(json[0]["event"] == "PreToolUse");
+    REQUIRE(json[1]["event"] == "PostToolUse");
+    REQUIRE(json[1]["type"] == "agent");
 }
