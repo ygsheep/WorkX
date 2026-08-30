@@ -264,11 +264,20 @@ TEST_CASE("hook dispatch publishes HookProgressEvent (M-2)", "[hook][progress]")
     int start_count = 0;
     int done_count = 0;
     std::string last_hook_type;
+    std::string last_hook_label;
+    uint64_t start_hook_id = 0;
+    uint64_t done_hook_id = 0;
     bus.subscribe<agent::HookProgressEvent>(
         [&](const agent::HookProgressEvent& ev) {
             last_hook_type = ev.hook_type;
-            if (ev.phase == "start") ++start_count;
-            else if (ev.phase == "done") ++done_count;
+            last_hook_label = ev.hook_label;
+            if (ev.phase == "start") {
+                ++start_count;
+                start_hook_id = ev.hook_id;
+            } else if (ev.phase == "done") {
+                ++done_count;
+                done_hook_id = ev.hook_id;
+            }
         });
 
     HookContext ctx;
@@ -282,4 +291,7 @@ TEST_CASE("hook dispatch publishes HookProgressEvent (M-2)", "[hook][progress]")
     REQUIRE(start_count == 1);   // 每次 hook 执行发布 1 次 start
     REQUIRE(done_count == 1);    // ……并发布 1 次 done
     REQUIRE(last_hook_type == "command");
+    REQUIRE(last_hook_label.find("[c] ") == 0);      // command 标签以 [c] 前缀
+    REQUIRE(start_hook_id != 0);                     // bus 注入了 hook_id
+    REQUIRE(done_hook_id == start_hook_id);          // start/done 关联同一条执行
 }

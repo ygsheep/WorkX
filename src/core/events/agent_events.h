@@ -91,11 +91,13 @@ struct AgentVerdictEvent {
 ///          订阅方（如 TUI 卡片/状态栏）决定。phase 取 "start" / "done" / "failed"。
 struct HookProgressEvent {
     std::string session_id;
+    uint64_t hook_id = 0;     ///< 单次 hook 执行唯一 id（HookManager 单调递增分配，供 start/done 关联）
     std::string event;        ///< 触发事件名（PreToolUse/Stop/...）
     std::string phase;        ///< "start" / "done" / "failed"
     std::string hook_type;    ///< command / http / prompt / agent
     std::string tool_name;    ///< 关联工具名（PreToolUse 等工具事件才有）
     std::string message;      ///< 执行结果摘要（done/failed 时填充）
+    std::string hook_label;   ///< 展示标签（command 内容 / prompt 摘要，UI 展示用）
 };
 
 /// @brief 缓存诊断事件（DeepSeek 硬盘缓存命中率劣化归因）

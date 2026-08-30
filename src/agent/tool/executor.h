@@ -29,6 +29,8 @@
 #include "context.h"
 #include "agent/tool/encoding.h"
 #include "agent/audit/audit_logger.h"
+#include "agent/hook/hook_event.h"   // #50 通用 Hook 事件系统：PermissionRequest
+#include "agent/hook/hook_manager.h" // HookManager::dispatch
 
 namespace agent::tool {
 
@@ -172,6 +174,26 @@ public:
             return Error{Error::Code::Cancelled,
                          "Tool execution cancelled",
                          tool_name};
+        }
+
+        // 2.5 #50 PermissionRequest hook：在常规权限检查前派发，hook 可动态授权/阻断
+        // 匹配已由 HookManager 内 HookMatcher 完成（event+tool_name），未匹配则零开销返回。
+        if (ctx.hook_manager_ptr && !ctx.hook_manager_ptr->empty()) {
+            hook::HookContext hctx;
+            hctx.session_id = ctx.session_id;
+            hctx.cwd = ctx.cwd;
+            hctx.request_id = ctx.request_id;
+            hctx.tool_name = tool_name;
+            hctx.tool_input = input;
+            auto hres = ctx.hook_manager_ptr->dispatch(hook::HookEvent::PermissionRequest, hctx);
+            if (hres.blockingError && !hres.blockingError->empty()) {
+                LOG_WARN("[tool_executor] tool={} blocked by PermissionRequest hook: {}",
+                         tool_name, *hres.blockingError);
+                audit::AuditLogger::instance().log_tool_invoke(
+                    tool_name, input, ctx.session_id, ctx.request_id,
+                    "deny", *hres.blockingError, 0);
+                return Error{Error::Code::PermissionDenied, *hres.blockingError, tool_name};
+            }
         }
 
         // 3. 权限检查

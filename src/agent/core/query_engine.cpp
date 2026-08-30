@@ -92,34 +92,11 @@ ReActLoop::Config QueryEngine::make_react_config() const {
     ReActLoop::Config cfg;
     cfg.max_iterations = m_deps.config_manager->get_or<int>(
         agent::keys::AGENT_MAX_ITERATIONS, cfg.max_iterations);
-    // Issue #50：构建通用 Hook 事件系统（受 hooks.enabled 门控；空定义为空 manager）
-    const bool hooks_enabled = m_deps.config_manager->get_or<bool>(
-        agent::keys::HOOKS_ENABLED, true);
-    if (hooks_enabled) {
-        auto manager = std::make_shared<hook::HookManager>();
-        manager->set_provider(m_deps.provider);  // prompt/agent 类型需要
-        manager->set_event_bus(m_deps.event_bus);  // M-2：hook 进度事件（可选）
-        const std::string defs_json = m_deps.config_manager->get_or<std::string>(
-            agent::keys::HOOKS_DEFINITIONS, "[]");
-        try {
-            auto arr = nlohmann::json::parse(defs_json);
-            if (arr.is_array()) {
-                for (const auto& obj : arr) {
-                    hook::HookDefinition def = hook::HookDefinition::from_json(obj);
-                    if (def.command.empty() && def.url.empty() && def.prompt.empty()) {
-                        LOG_WARN("[query_engine] hook def missing command/url/prompt, skipped: {}",
-                                 obj.dump());
-                        continue;
-                    }
-                    manager->register_hook(std::move(def));
-                }
-            }
-        } catch (const std::exception& e) {
-            LOG_WARN("[query_engine] invalid hooks.definitions JSON, hooks disabled: {}",
-                     e.what());
-        }
-        cfg.hooks = manager;
-    }
+    // Issue #50：构建通用 Hook 事件系统（复用装配 helper；受 hooks.enabled 门控，
+    // 空定义为空 manager）。循环级 HookManager 经 ReActLoop 注入 ToolContext，
+    // 供工具线程触发 PermissionRequest / Subagent* 事件。
+    cfg.hooks = hook::make_hook_manager(*m_deps.config_manager,
+                                        m_deps.provider, m_deps.event_bus);
     return cfg;
 }
 

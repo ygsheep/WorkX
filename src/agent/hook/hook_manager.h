@@ -12,6 +12,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -20,10 +21,21 @@
 
 namespace agent {
 class ICompletionProvider;
+class IConfigManager;
 class IEventBus;
 }
 
 namespace agent::hook {
+
+class HookManager;  // 前向声明（make_hook_manager 返回 shared_ptr 需要）
+
+/// @brief 从配置构建 HookManager（读取 hooks.enabled / hooks.definitions）
+/// @details 供 QueryEngine（per-query 循环级）与 ChatSession（会话级 SessionStart/End）
+///          复用同一套装配逻辑：注册配置中的 hook 定义并注入 provider/event_bus。
+///          hooks.enabled 为 false 时返回空 manager（empty()==true，零开销短路）。
+std::shared_ptr<HookManager> make_hook_manager(agent::IConfigManager& cfg,
+                                               agent::ICompletionProvider* provider,
+                                               agent::IEventBus* bus);
 
 struct HookEntry {
     HookDefinition def;
@@ -37,9 +49,13 @@ struct HookEntry {
 
 /// @brief Hook 生命周期接口。宿主（ReActLoop/ChatSession/AgentTool）持有一个
 ///        shared_ptr<HookManager> 在各事件点调用 dispatch()。
-/// @details 线程安全：注册集中在装配期（启动/会话开始，单线程），dispatch 在
-///          ReAct 循环内被调用。dispatch 对 every 执行的 hook 做同步执行，
-///          返回聚合结果。async 类型 hook 不阻塞主线程（无同步执行）。
+/// @details 线程安全：注册集中在装配期（启动/会话开始，单线程）；dispatch 可在
+///          任意线程并发调用（工具经 std::async 在工作线程触发 PermissionRequest、
+///          AgentTool 触发 Subagent*，与主循环 PreToolUse/PostToolUse/Stop 并发）。
+///          dispatch 用互斥锁对匹配条目做快照，执行 run_hook 在锁外进行，既保证
+///          once/run_count 不被并发重复执行，又不至于让长耗时（LLM/子进程）串行
+///          阻塞其他线程。empty()/size() 热路径不加锁，依赖运行期不变量：注册
+///          仅在首个 dispatch 之前完成，运行期不增删条目。
 class HookManager {
 public:
     /// @brief 注册一个 hook（若同 event+match 已存在则忽略，避免 config+frontmatter 重复）
@@ -49,7 +65,7 @@ public:
     void register_hooks(std::vector<HookDefinition> defs);
 
     /// @brief 清除全部 hook（clearSessionHooks 对应）
-    void clear() { entries_.clear(); }
+    void clear();
 
     /// @brief 调度事件：过滤匹配的 hook 并顺序执行，聚合结果
     /// @param event 事件类型
@@ -76,6 +92,7 @@ public:
 
 private:
     std::vector<HookEntry> entries_;
+    mutable std::mutex mutex_;   ///< 保护 entries_ 的并发访问（dispatch 快照）
     agent::ICompletionProvider* provider_ = nullptr;
     agent::IEventBus* event_bus_ = nullptr;
 

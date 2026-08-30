@@ -199,6 +199,20 @@ public:
     int sub_active = -1;         ///< 当前查看的子 Agent 记录索引（-1 = 无）
     std::vector<SubAgentDetail> sub_records;  ///< 子 Agent 完整记录（第二层独立渲染）
 
+    // ---- Hook 执行进度（#50：输入区上方进度条）----
+    /// @brief 展示面板内的一条 hook 进度（hook_id 关联 start/done 两拍）
+    struct HookRow {
+        uint64_t hook_id = 0;
+        std::string event;      ///< PreToolUse/Stop/...
+        std::string hook_type;  ///< command/http/prompt/agent
+        std::string tool_name;  ///< 关联工具名
+        std::string label;      ///< 展示标签
+        std::string phase;      ///< start/done/failed
+        std::string message;    ///< 结果摘要
+    };
+    static constexpr std::size_t kMaxHookRows = 8;  ///< 面板最多保留的行数（FIFO 淘汰）
+    std::vector<HookRow> hook_progress;
+
     /// @brief 应用一个动作
     /// @return 状态是否有变化（用于决定是否重绘）
     bool apply(const Action& action);
@@ -233,6 +247,7 @@ private:
     bool apply_variant(const ActionQueueUpdate&);
     bool apply_variant(const ActionSubAgentProgress&);
     bool apply_variant(const ActionSubAgentCompleted&);
+    bool apply_variant(const ActionHookProgress&);
     bool apply_variant(const ActionShutdown&);
     bool apply_variant(const ActionToast&);
     bool apply_variant(const ActionModelsLoaded&);

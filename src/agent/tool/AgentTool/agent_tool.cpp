@@ -17,6 +17,8 @@
 #include "agent/core/agent_task_id.h"
 #include "agent/core/react_loop.h"
 #include "agent/core/react_step_format.h"
+#include "agent/hook/hook_event.h"   // #50 通用 Hook 事件系统：SubagentStart/SubagentStop
+#include "agent/hook/hook_manager.h"
 #include "core/task/task_manager.h"
 #include "core/utils/error.h"
 #include "core/events/agent_events.h"
@@ -53,6 +55,7 @@ struct SubAgentLaunchOptions {
     std::string cwd;
     std::string session_id;  ///< #30：父会话 ID（注入子 Agent ToolContext.session_id，审计关联）
     tool::PermissionMode permission_mode = tool::PermissionMode::Default;
+    std::shared_ptr<agent::hook::HookManager> hook_manager;  ///< #50：父循环 HookManager（SubagentStart/Stop 派发）
 };
 
 /// @brief 启动单个子 Agent 任务
@@ -105,6 +108,16 @@ std::shared_ptr<agent::Task> launch_sub_agent(const SubAgentLaunchOptions& optio
             // 独立工具集 schema（子 Agent 的 ToolContext.tool_registry 亦指向独立 registry）
             nlohmann::json tools_schema = sub_agent_registry->get_all_schemas();
 
+            // #50 SubagentStart hook：子 Agent 构建完成、run() 之前派发（父作用域）
+            if (options.hook_manager && !options.hook_manager->empty()) {
+                hook::HookContext hctx;
+                hctx.session_id = options.session_id;
+                hctx.cwd = options.cwd;
+                hctx.subagent_id = options.task_id;
+                hctx.subagent_prompt = options.prompt;
+                options.hook_manager->dispatch(hook::HookEvent::SubagentStart, hctx);
+            }
+
             auto task_ptr = options.task_manager->find_task(options.task_id);
             ReActResult result = loop.run(messages, options.prompt, tools_schema,
                 should_cancel,
@@ -145,6 +158,19 @@ std::shared_ptr<agent::Task> launch_sub_agent(const SubAgentLaunchOptions& optio
             }
             if (task_ptr && !summary.empty()) {
                 task_ptr->append_output(summary);
+            }
+
+            // #50 SubagentStop hook：子 Agent run() 返回、收尾后派发（父作用域）。
+            // 与设计 4.3 对齐：子 ReActLoop 自身不重复触发 Stop，此处折叠为 SubagentStop。
+            if (options.hook_manager && !options.hook_manager->empty()) {
+                hook::HookContext hctx;
+                hctx.session_id = options.session_id;
+                hctx.cwd = options.cwd;
+                hctx.subagent_id = options.task_id;
+                hctx.subagent_prompt = options.prompt;
+                hctx.final_answer = summary;
+                hctx.stop_reason = result.was_error ? "error" : "completed";
+                options.hook_manager->dispatch(hook::HookEvent::SubagentStop, hctx);
             }
 
             // v1.1.0 后台结果自动回送：子 Agent 完成后发布完成事件，
@@ -288,6 +314,8 @@ ResultV2<ToolResult> AgentTool::call(
     std::string cwd = ctx.cwd;
     // #26 评审 #1：继承父会话权限模式，防止子 Agent 提升权限（父 Plan 只读时子 Agent 也受限）
     const tool::PermissionMode permission_mode = ctx.permission_mode;
+    // #50：父循环 HookManager（子 Agent 作用域 SubagentStart/Stop 派发）
+    std::shared_ptr<agent::hook::HookManager> hook_manager = ctx.hook_manager_ptr;
 
     // 2. 并行启动所有子 Agent（各自独立 task_id，线程池并发执行）
     std::vector<std::shared_ptr<agent::Task>> tasks;
@@ -308,7 +336,8 @@ ResultV2<ToolResult> AgentTool::call(
             .event_bus = event_bus,
             .cwd = cwd,
             .session_id = ctx.session_id,  // #30：父会话 ID 传递给子 Agent
-            .permission_mode = permission_mode
+            .permission_mode = permission_mode,
+            .hook_manager = hook_manager  // #50：父作用域 HookManager
         }));
     }
 

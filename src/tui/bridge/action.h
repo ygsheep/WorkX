@@ -279,6 +279,19 @@ struct ActionProjectFiles {
     std::vector<ProjectNode> tree;      ///< 根 children
 };
 
+/// @brief Hook 执行进度（订阅 HookProgressEvent → 输入区上方进度条）
+/// @details hook_id 关联同一条 hook 的 start 与 done/failed 两拍，UI 据此
+///          合并为一条卡片（进行中用 spinner，结束打勾/叉）。
+struct ActionHookProgress {
+    uint64_t hook_id = 0;
+    std::string event;      ///< PreToolUse/PostToolUse/Stop/...
+    std::string phase;      ///< start / done / failed
+    std::string hook_type;  ///< command / http / prompt / agent
+    std::string tool_name;  ///< 关联工具名
+    std::string message;    ///< 执行结果摘要（done/failed）
+    std::string hook_label; ///< 展示标签
+};
+
 /// @brief 统一动作类型
 using Action = std::variant<
     ActionAppendMessage,
@@ -302,6 +315,7 @@ using Action = std::variant<
     ActionQueueUpdate,
     ActionSubAgentProgress,
     ActionSubAgentCompleted,
+    ActionHookProgress,
     ActionShutdown,
     ActionToast,
     ActionModelsLoaded,

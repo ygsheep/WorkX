@@ -2494,8 +2494,9 @@ Element App::build_transcript(int width) {
         prefix[i + 1] = prefix[i] + m_msg_height[i] + 1;
 
     int dimy = ftxui::Terminal::Size().dimy;
-    // 减去：标题 1 + 面包屑 1 + 输入区 composer_height + 状态行 1 + 余量 2
-    int avail = std::max(1, dimy - (2 + 1 + composer_height(m_input_buffer) + 2));
+    // 减去：标题 1 + 面包屑 1 + 输入区 composer_height + 状态行 1 + hook 进度条 + 余量 2
+    int avail = std::max(1, dimy - (2 + 1 + composer_height(m_input_buffer) + 2
+                                   + hook_progress_height()));
     int content_h = prefix[n];
     int max_scroll = std::max(0, content_h - avail);
 
@@ -2760,7 +2761,8 @@ Element App::build_sub_agent_view(int width) {
 
     // 视口高度：与主转录区同公式，再减状态头 2 行（头 + 空行）
     int dimy = ftxui::Terminal::Size().dimy;
-    int avail = std::max(1, dimy - (2 + 1 + composer_height(m_input_buffer) + 2) - 2);
+    int avail = std::max(1, dimy - (2 + 1 + composer_height(m_input_buffer) + 2) - 2
+                            - hook_progress_height());
     int content_h = prefix[n];
     int max_scroll = std::max(0, content_h - avail);
 
@@ -3049,6 +3051,51 @@ Element App::build_queue_bar() {
     }
 
     return ftxui::vbox(std::move(rows));
+}
+
+// ---------------------------------------------------------------------------
+// Hook 执行进度条（#50 M-2）
+// ---------------------------------------------------------------------------
+
+int App::hook_progress_height() const {
+    return static_cast<int>(m_vm.hook_progress.size());
+}
+
+ftxui::Element App::build_hook_progress_elem() const {
+    const auto& rows = m_vm.hook_progress;
+    if (rows.empty()) return ftxui::emptyElement();
+
+    Elements elems;
+    elems.reserve(rows.size());
+    for (const auto& r : rows) {
+        // 状态图标 + 颜色（进行中蓝 / 完成绿 / 失败红）
+        const bool running = r.phase == "start";
+        const bool failed = r.phase == "failed";
+        const std::string icon = failed ? "✕ " : (running ? "● " : "✓ ");
+        const ftxui::Color icon_color =
+            failed ? theme::T::DiffDel
+                   : (running ? theme::T::Accent : theme::T::DiffAdd);
+
+        std::string text = r.event;
+        if (!r.tool_name.empty()) text += " · " + r.tool_name;
+        if (!r.label.empty()) text += "  " + r.label;
+        if (failed && !r.message.empty()) {
+            std::string msg = r.message;
+            const auto nl = msg.find('\n');
+            if (nl != std::string::npos) msg = msg.substr(0, nl);
+            if (msg.size() > 48) msg = msg.substr(0, 48) + "…";
+            text += "  " + msg;
+        }
+
+        elems.push_back(ftxui::hbox({
+            ftxui::text("  "),
+            ftxui::text(icon) | ftxui::color(icon_color),
+            ftxui::text(text) | ftxui::color(running ? theme::T::Text : theme::T::TextDim),
+            ftxui::flex(ftxui::text("")),
+            ftxui::text("  "),
+        }) | ftxui::bgcolor(theme::T::Panel));
+    }
+    return ftxui::vbox(std::move(elems));
 }
 
 // ---------------------------------------------------------------------------
@@ -3445,6 +3492,9 @@ void App::run() {
         // 消息队列卡片（模型忙碌时前端入队的用户消息）：提示面板下方、输入区上方
         Element queue_elem = build_queue_bar();
 
+        // Hook 执行进度条（#50 M-2）：输入区正上方，展示 Command/HTTP/Prompt hook 实时状态
+        Element hook_elem = build_hook_progress_elem();
+
         // 左列：标题 + 层级子列表（面包屑导航）+ 转录 + 输入区（含内嵌状态行）
         Element content_col = ftxui::vbox({
             // 标题栏 = 面包屑（首项即当前会话标题），背景与输出区一致（Surface）
@@ -3453,6 +3503,7 @@ void App::run() {
             build_ask_modal(),
             suggest_elem,
             queue_elem,
+            hook_elem,
             composer_zone,
         });
 

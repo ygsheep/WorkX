@@ -227,6 +227,12 @@ private:
     /// @details 折叠态单行摘要（条数 + Ctrl+Enter 提示）；展开态逐条预览 + ✕ 移除。
     ///          命中区写入 m_queue_hits（标题行切换展开，✕ 移除对应条目）。
     ftxui::Element build_queue_bar();
+    /// @brief Hook 执行进度条（#50 M-2：输入区上方多行，展示 Command/HTTP/Prompt hook 实时状态）
+    /// @details 单行一条 hook：状态图标（进行中 ● / 完成 ✓ / 失败 ✕）+ 事件名 + hook 类型 + 展示标签。
+    ///          为空时返回 emptyElement（零占用，不干扰既有布局）。
+    ftxui::Element build_hook_progress_elem() const;
+    /// @brief hook 进度条占用的行数（0 = 空；供 build_transcript 扣除可视高度防滚动错位）
+    int hook_progress_height() const;
     /// @brief 标题栏下的层级子列表（面包屑导航）：主会话 / 子 Agent 记录
     ftxui::Element build_breadcrumb();
     /// @brief 第二层：子 Agent 独立记录渲染（不混入主转录区）

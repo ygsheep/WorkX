@@ -42,6 +42,9 @@ namespace agent {
 // 前向声明（conditional skills 支持）
 namespace command { class CommandRegistry; }
 
+// #50：会话级 HookManager 前向声明（shared_ptr 成员）
+namespace hook { class HookManager; }
+
 /// @brief 后端接口前向声明（供 ChatSession::backend() 返回类型使用）
 class IBackend;
 
@@ -514,6 +517,12 @@ private:
 
     // 项目会话恢复：JSONL 持久化（可选，设置后每条消息实时追加）
     std::shared_ptr<agent::session::SessionStore> m_session_store;
+
+    // #50 会话级 HookManager（SessionStart / SessionEnd 事件；装配期由 make_hook_manager 构建）
+    std::shared_ptr<agent::hook::HookManager> m_hooks;
+    // 会话启停 hook 单次触发守卫（避免 configure_session_store/析构的多次调用重复触发）
+    bool m_session_start_hook_fired = false;
+    bool m_session_end_hook_fired = false;
 
     // 懒创建 SessionStore 配置（首条 user 消息时才创建文件）
     bool m_store_configured = false;

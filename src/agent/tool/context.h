@@ -30,6 +30,9 @@ class IEventBus;
 // 前向声明：ICompletionProvider（用于 AgentTool 等启动子 Agent 的工具）
 class ICompletionProvider;
 
+// 前向声明：HookManager（#50 通用 Hook 事件系统，工具线程触发 PermissionRequest / Subagent* 事件）
+namespace hook { class HookManager; }
+
 namespace tool {
 
 /// @brief 前向声明：ToolRegistry（AgentTool 为子 Agent 构造工具集）
@@ -209,6 +212,15 @@ struct ToolContext {
     ///          AgentTool 为子 Agent 构造工具集（get_all_schemas）。
     ///          nullptr 时子 Agent 无工具可用。
     std::shared_ptr<ToolRegistry> tool_registry;
+
+    /// @brief Hook 事件管理器（可选；#50 通用 Hook 事件系统）
+    /// @details 由调用方（ReActLoop）注入循环级 HookManager，供工具线程触发
+    ///          PermissionRequest / SubagentStart / SubagentStop 事件。
+    ///          线程安全：dispatch 内部互斥锁保证并发安全。
+    ///          共享语义：持有 shared_ptr 保证工具异步线程执行 dispatch 期间
+    ///            HookManager（及其中注册表）不提前析构。
+    ///          生命周期：与所属循环（ReActLoop/子 Agent loop）一致。
+    std::shared_ptr<agent::hook::HookManager> hook_manager_ptr;
 
     /// @brief 进度回调（可选）
     /// @details 由调用方（ReActLoop）注入，工具在长任务执行过程中调用以上报进度。

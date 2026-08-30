@@ -7,19 +7,76 @@
 
 #include "agent/hook/hook_manager.h"
 
+#include <atomic>
 #include <chrono>
 
 #include "agent/api/i_completion_provider.h"
 #include "agent/api/remote/http_client.h"
-#include "core/events/agent_events.h"  // HookProgressEvent（M-2 进度可视化）
-#include "core/events/i_event_bus.h"   // IEventBus::publish_async
+#include "agent/config/app_config.h"        // keys::HOOKS_ENABLED / HOOKS_DEFINITIONS
+#include "core/config/i_config_manager.h"   // get_or<std::string>
+#include "core/events/agent_events.h"       // HookProgressEvent（M-2 进度可视化）
+#include "core/events/i_event_bus.h"        // IEventBus::publish_async
 #include "core/process/subprocess.h"
 #include "liblogger/logger.h"
 
 namespace agent::hook {
 
+// ============================================================
+// 装配（QueryEngine / ChatSession 共用）
+// ============================================================
+
+std::shared_ptr<HookManager> make_hook_manager(agent::IConfigManager& cfg,
+                                               agent::ICompletionProvider* provider,
+                                               agent::IEventBus* bus) {
+    auto manager = std::make_shared<HookManager>();
+    manager->set_provider(provider);  // prompt/agent 类型需要（非拥有）
+    manager->set_event_bus(bus);      // hook 进度事件（可选）
+
+    const bool enabled = cfg.get_or<bool>(agent::keys::HOOKS_ENABLED, true);
+    if (!enabled) return manager;  // 空 manager，调用方 empty() 短路
+
+    const std::string defs_json = cfg.get_or<std::string>(
+        agent::keys::HOOKS_DEFINITIONS, "[]");
+    try {
+        auto arr = nlohmann::json::parse(defs_json);
+        if (arr.is_array()) {
+            for (const auto& obj : arr) {
+                hook::HookDefinition def = hook::HookDefinition::from_json(obj);
+                if (def.command.empty() && def.url.empty() && def.prompt.empty()) {
+                    LOG_WARN("[hook] hook def missing command/url/prompt, skipped: {}",
+                             obj.dump());
+                    continue;
+                }
+                manager->register_hook(std::move(def));
+            }
+        }
+    } catch (const std::exception& e) {
+        LOG_WARN("[hook] invalid hooks.definitions JSON, hooks disabled: {}", e.what());
+    }
+    return manager;
+}
+
 namespace {
 constexpr size_t MAX_HOOK_OUTPUT_BYTES = 64 * 1024;  ///< 单条 hook 输出上限 64KB
+
+/// @brief 单调递增 hook 执行 id（供 HookProgressEvent start/done 关联；线程安全）
+uint64_t next_hook_id() {
+    static std::atomic<uint64_t> counter{1};
+    return counter.fetch_add(1, std::memory_order_relaxed);
+}
+
+/// @brief 生成 hook 展示标签（UI 卡片标题；command 显示命令，http 显示 URL，
+///        prompt/agent 显示截断提示词）。仅供展示，不参与语义。
+std::string hook_label(const HookDefinition& def) {
+    if (!def.command.empty()) return "[c] " + def.command;
+    if (!def.url.empty()) return "[http] " + def.url;
+    if (!def.prompt.empty()) {
+        std::string p = def.prompt;
+        if (p.size() > 60) p = p.substr(0, 60) + "…";
+        return "[prompt] " + p;
+    }
+    return "[" + std::string(type_to_string(def.type)) + "]";
+}
 
 std::string truncate_output(const std::string& text, size_t max_chars) {
     if (text.size() <= max_chars) return text;
@@ -59,6 +116,7 @@ void apply_command_output(HookResult& r, const std::string& output) {
 
 void HookManager::register_hook(HookDefinition def) {
     // 同 event+type+match 去重（config 与 frontmatter 可能重复注册）
+    std::lock_guard<std::mutex> lock(mutex_);
     for (const auto& e : entries_) {
         if (e.def.event == def.event && e.def.type == def.type
             && e.def.match == def.match && e.def.command == def.command
@@ -70,8 +128,14 @@ void HookManager::register_hook(HookDefinition def) {
 }
 
 void HookManager::register_hooks(std::vector<HookDefinition> defs) {
+    std::lock_guard<std::mutex> lock(mutex_);
     entries_.clear();
     for (auto& d : defs) entries_.emplace_back(std::move(d));
+}
+
+void HookManager::clear() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    entries_.clear();
 }
 
 // ============================================================
@@ -79,39 +143,46 @@ void HookManager::register_hooks(std::vector<HookDefinition> defs) {
 // ============================================================
 
 HookResult HookManager::dispatch(HookEvent event, const HookContext& ctx) {
+    // 线程安全：锁内对匹配条目做快照 + 乐观占用 once，锁外顺序执行 run_hook，
+    // 避免长耗时 hook（LLM/子进程）串行阻塞其他触发线程，同时保证并发安全性。
     HookResult out;
-    if (entries_.empty()) return out;
+    std::vector<HookEntry*> selected;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (entries_.empty()) return out;
 
-    const std::string event_name = to_string(event);
-    for (auto& entry : entries_) {
-        if (entry.def.event != event) continue;
-        // once 语义：已执行过一次则跳过（asyncRewake 暂不在本次实现唤醒）
-        if (entry.def.once && entry.consumed) continue;
+        const std::string event_name = to_string(event);
+        for (auto& entry : entries_) {
+            if (entry.def.event != event) continue;
+            // once 语义：已执行过一次则跳过
+            if (entry.def.once && entry.consumed) continue;
 
-        if (!entry.matcher.matches(event_name, ctx.tool_name, ctx.tool_input)) {
-            continue;
+            if (!entry.matcher.matches(event_name, ctx.tool_name, ctx.tool_input)) {
+                continue;
+            }
+
+            // async 类型：本版本不提供异步执行队列 → 退化为同步执行（记录日志）
+            if (entry.def.async) {
+                LOG_WARN("[hook] event={} async hook degrades to sync (no async queue)",
+                         event_name);
+            }
+
+            if (entry.def.statusMessage) {
+                LOG_INFO("[hook] running event={} type={} cmd={} url={}",
+                         event_name, type_to_string(entry.def.type),
+                         entry.def.command, entry.def.url);
+            }
+
+            selected.push_back(&entry);
+            if (entry.def.once) entry.consumed = true;  // 乐观占用：防并发重复执行
         }
+    }
 
-        // async 类型：本版本不提供异步执行队列 → 退化为同步执行（记录日志）
-        if (entry.def.async) {
-            LOG_WARN("[hook] event={} async hook degrades to sync (no async queue)",
-                     event_name);
-        }
-
-        if (entry.def.statusMessage) {
-            LOG_INFO("[hook] running event={} type={} cmd={} url={}",
-                     event_name, type_to_string(entry.def.type),
-                     entry.def.command, entry.def.url);
-        }
-
-        HookResult r = run_hook(entry, ctx);
+    for (HookEntry* entry : selected) {
+        HookResult r = run_hook(*entry, ctx);
         aggregate(r, out);
-
-        entry.run_count++;
-        if (entry.def.once) entry.consumed = true;
-
-        // 若已要求阻止继续，本轮后续 hook 仍执行（记录日志原文逐条），
-        // 但聚合状态由调用方依据 out 判断。
+        std::lock_guard<std::mutex> lock(mutex_);
+        entry->run_count++;
     }
     return out;
 }
@@ -121,14 +192,17 @@ HookResult HookManager::dispatch(HookEvent event, const HookContext& ctx) {
 // ============================================================
 
 HookResult HookManager::run_hook(const HookEntry& entry, const HookContext& ctx) {
-    // M-2：发布 hook 执行开始事件（供 UI 展示 hook 进度；bus 为空则跳过）
+    // M-2：执行前发布 hook 开始进度事件（bus 为空则跳过，且不分配 hook_id）
+    const uint64_t hook_id = event_bus_ ? next_hook_id() : 0;
     if (event_bus_) {
         agent::HookProgressEvent ev;
         ev.session_id = ctx.session_id;
+        ev.hook_id = hook_id;
         ev.event = to_string(entry.def.event);
         ev.phase = "start";
         ev.hook_type = type_to_string(entry.def.type);
         ev.tool_name = ctx.tool_name;
+        ev.hook_label = hook_label(entry.def);
         event_bus_->publish_async(ev);
     }
 
@@ -140,14 +214,16 @@ HookResult HookManager::run_hook(const HookEntry& entry, const HookContext& ctx)
         case HookType::Agent:   r = run_agent(entry.def, ctx);   break;
     }
 
-    // M-2：发布 hook 执行完成/失败事件
+    // M-2：执行后发布完成/失败进度事件（复用同一 hook_id 供 UI 关联同一条执行）
     if (event_bus_) {
         agent::HookProgressEvent ev;
         ev.session_id = ctx.session_id;
+        ev.hook_id = hook_id;
         ev.event = to_string(entry.def.event);
         ev.hook_type = type_to_string(entry.def.type);
         ev.tool_name = ctx.tool_name;
         ev.message = r.message;
+        ev.hook_label = hook_label(entry.def);
         ev.phase = (r.blockingError && !r.blockingError->empty()) ? "failed" : "done";
         event_bus_->publish_async(ev);
     }

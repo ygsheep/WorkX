@@ -365,6 +365,30 @@ bool ViewModel::apply_variant(const ActionSubAgentCompleted& a) {
     return true;
 }
 
+bool ViewModel::apply_variant(const ActionHookProgress& a) {
+    // 按 hook_id 关联同一条 hook 的 start / done(failed) 两拍，合并为一行
+    auto it = std::find_if(hook_progress.begin(), hook_progress.end(),
+        [&](const HookRow& r) { return r.hook_id == a.hook_id; });
+    HookRow row;
+    row.hook_id = a.hook_id;
+    row.event = a.event;
+    row.hook_type = a.hook_type;
+    row.tool_name = a.tool_name;
+    row.label = a.hook_label;
+    row.phase = a.phase;
+    row.message = a.message;
+    if (it == hook_progress.end()) {
+        hook_progress.push_back(std::move(row));
+    } else {
+        *it = std::move(row);
+    }
+    // FIFO 淘汰最旧条目（历史 done/failed 行随新事件滚动离开，保持面板精简）
+    if (hook_progress.size() > kMaxHookRows)
+        hook_progress.erase(hook_progress.begin(), hook_progress.begin() +
+            static_cast<std::ptrdiff_t>(hook_progress.size() - kMaxHookRows));
+    return true;
+}
+
 bool ViewModel::apply_variant(const ActionShutdown&) {
     pending_exit = true;
     return true;
