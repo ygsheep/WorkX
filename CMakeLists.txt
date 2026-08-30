@@ -191,6 +191,22 @@ function(workx_fetch_ts_grammar name git_repo git_tag)
             "/FI${CMAKE_SOURCE_DIR}/third_party/ftxui/suppress_msvc_warnings.h"
             /wd4244 /wd4100 /wd4267 /wd4293 /wd4456
         )
+    else()
+        # GCC/Clang：项目级 add_compile_options(-Wall -Wextra -Wpedantic
+        # -Werror=uninitialized -Werror=maybe-uninitialized) 会波及 vendored
+        # tree-sitter grammar 的 scanner.c/parser.c（第三方自动生成代码）。
+        # ts_perl 已触发 -Wmaybe-uninitialized 告警并被当作错误（GCC 报
+        # "some warnings being treated as errors"），ts_php 也含
+        # -Wimplicit-fallthrough 噪音。第三方代码不受本项目告警纪律约束，
+        # 此处在目标级显式降级并抑制常见噪音，与上面 MSVC /we 豁免策略对齐。
+        target_compile_options("ts_${name}" PRIVATE
+            -Wno-error=uninitialized
+            -Wno-error=maybe-uninitialized
+            -Wno-maybe-uninitialized
+            -Wno-implicit-fallthrough
+            -Wno-unused-variable
+            -Wno-unused-but-set-variable
+        )
     endif()
 
     # 部分第三方 grammar 的 scanner.c 定义了非 static 的通用函数
