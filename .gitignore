@@ -94,5 +94,9 @@ imgui.ini
 /plan/
 /AGENT.md
 
+# 独立发布的 workx-tap 仓库（tools/session-trace），由 workx-tap 独立 git 仓库管理
+# 根仓库不跟踪该目录，避免嵌套 gitlink / 内容分叉
+/tools/session-trace/
+
 # nix build output symlink
 /result
