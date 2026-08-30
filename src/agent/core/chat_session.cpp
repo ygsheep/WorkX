@@ -199,9 +199,10 @@ ChatSession::ChatSession(std::unique_ptr<ICompletionProvider> provider,
     // #24：接线 TodoStore 事件总线（变更后发布 TodoUpdatedEvent → UI 侧边栏/StatusBar）
     tool::TodoStore::instance().set_event_bus(&m_event_bus.get());
 
-    // #50：装配会话级 HookManager（SessionStart/SessionEnd 事件；复用循环级同一装配逻辑）
-    m_hooks = hook::make_hook_manager(m_config_manager.get(), m_provider.get(),
-                                      &m_event_bus.get());
+    // #50：装配会话级 HookManager（SessionStart/SessionEnd 事件；复用循环级同一装配逻辑）。
+    //      会话级无独立工具 registry，agent 类型 hook 在此降级为纯 prompt 判定（白名单可空）。
+    m_hooks = hook::make_hook_manager(m_config_manager.get(), nullptr,
+                                      m_provider.get(), &m_event_bus.get());
 
     subscribe_interrupt();
     subscribe_sub_agent_persistence();

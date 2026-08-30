@@ -13,6 +13,8 @@
 #include "agent/api/i_completion_provider.h"
 #include "agent/api/remote/http_client.h"
 #include "agent/config/app_config.h"        // keys::HOOKS_ENABLED / HOOKS_DEFINITIONS
+#include "agent/core/goal_guarded_agent.h"  // GoalAgentDeps / ReActLoopFactory（agent 类型子循环）
+#include "agent/tool/registry.h"            // ToolRegistry（agent 类型白名单派生子工具集）
 #include "core/config/i_config_manager.h"   // get_or<std::string>
 #include "core/events/agent_events.h"       // HookProgressEvent（M-2 进度可视化）
 #include "core/events/i_event_bus.h"        // IEventBus::publish_async
@@ -26,11 +28,14 @@ namespace agent::hook {
 // ============================================================
 
 std::shared_ptr<HookManager> make_hook_manager(agent::IConfigManager& cfg,
+                                               std::shared_ptr<agent::tool::ToolRegistry> tool_registry,
                                                agent::ICompletionProvider* provider,
                                                agent::IEventBus* bus) {
     auto manager = std::make_shared<HookManager>();
-    manager->set_provider(provider);  // prompt/agent 类型需要（非拥有）
-    manager->set_event_bus(bus);      // hook 进度事件（可选）
+    manager->set_provider(provider);        // prompt/agent 类型需要（非拥有）
+    manager->set_event_bus(bus);            // hook 进度事件（可选）
+    manager->set_config_manager(&cfg);      // agent 类型子 ReActLoop 需要
+    manager->set_tool_registry(std::move(tool_registry));  // agent 白名单来源
 
     const bool enabled = cfg.get_or<bool>(agent::keys::HOOKS_ENABLED, true);
     if (!enabled) return manager;  // 空 manager，调用方 empty() 短路
@@ -58,6 +63,7 @@ std::shared_ptr<HookManager> make_hook_manager(agent::IConfigManager& cfg,
 
 namespace {
 constexpr size_t MAX_HOOK_OUTPUT_BYTES = 64 * 1024;  ///< 单条 hook 输出上限 64KB
+constexpr int kAgentMaxIterations = 4;  ///< agentic verifier 子 ReActLoop 最大轮数
 
 /// @brief 单调递增 hook 执行 id（供 HookProgressEvent start/done 关联；线程安全）
 uint64_t next_hook_id() {
@@ -404,15 +410,77 @@ HookResult HookManager::run_prompt(const HookDefinition& def,
     return r;
 }
 
-HookResult HookManager::run_agent(const HookDefinition& def,
-                                  const HookContext& /*ctx*/) {
-    // TODO(#50 S3)：构造受限子 ReActLoop 做 agentic verifier。
-    // 需要向 HookManager 注入工具注册表白名单；当前未注入，返回未就绪。
+HookResult HookManager::run_agent(const HookDefinition& def, const HookContext& ctx) {
     HookResult r;
-    r.message = def.prompt.empty()
-        ? "[hook:agent] not yet implemented (no registry whitelist wired)"
-        : "[hook:agent] not yet implemented (provider not wired)";
-    r.output = r.message;
+    if (!provider_) {
+        r.message = "[hook:agent] not ready (no provider wired)";
+        r.output = r.message;
+        return r;
+    }
+    if (!config_manager_) {
+        r.message = "[hook:agent] not ready (no config_manager wired)";
+        r.output = r.message;
+        return r;
+    }
+    if (def.prompt.empty()) {
+        r.message = "[hook:agent] empty prompt, skipped";
+        return r;
+    }
+
+    // 受限子工具集：从来源 registry 派生"只读"白名单（安全护栏）。只读过滤已排除
+    // Agent/AskUser 等写/交互工具，杜绝 agent hook 递归启动子 Agent 或向用户提问。
+    // 未注入来源 registry 时退化：空工具集也能给出最终判定（纯 prompt 评估）。
+    auto sub_registry = std::make_shared<tool::ToolRegistry>();
+    if (tool_registry_) {
+        for (const auto& t : tool_registry_->get_all_tools()) {
+            if (t->is_read_only()) sub_registry->register_tool(t);
+        }
+    }
+
+    // 事件/工具上下文注入系统提示，供 verifier 核实
+    std::string system_prompt =
+        "你是 Agent Hook 策略评估器。你可以调用白名单只读工具核实事实，再根据下面"
+        "的提示与事件上下文判断是否放行/阻断。最后必须只用一行 JSON 回答："
+        "{\"blockingError\":\"理由\" 或 \"\",\"preventContinuation\":true/false,"
+        "\"message\":\"附加提示(可空)\"}。默认放行为准，除非确有理由阻断。\n\n";
+    system_prompt += def.prompt;
+    system_prompt += "\n\n[hook context]\n";
+    system_prompt += "event: " + std::string(to_string(def.event)) + "\n";
+    if (!ctx.tool_name.empty()) system_prompt += "tool: " + ctx.tool_name + "\n";
+    if (ctx.tool_input.is_object()) {
+        for (auto it = ctx.tool_input.begin(); it != ctx.tool_input.end(); ++it) {
+            if (it.value().is_string())
+                system_prompt += it.key() + ": " + it.value().get<std::string>() + "\n";
+        }
+    }
+
+    GoalAgentDeps deps;
+    deps.provider = provider_;
+    deps.registry = sub_registry;
+    deps.config_manager = config_manager_;
+    deps.cwd = ctx.cwd;
+    deps.event_bus = event_bus_;
+    deps.session_id = ctx.session_id;
+
+    ReActLoop::Config loop_cfg;
+    loop_cfg.max_iterations = kAgentMaxIterations;  // verifier 最大化受控，避免长跑
+    auto loop = ReActLoopFactory::make(deps, sub_registry, loop_cfg);
+    if (!loop) {
+        r.message = "[hook:agent] failed to build sub loop, default allow";
+        r.output = r.message;
+        return r;
+    }
+
+    std::vector<ChatMessage> messages;
+    nlohmann::json tools_schema = sub_registry->get_all_schemas();
+    std::atomic<bool> cancel{false};  // agent hook 为同步阻塞执行，无外部取消通道
+    auto result = loop->run(messages, system_prompt, tools_schema, cancel);
+
+    const std::string final_text = result.final_answer;
+    r.output = truncate_output(final_text, 4096);
+    r.message = "[hook:agent] " + (final_text.empty() ? std::string("empty reply (allow)")
+                                                      : r.output);
+    apply_command_output(r, final_text);  // 复用 JSON 判定解析（blockingError 等）
     return r;
 }
 

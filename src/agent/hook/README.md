@@ -32,7 +32,7 @@
 | `command` | `cmd.exe /d /s /c`（Win）/ `sh -c`（POSIX），`agent::process::exec`，输出截断 64KB |
 | `http` | `HttpClient::post_json`（POST URL，自定义 headers + 事件上下文 JSON 体） |
 | `prompt` | 调 `ICompletionProvider` 单次推理（temperature 0，max_tokens 200），JSON 判定 |
-| `agent` | **未实现**（`run_agent` 返回 `not yet implemented`；需工具注册表白名单） |
+| `agent` | 受限子 ReActLoop（`ReActLoopFactory::make`，`max_iterations=4`）做 agentic verifier，产出 JSON 判定 |
 
 `blockingError` / `preventContinuation` 直接作用于当前 turn。
 
@@ -61,9 +61,9 @@
 
 ## 装配与线程安全
 
-统一入口 `make_hook_manager(cfg, provider, bus)`（`hook_manager.cpp`），供
-`QueryEngine`（per-query 循环级）与 `ChatSession`（会话级）复用，读取配置、
-注入 provider/event_bus。
+统一入口 `make_hook_manager(cfg, tool_registry, provider, bus)`（`hook_manager.cpp`），供
+`QueryEngine`（per-query 循环级，传入 `registry` 作白名单来源）与 `ChatSession`（会话级，
+白名单可空 → agent 降级为纯 prompt 判定）复用，读取配置、注入依赖。
 
 - **线程安全**：`dispatch` 在互斥锁内对匹配条目做快照 + 乐观占用 `once`，锁外
   顺序执行 `run_hook`。长耗时 hook（LLM/子进程）不会串行阻塞其它触发线程。
@@ -96,12 +96,12 @@ build_hook_progress_elem()` 在输入区上方渲染多行进度条（进行中 
 
 - [x] 8 事件 + 4 类型骨架、matcher、配置加载、dispatch 线程安全
 - [x] 进度可视化事件 + TUI 进度条
-- [x] `command` / `http` / `prompt` 执行器
-- [ ] `agent` 类型执行器（`run_agent` 待实现）
+- [x] `command` / `http` / `prompt` / `agent` 执行器（agent 由只读子工具集 ReActLoop 做 verifier）
 - [ ] frontmatter 对象式 hooks 注册（`Scanner` 式生命周期，会话级清理）
 
 ## 测试
 
 `tests/unit/agent/core/test_hook_manager.cpp`：事件枚举 round-trip、matcher 各
-语法、command 执行、`once` 语义、`from_json`、prompt 判定（阻断/放行）、M-2
-进度事件（`hook_id` 关联 + `hook_label`）。
+语法、command 执行、`once` 语义、`from_json`、prompt 判定（阻断/放行）、agent
+类型（守卫降级 / 空 prompt 跳过 / JSON 判定阻断）、M-2 进度事件（`hook_id`
+关联 + `hook_label`）。

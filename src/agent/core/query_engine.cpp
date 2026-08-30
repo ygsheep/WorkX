@@ -94,8 +94,10 @@ ReActLoop::Config QueryEngine::make_react_config() const {
         agent::keys::AGENT_MAX_ITERATIONS, cfg.max_iterations);
     // Issue #50：构建通用 Hook 事件系统（复用装配 helper；受 hooks.enabled 门控，
     // 空定义为空 manager）。循环级 HookManager 经 ReActLoop 注入 ToolContext，
-    // 供工具线程触发 PermissionRequest / Subagent* 事件。
+    // 供工具线程触发 PermissionRequest / Subagent* 事件；agent 类型从中派生态
+    // 只读子工具集（白名单来源）。
     cfg.hooks = hook::make_hook_manager(*m_deps.config_manager,
+                                        m_deps.registry,
                                         m_deps.provider, m_deps.event_bus);
     return cfg;
 }

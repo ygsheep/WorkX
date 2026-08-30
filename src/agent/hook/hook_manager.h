@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "agent/hook/hook_event.h"
@@ -23,6 +24,7 @@ namespace agent {
 class ICompletionProvider;
 class IConfigManager;
 class IEventBus;
+namespace tool { class ToolRegistry; }
 }
 
 namespace agent::hook {
@@ -31,9 +33,12 @@ class HookManager;  // 前向声明（make_hook_manager 返回 shared_ptr 需要
 
 /// @brief 从配置构建 HookManager（读取 hooks.enabled / hooks.definitions）
 /// @details 供 QueryEngine（per-query 循环级）与 ChatSession（会话级 SessionStart/End）
-///          复用同一套装配逻辑：注册配置中的 hook 定义并注入 provider/event_bus。
+///          复用同一套装配逻辑：注册配置中的 hook 定义并注入 provider/event_bus，
+///          以及 agent 类型所需的 config_manager / 白名单来源 registry。
 ///          hooks.enabled 为 false 时返回空 manager（empty()==true，零开销短路）。
+/// @param tool_registry 白名单来源（agent 类型从中派生只读子工具集；空则 agent 退化为纯 prompt 判定）
 std::shared_ptr<HookManager> make_hook_manager(agent::IConfigManager& cfg,
+                                               std::shared_ptr<agent::tool::ToolRegistry> tool_registry,
                                                agent::ICompletionProvider* provider,
                                                agent::IEventBus* bus);
 
@@ -90,11 +95,24 @@ public:
     /// @note 为 nullptr 时跳过进度事件发布（日志仍正常），测试/无 UI 环境可留空
     void set_event_bus(agent::IEventBus* bus) noexcept { event_bus_ = bus; }
 
+    /// @brief 注入配置管理器（agent 类型子 ReActLoop 需要；非拥有指针）
+    /// @note 生命周期与 M-1 的 provider 一致：宿主保证存活期 ≥ 本管理器。
+    ///       为 nullptr 时 agent hook 降级为未就绪消息（不崩溃）。
+    void set_config_manager(agent::IConfigManager* cfg) noexcept { config_manager_ = cfg; }
+
+    /// @brief 注入白名单来源 registry（agent 类型从中派生只读子工具集）
+    /// @details 非拥有性（shared_ptr 持有权归宿主）；为空则 agent 退化为纯 prompt 判定。
+    void set_tool_registry(std::shared_ptr<agent::tool::ToolRegistry> reg) noexcept {
+        tool_registry_ = std::move(reg);
+    }
+
 private:
     std::vector<HookEntry> entries_;
     mutable std::mutex mutex_;   ///< 保护 entries_ 的并发访问（dispatch 快照）
     agent::ICompletionProvider* provider_ = nullptr;
+    agent::IConfigManager* config_manager_ = nullptr;
     agent::IEventBus* event_bus_ = nullptr;
+    std::shared_ptr<agent::tool::ToolRegistry> tool_registry_;  ///< agent 类型白名单来源
 
     /// @brief 执行单条 hook，返回其 HookResult
     HookResult run_hook(const HookEntry& entry, const HookContext& ctx);

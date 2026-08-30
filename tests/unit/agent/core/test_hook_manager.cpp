@@ -11,6 +11,7 @@
 #include "agent/hook/hook_match.h"
 #include "agent/hook/hook_manager.h"
 #include "core/events/agent_events.h"  // HookProgressEvent（M-2）
+#include "helpers/mock_config_manager.h"  // MockConfigManager（agent 类型子循环装配）
 #include "helpers/mock_event_bus.h"    // MockEventBus（M-2 订阅断言）
 #include "helpers/mock_provider.h"
 
@@ -238,6 +239,79 @@ TEST_CASE("hook prompt allow verdict not blocking", "[hook][prompt]") {
     auto r = mgr.dispatch(HookEvent::PreToolUse, ctx);
     REQUIRE_FALSE(r.blockingError.has_value());
     REQUIRE_FALSE(r.preventContinuation);
+}
+
+// ============================================================
+// agent 类型：受限子 ReActLoop 做 agentic verifier
+// ============================================================
+
+TEST_CASE("hook agent without deps degrades gracefully", "[hook][agent]") {
+    HookManager mgr;  // 未注入 provider / config_manager
+    HookDefinition def;
+    def.event = HookEvent::PreToolUse;
+    def.type = HookType::Agent;
+    def.prompt = "verify";
+    mgr.register_hook(def);
+
+    HookContext ctx;
+    ctx.cwd = ".";
+    auto r = mgr.dispatch(HookEvent::PreToolUse, ctx);
+    REQUIRE(r.message.find("[hook:agent] not ready") == 0);
+    REQUIRE_FALSE(r.blockingError.has_value());
+}
+
+TEST_CASE("hook agent empty prompt skipped", "[hook][agent]") {
+    using agent::test::MockCompletionProvider;
+    using agent::test::MockConfigManager;
+
+    MockCompletionProvider provider;
+    MockConfigManager cfg;
+    HookManager mgr;
+    mgr.set_provider(&provider);
+    mgr.set_config_manager(&cfg);
+
+    HookDefinition def;
+    def.event = HookEvent::PreToolUse;
+    def.type = HookType::Agent;
+    mgr.register_hook(def);  // 空 prompt
+
+    HookContext ctx;
+    ctx.cwd = ".";
+    auto r = mgr.dispatch(HookEvent::PreToolUse, ctx);
+    REQUIRE(r.message.find("[hook:agent] empty prompt") == 0);
+    REQUIRE(provider.submit_count == 0);  // 未触发任何子循环
+}
+
+TEST_CASE("hook agent JSON verdict blocks tool", "[hook][agent]") {
+    using agent::test::MockCompletionProvider;
+    using agent::test::MockStreamReader;
+    using agent::test::MockConfigManager;
+
+    MockCompletionProvider provider;
+    // 无白名单 registry 注入 → 子循环空工具集，verifier 直接给出最终 JSON 判定
+    auto reader = std::make_shared<MockStreamReader>();
+    reader->add_content_chunk("{\"blockingError\":\"agent 判定危险\"}");
+    provider.set_next_reader(reader);
+
+    MockConfigManager cfg;
+    HookManager mgr;
+    mgr.set_provider(&provider);
+    mgr.set_config_manager(&cfg);
+
+    HookDefinition def;
+    def.event = HookEvent::PreToolUse;
+    def.type = HookType::Agent;
+    def.prompt = "verify bash command";
+    mgr.register_hook(def);
+
+    HookContext ctx;
+    ctx.cwd = ".";
+    ctx.tool_name = "Bash";
+    ctx.tool_input = {{"command", "rm -rf /"}};
+    auto r = mgr.dispatch(HookEvent::PreToolUse, ctx);
+    REQUIRE(r.blockingError.has_value());
+    REQUIRE(r.blockingError->find("agent 判定危险") != std::string::npos);
+    REQUIRE(provider.submit_count == 1);  // 仅一次子循环 LLM 调用
 }
 
 // ============================================================
