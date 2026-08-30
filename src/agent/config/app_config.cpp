@@ -180,6 +180,30 @@ void register_config_defaults(ConfigManager& cfg) {
         .int_range = std::make_pair<int64_t, int64_t>(1, 2000)
     });
 
+    // === Hooks（#50 通用 Hook 事件系统）===
+    cfg.register_schema({
+        .key = keys::HOOKS_ENABLED,
+        .description = "Enable the general hook event system (PreToolUse/PostToolUse/Stop "
+                       "et al). When disabled, no HookManager is built and hooks never run.",
+        .default_value = true,
+        .type = ConfigSchema::Type::Bool
+    });
+    cfg.register_schema({
+        .key = keys::HOOKS_DEFINITIONS,
+        .description = "JSON string array of hook definitions, each matching HookDefinition: "
+                       "{event,type,match,command,url,prompt,timeout_ms,once,...}",
+        .default_value = std::string("[]"),
+        .type = ConfigSchema::Type::String  // JSON 以字符串承载（schema 无原生 JSON 类型）
+    });
+    cfg.register_schema({
+        .key = keys::HOOKS_TIMEOUT_MS,
+        .description = "Default hook execution timeout in milliseconds (per-hook "
+                       "timeout_ms overrides)",
+        .default_value = 30000,
+        .type = ConfigSchema::Type::Int,
+        .int_range = std::make_pair<int64_t, int64_t>(100, 3600000)
+    });
+
     // === Logging ===
     cfg.register_schema({
         .key = keys::LOG_LEVEL,

@@ -85,6 +85,19 @@ struct AgentVerdictEvent {
     std::string detail;       ///< 验证器返回的人可读说明（如测试失败数/缺失路径）
 };
 
+/// @brief Hook 执行进度事件（Issue #50 M-2：hook 进度可视化）
+/// @details 每条 hook 执行开始/结束时经 IEventBus 异步发布，供 UI 展示
+///          hook 执行状态（起始/完成/失败）。engine 侧仅负责发布；渲染由
+///          订阅方（如 TUI 卡片/状态栏）决定。phase 取 "start" / "done" / "failed"。
+struct HookProgressEvent {
+    std::string session_id;
+    std::string event;        ///< 触发事件名（PreToolUse/Stop/...）
+    std::string phase;        ///< "start" / "done" / "failed"
+    std::string hook_type;    ///< command / http / prompt / agent
+    std::string tool_name;    ///< 关联工具名（PreToolUse 等工具事件才有）
+    std::string message;      ///< 执行结果摘要（done/failed 时填充）
+};
+
 /// @brief 缓存诊断事件（DeepSeek 硬盘缓存命中率劣化归因）
 /// @details 当某轮缓存命中率显著下降时发布，用于 UI 显示归因。
 ///          reasons 取值："system" / "tools" / "log_rewrite"

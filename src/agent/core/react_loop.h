@@ -35,6 +35,7 @@ class IConfigManager;  // D-5：前向声明，避免头文件强依赖
 class ITaskManager;    // BashTool 后台任务 DI（agent 命名空间下）
 class IEventBus;       // AskUserTool 事件发布 DI
 namespace skill { class TouchCollector; }  // conditional skills touch 收集器
+namespace hook { class HookManager; }      // Issue #50：通用 Hook 事件系统
 
 // ============================================================
 // ReAct 步骤类型
@@ -182,10 +183,15 @@ public:
         int review_stall_window = 4;
         /// 评审"继续"时追加的额外迭代预算（块大小）
         int review_extra_budget = 8;
-        /// 达上限评审的"继续"允许次数上限（硬性总预算 = max_iterations + extra*grants）
-        int review_max_grants = 2;
-        CacheAwareCompactor::Config compactor_cfg; ///< DS_CACHE: 缓存感知压缩配置
-    };
+        /// @brief 达上限评审的"继续"允许次数上限（硬性总预算 = max_iterations + extra*grants）
+    int review_max_grants = 2;
+    CacheAwareCompactor::Config compactor_cfg; ///< DS_CACHE: 缓存感知压缩配置
+
+    /// @brief Issue #50：通用 Hook 事件系统（可空；空则全部跳过，零开销）
+    /// @details ReActLoop 在 PreToolUse / PostToolUse / Stop 三处调用，
+    ///          blockingError/preventContinuation 语义作用于当前 turn。
+    std::shared_ptr<hook::HookManager> hooks;
+};
 
     /// @brief 步骤回调（每完成一个步骤时调用）
     ///
