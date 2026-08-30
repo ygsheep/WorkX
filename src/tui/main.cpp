@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iostream>
 #include <iterator>
 #include <memory>
 #include <string>
@@ -74,8 +75,29 @@ int main(int argc, char** argv) {
     bool mock_mode = false;
     bool smoke_mode = false;
     for (int i = 1; i < argc; ++i) {
-        if (std::string(argv[i]) == "--mock") mock_mode = true;
-        if (std::string(argv[i]) == "--smoke") smoke_mode = true;
+        const std::string arg = argv[i];
+        if (arg == "--mock") mock_mode = true;
+        if (arg == "--smoke") smoke_mode = true;
+        if (arg == "--version" || arg == "-v") {
+            // 仅打印版本与简介后退出，不触发配置向导/索引/Island/TUI
+            std::cout << "workx " << WORKX_VERSION;
+#ifdef WORKX_BUILD_INFO
+            std::cout << " (build " << WORKX_BUILD_INFO << ")";
+#endif
+            // NDEBUG 为 release 配置（CMAKE_BUILD_TYPE=Release/RelWithDebInfo/MSVC Release）
+            // 统一设置的标准宏，未定义则为 debug 配置；跨 MSVC/GCC/Clang 可靠。
+            // 注意 build 信息里的 "-dirty" 是 git 工作区脏标记，与构建类型无关。
+#ifdef NDEBUG
+            std::cout << " [release]\n";
+#else
+            std::cout << " [debug]\n";
+#endif
+            std::cout << "WorkX — 一个现代化的终端 Code Agent / Work Agent\n"
+                      << "用法:\n"
+                      << "  workx                  启动 TUI\n"
+                      << "  workx --version | -v  显示版本与简介\n";
+            return 0;
+        }
     }
     // 冒烟（B5）依赖 mock 流：无后端也能在 CI 无头管道下跑通全链路
     if (smoke_mode) mock_mode = true;
