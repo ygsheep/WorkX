@@ -520,12 +520,12 @@ std::string build_system_prompt(const std::string& user_prompt,
         sys_prompt += t->prompt();
     }
 
-    // @file 引用说明
+    // @file 引用说明：@path 只是路径引用，内容不注入；需要时用 Read 工具读取
     sys_prompt +=
         "\n\n"
-        "用户消息中可能出现 <file path=\"...\">...</file> 标签，这是用户通过 "
-        "@path 语法引用的文件内容，已由前端读取并注入。对此类标签内的路径，"
-        "禁止再次调用 Read 工具读取；直接基于标签内已有内容回答用户问题。";
+        "用户消息中可能包含 @path 形式的文件引用（例如 @src/main.cpp），"
+        "这只是文件路径，文件内容不会注入消息。如需读取该文件，"
+        "请调用 Read 工具获取内容后再回答。";
 
     return sys_prompt;
 }

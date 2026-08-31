@@ -9,6 +9,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,7 @@
 #include <ftxui/screen/terminal.hpp>
 
 #include "render/markdown_to_elements.h"
+#include "render/image_view.h"
 #include "widgets/file_viewer.h"
 
 using namespace ftxtui;
@@ -178,4 +180,133 @@ TEST_CASE("file viewer ignores change without new_start", "[file_viewer][diff]")
 
     const auto text = render_elem(build_file_viewer(f), 40, 24);
     REQUIRE(text.find("+") == std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// 图片预览（/view 及项目树点击图片）
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// @brief 构造纯色/逐像素可控的 RGBA 测试图
+std::shared_ptr<ImageData> make_image(int w, int h, uint8_t r, uint8_t g,
+                                      uint8_t b) {
+    auto img = std::make_shared<ImageData>();
+    img->width = w;
+    img->height = h;
+    img->rgba.assign(static_cast<std::size_t>(w) * h * 4, 0);
+    for (int i = 0; i < w * h; ++i) {
+        img->rgba[static_cast<std::size_t>(i) * 4 + 0] = r;
+        img->rgba[static_cast<std::size_t>(i) * 4 + 1] = g;
+        img->rgba[static_cast<std::size_t>(i) * 4 + 2] = b;
+        img->rgba[static_cast<std::size_t>(i) * 4 + 3] = 255;
+    }
+    return img;
+}
+
+}  // namespace
+
+TEST_CASE("is_image_file detects common image extensions", "[file_viewer][image]") {
+    REQUIRE(is_image_file("logo.png"));
+    REQUIRE(is_image_file("a/b/c.PNG"));      // 大小写不敏感
+    REQUIRE(is_image_file("photo.jpeg"));
+    REQUIRE(is_image_file("photo.jpg"));
+    REQUIRE(is_image_file("img.webp"));
+    REQUIRE(is_image_file("icon.bmp"));
+    REQUIRE(is_image_file("anim.gif"));
+    REQUIRE(is_image_file("tex.tga"));
+    REQUIRE_FALSE(is_image_file("main.cpp"));
+    REQUIRE_FALSE(is_image_file("readme.md"));
+    REQUIRE_FALSE(is_image_file("noext"));
+    REQUIRE_FALSE(is_image_file("dir.with.dot/name"));
+}
+
+TEST_CASE("file viewer image mode shows path and size meta", "[file_viewer][render][image]") {
+    FileViewState f;
+    f.path = "assets/logo.png";
+    f.image = make_image(64, 32, 255, 0, 0);
+
+    const auto text = render_elem(build_file_viewer(f), 40, 24);
+    INFO("RENDERED:\n" << text);
+    REQUIRE(text.find("assets/logo.png") != std::string::npos);
+    REQUIRE(text.find("64x32") != std::string::npos);
+    REQUIRE(text.find("图片预览") != std::string::npos);
+}
+
+TEST_CASE("image content renders half-block truecolor cells", "[file_viewer][render][image]") {
+    // 2x2 图像：左上红 / 右上绿 / 左下蓝 / 右下白（半块每终端单元格 2 像素）
+    auto img = std::make_shared<ImageData>();
+    img->width = 2;
+    img->height = 2;
+    img->rgba = {255, 0, 0, 255,  0, 255, 0, 255,   //
+                 0, 0, 255, 255,  255, 255, 255, 255};
+
+    auto e = build_image_content(*img, 40, 24, 0);
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(40),
+                                        ftxui::Dimension::Fixed(24));
+    ftxui::Render(screen, e);
+
+    // 收集半块 cell（应恰好 2 个，水平居中于 40 宽：x=19/x=20）
+    struct Seen {
+        int x;
+        ftxui::Color fg;
+        ftxui::Color bg;
+    };
+    std::vector<Seen> seen;
+    for (int y = 0; y < 24 && seen.size() < 3; ++y)
+        for (int x = 0; x < 40; ++x) {
+            const auto& cell = screen.PixelAt(x, y);
+            if (cell.character == "\u2580")
+                seen.push_back({x, cell.foreground_color, cell.background_color});
+        }
+    REQUIRE(seen.size() == 2);
+    // 左半块：上=红(左上) 下=蓝(左下)
+    REQUIRE(seen[0].fg == ftxui::Color::RGB(255, 0, 0));
+    REQUIRE(seen[0].bg == ftxui::Color::RGB(0, 0, 255));
+    // 右半块：上=绿(右上) 下=白(右下)
+    REQUIRE(seen[1].fg == ftxui::Color::RGB(0, 255, 0));
+    REQUIRE(seen[1].bg == ftxui::Color::RGB(255, 255, 255));
+}
+
+TEST_CASE("image_view_rows fits aspect ratio without upscale", "[file_viewer][image]") {
+    // 400x200 在 40 列视口：宽比 0.1 → 垂直 200*0.1=20 像素 = 10 半块行
+    ImageData img;
+    img.width = 400;
+    img.height = 200;
+    img.rgba.resize(static_cast<std::size_t>(400) * 200 * 4, 0);
+    REQUIRE(image_view_rows(img, 40, 10) == 10);
+
+    // 小图不放大：4x2 → 视口 40x24，scale 钳到 1 → 保持原尺寸 → ceil(2/2)=1 行
+    ImageData small;
+    small.width = 4;
+    small.height = 2;
+    small.rgba.resize(static_cast<std::size_t>(4) * 2 * 4, 0);
+    REQUIRE(image_view_rows(small, 40, 24) == 1);
+
+    // 2x4 → 保持原尺寸 → ceil(4/2)=2 行
+    ImageData tall;
+    tall.width = 2;
+    tall.height = 4;
+    tall.rgba.resize(static_cast<std::size_t>(2) * 4 * 4, 0);
+    REQUIRE(image_view_rows(tall, 40, 24) == 2);
+}
+
+TEST_CASE("decode_image_file decodes real PNG from repo", "[file_viewer][image]") {
+    const auto png = (std::filesystem::path(SOURCE_DIR) / "docs" / "img" /
+                      "11_module_dependency.png")
+                         .string();
+    std::string err;
+    auto img = decode_image_file(png, &err);
+    REQUIRE(img != nullptr);
+    REQUIRE(img->width > 0);
+    REQUIRE(img->height > 0);
+    REQUIRE(img->rgba.size() ==
+            static_cast<std::size_t>(img->width) * img->height * 4);
+}
+
+TEST_CASE("decode_image_file reports error for missing file", "[file_viewer][image]") {
+    std::string err;
+    auto img = decode_image_file("no_such_file.png", &err);
+    REQUIRE(img == nullptr);
+    REQUIRE_FALSE(err.empty());
 }

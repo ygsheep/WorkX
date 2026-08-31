@@ -54,6 +54,7 @@
 #include "theme/strings.h"
 #include "theme/theme.h"
 #include "clipboard.h"
+#include "render/image_view.h"
 #include "render/markdown_to_elements.h"
 #include "render/transcript_layout.h"
 #include "widgets/sidebar.h"
@@ -235,6 +236,19 @@ std::string status_text(const std::string& status) {
     if (status == "failed") return std::string(str::kSubStatusFailed);
     return std::string(str::kSubStatusDone);
 }
+
+/// @brief 规范化 /view、/edit、/nvim 的文件参数：去首尾空白，剥离前导 '@'
+///        （输入 `/view @path` 触发文件搜索面板，选中后保留 '@' 前缀，需去掉再解析路径）
+std::string normalize_cmd_path(const std::string& args) {
+    std::string s = args;
+    const auto is_space = [](char c) {
+        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+    };
+    while (!s.empty() && is_space(s.front())) s.erase(s.begin());
+    while (!s.empty() && is_space(s.back())) s.pop_back();
+    if (!s.empty() && s.front() == '@') s.erase(s.begin());
+    return s;
+}
 }  // namespace
 
 App::App(AppDeps deps)
@@ -271,13 +285,13 @@ App::App(AppDeps deps)
         .on_compact = [this] { compact_context(); },
         .on_view = [this](const std::string& args) { cmd_view(args); },
         .on_edit = [this](const std::string& args) { cmd_edit(args); },
-        .on_nvim = [this] { cmd_nvim(); },
+        .on_nvim = [this](const std::string& args) { cmd_nvim(args); },
         .on_test_askuser = [this] { cmd_test_askuser(); },
     });
 
     // B2 统一命令：App 持有唯一命令处理器（消费 agent 注册表，含内置命令）
     m_command_processor = std::make_unique<agent::input::InputProcessor>(
-        m_deps.command_registry, std::make_shared<agent::input::LocalFileLoader>());
+        m_deps.command_registry);
 
     // 加载磁盘 skills（.claude/skills）并注册为命令 → "/" 提示面板与 Skill 工具共用
     // （对齐 src/app/main.cpp；终端 author 在 ftxtui 路径保留 skill 为斜杠命令可执行）
@@ -1087,13 +1101,8 @@ void App::cmd_rename(const std::string& args) {
 /// @brief /view：打开文件只读查看器（读取 ≤2MB + 按行切分 + 语言推断 + 定位）
 /// @details 相对路径基于当前工作目录解析；超限截断并提示。打开后切到文件 tab。
 void App::cmd_view(const std::string& args) {
-    // 去首尾空白
-    std::string path = args;
-    const auto is_space = [](char c) {
-        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
-    };
-    while (!path.empty() && is_space(path.front())) path.erase(path.begin());
-    while (!path.empty() && is_space(path.back())) path.pop_back();
+    // 去首尾空白 + 剥离前导 '@'（@path 面板触发语义）
+    const std::string path = normalize_cmd_path(args);
     if (path.empty()) {
         m_vm.apply(ActionAppendMessage{.role = "assistant",
             .text = std::string(str::kViewUsage)});
@@ -1115,6 +1124,27 @@ void App::cmd_view(const std::string& args) {
     if (!fs::is_regular_file(p, ec)) {
         m_vm.apply(ActionAppendMessage{.role = "assistant",
             .text = std::string(str::kViewNotFound) + path + std::string(str::kCloseParenNl)});
+        return;
+    }
+
+    // —— 图片文件：/view 与项目树点击共用此路径（stb 解码 → 半块 truecolor 预览）——
+    if (is_image_file(p.string())) {
+        std::string err;
+        auto img = decode_image_file(p.string(), &err);
+        m_vm.tabs.file.path = p.string();
+        m_vm.tabs.file.lang.clear();
+        m_vm.tabs.file.scroll = 0;
+        m_vm.tabs.file.dirty = false;
+        m_vm.tabs.file.changes.clear();
+        m_vm.tabs.file.image = std::move(img);
+        if (m_vm.tabs.file.image) {
+            m_vm.tabs.file.lines.clear();
+        } else {
+            m_vm.tabs.file.lines = {"（图片解码失败：" + err + "）"};
+        }
+        m_vm.tabs.file_open = true;
+        m_vm.tabs.active = SidebarTab::kFiles;
+        m_screen.RequestAnimationFrame();
         return;
     }
 
@@ -1157,6 +1187,7 @@ void App::cmd_view(const std::string& args) {
     }
 
     m_vm.tabs.file.path = p.string();
+    m_vm.tabs.file.image.reset();
     m_vm.tabs.file.lines = std::move(lines);
     m_vm.tabs.file.lang = lang_from_path(p.string());
     m_vm.tabs.file.scroll = 0;
@@ -1174,12 +1205,8 @@ void App::cmd_view(const std::string& args) {
 ///          WithRestoredIO 全屏切换启动 nvim（模态）→ 返回后重读文件。
 ///          闭包必须在 UI 线程执行（Uninstall/Install 直接操作终端句柄）。
 void App::cmd_edit(const std::string& args) {
-    std::string path = args;
-    const auto is_space = [](char c) {
-        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
-    };
-    while (!path.empty() && is_space(path.front())) path.erase(path.begin());
-    while (!path.empty() && is_space(path.back())) path.pop_back();
+    // 去首尾空白 + 剥离前导 '@'（@path 面板触发语义）
+    const std::string path = normalize_cmd_path(args);
     if (path.empty()) {
         m_vm.apply(ActionAppendMessage{.role = "assistant",
             .text = std::string(str::kEditUsage)});
@@ -1214,6 +1241,7 @@ void App::cmd_edit(const std::string& args) {
         // 新建文件：初始化空文件 tab（无磁盘内容可读）
         m_vm.tabs.file.path = p.string();
         m_vm.tabs.file.lines.clear();
+        m_vm.tabs.file.image.reset();
         m_vm.tabs.file.changes.clear();
         m_vm.tabs.file.lang = lang_from_path(p.string());
         m_vm.tabs.file.scroll = 0;
@@ -1222,7 +1250,7 @@ void App::cmd_edit(const std::string& args) {
         m_vm.tabs.active = SidebarTab::kFiles;
     } else {
         // 打开文件 tab 显示当前内容（复用 /view 读取 + 行号 + 内联 diff）
-        cmd_view(args);
+        cmd_view(path);
     }
 
     if (is_new)
@@ -1258,8 +1286,11 @@ void App::cmd_edit(const std::string& args) {
     m_screen.RequestAnimationFrame();
 }
 
-/// @brief /nvim：在当前目录启动 nvim（WithRestoredIO 全屏切换，模态）
-void App::cmd_nvim() {
+/// @brief /nvim：启动 nvim（可带文件路径；WithRestoredIO 全屏切换，模态）
+void App::cmd_nvim(const std::string& args) {
+    // 去首尾空白 + 剥离前导 '@'（@path 面板触发语义）；空 = 在当前目录启动
+    const std::string path = normalize_cmd_path(args);
+
     auto nvim = agent::process::ToolRegistry::instance().find_executable("nvim");
     if (!nvim) {
         m_vm.apply(ActionAppendMessage{.role = "assistant",
@@ -1271,7 +1302,14 @@ void App::cmd_nvim() {
 
     bool launched = false;
     auto edit = m_screen.WithRestoredIO([&] {
-        auto r = agent::process::exec_interactive(*nvim, {});
+        std::vector<std::string> argv;
+        if (!path.empty()) {
+            namespace fs = std::filesystem;
+            fs::path p(path);
+            if (!p.is_absolute()) p = fs::current_path() / p;
+            argv.push_back(p.string());
+        }
+        auto r = agent::process::exec_interactive(*nvim, argv);
         if (r.is_ok()) launched = true;
     });
     edit();
@@ -1593,6 +1631,7 @@ void App::reload_file() {
     }
 
     m_vm.tabs.file.lines = std::move(lines);
+    m_vm.tabs.file.image.reset();
     m_vm.tabs.file.lang = lang_from_path(p.string());
     m_vm.tabs.file.dirty = false;
     if (truncated)

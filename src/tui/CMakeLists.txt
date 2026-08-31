@@ -24,6 +24,26 @@ if(MSVC)
     endforeach()
 endif()
 
+# ---- stb_image（vendored 单头图像解码库）----
+# 实现单元 stb_image.cpp 独立编译为静态库，避免把第三方实现直接编进 workx
+# 目标（会继承宿主 /we 告警策略）。MSVC 下 /FI 注入抑制头豁免 /we（同 ftxui/
+# tree-sitter grammar 的处理），并顺带压掉第三方常见噪音告警。
+add_library(stb_image STATIC
+    ${CMAKE_SOURCE_DIR}/third_party/stb/stb_image.cpp
+)
+target_include_directories(stb_image PUBLIC ${CMAKE_SOURCE_DIR}/third_party/stb)
+if(MSVC)
+    target_compile_options(stb_image PRIVATE
+        "/FI${CMAKE_SOURCE_DIR}/third_party/stb/suppress_msvc_warnings.h"
+        /wd4244 /wd4100 /wd4267 /wd4456 /wd4996
+    )
+else()
+    target_compile_options(stb_image PRIVATE
+        -Wno-unused-function
+        -Wno-unused-variable
+    )
+endif()
+
 add_executable(workx
     main.cpp
     app.cpp
@@ -35,6 +55,7 @@ add_executable(workx
     bridge/event_bridge.cpp
     render/markdown_to_elements.cpp
     render/code_card.cpp
+    render/image_view.cpp
     render/syntax_highlight.cpp
     widgets/sidebar.cpp
     widgets/sidebar_tabs.cpp
@@ -135,6 +156,7 @@ target_link_libraries(workx PRIVATE
     workx_agent
     workx_core
     workx_island
+    stb_image
     ftxui::screen
     ftxui::dom
     ftxui::component

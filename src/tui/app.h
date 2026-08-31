@@ -149,8 +149,8 @@ private:
     void cmd_view(const std::string& args);
     /// @brief /edit：内嵌 nvim 编辑文件（WithRestoredIO 全屏切换，返回后重读）
     void cmd_edit(const std::string& args);
-    /// @brief /nvim：启动 nvim（当前目录，WithRestoredIO 全屏切换）
-    void cmd_nvim();
+    /// @brief /nvim：启动 nvim（可选文件路径，WithRestoredIO 全屏切换）
+    void cmd_nvim(const std::string& args);
     /// @brief Ctrl+G：打开系统默认编辑器编辑当前输入（写入 ~/.workx/prompt.md，
     ///        编辑器结束后读回并替换输入框内容）
     void edit_prompt();

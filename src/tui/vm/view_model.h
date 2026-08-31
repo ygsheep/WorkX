@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -129,14 +130,22 @@ struct FileChange {
     int new_start = 0;         ///< 修改区块在文件中的起始行（/view 打开时定位，1-based）
 };
 
+/// @brief 解码后的图片数据（RGBA；加载时已下采样控制内存）
+struct ImageData {
+    int width = 0;              ///< 像素宽
+    int height = 0;             ///< 像素高
+    std::vector<uint8_t> rgba;  ///< RGBA 像素（width*height*4）
+};
+
 /// @brief 文件 tab 状态（/view 只读查看器）
 struct FileViewState {
     std::string path;                ///< 当前查看文件（空=未打开）
-    std::vector<std::string> lines;  ///< 当前内容（按行）
+    std::vector<std::string> lines;  ///< 当前内容（按行；图片视图为空）
     std::string lang;                ///< 高亮语言（扩展名推断）
     int scroll = 0;                  ///< 首行索引（虚拟化滚动）
     bool dirty = false;              ///< /edit 后需重读（P6 联动）
     std::vector<FileChange> changes; ///< 该文件会话内修改（内联高亮用）
+    std::shared_ptr<ImageData> image; ///< 图片视图数据（非空 = 图片预览模式）
 };
 
 /// @brief 变更记录 tab 状态

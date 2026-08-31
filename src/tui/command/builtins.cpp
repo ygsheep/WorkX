@@ -151,10 +151,10 @@ void register_ftx_builtins(CommandRegistry& registry,
 
     auto nvim_cmd =
         agent::command::make_local_command("nvim", std::string(str::kCmdNvimDesc));
-    nvim_cmd->set_argument_hint("/nvim");
-    nvim_cmd->set_call([on_nvim = cb.on_nvim](const std::string&,
+    nvim_cmd->set_argument_hint("/nvim [<file>]");
+    nvim_cmd->set_call([on_nvim = cb.on_nvim](const std::string& args,
                                               const CommandContext&) -> CommandResult {
-        if (on_nvim) on_nvim();
+        if (on_nvim) on_nvim(args);
         return CommandResult::ok("");
     });
     registry.register_command(nvim_cmd);

@@ -104,6 +104,28 @@ TEST_CASE("parse_suggest_query trailing at wins over slash", "[suggest][parse]")
     REQUIRE(q == "x");
 }
 
+TEST_CASE("parse_suggest_query command arg at enters file mode", "[suggest][parse]") {
+    std::string q;
+    // "/view @path"：命令参数用 @ 触发文件搜索面板，优先文件模式
+    REQUIRE(parse_suggest_query("/view @", q) == SuggestMode::File);
+    REQUIRE(q.empty());
+    REQUIRE(parse_suggest_query("/view @src", q) == SuggestMode::File);
+    REQUIRE(q == "src");
+    REQUIRE(parse_suggest_query("/nvim @src/core/main.cpp", q) == SuggestMode::File);
+    REQUIRE(q == "src/core/main.cpp");
+    // 命令多词（含空格）+ @ 同样走文件模式
+    REQUIRE(parse_suggest_query("/skill-001 看 @app", q) == SuggestMode::File);
+    REQUIRE(q == "app");
+}
+
+TEST_CASE("parse_suggest_query command arg without at stays command mode", "[suggest][parse]") {
+    std::string q;
+    // 命令参数不带 @：仍为命令模式（如 /view、/nvim 自身补全）
+    REQUIRE(parse_suggest_query("/view", q) == SuggestMode::Command);
+    REQUIRE(q == "view");
+    REQUIRE(parse_suggest_query("/nvim x", q) == SuggestMode::None);
+}
+
 // ============================================================================
 // filter_commands：子串过滤
 // ============================================================================

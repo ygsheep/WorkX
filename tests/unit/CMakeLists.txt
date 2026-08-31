@@ -95,6 +95,7 @@ if(TUI_TEST_SOURCES)
         ${WORKX_ROOT}/src/tui/widgets/project_tree.cpp
         ${WORKX_ROOT}/src/tui/widgets/provider_manager.cpp
         ${WORKX_ROOT}/src/tui/render/code_card.cpp
+        ${WORKX_ROOT}/src/tui/render/image_view.cpp
         ${WORKX_ROOT}/src/tui/wizard.cpp
     )
     target_include_directories(tui_unit_tests PRIVATE
@@ -108,6 +109,7 @@ if(TUI_TEST_SOURCES)
     target_link_libraries(tui_unit_tests PRIVATE
         workx_agent
         workx_core
+        stb_image
         ftxui::dom
         ftxui::screen
         ftxui::component

@@ -67,7 +67,7 @@ std::string now_iso() {
 
 namespace {
 
-/// @brief 提取消息中的 <file path="..."> 引用（@file 展开产物），加入 touch 收集器
+/// @brief 提取消息中的 <file path="..."> 引用，加入 touch 收集器
 /// @details 只识别显式 file 标签，避免裸路径误报
 void extract_file_path_touches(const std::string& text, skill::TouchCollector& collector) {
     static const std::string kTag = "<file path=\"";

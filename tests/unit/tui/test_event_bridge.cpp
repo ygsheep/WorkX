@@ -44,6 +44,7 @@ size_t bridge_subscriber_count(MockEventBus& bus) {
     n += bus.subscriber_count_typed<agent::McpStatusChangedEvent>();  // #27 M4：MCP 状态
     n += bus.subscriber_count_typed<agent::MessageQueueUpdatedEvent>();  // 消息队列更新
     n += bus.subscriber_count_typed<agent::QueuedMessagesFlushedEvent>();  // 队列冲刷回显
+    n += bus.subscriber_count_typed<agent::HookProgressEvent>();  // Issue #50 M-2：Hook 进度
     n += bus.subscriber_count_typed<agent::ShutdownEvent>();
     return n;
 }
@@ -56,8 +57,8 @@ TEST_CASE("EventBridge start subscribes all UI events", "[event_bridge][start]")
     EventBridge bridge(bus, queue);
     bridge.start();
 
-    REQUIRE(bridge_subscriber_count(bus) == 21);
-    REQUIRE(bus.total_subscriber_count() == 21);
+    REQUIRE(bridge_subscriber_count(bus) == 22);
+    REQUIRE(bus.total_subscriber_count() == 22);
 }
 
 TEST_CASE("EventBridge stop unsubscribes every registered event", "[event_bridge][stop]") {

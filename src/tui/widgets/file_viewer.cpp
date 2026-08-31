@@ -13,6 +13,7 @@
 
 #include "core/utils/line_diff.h"
 #include "render/code_card.h"
+#include "render/image_view.h"
 #include "render/syntax_highlight.h"
 #include "theme/strings.h"
 #include "theme/theme.h"
@@ -228,6 +229,43 @@ Element build_file_viewer(const FileViewState& file, int avail_width,
         });
     }
 
+    // —— 图片预览模式（/view 或项目树点击图片）——
+    if (file.image) {
+        const int avail_w =
+            avail_width > 0 ? avail_width
+                            : std::max(40, ftxui::Terminal::Size().dimx - 4);
+        const int avail_h = avail_height > 0 ? avail_height
+                                             : visible_line_count();
+        const int rows = image_view_rows(*file.image, avail_w, avail_h);
+        const int scroll =
+            std::clamp(file.scroll, 0, std::max(0, rows - avail_h));
+
+        const std::string meta =
+            std::to_string(file.image->width) + "x" +
+            std::to_string(file.image->height);
+        const std::string hint =
+            rows > avail_h ? std::string(str::kViewScrollHint)
+                           : std::string(str::kViewImageHint);
+
+        return ftxui::vbox({
+            ftxui::hbox({
+                ftxui::text(" "),
+                ftxui::text(file.path) | ftxui::color(theme::T::Text),
+                ftxui::flex(ftxui::text("")),
+                ftxui::text(meta) | ftxui::color(theme::T::TextFaint),
+                ftxui::text(" "),
+            }),
+            ftxui::separator() | ftxui::color(theme::T::TextFaint),
+            build_image_content(*file.image, avail_w, avail_h, scroll)
+                | ftxui::bgcolor(theme::T::Panel),
+            ftxui::separator() | ftxui::color(theme::T::TextFaint),
+            ftxui::hbox({
+                ftxui::text("  "),
+                ftxui::text(hint) | ftxui::color(theme::T::TextFaint),
+            }),
+        });
+    }
+
     int num_w = 1;
     std::vector<std::vector<HighlightSpan>> line_spans;
     std::vector<FlatRow> flat =
@@ -281,12 +319,26 @@ public:
 
     bool OnEvent(ftxui::Event event) override {
         if (!m_file || m_file->path.empty()) return false;
-        const int visible = visible_line_count();
         const int avail = m_box.IsEmpty() ? 0 : (m_box.x_max - m_box.x_min + 1);
-        int num_w = 1;
-        const std::size_t flat_size =
-            build_flat_rows(*m_file, avail, &num_w, nullptr).size();
-        const int max_scroll = std::max(0, static_cast<int>(flat_size) - visible);
+        const int avail_h = m_box.IsEmpty() ? 0 : (m_box.y_max - m_box.y_min + 1);
+        const int visible = avail_h > 0 ? avail_h : visible_line_count();
+
+        // 滚动上限：图片按缩放后行数，文本按折行后扁平行数
+        int max_scroll = 0;
+        if (m_file->image) {
+            const int w =
+                avail > 0 ? avail
+                          : std::max(40, ftxui::Terminal::Size().dimx - 4);
+            max_scroll = std::max(
+                0, image_view_rows(*m_file->image, w, visible) - visible);
+        } else {
+            int num_w = 1;
+            const std::size_t flat_size =
+                build_flat_rows(*m_file, avail, &num_w, nullptr).size();
+            max_scroll =
+                std::max(0, static_cast<int>(flat_size) - visible);
+        }
+
         if (event == ftxui::Event::ArrowUp) {
             m_file->scroll = std::max(0, m_file->scroll - 1);
             return true;
@@ -321,6 +373,11 @@ public:
     Element OnRender() override {
         if (!m_file) return ftxui::emptyElement();
         const int avail = m_box.IsEmpty() ? 0 : (m_box.x_max - m_box.x_min + 1);
+        const int avail_h = m_box.IsEmpty() ? 0 : (m_box.y_max - m_box.y_min + 1);
+        // 图片模式需传入实际可视高度以做缩放与滚动钳制；文本模式保持原调用
+        if (m_file->image)
+            return build_file_viewer(*m_file, avail, avail_h)
+                   | ftxui::reflect(m_box);
         return build_file_viewer(*m_file, avail) | ftxui::reflect(m_box);
     }
 
