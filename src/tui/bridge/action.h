@@ -42,6 +42,23 @@ struct ActionAppendSkill {
     bool is_error = false; ///< 技能本地解析是否出错
 };
 
+/// @brief 本地命令执行完成：合成 Bash 卡片（！命令，跨平台 cmd/sh）
+/// @details Enter 触发：仅执行并展示结果卡；卡片复用现有 Shell 工具卡渲染
+///          （tool_name="Bash"，arguments 含 command，result 用 <stdout>/<stderr>/
+///          <exit_code> 或 <error> 标签）。卡片只存在于 ViewModel 转录区。
+struct ActionAppendCmdResult {
+    std::string command;   ///< 命令文本（卡 subject 展示）
+    std::string result;    ///< 已组装好标签文本（<stdout>/<stderr>/<exit_code> 或 <error>）
+    bool is_error = false; ///< 执行/退出码非 0 是否视为失败（默认展开）
+};
+
+/// @brief 把结构化命令结果作为用户消息提交给模型（！命令 + Ctrl+Enter）
+/// @details UI 线程处理：回显 user 消息 + 置 busy + on_submit（文本已含命令、
+///          退出码与输出，便于模型理解上下文）。
+struct ActionSubmitCmdToModel {
+    std::string text;      ///< 结构化文本（用户执行了什么命令、结果如何）
+};
+
 /// @brief 流式正文增量（追加到当前流式消息节点）
 struct ActionTokenDelta {
     std::string content_delta;
@@ -296,6 +313,8 @@ struct ActionHookProgress {
 using Action = std::variant<
     ActionAppendMessage,
     ActionAppendSkill,
+    ActionAppendCmdResult,
+    ActionSubmitCmdToModel,
     ActionTokenDelta,
     ActionReasoningDelta,
     ActionStepDone,

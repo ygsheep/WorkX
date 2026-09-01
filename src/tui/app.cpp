@@ -46,6 +46,7 @@
 #include "agent/skill/inclaude/skill_loader.h"
 #include "agent/skill/inclaude/skill_prompt.h"  // build_skills_prompt_section：skills 摘要注入 System Prompt
 #include "command/builtins.h"
+#include "agent/tool/ShellTool/shell_detector.h"  // ！命令 shell（Windows 优先 Git Bash，降级 cmd.exe）
 #include "core/events/stream_events.h"
 #include "core/process/subprocess.h"
 #include "core/process/tool_registry.h"
@@ -351,6 +352,8 @@ App::~App() {
     if (m_anim_thread.joinable()) m_anim_thread.join();
     m_stream_run = false;
     if (m_stream_thread.joinable()) m_stream_thread.join();
+    // ！命令执行线程：join 确保无在途 push 后，队列才随成员析构销毁。
+    if (m_cmd_thread.joinable()) m_cmd_thread.join();
     // 复制提示自清除线程不触碰任何成员（析构安全）；join 等待它结束时 m_screen 仍存活。
     if (m_copy_flash_thread.joinable()) m_copy_flash_thread.join();
     // 先置停止信号并 join 项目扫描线程，确保无在途入队后，再停桥接清空队列。
@@ -580,6 +583,22 @@ void App::drain() {
             }
             if (auto* failed = std::get_if<ActionProviderSwitchFailed>(&a)) {
                 handle_provider_switch_failed(failed->provider_name);
+                changed = true;
+                continue;
+            }
+            // ！命令 Ctrl+Enter：把结构化命令结果作为用户消息提交给模型
+            //（Bash 卡已由 ActionAppendCmdResult 先行渲染，此处仅发送）
+            if (auto* cmd2m = std::get_if<ActionSubmitCmdToModel>(&a)) {
+                m_vm.apply(ActionAppendMessage{.role = "user", .text = cmd2m->text});
+                m_vm.apply(ActionSetBusy{.busy = true});
+                m_follow = true;
+                if (m_deps.on_submit) {
+                    m_deps.on_submit(cmd2m->text, {});
+                    // 唤醒事件循环消费积压事件（同 send_input / run_command）
+                    m_screen.PostEvent(Event::Custom);
+                } else {
+                    m_vm.apply(ActionSetBusy{.busy = false});
+                }
                 changed = true;
                 continue;
             }
@@ -2165,6 +2184,14 @@ void App::send_input(const std::string& text, bool force_flush) {
         m_input_history.save();
     }
 
+    // ！命令：以 '!' 开头视为 Shell 命令执行（跨平台 cmd/sh）。
+    // 顺序置于技能/斜杠命令之前，避免命令串内含 '/...' 被误判为技能调用。
+    // Enter 只执行并渲染 Bash 卡；Ctrl+Enter（force_flush）再把结果结构化发给模型。
+    if (!text.empty() && text[0] == '!') {
+        run_shell_command(text, force_flush);
+        return;
+    }
+
     // 技能命令任意位置调用：/skill-name 可出现在消息任何位置（含开头）。
     // 命中即：回显原始输入 + 注入合成 Skill 卡片 + 本地解析后路由模型。
     if (!text.empty() && m_deps.command_registry) {
@@ -2348,6 +2375,99 @@ void App::run_command(const std::string& cmd, const std::string& args) {
             m_screen.PostEvent(Event::Custom);  // 同 send_input：唤醒事件循环消费积压事件
         }
     }
+}
+
+namespace {
+
+/// @brief 跨平台执行一条 Shell 命令，复用 shell_detect::detect()。
+/// @details Windows 优先 Git Bash（bash -c），未安装则降级 cmd.exe（/c）；
+///          POSIX 走 /bin/sh -c。与 BashTool 共用同一 shell 判定，保证命令语义一致，
+///          例如 `!ls`、`!grep` 在安装 Git Bash 的 Windows 上可直接执行。
+///          设超时防命令挂死。
+agent::ResultV2<agent::process::ExecOutput> exec_shell_command(
+    const std::string& command) {
+    // 引用静态缓存，程序生命周期内有效（shell_detect::detect 已做线程安全缓存）
+    const auto& sh = agent::tool::shell_detect::detect();
+    agent::process::ExecOptions opts;
+    opts.args = {sh.flag, command};
+    opts.timeout = std::chrono::milliseconds(120000);
+    return agent::process::exec(sh.cmd, opts);
+}
+
+/// @brief 组装发给模型的结构化命令结果（用户执行了什么命令、结果如何）
+std::string build_cmd_submit_text(
+    const std::string& command,
+    const agent::ResultV2<agent::process::ExecOutput>& res) {
+    std::string out = "用户执行了 Shell 命令：\n```bash\n" + command + "\n```\n";
+    if (res.is_err()) {
+        out += "\n命令启动失败：" + res.error().message;
+    } else {
+        const auto& r = res.value();
+        if (r.cancelled) {
+            out += "\n命令执行已被取消。";
+        } else if (r.timed_out) {
+            out += "\n命令执行超时。";
+        } else {
+            out += "\n命令退出码：" + std::to_string(r.exit_code) + "\n";
+            if (!r.stdout_text.empty())
+                out += "\n标准输出：\n" + r.stdout_text + "\n";
+            if (!r.stderr_text.empty())
+                out += "\n标准错误：\n" + r.stderr_text + "\n";
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
+void App::run_shell_command(const std::string& raw_input, bool send_to_model) {
+    std::string command = raw_input.substr(1);  // 去前导 '!'
+    const size_t b = command.find_first_not_of(" \t\n\r");
+    const size_t e = command.find_last_not_of(" \t\n\r");
+    if (b == std::string::npos) return;         // 空命令：忽略
+    command = command.substr(b, e - b + 1);
+
+    // 回显用户输入（含 '!' 前缀）
+    m_vm.apply(ActionAppendMessage{.role = "user", .text = raw_input});
+    if (m_deps.mock_mode) return;  // mock 模式不真实执行（合成结果卡由 mock 演示）
+
+    // 串行执行：上一命令未结束则等待，避免并发命令 push 交错
+    if (m_cmd_thread.joinable()) m_cmd_thread.join();
+
+    m_cmd_thread = std::thread([this, command, send_to_model] {
+        auto res = exec_shell_command(command);
+        std::string result;
+        bool is_error = false;
+        if (res.is_err()) {
+            result = std::string("<error>\n命令启动失败：") + res.error().message + "\n</error>";
+            is_error = true;
+        } else {
+            const auto& out = res.value();
+            if (out.cancelled || out.timed_out) {
+                result = std::string("<error>\n命令") +
+                         (out.timed_out ? "执行超时" : "执行已被取消") + "\n</error>";
+                is_error = true;
+            } else {
+                if (out.stdout_text.empty()) {
+                    result = "<stdout>\n</stdout>\n";
+                } else {
+                    result = "<stdout>\n" + out.stdout_text + "\n</stdout>\n";
+                }
+                if (!out.stderr_text.empty())
+                    result += "<stderr>\n" + out.stderr_text + "\n</stderr>\n";
+                result += "<exit_code>" + std::to_string(out.exit_code) + "</exit_code>";
+                is_error = (out.exit_code != 0);
+            }
+        }
+        m_queue.push(ActionAppendCmdResult{
+            .command = command, .result = std::move(result), .is_error = is_error});
+        if (send_to_model) {
+            m_queue.push(ActionSubmitCmdToModel{
+                .text = build_cmd_submit_text(command, res)});
+        }
+        // 唤醒 UI 线程消费队列并重绘（模拟流/项目扫描/轮询线程同一模式）
+        m_screen.PostEvent(ftxui::Event::Custom);
+    });
 }
 
 void App::start_mock_stream(const std::string& user_text) {

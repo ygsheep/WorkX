@@ -70,6 +70,35 @@ bool ViewModel::apply_variant(const ActionAppendSkill& a) {
     return true;
 }
 
+bool ViewModel::apply_variant(const ActionAppendCmdResult& a) {
+    // ！命令执行结果：合成独立 assistant 消息承载 Bash 卡（复用 Shell 工具卡渲染：
+    // tool_name="Bash" → 标题取 arguments.command，结果剥离 <stdout>/<stderr>/<exit_code>
+    // 标签、<error> 红色显示）。本地合成完成态（无 running），出错默认展开。
+    MessageNode n;
+    n.role = MsgRole::Assistant;
+    n.sealed = true;
+    n.notice = true;  // UI 通知，非模型回复 → 不显示重试/复制按钮栏
+    ToolCallNode t;
+    t.tool_name = "Bash";
+    t.call_id = "";  // 本地合成，无真实 tool_call id
+    t.arguments = nlohmann::json{{"command", a.command}}.dump();
+    t.result = a.result;
+    t.done = true;
+    t.running = false;
+    t.is_error = a.is_error;
+    t.expanded = a.is_error;
+    t.text_pos = n.text.size();
+    n.tool_calls.push_back(std::move(t));
+    messages.push_back(std::move(n));
+    return true;
+}
+
+bool ViewModel::apply_variant(const ActionSubmitCmdToModel&) {
+    // 由 App 层在 drain 中处理（回显 user + 置 busy + on_submit），此处仅满足
+    // std::visit 编译对全部 variant 类型需有重载的要求，不参与渲染。
+    return false;
+}
+
 bool ViewModel::apply_variant(const ActionTokenDelta& a) {
     auto& m = active_stream();
     m.streaming = true;

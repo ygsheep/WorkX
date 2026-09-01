@@ -138,6 +138,10 @@ private:
                                  const std::string& args);
     /// @brief 统一命令执行入口（斜杠命令经 InputProcessor → CommandExecutor）
     void run_command(const std::string& cmd, const std::string& args);
+    /// @brief ！命令执行（输入以 '!' 开头）：跨平台 Shell 执行 + 合成 Bash 卡
+    /// @param raw_input 含 '!' 前缀的原始输入（回显用）
+    /// @param send_to_model true=Ctrl+Enter：再把结构化（命令/退出码/输出）提交给模型
+    void run_shell_command(const std::string& raw_input, bool send_to_model);
     void start_mock_stream(const std::string& user_text);
     void cmd_resume(const std::string& args);
     void cmd_rename(const std::string& args);
@@ -439,6 +443,10 @@ private:
     // mock 流式输出（后台线程逐步入队 token，模拟 LLM 流式回复）
     std::atomic<bool> m_stream_run{false}; ///< 流式线程运行标志
     std::thread m_stream_thread;           ///< 流式线程
+
+    /// @brief ！命令执行线程（后台 exec + m_queue.push 合成 Bash 卡；析构 join）
+    /// @details 串行执行（新命令启动前 join 旧命令），避免并发命令交错。
+    std::thread m_cmd_thread;
 
     // 冒烟模式（B5）状态：driver 线程经 atomic 与 UI 线程通信
     std::atomic<int> m_exit_code{0};       ///< 退出码（0=通过；1=超时）
