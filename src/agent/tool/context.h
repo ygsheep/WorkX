@@ -33,6 +33,12 @@ class ICompletionProvider;
 // 前向声明：HookManager（#50 通用 Hook 事件系统，工具线程触发 PermissionRequest / Subagent* 事件）
 namespace hook { class HookManager; }
 
+// 前向声明：McpClientManager（#56 方案 D，MCP 连接管理器；完整类型位于 agent/mcp/mcp_client_manager.h）
+namespace mcp { class McpClientManager; }
+
+// 前向声明：CommandRegistry（#56 方案 C，命令注册表；完整类型位于 agent/command/inclaude/registry.h）
+namespace command { class CommandRegistry; }
+
 namespace tool {
 
 /// @brief 前向声明：ToolRegistry（AgentTool 为子 Agent 构造工具集）
@@ -212,6 +218,19 @@ struct ToolContext {
     ///          AgentTool 为子 Agent 构造工具集（get_all_schemas）。
     ///          nullptr 时子 Agent 无工具可用。
     std::shared_ptr<ToolRegistry> tool_registry;
+
+    /// @brief 技能/命令注册表（可选，非拥有，#56 方案 C）
+    /// @details 由调用方（ReActLoop）显式注入其持有的 CommandRegistry（bundled + 磁盘技能）。
+    ///          AgentTool 按 skill 名预加载全文到子 Agent 初始消息。
+    ///          nullptr 时 skill 预加载静默跳过。生命周期由调用方（ChatSession）保证。
+    command::CommandRegistry* command_registry_ptr = nullptr;
+
+    /// @brief MCP 连接管理器指针（可选，非拥有，#56 方案 D）
+    /// @details 由调用方（ReActLoop / 子 Agent 构造）显式注入。MCPTool 实际自行持有
+    ///          manager，本指针供工具在需要时访问当前作用域可用的 MCP server 集合
+    ///          （父会话全局 manager 或子 Agent 临时 manager）。nullptr 表示无可用的
+    ///          MCP 通道。生命周期由调用方保证。
+    mcp::McpClientManager* mcp_manager_ptr = nullptr;
 
     /// @brief Hook 事件管理器（可选；#50 通用 Hook 事件系统）
     /// @details 由调用方（ReActLoop）注入循环级 HookManager，供工具线程触发

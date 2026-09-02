@@ -18,6 +18,7 @@
 #include "agent/command/inclaude/registry.h"
 #include "agent/skill/inclaude/conditional.h"
 #include "agent/skill/inclaude/hooks.h"
+#include "agent/mcp/mcp_client_manager.h"  // #56 方案 D：MCP 连接管理器成员
 #include "agent/config/app_config.h"
 #include "agent/hook/hook_manager.h"  // #50 通用 Hook 事件系统：会话级 SessionStart/End
 #include "agent/audit/audit_logger.h"  // 会话生命周期审计
@@ -331,6 +332,16 @@ void ChatSession::set_command_registry(std::shared_ptr<command::CommandRegistry>
 std::shared_ptr<command::CommandRegistry> ChatSession::command_registry() const {
     std::lock_guard<std::mutex> lock(m_state_mutex);
     return m_command_registry;
+}
+
+void ChatSession::set_mcp_manager(std::shared_ptr<mcp::McpClientManager> manager) {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    m_mcp_manager = std::move(manager);
+}
+
+std::shared_ptr<mcp::McpClientManager> ChatSession::mcp_manager() const {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    return m_mcp_manager;
 }
 
 skill::TouchCollector& ChatSession::touch_collector() {
@@ -1246,6 +1257,10 @@ void ChatSession::run_completion(const std::string& user_text,
                 .queue_inject_cb = [this](std::vector<ChatMessage>& messages) {
                     inject_pending_queue(messages);
                 },
+                // #56 方案 C：命令注册表 → ToolContext（AgentTool skill 预加载来源）
+                .command_registry = m_command_registry,
+                // #56 方案 D：父会话全局 MCP 管理器（AgentTool 子 Agent mcpServers 引用复用来源）
+                .mcp_manager = m_mcp_manager,
             };
             QueryEngine query_engine(std::move(gdeps));
 

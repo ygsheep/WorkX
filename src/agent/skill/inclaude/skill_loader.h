@@ -43,4 +43,19 @@ std::vector<std::shared_ptr<command::PromptCommand>> load_skills_from_dirs(
 size_t register_bundled_skill(command::CommandRegistry& registry,
                               const std::string& skill_dir);
 
+/// @brief 返回 bundled skills 根目录（<exe_dir>/skills/bundled）
+/// @return 绝对路径；该目录不存在时返回空串（安装在未带 bundled skills 时优雅降级）
+/// @note 与 ToolRegistry 的 bundled 资源约定一致（<exe_dir>/tools/*），
+///       源码目录由 CMake POST_BUILD 拷贝到 <exe_dir>/skills/bundled
+std::string find_bundled_skills_dir();
+
+/// @brief 注册 root 下全部 bundled skills（root/<name>/SKILL.md）
+/// @param registry 目标命令注册表
+/// @param root bundled skills 根目录
+/// @return 注册的命令总数（含别名）；无子目录或全空返回 0
+/// @note 逐项复用 register_bundled_skill；同名（含别名）冲突不跨技能去重，
+///       由调用方在注册顺序上保证优先级（bundled 应先注册）
+size_t register_bundled_skills(command::CommandRegistry& registry,
+                               const std::string& root);
+
 } // namespace agent::skill

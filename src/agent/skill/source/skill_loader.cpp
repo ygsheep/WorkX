@@ -9,6 +9,7 @@
 
 #include "agent/skill/inclaude/skill_loader.h"
 #include "agent/skill/inclaude/frontmatter.h"
+#include "core/process/tool_registry.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -178,6 +179,31 @@ size_t register_bundled_skill(command::CommandRegistry& registry,
         registry.register_command(cmd);
     }
     return cmds.size();
+}
+
+std::string find_bundled_skills_dir() {
+    const auto exe_dir = agent::process::ToolRegistry::executable_dir();
+    if (exe_dir.empty()) return {};
+    std::error_code ec;
+    fs::path root = fs::path(exe_dir) / "skills" / "bundled";
+    if (!fs::is_directory(root, ec) || ec) return {};
+    return root.string();
+}
+
+size_t register_bundled_skills(command::CommandRegistry& registry,
+                               const std::string& root) {
+    if (root.empty()) return 0;
+    std::error_code ec;
+    fs::directory_iterator it(root, fs::directory_options::skip_permission_denied, ec);
+    if (ec) return 0;
+
+    size_t total = 0;
+    for (const auto& entry : it) {
+        ec.clear();
+        if (!entry.is_directory(ec) || ec) continue;
+        total += register_bundled_skill(registry, entry.path().string());
+    }
+    return total;
 }
 
 } // namespace agent::skill

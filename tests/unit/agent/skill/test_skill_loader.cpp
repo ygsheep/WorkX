@@ -327,3 +327,40 @@ TEST_CASE("find_user_skill_dirs returns existing home dirs", "[skill][loader]") 
     REQUIRE(dirs[0] == (tmp.path() / ".claude" / "skills").string());
     REQUIRE(dirs[1] == (tmp.path() / ".workx" / "skills").string());
 }
+
+TEST_CASE("register_bundled_skills registers all subdirs with Bundled source",
+          "[skill][loader]") {
+    TempDir tmp;
+    tmp.make_file("bundled/loop/SKILL.md",
+                  "---\nname: loop\ndescription: iterate\n---\n# Loop\nDo loop\n");
+    tmp.make_file("bundled/debug/SKILL.md",
+                  "---\nname: debug\ndescription: debug things\n---\n# Debug\nDo debug\n");
+    // 缺 SKILL.md 的子目录应被跳过
+    fs::create_directories(tmp.path() / "bundled/empty");
+
+    CommandRegistry registry;
+    const auto count =
+        register_bundled_skills(registry, (tmp.path() / "bundled").string());
+
+    REQUIRE(count == 2);
+    REQUIRE(registry.size() == 2);
+    REQUIRE(registry.find_by_name("loop")->loaded_from() == LoadSource::Bundled);
+    REQUIRE(registry.find_by_name("debug")->loaded_from() == LoadSource::Bundled);
+    REQUIRE(registry.find_by_name("empty") == nullptr);
+}
+
+TEST_CASE("register_bundled_skills handles empty or missing root", "[skill][loader]") {
+    TempDir tmp;
+
+    CommandRegistry empty_reg;
+    REQUIRE(register_bundled_skills(empty_reg, "") == 0);
+
+    CommandRegistry missing_reg;
+    REQUIRE(register_bundled_skills(missing_reg,
+                                    (tmp.path() / "no_such_dir").string()) == 0);
+
+    CommandRegistry empty_root_reg;
+    fs::create_directories(tmp.path() / "empty_root");
+    REQUIRE(register_bundled_skills(empty_root_reg,
+                                    (tmp.path() / "empty_root").string()) == 0);
+}

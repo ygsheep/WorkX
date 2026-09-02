@@ -917,6 +917,10 @@ ReActResult ReActLoop::run(
         ctx.tool_registry = m_registry;
         // #50：注入循环级 HookManager，工具线程可触发 PermissionRequest / Subagent* 事件
         ctx.hook_manager_ptr = m_config.hooks;
+        // #56 方案 C：注入命令注册表（AgentTool 子 Agent skill 预加载；可选）
+        ctx.command_registry_ptr = m_command_registry.get();
+        // #56 方案 D：注入会话级 MCP 连接管理器（工具访问可用 MCP server；可选）
+        ctx.mcp_manager_ptr = m_mcp_manager.get();
         // #28 评审 #1/#3：进入计划模式——保存原模式、切换 Plan；Bypass 禁止降级、已在 Plan 则幂等拒绝
         ctx.on_enter_plan_mode = [this]() -> bool {
             if (m_permission_mode == tool::PermissionMode::BypassPermissions) {

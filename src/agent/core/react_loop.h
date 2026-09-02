@@ -36,6 +36,8 @@ class ITaskManager;    // BashTool 后台任务 DI（agent 命名空间下）
 class IEventBus;       // AskUserTool 事件发布 DI
 namespace skill { class TouchCollector; }  // conditional skills touch 收集器
 namespace hook { class HookManager; }      // Issue #50：通用 Hook 事件系统
+namespace command { class CommandRegistry; }   // #56 方案 C：技能/命令注册表
+namespace mcp { class McpClientManager; }      // #56 方案 D：MCP 连接管理器
 
 // ============================================================
 // ReAct 步骤类型
@@ -337,6 +339,18 @@ public:
     void set_session_mode(tool::SessionMode mode) { m_session_mode = mode; }
     tool::SessionMode session_mode() const { return m_session_mode; }
 
+    /// @brief #56 方案 C：注入命令注册表（bundled + 磁盘技能），供 AgentTool 子 Agent
+    ///        skill 预加载取全文；构造 ToolContext 时注入 command_registry_ptr。
+    void set_command_registry(std::shared_ptr<command::CommandRegistry> registry) {
+        m_command_registry = std::move(registry);
+    }
+
+    /// @brief #56 方案 D：注入会话级 MCP 连接管理器，构造 ToolContext 时注入
+    ///        mcp_manager_ptr（供工具访问当前作用域可用 MCP server）。
+    void set_mcp_manager(std::shared_ptr<agent::mcp::McpClientManager> mgr) {
+        m_mcp_manager = std::move(mgr);
+    }
+
     /// @brief H-1（PR #46 评审）：权限状态变更通知回调（宿主 ChatSession 注入）
     /// @details 工具路径回调（on_permission_mode_changed / on_enter_plan_mode /
     ///          on_exit_plan_mode）修改 ReActLoop 投影状态后调用，宿主据此回写
@@ -500,6 +514,11 @@ private:
     PermissionStateChangedCallback m_perm_state_changed_cb;
     /// @brief 消息队列冲刷回调（可选；工具轮边界把排队用户消息注入 messages）
     std::function<void(std::vector<ChatMessage>&)> m_queue_inject_cb;
+
+    /// @brief #56 方案 C：命令注册表（bundled + 磁盘技能；注入 ToolContext.command_registry_ptr）
+    std::shared_ptr<command::CommandRegistry> m_command_registry;
+    /// @brief #56 方案 D：会话级 MCP 连接管理器（注入 ToolContext.mcp_manager_ptr）
+    std::shared_ptr<agent::mcp::McpClientManager> m_mcp_manager;
 };
 
 } // namespace agent

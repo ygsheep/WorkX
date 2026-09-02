@@ -36,6 +36,7 @@
 #include "agent/tool/AgentTool/agent_tool.h"
 #include "agent/tool/BashTool/bash_tool.h"
 #include "agent/tool/AskUser/AskUserTool.h"
+#include "agent/tool/BriefTool/BriefTool.h"
 #include "agent/tool/PlanMode/enter_plan_mode_tool.h"
 #include "agent/tool/PlanMode/exit_plan_mode_v2_tool.h"
 #include "agent/tool/Task/task_output_tool.h"
@@ -253,6 +254,9 @@ SessionResult create_session(IConfigManager& cfg,
     auto tool_registry = std::make_shared<tool::ToolRegistry>();
     register_builtin_tools(*tool_registry, mcp_manager);
     result.session->set_tool_registry(tool_registry);
+    // #56 方案 D：把父会话全局 MCP 管理器注入 ChatSession，AgentTool 子 Agent
+    //              mcpServers 字符串引用从该管理器复用 client（引用复用不清理）。
+    result.session->set_mcp_manager(mcp_manager);
 
     // 宿主接线：FileWriteTool 写文件后失效 TUI @ 补全索引（mark_dirty 仅原子置位）
     result.session->set_file_index_invalidator([] { global_file_index().mark_dirty(); });
@@ -328,6 +332,8 @@ void register_builtin_tools(tool::ToolRegistry& registry,
     registry.register_tool(std::make_shared<tool::GlobTool>());
     registry.register_tool(std::make_shared<tool::GrepTool>());
     registry.register_tool(std::make_shared<tool::AskUserTool>());
+    // #56 方案 B：强制用户通信通道（开工/临门一脚确认）
+    registry.register_tool(std::make_shared<tool::BriefTool>());
     // #28：计划模式工具（大型任务先规划后执行）
     registry.register_tool(std::make_shared<tool::EnterPlanModeTool>());
     registry.register_tool(std::make_shared<tool::ExitPlanModeV2Tool>());

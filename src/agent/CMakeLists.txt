@@ -179,6 +179,7 @@ target_sources(workx_agent PRIVATE
     tool/AgentTool/agent_tool.cpp
     tool/AskUser/AskUserTool.cpp
     tool/AskUser/ask_user_config.cpp
+    tool/BriefTool/BriefTool.cpp
     tool/PlanMode/enter_plan_mode_tool.cpp
     tool/PlanMode/exit_plan_mode_v2_tool.cpp
     tool/Task/task_output_tool.cpp
