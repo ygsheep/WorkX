@@ -20,6 +20,7 @@
 #include "agent/hook/hook_event.h"   // #50 通用 Hook 事件系统：SubagentStart/SubagentStop
 #include "agent/hook/hook_manager.h"
 #include "agent/mcp/mcp_client_manager.h"  // #56 方案 D：子作用域 MCP 管理器
+#include "agent/tool/MCPTool/mcp_tool.h"   // H-1：子 Agent 绑定作用域 manager 的 MCPTool
 #include "agent/skill/inclaude/skill_prompt.h"  // #56 方案 C：build_skill_full_text 共享取全文
 #include "core/task/task_manager.h"
 #include "core/utils/error.h"
@@ -79,6 +80,11 @@ std::shared_ptr<agent::Task> launch_sub_agent(const SubAgentLaunchOptions& optio
             //  - 防递归：无论如何排除 Agent 工具本身，子 Agent 不能再启动子 Agent，
             //    杜绝无限嵌套/循环（即使白名单显式包含 "Agent" 也会被忽略）
             auto sub_agent_registry = std::make_shared<ToolRegistry>();
+            // #56 方案 D：先构建 MCP 作用域（引用复用父 client 不清理；inline 新建需 dispose），
+            //             供下方 registry 构建时为 MCP 工具绑定作用域 manager。
+            AgentTool::McpScopeBuildResult mcp_scope =
+                AgentTool::build_mcp_scope(options.mcp_servers, options.parent_mcp_manager);
+            const bool have_mcp_scope = mcp_scope.scope && !mcp_scope.scope->empty();
             if (options.sub_registry) {
                 std::vector<std::shared_ptr<ITool>> candidates =
                     options.tool_whitelist.empty()
@@ -99,6 +105,14 @@ std::shared_ptr<agent::Task> launch_sub_agent(const SubAgentLaunchOptions& optio
                     if (options.permission_mode == tool::PermissionMode::Plan && !t->is_read_only()) {
                         continue;  // Plan 只读：跳过写/执行工具
                     }
+                    // H-1：子 Agent 定义 mcpServers 时，为其 MCP 工具绑定作用域 manager，
+                    //      使 prompt() 展示的 server 列表与 call() 实际可用范围一致；
+                    //      否则复用的共享实例 prompt() 固定显示父全局 server 列表。
+                    if (t->name() == "MCP" && have_mcp_scope) {
+                        sub_agent_registry->register_tool(
+                            std::make_shared<MCPTool>(mcp_scope.scope));
+                        continue;
+                    }
                     sub_agent_registry->register_tool(t);
                 }
             }
@@ -110,12 +124,7 @@ std::shared_ptr<agent::Task> launch_sub_agent(const SubAgentLaunchOptions& optio
                            options.session_id);
             // 评审 #1：子 Agent 继承父会话权限模式，避免 Plan 只读边界被绕过
             loop.set_permission_mode(options.permission_mode);
-            // #56 方案 D：为子 Agent 构建 MCP 作用域（引用复用父 client 不清理；
-            //             inline 新建独立连接，子结束 dispose）。empty() 时无可用 server，
-            //             不注入作用域管理器（子 Agent MCPTool 回退父全局 manager）。
-            AgentTool::McpScopeBuildResult mcp_scope =
-                AgentTool::build_mcp_scope(options.mcp_servers, options.parent_mcp_manager);
-            if (mcp_scope.scope && !mcp_scope.scope->empty()) {
+            if (have_mcp_scope) {
                 loop.set_mcp_manager(mcp_scope.scope);
             }
             std::vector<ChatMessage> messages;
@@ -468,10 +477,12 @@ std::vector<agent::ChatMessage> AgentTool::build_skill_preload_messages(
     for (const auto& name : skills) {
         if (name.empty()) continue;
         auto base = registry->find_by_name(name);
-        // 仅预加载真正从磁盘/bundled 加载的技能条目（prompt 类型 + Skills 来源），
+        // 仅预加载真正可注入全文的技能条目（prompt 类型 + Skills/Bundled 来源）；
+        // #56 M-3：bundled 技能（loop/debug 等）同样注册进 CommandRegistry，应可预加载。
         // 其余（本地命令、内置 prompt、未知名）静默跳过，不阻断子 Agent 启动。
         if (!base || base->type() != "prompt" ||
-            base->loaded_from() != command::LoadSource::Skills) {
+            (base->loaded_from() != command::LoadSource::Skills &&
+             base->loaded_from() != command::LoadSource::Bundled)) {
             continue;
         }
         auto cmd = std::dynamic_pointer_cast<const command::PromptCommand>(base);

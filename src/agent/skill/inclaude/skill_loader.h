@@ -11,6 +11,7 @@
 
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "agent/command/inclaude/command.h"
@@ -39,9 +40,10 @@ std::vector<std::shared_ptr<command::PromptCommand>> load_skills_from_dirs(
 /// @param registry 目标命令注册表
 /// @param skill_dir 含 SKILL.md 的目录
 /// @return 注册的命令数（含别名）；无 SKILL.md 或解析失败返回 0
-/// @note 命令标记 LoadSource::Bundled；同名冲突由调用方注册顺序决定（bundled 应先注册）
+/// @note 命令标记 LoadSource::Bundled；若传入非空 seen_names，同名（含别名）跳过（首个注册优先）
 size_t register_bundled_skill(command::CommandRegistry& registry,
-                              const std::string& skill_dir);
+                              const std::string& skill_dir,
+                              std::unordered_set<std::string>* seen_names = nullptr);
 
 /// @brief 返回 bundled skills 根目录（<exe_dir>/skills/bundled）
 /// @return 绝对路径；该目录不存在时返回空串（安装在未带 bundled skills 时优雅降级）
@@ -53,8 +55,8 @@ std::string find_bundled_skills_dir();
 /// @param registry 目标命令注册表
 /// @param root bundled skills 根目录
 /// @return 注册的命令总数（含别名）；无子目录或全空返回 0
-/// @note 逐项复用 register_bundled_skill；同名（含别名）冲突不跨技能去重，
-///       由调用方在注册顺序上保证优先级（bundled 应先注册）
+/// @note 逐项复用 register_bundled_skill，跨技能用 seen_names 去重（首个注册优先，
+///       与 load_skills_from_dirs 语义一致）
 size_t register_bundled_skills(command::CommandRegistry& registry,
                                const std::string& root);
 

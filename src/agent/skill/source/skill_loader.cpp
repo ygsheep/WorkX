@@ -168,17 +168,21 @@ std::vector<std::shared_ptr<command::PromptCommand>> load_skills_from_dirs(
 }
 
 size_t register_bundled_skill(command::CommandRegistry& registry,
-                              const std::string& skill_dir) {
+                              const std::string& skill_dir,
+                              std::unordered_set<std::string>* seen_names) {
     const auto content = read_file_text(fs::path(skill_dir) / "SKILL.md");
     if (!content) return 0;
 
     const auto parsed = parse_skill_content(*content, fs::path(skill_dir).filename().string());
     auto cmds = build_commands(parsed, fs::path(skill_dir));
+    size_t n = 0;
     for (auto& cmd : cmds) {
         cmd->set_loaded_from(command::LoadSource::Bundled);
+        if (seen_names && !seen_names->insert(cmd->name()).second) continue;  // #56 M-1：同名跳过（首个注册优先）
         registry.register_command(cmd);
+        ++n;
     }
-    return cmds.size();
+    return n;
 }
 
 std::string find_bundled_skills_dir() {
@@ -198,10 +202,11 @@ size_t register_bundled_skills(command::CommandRegistry& registry,
     if (ec) return 0;
 
     size_t total = 0;
+    std::unordered_set<std::string> seen_names;  // #56 M-1：跨技能命令名去重（首个注册优先）
     for (const auto& entry : it) {
         ec.clear();
         if (!entry.is_directory(ec) || ec) continue;
-        total += register_bundled_skill(registry, entry.path().string());
+        total += register_bundled_skill(registry, entry.path().string(), &seen_names);
     }
     return total;
 }
