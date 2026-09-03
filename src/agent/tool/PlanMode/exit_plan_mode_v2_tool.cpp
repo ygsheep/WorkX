@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <vector>  // #54：critical_files 结构化列表
 
 #include "agent/tool/path_matcher.h"
 #include "agent/tool/permission_ask.h"
@@ -46,13 +47,22 @@ const std::string& ExitPlanModeV2Tool::prompt() const {
 }
 
 nlohmann::json ExitPlanModeV2Tool::input_schema() const {
+    const nlohmann::json critical_files_schema = {
+        {"type", "array"},
+        {"items", {{"type", "string"}}},
+        {"description",
+         "#54: Optional list of critical files from exploration that the execution "
+         "phase should touch. If omitted, the session coordinator fills it from the "
+         "aggregated PlanArtifact."}
+    };
     return {
         {"type", "object"},
         {"properties", nlohmann::json::object({
             {"plan", {
                 {"type", "string"},
                 {"description", "The detailed plan: files to change, approach, risks."}
-            }}
+            }},
+            {"critical_files", critical_files_schema}
         })},
         {"required", nlohmann::json::array({"plan"})},
         {"additionalProperties", false}
@@ -71,6 +81,15 @@ ResultV2<ToolResult> ExitPlanModeV2Tool::call(
     if (plan.empty()) {
         return ResultV2<ToolResult>::err(
             Error::Code::InvalidInput, "ExitPlanModeV2: 'plan' must not be empty");
+    }
+
+    // #54：读取可选结构化 critical_files（LLM 可从 explore 产物聚合的 markdown 中整理；
+    //       缺省由宿主在审批时从 PlanArtifact 补齐）
+    std::vector<std::string> critical_files;
+    if (input.contains("critical_files") && input["critical_files"].is_array()) {
+        for (const auto& cf : input["critical_files"]) {
+            if (cf.is_string()) critical_files.push_back(cf.get<std::string>());
+        }
     }
 
     // 1. 方案写入 markdown 文件（~/.workx/plan/plan_<session>.md），供 TUI 侧边栏预览，
@@ -131,7 +150,8 @@ ResultV2<ToolResult> ExitPlanModeV2Tool::call(
         ctx.event_bus_ptr->publish_async(ExitPlanModeEvent{
             .session_id = ctx.session_id,
             .plan = plan,
-            .approved = approved
+            .approved = approved,
+            .critical_files = critical_files  // #54：结构化关键文件（宿审批时从产物补齐缺省）
         });
     }
 

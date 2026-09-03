@@ -8,9 +8,11 @@
 
 #include "agent/core/chat_session.h"
 #include "agent/core/react_loop.h"
-#include "agent/core/agent_type.h"          // 0.6.x：#31 AgentType 路由
+#include "agent/core/agent_type.h"          // 0.6.x：#31 AgentType 枚举 + 别名解析
 #include "agent/core/goal_guarded_agent.h"  // 0.6.x：#31 GoalGuardedAgent + parse_goal
 #include "agent/core/query_engine.h"        // 0.6.x：QueryEngine 唯一编排入口
+#include "agent/plan/plan_coordinator.h"   // #54：Plan Mode V2 五阶段协调器
+#include "agent/tool/path_matcher.h"       // #54：~/.workx/plan 家目录展开
 #include "agent/message/types.h"
 #include "agent/tool/tool_kind.h"
 #include "agent/tool/TodoStore/todo_store.h"  // #24：待办清单持久化接线
@@ -20,6 +22,7 @@
 #include "agent/skill/inclaude/hooks.h"
 #include "agent/mcp/mcp_client_manager.h"  // #56 方案 D：MCP 连接管理器成员
 #include "agent/config/app_config.h"
+#include "agent/tool/AgentTool/agent_tool.h"  // #54：SubAgentLaunchOptions / launch_sub_agent（explore 并行）
 #include "agent/hook/hook_manager.h"  // #50 通用 Hook 事件系统：会话级 SessionStart/End
 #include "agent/audit/audit_logger.h"  // 会话生命周期审计
 #include "core/task/task_manager.h"
@@ -207,6 +210,10 @@ ChatSession::ChatSession(std::unique_ptr<ICompletionProvider> provider,
 
     subscribe_interrupt();
     subscribe_sub_agent_persistence();
+
+    // #54：Plan Mode V2 协调器（会话语义级驱动五阶段 + 并行 explore 编排）
+    m_plan_coordinator = std::make_unique<plan::PlanCoordinator>(m_config_manager.get());
+    subscribe_plan_events();
 }
 
 ChatSession::~ChatSession() {
@@ -221,6 +228,7 @@ ChatSession::~ChatSession() {
         m_hooks->dispatch(hook::HookEvent::SessionEnd, hctx);
     }
     unsubscribe_sub_agent_persistence();
+    unsubscribe_plan_events();
     unsubscribe_interrupt();
     if (m_provider) {
         m_provider->interrupt();
@@ -1855,6 +1863,110 @@ void ChatSession::subscribe_sub_agent_persistence() {
 void ChatSession::unsubscribe_sub_agent_persistence() {
     m_event_bus.get().unsubscribe<SubAgentProgressEvent>(m_sub_progress_token);
     m_event_bus.get().unsubscribe<SubAgentCompletedEvent>(m_sub_completed_token);
+}
+
+// ============================================================
+// #54：Plan Mode V2 事件驱动（五阶段 + 并行 explore 编排）
+// ============================================================
+
+void ChatSession::subscribe_plan_events() {
+    if (!m_plan_coordinator) return;
+
+    // #54：接线真实并行 explore 子 Agent——复用 AgentTool 的子 Agent 启动链路（launch_sub_agent）。
+    // 每个 explore 的 task_id 即子 Agent 任务名；完成后发布的 SubAgentCompletedEvent
+    // 由下方 m_plan_sub_completed_token 回投 m_plan_coordinator->on_explore_task_done。
+    // 权限模式取 Plan（只读）：launch_sub_agent 内会对非只读工具过滤，杜绝写/执行能力。
+    m_plan_coordinator->set_explore_runner(
+        [this](const std::string& task_id, const std::string& /*area*/,
+               const std::string& prompt) {
+            tool::SubAgentLaunchOptions opts;
+            opts.task_id = task_id;
+            opts.prompt = prompt;
+            opts.provider = m_provider.get();
+            opts.sub_registry = m_tool_registry;
+            opts.command_registry = m_command_registry.get();
+            opts.config_manager = &m_config_manager.get();
+            opts.task_manager = &m_task_manager.get();
+            opts.event_bus = &m_event_bus.get();
+            opts.cwd = m_cwd;
+            opts.session_id = m_session_id;
+            opts.permission_mode = tool::PermissionMode::Plan;  // 只读探索，杜绝写/执行
+            opts.hook_manager = m_hooks;
+            tool::launch_sub_agent(opts);
+            m_plan_explore_task_ids.push_back(task_id);
+        });
+
+    // 进入 Plan（EnterPlanMode 事件）→ 启动 interview/探索流程
+    m_plan_enter_token = m_event_bus.get().subscribe<EnterPlanModeEvent>(
+        [this](const EnterPlanModeEvent& e) {
+            if (!m_plan_coordinator) return;
+            m_plan_coordinator->begin_plan(e.reason);
+            // interview 开启路径：收集的约束以进入原因代填，随后自动推进探索。
+            // （交互式 Interview 面板可由宿主另行扩展；当前架构支持在
+            //   PlanCoordinator.set_interview_notes 注入真实收集结果。）
+            if (m_plan_coordinator->stage() == plan::PlanStage::Interview) {
+                m_plan_coordinator->set_interview_notes(e.reason);
+            }
+            // 探索完成（机械 fallback 合成时同步到 AwaitingApproval）：落盘方案文件
+            maybe_persist_plan_artifact();
+        });
+
+    // 退出 Plan（ExitPlanModeV2 工具批准/驳回）→ 推进阶段终态
+    m_plan_exit_token = m_event_bus.get().subscribe<ExitPlanModeEvent>(
+        [this](const ExitPlanModeEvent& e) {
+            if (!m_plan_coordinator) return;
+            m_plan_coordinator->set_approved(e.approved);
+            // #54：审批时消费结构化 critical_files（工具缺省 → 产物已聚合；工具显式传入 →
+            //       并入产物使执行阶段程序化读取关键文件）
+            if (e.approved && !e.critical_files.empty()) {
+                m_plan_coordinator->set_critical_files(e.critical_files);
+            }
+        });
+
+    // 子 Agent 完成 → 回报 explore 发现（按 task_id 匹配）
+    m_plan_sub_completed_token = m_event_bus.get().subscribe<SubAgentCompletedEvent>(
+        [this](const SubAgentCompletedEvent& e) {
+            if (!m_plan_coordinator) return;
+            m_plan_coordinator->on_explore_task_done(e.task_id, e.final_answer, e.was_error);
+            maybe_persist_plan_artifact();
+        });
+}
+
+void ChatSession::unsubscribe_plan_events() {
+    m_event_bus.get().unsubscribe<EnterPlanModeEvent>(m_plan_enter_token);
+    m_event_bus.get().unsubscribe<ExitPlanModeEvent>(m_plan_exit_token);
+    m_event_bus.get().unsubscribe<SubAgentCompletedEvent>(m_plan_sub_completed_token);
+}
+
+/// @brief explore 任务完成回调：把子 Agent 结论回报给协调器并推进阶段
+/// @details 被 start_plan_explore 中的后台任务调用，经 EventBus 回传或直接调用。
+void ChatSession::on_plan_explore_done(const std::string& task_id,
+                                       const std::string& summary,
+                                       bool was_error) {
+    if (!m_plan_coordinator) return;
+    m_plan_coordinator->on_explore_task_done(task_id, summary, was_error);
+    maybe_persist_plan_artifact();
+}
+
+/// @brief 计划产物就绪（AwaitingApproval，含 mechanical fallback）时落盘方案 markdown
+/// @details 复写 ~/.workx/plan/plan_<session>.md，供 ExitPlanModeV2 / 侧边栏预览。
+void ChatSession::maybe_persist_plan_artifact() {
+    if (!m_plan_coordinator) return;
+    const auto& art = m_plan_coordinator->artifact();
+    if (m_plan_coordinator->stage() != plan::PlanStage::AwaitingApproval ||
+        art.markdown.empty()) {
+        return;
+    }
+    namespace fs = std::filesystem;
+    try {
+        fs::path dir = fs::path(tool::expand_home("~/.workx/plan"));
+        fs::create_directories(dir);
+        fs::path file = dir / ("plan_" + m_session_id + ".md");
+        std::ofstream ofs(file, std::ios::trunc | std::ios::binary);
+        if (ofs) ofs << art.markdown;
+    } catch (const std::exception&) {
+        // 落盘失败静默（不阻断退出确认流程）
+    }
 }
 
 } // namespace agent

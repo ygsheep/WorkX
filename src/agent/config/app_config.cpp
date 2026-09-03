@@ -180,6 +180,43 @@ void register_config_defaults(ConfigManager& cfg) {
         .int_range = std::make_pair<int64_t, int64_t>(1, 2000)
     });
 
+    // === Plan Mode V2（#54：五阶段多 Agent 规划流程）===
+    cfg.register_schema({
+        .key = keys::PLAN_AUTO,
+        .description = "Auto-run the plan stages (interview→explore→plan) on entering "
+                       "plan mode. When false, only the legacy manual behavior remains.",
+        .default_value = true,
+        .type = ConfigSchema::Type::Bool
+    });
+    cfg.register_schema({
+        .key = keys::PLAN_INTERVIEW_ENABLED,
+        .description = "Enable the Interview stage: clarify requirements / collect "
+                       "constraints before exploring the codebase.",
+        .default_value = true,
+        .type = ConfigSchema::Type::Bool
+    });
+    cfg.register_schema({
+        .key = keys::PLAN_EXPLORE_AGENT_COUNT,
+        .description = "Number of explore agents to run in parallel (getPlanModeV2ExploreAgentCount)",
+        .default_value = 3,
+        .type = ConfigSchema::Type::Int,
+        .int_range = std::make_pair<int64_t, int64_t>(1, 8)
+    });
+    cfg.register_schema({
+        .key = keys::PLAN_AGENT_COUNT,
+        .description = "Number of plan synthesis agents (getPlanModeV2AgentCount)",
+        .default_value = 1,
+        .type = ConfigSchema::Type::Int,
+        .int_range = std::make_pair<int64_t, int64_t>(1, 4)
+    });
+    cfg.register_schema({
+        .key = keys::PLAN_EXPLORE_AREAS,
+        .description = "Comma-separated subdomains to explore in parallel (empty = generate "
+                       "generic prompts per explore agent)",
+        .default_value = std::string(""),
+        .type = ConfigSchema::Type::String
+    });
+
     // === Hooks（#50 通用 Hook 事件系统）===
     cfg.register_schema({
         .key = keys::HOOKS_ENABLED,

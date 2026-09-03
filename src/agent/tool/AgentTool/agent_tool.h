@@ -16,6 +16,9 @@
 #include "agent/command/inclaude/registry.h"
 #include "agent/mcp/mcp_client_manager.h"
 #include "agent/tool/itool.h"
+#include "agent/tool/context.h"  // #54：PermissionMode 定义 + ITaskManager/IEventBus/ToolRegistry 等前向声明
+
+namespace agent { class Task; }
 
 namespace agent::tool {
 
@@ -72,5 +75,34 @@ public:
     static McpScopeBuildResult build_mcp_scope(const nlohmann::json& servers,
                                                mcp::McpClientManager* parent);
 };
+
+/// @brief 子 Agent 启动参数（聚合，避免长参数列表）
+/// @details #54 起作为公共 API，供 AgentTool::call 与 Plan Mode V2 explore 并行启动复用。
+struct SubAgentLaunchOptions {
+    std::string task_id;                         ///< 任务 id（AgentTool 生成 'a'+8 随机；Plan 用 "pa-N"）
+    std::string prompt;                          ///< 子 Agent 任务 prompt
+    std::vector<std::string> tool_whitelist;     ///< 工具白名单（空 → 全部已注册工具）
+    std::vector<std::string> skills;             ///< #56 方案 C：预加载到初始消息的 skill 名
+    const command::CommandRegistry* command_registry = nullptr;  ///< #56 方案 C：按名取 skill 全文（非拥有）
+    ICompletionProvider* provider = nullptr;     ///< LLM provider（宿主保证存活于会话周期）
+    std::shared_ptr<ToolRegistry> sub_registry;  ///< 父会话工具注册表（构建子 Agent 独立工具集）
+    IConfigManager* config_manager = nullptr;
+    ITaskManager* task_manager = nullptr;
+    IEventBus* event_bus = nullptr;
+    std::string cwd;
+    std::string session_id;  ///< #30：父会话 ID（注入子 Agent ToolContext.session_id，审计关联）
+    tool::PermissionMode permission_mode = tool::PermissionMode::Default;
+    std::shared_ptr<agent::hook::HookManager> hook_manager;  ///< #50：父循环 HookManager（SubagentStart/Stop 派发）
+    nlohmann::json mcp_servers;                  ///< #56 方案 D：mcpServers 数组（字符串引用 / inline 对象）
+    mcp::McpClientManager* parent_mcp_manager = nullptr;  ///< #56 方案 D：父全局 MCP 管理器（复用来源，非拥有）
+};
+
+/// @brief 启动单个子 Agent 任务
+/// @details v1.2.0：并行批量调度复用。为每个任务生成独立 task_id 并投递到线程池，
+///          多个子 Agent 并发执行。返回已启动的 Task（供调用方等待/读输出）。
+///          #54 起为公共 API，供 AgentTool::call 与 Plan explore runner 共用。
+/// @param options 子 Agent 启动参数
+/// @return 已启动的 Task
+std::shared_ptr<agent::Task> launch_sub_agent(const SubAgentLaunchOptions& options);
 
 } // namespace agent::tool
