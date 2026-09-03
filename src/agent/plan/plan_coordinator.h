@@ -45,7 +45,6 @@ public:
     bool auto_enabled() const;
     bool interview_enabled() const;
     int explore_agent_count() const;
-    int plan_agent_count() const;
     std::string explore_areas() const;  ///< 逗号分隔子域串（可为空）
 
     // ---- 五个阶段的驱动方法（宿主按事件回调调用）----
@@ -118,7 +117,7 @@ private:
     std::vector<ExploreFinding> m_findings;
     std::vector<std::string> m_active_tasks;  ///< 尚在运行的 explore 任务 id
     std::vector<std::string> m_explore_areas;  ///< #54：本轮 explore 启动顺序对应的子域列表
-    std::size_t m_explore_launched = 0;       ///< 已启动探索数（防重复启动）
+    std::size_t m_explore_launched = 0;       ///< 归档用启动计数（写入 serialize，供恢复参考；重入防护由 stage 承担）
     std::size_t m_plan_cycle = 0;             ///< #54：规划轮次（begin_plan 自增，explore id 跨轮唯一）
     PlanArtifact m_artifact;
 

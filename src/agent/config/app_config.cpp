@@ -203,13 +203,6 @@ void register_config_defaults(ConfigManager& cfg) {
         .int_range = std::make_pair<int64_t, int64_t>(1, 8)
     });
     cfg.register_schema({
-        .key = keys::PLAN_AGENT_COUNT,
-        .description = "Number of plan synthesis agents (getPlanModeV2AgentCount)",
-        .default_value = 1,
-        .type = ConfigSchema::Type::Int,
-        .int_range = std::make_pair<int64_t, int64_t>(1, 4)
-    });
-    cfg.register_schema({
         .key = keys::PLAN_EXPLORE_AREAS,
         .description = "Comma-separated subdomains to explore in parallel (empty = generate "
                        "generic prompts per explore agent)",

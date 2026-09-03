@@ -63,8 +63,6 @@ namespace keys {
     constexpr const char* PLAN_INTERVIEW_ENABLED = "plan.interview_enabled";
     /// 并行 explore agent 数量（对应 cc getPlanModeV2ExploreAgentCount，默认 3）
     constexpr const char* PLAN_EXPLORE_AGENT_COUNT = "plan.explore_agent_count";
-    /// plan 综合 agent 数量（对应 cc getPlanModeV2AgentCount，默认 1）
-    constexpr const char* PLAN_AGENT_COUNT = "plan.agent_count";
     /// explore 聚焦子域列表（逗号分隔；空 → 按 agent_count 生成通用探索 prompt）
     constexpr const char* PLAN_EXPLORE_AREAS = "plan.explore_areas";
 

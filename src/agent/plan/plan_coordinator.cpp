@@ -81,10 +81,6 @@ int PlanCoordinator::explore_agent_count() const {
     return m_cfg.get_or<int>(keys::PLAN_EXPLORE_AGENT_COUNT, 3);
 }
 
-int PlanCoordinator::plan_agent_count() const {
-    return m_cfg.get_or<int>(keys::PLAN_AGENT_COUNT, 1);
-}
-
 std::string PlanCoordinator::explore_areas() const {
     return m_cfg.get_or<std::string>(keys::PLAN_EXPLORE_AREAS, "");
 }
