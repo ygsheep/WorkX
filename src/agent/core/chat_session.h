@@ -37,6 +37,11 @@
 #include "agent/skill/inclaude/conditional.h"  // conditional skills：TouchCollector（按值成员）
 #include "core/task/task_manager.h"
 
+// #54：Plan Mode V2 会话语义级协调器（五阶段多 Agent 规划）
+// 注意：实现位于 agent::plan，前向声明必须进同名命名空间，
+//       否则 ChatSession 成员 unique_ptr<plan::PlanCoordinator> 会误绑定到 ::plan 占位。
+namespace agent::plan { class PlanCoordinator; }
+
 namespace agent {
 
 // 前向声明（conditional skills 支持）
@@ -273,6 +278,10 @@ public:
     ///          线程安全（受 m_state_mutex 保护）。跨 turn 生效（下一轮 ReActLoop 注入）。
     void set_permission_mode(tool::PermissionMode mode);
 
+    /// @brief #54：Plan Mode V2 协调器访问器（供宿主/工具读取阶段与规划产物）
+    /// @return 协调器指针（为空表示未创建）；生命周期与 ChatSession 绑定
+    plan::PlanCoordinator* plan_coordinator() const { return m_plan_coordinator.get(); }
+
     /// @brief #45：获取当前权限模式（线程安全）
     tool::PermissionMode permission_mode() const;
 
@@ -428,6 +437,17 @@ private:
     /// @brief 取消子 Agent 事件持久化订阅
     void unsubscribe_sub_agent_persistence();
 
+    /// @brief #54：订阅 Plan Mode V2 事件（Enter/Exit/子 Agent 完成 → 驱动协调器流转）
+    /// @details 进入 Plan 触发 interview→explore；子 Agent 完成回报 explore 发现；
+    ///          Exit 批准/驳回推进阶段终态。产物就绪（AwaitingApproval）时落盘方案文件。
+    void subscribe_plan_events();
+
+    /// @brief #54：取消 Plan Mode V2 事件订阅
+    void unsubscribe_plan_events();
+
+    /// @brief #54：计划产物就绪（AwaitingApproval）时落盘方案 markdown（供退出确认预览）
+    void maybe_persist_plan_artifact();
+
     /// @brief DS_CACHE M-4：LLM 摘要回调（注入到 m_compactor）
     /// @param middle 待摘要的中段消息序列
     /// @return LLM 生成的摘要文本（失败时抛异常，由 compact_middle fallback 到机械折叠）
@@ -557,6 +577,14 @@ private:
     // 子 Agent 事件持久化订阅（progress/completed）
     EventToken m_sub_progress_token;
     EventToken m_sub_completed_token;
+
+    /// @brief #54：Plan Mode V2 协调器（会话语义级，五阶段 + 并行 explore 编排）
+    /// @details 由构造函数创建并接线事件订阅；宿主可通过 accessor 读取阶段与产物。
+    std::unique_ptr<plan::PlanCoordinator> m_plan_coordinator;
+    /// #54 Plan Mode V2 事件订阅令牌（Enter/Exit/子 Agent 完成）
+    EventToken m_plan_enter_token;
+    EventToken m_plan_exit_token;
+    EventToken m_plan_sub_completed_token;
 
     // 并发控制：保护 m_messages / m_system_prompt / m_tool_registry / m_current_task
     mutable std::mutex m_state_mutex;

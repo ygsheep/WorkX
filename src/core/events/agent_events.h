@@ -164,10 +164,12 @@ struct EnterPlanModeEvent {
 /// @brief 退出计划模式事件（#28：ExitPlanModeV2Tool → TUI/宿主）
 /// @details AI 完成规划后发布：携带方案文本与用户批准结果。
 ///          approved=true 表示用户批准方案，可进入执行阶段。
+///          #54：critical_files 为结构化关键文件列表（explore 产物聚合，供执行阶段消费）。
 struct ExitPlanModeEvent {
     std::string session_id;
     std::string plan;       ///< 方案文本（改哪些文件、风险点等）
     bool approved = false;  ///< 用户是否批准
+    std::vector<std::string> critical_files;  ///< #54：关键文件（结构化，可为空由宿主从产物补齐）
 };
 
 /// @brief 方案预览事件（ExitPlanModeV2Tool → TUI）

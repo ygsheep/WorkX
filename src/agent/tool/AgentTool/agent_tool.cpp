@@ -45,25 +45,7 @@ std::string fmt_task_count(size_t n) {
     return std::format("{} {}", n, n == 1 ? "task" : "tasks");
 }
 
-/// @brief 子 Agent 启动参数（聚合，避免长参数列表）
-struct SubAgentLaunchOptions {
-    std::string task_id;                         ///< 任务 id（AgentTool 生成的 'a'+8 随机）
-    std::string prompt;                          ///< 子 Agent 任务 prompt
-    std::vector<std::string> tool_whitelist;     ///< 工具白名单（空 → 全部已注册工具）
-    std::vector<std::string> skills;             ///< #56 方案 C：预加载到初始消息的 skill 名
-    const command::CommandRegistry* command_registry = nullptr;  ///< #56 方案 C：按名取 skill 全文（非拥有）
-    ICompletionProvider* provider = nullptr;     ///< LLM provider（宿主保证存活于会话周期）
-    std::shared_ptr<ToolRegistry> sub_registry;  ///< 父会话工具注册表（构建子 Agent 独立工具集）
-    IConfigManager* config_manager = nullptr;
-    ITaskManager* task_manager = nullptr;
-    IEventBus* event_bus = nullptr;
-    std::string cwd;
-    std::string session_id;  ///< #30：父会话 ID（注入子 Agent ToolContext.session_id，审计关联）
-    tool::PermissionMode permission_mode = tool::PermissionMode::Default;
-    std::shared_ptr<agent::hook::HookManager> hook_manager;  ///< #50：父循环 HookManager（SubagentStart/Stop 派发）
-    nlohmann::json mcp_servers;                  ///< #56 方案 D：mcpServers 数组（字符串引用 / inline 对象）
-    mcp::McpClientManager* parent_mcp_manager = nullptr;  ///< #56 方案 D：父全局 MCP 管理器（引用复用来源，非拥有）
-};
+} // namespace
 
 /// @brief 启动单个子 Agent 任务
 /// @details v1.2.0：并行批量调度复用。为每个任务生成独立 task_id 并投递到线程池，
@@ -225,8 +207,6 @@ std::shared_ptr<agent::Task> launch_sub_agent(const SubAgentLaunchOptions& optio
             }
         });
 }
-
-} // namespace
 
 const std::string& AgentTool::name() const {
     static const std::string n{kAgentToolName};

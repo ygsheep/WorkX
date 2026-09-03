@@ -182,6 +182,9 @@ target_sources(workx_agent PRIVATE
     tool/BriefTool/BriefTool.cpp
     tool/PlanMode/enter_plan_mode_tool.cpp
     tool/PlanMode/exit_plan_mode_v2_tool.cpp
+
+    # plan: Plan Mode V2（#54）五阶段协调器
+    plan/plan_coordinator.cpp
     tool/Task/task_output_tool.cpp
     tool/Task/task_stop_tool.cpp
     tool/MCPTool/mcp_tool.cpp
