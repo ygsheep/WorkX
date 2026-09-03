@@ -10,7 +10,7 @@
 #   MINOR = 不兼容变更（公共 API 破坏、行为不兼容）
 #   PATCH = 兼容修复（bugfix、无 API 变化的内部优化）
 set(WORKX_VERSION_MAJOR 0)
-set(WORKX_VERSION_MINOR 9)
+set(WORKX_VERSION_MINOR 10)
 set(WORKX_VERSION_PATCH 0)
 
 # 校验文件包含指定字面量（string(FIND) 为字面量查找，避免正则转义问题）
