@@ -10,6 +10,7 @@
 #include "agent/tool/SkillTool/skill_tool.h"
 
 #include "agent/command/inclaude/command.h"
+#include "agent/skill/inclaude/skill_prompt.h"  // build_skill_full_text 共享取全文 helper
 #include "core/utils/error.h"
 
 namespace agent::tool {
@@ -100,12 +101,8 @@ ResultV2<ToolResult> SkillTool::call(
     cctx.model = ctx.model;
     cctx.session_id = ctx.session_id;
 
-    std::string text;
-    for (const auto& block : prompt_cmd->generate_prompt("", cctx)) {
-        if (block.type != command::PromptBlockType::Text) continue;
-        if (!text.empty()) text += "\n";
-        text += block.text;
-    }
+    // 复用共享取全文 helper（与 AgentTool 子 Agent skill 预加载共用，避免两处漂移）
+    std::string text = agent::skill::build_skill_full_text(*prompt_cmd, cctx);
 
     // 超长技能截断，防止单条 tool 结果撑爆上下文（详见 kMaxSkillTextLength）
     const std::string skill_name = prompt_cmd->name();

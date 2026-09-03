@@ -47,6 +47,10 @@ std::unique_ptr<IAgentLoop> QueryEngine::make_loop(AgentType type) const {
                 m_deps.file_index_invalidator, m_deps.session_id,
                 m_deps.queue_inject_cb);
             apply_permission(loop);
+            // #56 方案 C：注入命令注册表 → ToolContext.command_registry_ptr（子 Agent skill 预加载）
+            loop->set_command_registry(m_deps.command_registry);
+            // #56 方案 D：注入父会话全局 MCP 管理器 → ToolContext.mcp_manager_ptr
+            loop->set_mcp_manager(m_deps.mcp_manager);
             return std::make_unique<ReActLoopAdapter>(std::move(loop));
         }
         case AgentType::GoalGuarded: {
@@ -84,6 +88,10 @@ std::unique_ptr<IAgentLoop> QueryEngine::make_loop(AgentType type) const {
                 m_deps.file_index_invalidator, m_deps.session_id,
                 m_deps.queue_inject_cb);
             apply_permission(loop);
+            // #56 方案 C：注入命令注册表 → ToolContext.command_registry_ptr（子 Agent skill 预加载）
+            loop->set_command_registry(m_deps.command_registry);
+            // #56 方案 D：注入父会话全局 MCP 管理器 → ToolContext.mcp_manager_ptr
+            loop->set_mcp_manager(m_deps.mcp_manager);
             return std::make_unique<ReActLoopAdapter>(std::move(loop));
     }
 }

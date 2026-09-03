@@ -250,7 +250,7 @@ if (r.is_ok()) {
 ### 短期
 
 - [x] conditional skills（`paths` frontmatter，touch 匹配文件时激活）
-- [x] bundled skills 程序化注册（`register_bundled_skill`）
+- [x] bundled skills 程序化注册（`register_bundled_skill` + `find_bundled_skills_dir`；随包发布 5 个内置技能 `loop/debug/stuck/verify/batch`，源码 `src/agent/skill/bundled/`，CMake 拷贝到 `<exe_dir>/skills/bundled`，启动优先注册）
 - [x] 用户级 `~/.claude/skills` / `~/.workx/skills` 显式支持（home 不在 cwd 祖先路径时，含同名去重）
 
 ### 中期

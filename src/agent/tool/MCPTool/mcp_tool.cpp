@@ -82,7 +82,7 @@ PermissionResult MCPTool::check_permissions(
 
 ResultV2<ToolResult> MCPTool::call(
     const nlohmann::json& input,
-    const ToolContext& /*ctx*/
+    const ToolContext& ctx
 ) const {
     if (!input.contains("server") || !input.at("server").is_string()) {
         return ResultV2<ToolResult>::err(
@@ -92,7 +92,10 @@ ResultV2<ToolResult> MCPTool::call(
         return ResultV2<ToolResult>::err(
             Error::Code::InvalidInput, "MCP 需要字符串参数 tool", input.dump());
     }
-    if (!m_manager) {
+    // #56 方案 D：优先解析当前作用域的 MCP 管理器（子 Agent 的 inline/引用 server），
+    //             否则回退到构造时的全局管理器（父会话 MCP server）。
+    mcp::McpClientManager* manager = ctx.mcp_manager_ptr ? ctx.mcp_manager_ptr : m_manager.get();
+    if (!manager) {
         return ResultV2<ToolResult>::err(
             Error::Code::InternalError, "MCP 连接管理器未初始化");
     }
@@ -103,14 +106,14 @@ ResultV2<ToolResult> MCPTool::call(
         input.contains("input") && input.at("input").is_object()
             ? input.at("input") : nlohmann::json::object();
 
-    auto client = m_manager->get_client(server);
+    auto client = manager->get_client(server);
     if (!client) {
         return ResultV2<ToolResult>::err(
             Error::Code::ResourceNotFound,
             "MCP server 不存在或未连接: " + server,
-            "可用 server: " + [this] {
+            "可用 server: " + [&] {
                 std::string names;
-                for (const auto& n : m_manager->server_names()) {
+                for (const auto& n : manager->server_names()) {
                     if (!names.empty()) names += ", ";
                     names += n;
                 }
@@ -119,16 +122,13 @@ ResultV2<ToolResult> MCPTool::call(
     }
 
     // P1-6：工具存在性校验（LLM 可能调用已移除/隐藏的工具）
-    if (!m_manager->has_tool(server, tool)) {
+    if (!manager->has_tool(server, tool)) {
         return ResultV2<ToolResult>::err(
             Error::Code::ResourceNotFound,
             "MCP server '" + server + "' 未暴露工具 '" + tool + "'",
-            "可用工具: " + [this, server] {
+            "可用工具: " + [&] {
                 std::string names;
-                for (const auto& n : m_manager->server_names()) {
-                    (void)n;
-                }
-                if (auto c = m_manager->get_client(server)) {
+                if (auto c = manager->get_client(server)) {
                     auto tools = c->list_tools();
                     if (tools.is_ok()) {
                         for (const auto& t : tools.value()) {

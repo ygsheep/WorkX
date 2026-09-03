@@ -42,6 +42,9 @@ namespace agent {
 // 前向声明（conditional skills 支持）
 namespace command { class CommandRegistry; }
 
+// #56 方案 D：MCP 连接管理器前向声明（shared_ptr 成员）
+namespace mcp { class McpClientManager; }
+
 // #50：会话级 HookManager 前向声明（shared_ptr 成员）
 namespace hook { class HookManager; }
 
@@ -135,6 +138,13 @@ public:
 
     /// @brief 获取命令注册表（返回拷贝，线程安全）
     std::shared_ptr<command::CommandRegistry> command_registry() const;
+
+    /// @brief 设置 MCP 连接管理器（#56 方案 D）
+    /// @param manager 父会话全局 MCP 管理器（AgentTool 子 Agent mcpServers 引用复用来源）
+    void set_mcp_manager(std::shared_ptr<mcp::McpClientManager> manager);
+
+    /// @brief 获取 MCP 连接管理器（返回拷贝，线程安全）
+    std::shared_ptr<mcp::McpClientManager> mcp_manager() const;
 
     /// @brief 获取 touch 收集器（conditional skills 用）
     /// @return TouchCollector 引用（会话内有效）
@@ -507,6 +517,9 @@ private:
 
     // conditional skills：命令注册表（激活匹配用，可选）
     std::shared_ptr<command::CommandRegistry> m_command_registry;
+
+    // #56 方案 D：父会话全局 MCP 连接管理器（AgentTool 子 Agent mcpServers 引用复用来源）
+    std::shared_ptr<mcp::McpClientManager> m_mcp_manager;
 
     // conditional skills：touch 路径收集器（会话级累积）+ 已激活 skill 名（避免重复注入）
     skill::TouchCollector m_touch_collector;

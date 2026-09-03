@@ -147,6 +147,15 @@ if(WORKX_HAS_VENDOR_JQ)
     target_compile_definitions(workx PRIVATE WORKX_HAS_BUNDLED_JQ=1)
 endif()
 
+# --- bundled skills：拷贝源码目录到 <exe_dir>/skills/bundled ---
+# 运行时由 skill 加载器 find_bundled_skills_dir() 发现（与 <exe_dir>/tools 约定一致）
+add_custom_command(TARGET workx POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/src/agent/skill/bundled"
+        "$<TARGET_FILE_DIR:workx>/skills/bundled"
+    COMMENT "Bundling built-in skills: ${CMAKE_SOURCE_DIR}/src/agent/skill/bundled"
+)
+
 target_include_directories(workx PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${CMAKE_CURRENT_SOURCE_DIR}

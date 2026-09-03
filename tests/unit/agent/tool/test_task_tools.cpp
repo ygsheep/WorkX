@@ -648,3 +648,87 @@ TEST_CASE_METHOD(TaskToolsFixture, "TaskOutputTool rejects unknown and missing t
     REQUIRE(r2.is_err());
     REQUIRE(r2.error().code == Error::Code::MissingArgument);
 }
+
+// ============================================================
+// #56 方案 C：子 Agent 预加载 skill 到初始消息
+// ============================================================
+
+namespace {
+
+/// @brief 构造一个来源为 Skills 的 PromptCommand（模拟加载的 skill）
+std::shared_ptr<command::PromptCommand> make_skill_cmd(
+    const std::string& name, std::vector<std::string> text_blocks) {
+    auto cmd = command::make_prompt_command(name, "skill description");
+    cmd->set_loaded_from(command::LoadSource::Skills);
+    cmd->set_prompt_generator(
+        [text_blocks = std::move(text_blocks)](const std::string&,
+                                               const command::CommandContext&) {
+            std::vector<command::PromptBlock> blocks;
+            for (const auto& t : text_blocks) {
+                blocks.push_back({command::PromptBlockType::Text, t});
+            }
+            return blocks;
+        });
+    return cmd;
+}
+
+} // namespace
+
+TEST_CASE("AgentTool build_skill_preload_messages 注入初始 system 消息", "[agent_tool][skill_preload]") {
+    command::CommandRegistry registry;
+    registry.register_command(
+        make_skill_cmd("review", {"你是资深 C++ 评审员。", "关注正确性与回归风险。"}));
+
+    auto msgs = AgentTool::build_skill_preload_messages({"review"}, &registry);
+
+    REQUIRE(msgs.size() == 1);
+    REQUIRE(msgs[0].role == agent::ChatMessage::Role::System);
+    // 内容 = "Skill: <name>\n\n" + 全文（text 块按顺序用 \n 拼接）
+    REQUIRE(msgs[0].content.find("Skill: review") == 0);
+    REQUIRE(msgs[0].content.find("你是资深 C++ 评审员。") != std::string::npos);
+    REQUIRE(msgs[0].content.find("关注正确性与回归风险。") != std::string::npos);
+    // 顺序保持：第一个块出现在第二个块之前
+    const auto first = msgs[0].content.find("评审员。");
+    const auto second = msgs[0].content.find("回归风险。");
+    REQUIRE((first != std::string::npos && second != std::string::npos));
+    REQUIRE(first < second);
+}
+
+TEST_CASE("AgentTool build_skill_preload_messages 多 skill 按序各生成一条", "[agent_tool][skill_preload]") {
+    command::CommandRegistry registry;
+    registry.register_command(make_skill_cmd("alpha", {"alpha body"}));
+    registry.register_command(make_skill_cmd("beta", {"beta body"}));
+
+    auto msgs = AgentTool::build_skill_preload_messages({"alpha", "beta"}, &registry);
+
+    REQUIRE(msgs.size() == 2);
+    REQUIRE(msgs[0].content.find("Skill: alpha") == 0);
+    REQUIRE(msgs[0].content.find("alpha body") != std::string::npos);
+    REQUIRE(msgs[1].content.find("Skill: beta") == 0);
+    REQUIRE(msgs[1].content.find("beta body") != std::string::npos);
+}
+
+TEST_CASE("AgentTool build_skill_preload_messages 忽略未知名/非技能/非 prompt", "[agent_tool][skill_preload]") {
+    command::CommandRegistry registry;
+
+    // 未知名称 → 跳过（不阻断）
+    REQUIRE(AgentTool::build_skill_preload_messages({"nope"}, &registry).empty());
+
+    // 类型为 prompt 但来源非 Skills（builtin）→ 跳过
+    auto builtin_prompt = command::make_prompt_command("builtin_cmd", "builtin");
+    builtin_prompt->set_prompt_generator([](const std::string&, const command::CommandContext&) {
+        return std::vector<command::PromptBlock>{{command::PromptBlockType::Text, "builtin body"}};
+    });
+    registry.register_command(builtin_prompt);
+    REQUIRE(AgentTool::build_skill_preload_messages({"builtin_cmd"}, &registry).empty());
+
+    // 类型非 prompt（local）但来源为 Skills → 跳过
+    auto local_skill = command::make_local_command("local_skill", "local");
+    local_skill->set_loaded_from(command::LoadSource::Skills);
+    registry.register_command(local_skill);
+    REQUIRE(AgentTool::build_skill_preload_messages({"local_skill"}, &registry).empty());
+
+    // skills 为空 且 registry 为 nullptr → 均返回空
+    REQUIRE(AgentTool::build_skill_preload_messages({}, &registry).empty());
+    REQUIRE(AgentTool::build_skill_preload_messages({"review"}, nullptr).empty());
+}

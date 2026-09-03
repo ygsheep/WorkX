@@ -28,6 +28,10 @@ ToolRegistry& ToolRegistry::instance() {
     return registry;
 }
 
+std::string ToolRegistry::executable_dir() {
+    return get_executable_dir();
+}
+
 std::string ToolRegistry::get_executable_dir() {
 #ifdef _WIN32
     wchar_t path[MAX_PATH];

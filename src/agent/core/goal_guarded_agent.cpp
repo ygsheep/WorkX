@@ -31,6 +31,10 @@ std::unique_ptr<ReActLoop> ReActLoopFactory::make(
     if (deps.permission_state_changed_cb) {
         loop->set_permission_state_changed_callback(deps.permission_state_changed_cb);
     }
+    // #56 方案 C：注入命令注册表 → ToolContext.command_registry_ptr（子 Agent skill 预加载）
+    loop->set_command_registry(deps.command_registry);
+    // #56 方案 D：注入父会话全局 MCP 管理器 → ToolContext.mcp_manager_ptr
+    loop->set_mcp_manager(deps.mcp_manager);
     return loop;
 }
 

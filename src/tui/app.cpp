@@ -294,14 +294,24 @@ App::App(AppDeps deps)
     m_command_processor = std::make_unique<agent::input::InputProcessor>(
         m_deps.command_registry);
 
-    // 加载磁盘 skills（.claude/skills）并注册为命令 → "/" 提示面板与 Skill 工具共用
+    // 加载 skills 并注册为命令 → "/" 提示面板与 Skill 工具共用
     // （对齐 src/app/main.cpp；终端 author 在 ftxtui 路径保留 skill 为斜杠命令可执行）
+    // 顺序：先注册 bundled 内置技能（LoadSource::Bundled，具有最高优先级），
+    // 再加载磁盘 skills（.claude/skills），同名冲突时磁盘技能不覆盖内置技能。
     {
         namespace fs = std::filesystem;
+        const auto bundled_root = agent::skill::find_bundled_skills_dir();
+        if (!bundled_root.empty()) {
+            agent::skill::register_bundled_skills(*m_deps.command_registry, bundled_root);
+        }
         auto base_dirs = agent::skill::find_skill_dirs_up_to_home(fs::current_path().string());
         for (const auto& dir : agent::skill::find_user_skill_dirs()) base_dirs.push_back(dir);
-        const auto skills = agent::skill::load_skills_from_dirs(base_dirs);
-        for (const auto& s : skills) m_deps.command_registry->register_command(s);
+        for (const auto& s : agent::skill::load_skills_from_dirs(base_dirs)) {
+            // bundled 优先级最高：磁盘技能若与内置同名则不覆盖
+            if (!m_deps.command_registry->exists(s->name())) {
+                m_deps.command_registry->register_command(s);
+            }
+        }
         // conditional skills：会话持有命令注册表（激活匹配 SkillTool 用）
         if (m_deps.session) {
             m_deps.session->set_command_registry(m_deps.command_registry);

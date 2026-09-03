@@ -32,6 +32,9 @@ namespace agent {
 class IConfigManager;
 class ITaskManager;
 namespace skill { class TouchCollector; }
+// #56 方案 C：命令注册表（子 Agent skill 预加载来源）
+namespace command { class CommandRegistry; }
+namespace mcp { class McpClientManager; }   // #56 方案 D：MCP 连接管理器
 
 /// @brief GoalGuardedAgent 依赖注入（对齐 ReActLoop 构造参数，避免重复参数列表）
 /// @details ReActLoop 每轮由本 Agent 新建（Config{max_iterations=1}），故所有
@@ -63,6 +66,19 @@ struct GoalAgentDeps {
     /// 消息队列冲刷回调（可选，ChatSession 注入）：模型忙碌时前端入队的用户消息，
     /// 在 ReAct 工具轮边界合并为单条 user 消息注入当前循环的 messages。
     std::function<void(std::vector<ChatMessage>&)> queue_inject_cb;
+
+    // #56 方案 C：命令注册表（bundled + 磁盘技能），子 Agent skill 预加载来源
+    /// @brief 技能/命令注册表（可选，#56 方案 C）
+    /// @details 注入到 ReActLoop → ToolContext.command_registry_ptr，供 AgentTool
+    ///          按 skill 名预加载全文到子 Agent 初始消息。nullptr 时预加载跳过。
+    std::shared_ptr<command::CommandRegistry> command_registry;
+
+    // #56 方案 D：MCP 连接管理器（父会话全局），子 Agent 引用复用 mcp servers 来源
+    /// @brief MCP 连接管理器（可选，#56 方案 D）
+    /// @details 注入到 ReActLoop → ToolContext.mcp_manager_ptr，供 AgentTool 获取
+    ///          全局连接（mcpServers 字符串引用复用）与子作用域隔离。nullptr 时
+    ///          引用条目跳过、MCPTool 回退构造管理器。
+    std::shared_ptr<mcp::McpClientManager> mcp_manager;
 };
 
 /// @brief 构造 GoalGuardedAgent 内部 ReActLoop 的工厂（供 QueryEngine 复用注入逻辑）

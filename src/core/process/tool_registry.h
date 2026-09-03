@@ -67,6 +67,10 @@ public:
     /// @note Windows 上自动尝试 .exe 扩展名（PATH 中常省略扩展名）
     static std::optional<std::string> find_executable(const std::string& name);
 
+    /// @brief 当前可执行文件所在目录
+    /// @return 可执行文件目录的绝对路径（用于定位 bundled 资源，如 tools/、skills/bundled/）
+    static std::string executable_dir();
+
 private:
     ToolRegistry() = default;
 

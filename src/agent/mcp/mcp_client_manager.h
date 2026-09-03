@@ -65,6 +65,33 @@ public:
     /// @brief 按 server 名获取 client（不存在返回 nullptr）
     std::shared_ptr<McpClient> get_client(const std::string& name) const;
 
+    /// @brief 同步连接一个独立临时 MCP server（#56 方案 D）
+    /// @details 与 connect_all_async 不同：不注册进本 manager 的状态/客户端集合
+    ///          （不得被 get_client/server_names 遮蔽），也不发布状态事件。
+    ///          连接生命周期由调用方显式管理——持有返回的 client，用后调 dispose()。
+    ///          内联 server 场景（AgentTool mcpServers inline 对象）由 AgentTool 调用。
+    /// @param cfg 待连接的 server 配置
+    /// @param timeout_ms 连接/协商超时
+    /// @return 已连接 client；连接失败返回 nullptr（不抛异常）
+    std::shared_ptr<McpClient> connect_one_off(const McpServerConfig& cfg,
+                                               int timeout_ms = 15000);
+
+    /// @brief 关闭临时 client（#56 方案 D，幂等）
+    /// @details 等价 client->disconnect()；nullptr 或重复调用安全。仅用于关闭
+    ///          connect_one_off 创建的临时 client，不影响 register_client 的复用 client。
+    void dispose(const std::shared_ptr<McpClient>& client);
+
+    /// @brief 将外部已连接 client 注册进本 manager（#56 方案 D）
+    /// @details 子 Agent 作用域 manager 承接：@a inline —— connect_one_off 新连后注册
+    ///          （需 dispose）；@a 引用 —— 从父 manager get_client 复用的实例注册
+    ///          （不 dispose）。注册后该 server 经 get_client/describe_servers 对本
+    ///          manager 可见，使 MCPTool（解析 ctx.mcp_manager_ptr）能调用。断开时将
+    ///          在子作用域析构时自然释放，不影响父 manager 的生命周期。
+    ///          同名重注册会覆盖旧条目（作用域隔离，父 manager 不受影响）。
+    /// @param name server 名
+    /// @param client 已连接 client（nullptr 忽略）
+    void register_client(const std::string& name, std::shared_ptr<McpClient> client);
+
     /// @brief 所有已连接 client
     std::vector<std::shared_ptr<McpClient>> clients() const;
 
