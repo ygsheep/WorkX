@@ -445,11 +445,6 @@ private:
     /// @brief #54：取消 Plan Mode V2 事件订阅
     void unsubscribe_plan_events();
 
-    /// @brief #54：explore 任务完成回调（把子 Agent 结论回报给协调器并推进阶段）
-    /// @details 由 explore runner 后台任务调用；协调器据此聚合发现、触发 plan 综合。
-    void on_plan_explore_done(const std::string& task_id, const std::string& summary,
-                              bool was_error);
-
     /// @brief #54：计划产物就绪（AwaitingApproval）时落盘方案 markdown（供退出确认预览）
     void maybe_persist_plan_artifact();
 
@@ -590,8 +585,6 @@ private:
     EventToken m_plan_enter_token;
     EventToken m_plan_exit_token;
     EventToken m_plan_sub_completed_token;
-    /// #54 已启动的 explore 子任务 id（坐标器 active 之外，供定向取消）
-    std::vector<std::string> m_plan_explore_task_ids;
 
     // 并发控制：保护 m_messages / m_system_prompt / m_tool_registry / m_current_task
     mutable std::mutex m_state_mutex;

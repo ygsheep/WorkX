@@ -1893,7 +1893,6 @@ void ChatSession::subscribe_plan_events() {
             opts.permission_mode = tool::PermissionMode::Plan;  // 只读探索，杜绝写/执行
             opts.hook_manager = m_hooks;
             tool::launch_sub_agent(opts);
-            m_plan_explore_task_ids.push_back(task_id);
         });
 
     // 进入 Plan（EnterPlanMode 事件）→ 启动 interview/探索流程
@@ -1936,16 +1935,6 @@ void ChatSession::unsubscribe_plan_events() {
     m_event_bus.get().unsubscribe<EnterPlanModeEvent>(m_plan_enter_token);
     m_event_bus.get().unsubscribe<ExitPlanModeEvent>(m_plan_exit_token);
     m_event_bus.get().unsubscribe<SubAgentCompletedEvent>(m_plan_sub_completed_token);
-}
-
-/// @brief explore 任务完成回调：把子 Agent 结论回报给协调器并推进阶段
-/// @details 被 start_plan_explore 中的后台任务调用，经 EventBus 回传或直接调用。
-void ChatSession::on_plan_explore_done(const std::string& task_id,
-                                       const std::string& summary,
-                                       bool was_error) {
-    if (!m_plan_coordinator) return;
-    m_plan_coordinator->on_explore_task_done(task_id, summary, was_error);
-    maybe_persist_plan_artifact();
 }
 
 /// @brief 计划产物就绪（AwaitingApproval，含 mechanical fallback）时落盘方案 markdown

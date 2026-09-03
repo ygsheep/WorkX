@@ -10,6 +10,7 @@
  */
 
 #include <catch2/catch_test_macros.hpp>
+#include <algorithm>  // std::find（M-1 关键文件断言）
 #include <string>
 #include <vector>
 
@@ -241,4 +242,33 @@ TEST_CASE("PlanCoordinator set_critical_files consumes structured files into art
     // 重复并入去重
     pc.set_critical_files({"src/foo.cpp"});
     REQUIRE(pc.artifact().critical_files.size() == 2);
+}
+
+TEST_CASE("explore conclusion critical files are extracted into finding and aggregated", "[plan]") {
+    MockConfigManager cfg;
+    cfg.set(keys::PLAN_INTERVIEW_ENABLED, false);
+    cfg.set(keys::PLAN_EXPLORE_AGENT_COUNT, 1);
+    PlanCoordinator pc = make_default_coordinator(cfg);
+    pc.begin_plan("refactor");
+    const auto ids = pc.active_task_ids();
+    REQUIRE_FALSE(ids.empty());
+
+    // 手动回报含路径的 explore 结论 → 关键文件应从文本中解析出来
+    pc.on_explore_task_done(ids[0],
+        "Key files: src/agent/core/react_loop.cpp and src/agent/tool/registry.h; "
+        "also tests/unit/test_plan_mode_tools.cpp.",
+        false);
+
+    REQUIRE(pc.findings().size() == 1);
+    const auto& critical = pc.findings()[0].critical_files;
+    REQUIRE_FALSE(critical.empty());
+    REQUIRE(std::find(critical.begin(), critical.end(), "src/agent/core/react_loop.cpp")
+            != critical.end());
+    REQUIRE(std::find(critical.begin(), critical.end(), "src/agent/tool/registry.h")
+            != critical.end());
+
+    // 机械综合产物应聚合到该文件（M-1 修复：不再恒为空）
+    const auto& aggregated = pc.artifact().critical_files;
+    REQUIRE(std::find(aggregated.begin(), aggregated.end(), "src/agent/core/react_loop.cpp")
+            != aggregated.end());
 }

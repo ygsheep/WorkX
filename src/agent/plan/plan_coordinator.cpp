@@ -11,6 +11,8 @@
 #include <cctype>
 #include <cstdlib>
 #include <format>
+#include <regex>        // #54：M-1 从 explore 结果提取关键文件
+#include <unordered_set>
 #include "agent/config/app_config.h"
 
 namespace agent::plan {
@@ -35,6 +37,32 @@ std::vector<std::string> split_areas(const std::string& s) {
         start = comma + 1;
     }
     return out;
+}
+
+/// @brief 从探索文本中提取"关键文件"引用（M-1）
+/// @details 采集形如 <路径>\<扩展名> 的 token（含 `/` 或 `\` 分隔，避免误抓版本号/散文词）。
+///          命中常见源码/配置扩展名，按原文去重保序。解析失败的文本走 set_critical_files 兜底。
+std::vector<std::string> extract_file_refs(const std::string& text) {
+    static const std::regex path_re(
+        R"([A-Za-z0-9_./\\\-]+\.(?:cpp|cc|cxx|c|hpp|hh|hxx|h|py|rs|go|java|kt|kts|ts|tsx|js|jsx|vue|md|json|toml|yaml|yml|cmake|proto|sql|csv|sh))",
+        std::regex_constants::icase);
+    std::vector<std::string> files;
+    std::unordered_set<std::string> seen;
+    if (text.empty()) return files;
+    try {
+        for (auto it = std::sregex_iterator(text.begin(), text.end(), path_re);
+             it != std::sregex_iterator(); ++it) {
+            std::string tok = it->str(0);
+            // 仅保留含路径分隔符的 token（提高信噪比）：形如 src/foo.cpp / src\foo.cpp
+            if (tok.find('/') == std::string::npos && tok.find('\\') == std::string::npos) {
+                continue;
+            }
+            if (seen.insert(tok).second) files.push_back(std::move(tok));
+        }
+    } catch (const std::regex_error&) {
+        return {};  // 正则异常兜底：不阻断 explore 收尾
+    }
+    return files;
 }
 
 } // namespace
@@ -73,7 +101,7 @@ void PlanCoordinator::begin_plan(const std::string& reason) {
     m_explore_launched = 0;
     m_artifact = PlanArtifact{};
     ++m_plan_cycle;  // #54：编号细化——规划轮次自增，explore task_id 借此跨轮全局唯一
-    m_stage = PlanStage::Interview;  // 阶段 1（Interview）
+    transition(PlanStage::Interview);  // 阶段 1（Interview）
     // auto 关闭 → 保持 interview 由宿主/用户驱动；开启且跳 Interview → 直通探索
     if (auto_enabled() && !interview_enabled()) {
         start_explore();
@@ -117,7 +145,7 @@ void PlanCoordinator::start_explore() {
     if (m_stage != PlanStage::Interview && m_stage != PlanStage::Exploring) {
         return;  // 仅允许从 interview 或自身幂等进入探索
     }
-    m_stage = PlanStage::Exploring;  // 阶段 2
+    transition(PlanStage::Exploring);  // 阶段 2
     m_active_tasks.clear();
     m_findings.clear();
     m_artifact = PlanArtifact{};
@@ -165,7 +193,8 @@ void PlanCoordinator::on_explore_task_done(const std::string& task_id,
         m_findings.push_back(ExploreFinding{
             .task_id = task_id,
             .area = area,
-            .summary = result
+            .summary = result,
+            .critical_files = extract_file_refs(result)  // #54 M-1：从探索结论提取关键文件
         });
     }
     m_active_tasks.erase(
@@ -178,18 +207,18 @@ void PlanCoordinator::complete_explore_if_all_done() {
     if (!m_active_tasks.empty()) {
         return;
     }
-    m_stage = PlanStage::Planning;  // 阶段 3
+    transition(PlanStage::Planning);  // 阶段 3
     if (m_plan_runner) {
         m_artifact = m_plan_runner(m_findings, m_context);
     } else {
         m_artifact = synthesize_mechanically();
     }
-    m_stage = PlanStage::AwaitingApproval;  // 阶段 4
+    transition(PlanStage::AwaitingApproval);  // 阶段 4
 }
 
 void PlanCoordinator::submit_plan(PlanArtifact artifact) {
     m_artifact = std::move(artifact);
-    m_stage = PlanStage::AwaitingApproval;
+    transition(PlanStage::AwaitingApproval);
 }
 
 void PlanCoordinator::set_critical_files(std::vector<std::string> files) {
@@ -204,14 +233,14 @@ void PlanCoordinator::set_critical_files(std::vector<std::string> files) {
 
 void PlanCoordinator::set_approved(bool approved) {
     if (approved) {
-        m_stage = PlanStage::Done;  // 阶段 5
+        transition(PlanStage::Done);  // 阶段 5
     } else if (m_stage == PlanStage::AwaitingApproval) {
         // 驳回 → 回到 interview 修订（清空本次探索，准备重新澄清）
-        m_stage = PlanStage::Interview;
+        transition(PlanStage::Interview);
     }
 }
 
-void PlanCoordinator::finish() { m_stage = PlanStage::Done; }
+void PlanCoordinator::finish() { transition(PlanStage::Done); }
 
 PlanArtifact PlanCoordinator::synthesize_mechanically() const {
     PlanArtifact a;
