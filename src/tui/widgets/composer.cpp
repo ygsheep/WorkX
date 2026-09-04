@@ -3,7 +3,8 @@
  * @brief 底部输入组件（自定义渲染：块状光标 + 灰色提示 + 快捷键处理）
  * @details 自绘单行输入，避免 ftxui::Input 的 Windows 光标回退问题
  *          （空输入时光标落在终端右下角）与默认 Bar 光标。
- *          Enter 提交；Shift+Tab 切换权限；Ctrl+O 思考视图。
+ *          Enter 提交；Tab 切换工作模式（标准/极简/计划）；Shift+Tab 切换权限；
+ *          Ctrl+O 思考视图。
  *          Ctrl+P 不在输入栏消费（全局搜索面板由 App 顶层捕获）。
  *          输入栏提示面板（"/" 命令 / "@" 文件）不占焦点：导航键在面板
  *          激活时经 suggest_* 回调转发给 App 状态机，否则走原逻辑。
@@ -101,9 +102,9 @@ size_t byte_pos_at_col(const std::string& s, size_t start, size_t col, size_t en
     return std::min(i, end);
 }
 
-/// @brief 块状光标（白色实心单元）
+/// @brief 块状光标（主题强调色实心单元，与输入框左边框同色 #5c9cf5）
 Element cursor_block() {
-    return ftxui::text(" ") | ftxui::bgcolor(Color::White);
+    return ftxui::text(" ") | ftxui::bgcolor(theme::T::Accent);
 }
 
 /// @brief 把控制台/IME 光标锚定到给定元素所在单元（focused 时）。
@@ -131,7 +132,7 @@ Element render_line_with_cursor(const std::string& line, size_t col, bool focuse
     size_t clen = char_len_at(line, col);
     Element at = ftxui::text(line.substr(col, clen));
     if (focused) {
-        at = mark_cursor(at | ftxui::bgcolor(Color::White) | ftxui::color(Color::Black));
+        at = mark_cursor(at | ftxui::bgcolor(theme::T::Accent) | ftxui::color(Color::White));
     } else {
         at |= ftxui::color(theme::T::Text);
     }
@@ -236,18 +237,30 @@ Component make_composer(ComposerOptions& opt) {
             return true;
         }
         // Ctrl+Enter（Windows 补丁改写为 kitty 序列 \x1b[13;5u）：
-        // 面板激活时插入引用（@路径），否则不消费
+        // 面板激活时插入引用（@路径），否则提交并请求立即冲刷
+        //（模型忙碌时入队 + 请求工具轮边界注入；空闲时等同 Enter 直接发送）
         if (e == ftxui::Event::Special("\x1b[13;5u")) {
             if (suggest && opt.suggest_enter_insert && opt.suggest_enter_insert())
                 return true;
-            return false;
+            std::string t = text;
+            size_t b = t.find_first_not_of(" \t");
+            size_t en = t.find_last_not_of(" \t");
+            if (b == std::string::npos) return true;  // 全空白
+            std::string trimmed = t.substr(b, en - b + 1);
+            if (opt.on_submit_ctrl) opt.on_submit_ctrl(trimmed);
+            text.clear();
+            cursor = 0;
+            if (opt.suggest_refresh) opt.suggest_refresh();
+            return true;
         }
         if (e == Event::Tab) {
             if (suggest && opt.suggest_move) {
                 opt.suggest_move(+1);  // Tab = 向下循环选择
                 return true;
             }
-            return true;  // 无面板时 Tab 无操作（防插入控制字符）
+            // 无面板时 Tab = 切换工作模式（标准 → 极简 → 计划）
+            if (opt.on_mode_toggle) opt.on_mode_toggle();
+            return true;
         }
         if (e == Event::Escape) {
             if (suggest && opt.suggest_cancel) {
@@ -330,8 +343,16 @@ Component make_composer(ComposerOptions& opt) {
             return (e.is_character() && e.character() == s) ||
                    e == ftxui::Event::Special(s);
         };
+        if (is_ctrl(0x14)) {  // Ctrl+T：工作模式切换（标准 → 极简 → 计划）
+            if (opt.on_mode_toggle) opt.on_mode_toggle();
+            return true;
+        }
         if (is_ctrl(0x0f)) {  // Ctrl+O 思考视图
             if (opt.on_toggle_thinking) opt.on_toggle_thinking();
+            return true;
+        }
+        if (is_ctrl(0x07)) {  // Ctrl+G：打开系统默认编辑器编辑当前输入
+            if (opt.on_edit) opt.on_edit();
             return true;
         }
         if (is_ctrl(0x01)) {  // Ctrl+A 行首

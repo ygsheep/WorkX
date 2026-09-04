@@ -624,4 +624,105 @@ bool skip_utf8_bom(std::ifstream& file) {
     return false;
 }
 
+std::string sanitize_utf8(std::string_view text) {
+    static constexpr char kUfffd[] = "\xEF\xBF\xBD"; // U+FFFD (EF BF BD)
+
+    const char* data = text.data();
+    const size_t len = text.size();
+    std::string result;
+    result.reserve(len);
+
+    size_t i = 0;
+    auto append_valid = [&](size_t start, size_t count) {
+        result.append(data + start, count);
+    };
+
+    while (i < len) {
+        const unsigned char c = static_cast<unsigned char>(data[i]);
+
+        if (c < 0x80) {
+            // ASCII 或合法 1 字节：直接保留
+            result.push_back(static_cast<char>(c));
+            ++i;
+            continue;
+        }
+
+        // 判定当前多字节序列长度
+        int seq_len = 0;
+        if (c >= 0xC2 && c <= 0xDF) {
+            seq_len = 2;
+        } else if (c >= 0xE0 && c <= 0xEF) {
+            seq_len = 3;
+        } else if (c >= 0xF0 && c <= 0xF4) {
+            seq_len = 4;
+        } else {
+            // 孤立续字节 (0x80-0xBF)、C0/C1、0xF5-0xFF：非法首字节
+            result += kUfffd;
+            ++i;
+            continue;
+        }
+
+        // 检查续字节是否完整且合法
+        bool ok = (i + static_cast<size_t>(seq_len) <= len);
+        if (ok) {
+            for (int k = 1; k < seq_len; ++k) {
+                const unsigned char cc = static_cast<unsigned char>(data[i + k]);
+                if ((cc & 0xC0) != 0x80) { ok = false; break; }
+            }
+        }
+        // 约束：不允许字节序列过长表示（overlong）与非法码点
+        if (ok && seq_len == 3 &&
+            (c == 0xE0 && (static_cast<unsigned char>(data[i + 1]) & 0xE0) == 0x80)) {
+            ok = false; // E0 80..9F 的 overlong 2-byte
+        }
+        if (ok && seq_len == 4 &&
+            (c == 0xF0 && (static_cast<unsigned char>(data[i + 1]) & 0xF0) == 0x80)) {
+            ok = false; // F0 80..8F 的 overlong 3-byte
+        }
+        if (ok && seq_len == 4 &&
+            (c == 0xF4 && static_cast<unsigned char>(data[i + 1]) > 0x8F)) {
+            ok = false; // F4 90..BF 超出 U+10FFFF
+        }
+
+        if (ok) {
+            append_valid(i, static_cast<size_t>(seq_len));
+            i += static_cast<size_t>(seq_len);
+        } else {
+            // 非法序列 / 续字节缺失：按 maximal subpart 策略合并替换，
+            // 跳过能构成最长合法前缀的续字节（如截断的 3 字节序列 E6 96 → 单个 U+FFFD，
+            // 而非逐字节各替换一个）
+            size_t consumed = 1;
+            while (i + consumed < len &&
+                   (static_cast<unsigned char>(data[i + consumed]) & 0xC0) == 0x80) {
+                ++consumed;
+            }
+            result += kUfffd;
+            i += consumed;
+        }
+    }
+
+    return result;
+}
+
+nlohmann::json sanitize_json_strings(const nlohmann::json& j) {
+    if (j.is_string()) {
+        return nlohmann::json(sanitize_utf8(j.get_ref<const std::string&>()));
+    }
+    if (j.is_array()) {
+        nlohmann::json out = nlohmann::json::array();
+        for (const auto& item : j) {
+            out.push_back(sanitize_json_strings(item));
+        }
+        return out;
+    }
+    if (j.is_object()) {
+        nlohmann::json out = nlohmann::json::object();
+        for (auto it = j.begin(); it != j.end(); ++it) {
+            out[it.key()] = sanitize_json_strings(it.value());
+        }
+        return out;
+    }
+    return j; // number/bool/null 原样返回
+}
+
 } // namespace agent::tool

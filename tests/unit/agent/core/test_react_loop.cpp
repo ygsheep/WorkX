@@ -20,6 +20,7 @@
 #include "agent/api/i_completion_provider.h"
 #include "agent/api/i_stream_reader.h"
 #include "agent/api/chat_types.h"
+#include "agent/hook/hook_manager.h"       // Issue #50：通用 Hook 事件系统
 #include "agent/tool/registry.h"
 #include "agent/tool/itool.h"
 #include "agent/tool/context.h"
@@ -357,6 +358,46 @@ TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop executes tool and feeds result bac
     REQUIRE(messages[2].content == "echo: hello");
     REQUIRE(messages[3].role == ChatMessage::Role::Assistant);
     REQUIRE(messages[3].content == "Done after echo");
+}
+
+TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop PreToolUse hook blocks Echo", "[react_loop][hook]") {
+    // Issue #50：prompt 类型 hook（复用循环的 MockProvider），拦截 Echo 输出 JSON blockingError
+    auto hooks = std::make_shared<agent::hook::HookManager>();
+    hooks->set_provider(provider.get());
+    agent::hook::HookDefinition def;
+    def.event = agent::hook::HookEvent::PreToolUse;
+    def.type = agent::hook::HookType::Prompt;
+    def.match = "Echo";
+    def.prompt = "gate echo to prove blocking path";
+    hooks->register_hook(def);
+
+    make_tool_call_reader("tu_01", "Echo", R"({"text":"hello"})"); // reader[0]：循环请求 Echo
+    auto hook_reader = std::make_shared<MockStreamReader>();
+    hook_reader->add_content_chunk(R"({"blockingError":"blocked-by-hook"})");
+    provider->set_next_reader(hook_reader);                       // reader[1]：hook 判定阻断
+    make_text_reader("Done after blocked");                       // reader[2]：收尾
+
+    ReActLoop::Config config;
+    config.hooks = hooks;
+    config.max_iterations = 8;
+    std::vector<ChatMessage> messages = {ChatMessage::user("echo hello")};
+    auto loop = make_loop(config);
+    auto result = loop->run(messages, "", registry->get_all_schemas(), should_cancel);
+
+    REQUIRE_FALSE(result.was_error);
+    // 被 PreToolUse 拦截 → Echo 真实工具线程不启动
+    REQUIRE(echo_tool->call_count == 0);
+    REQUIRE(result.total_tool_calls == 0);
+
+    // Observation 中应包含阻断文本（不会真正执行工具）
+    bool found_blocked = false;
+    for (const auto& m : messages) {
+        if (m.role == ChatMessage::Role::Tool && m.content.find("blocked") != std::string::npos) {
+            found_blocked = true;
+            break;
+        }
+    }
+    REQUIRE(found_blocked);
 }
 
 TEST_CASE_METHOD(ReActLoopFixture, "ReActLoop tool not found returns error result", "[react_loop][action]") {

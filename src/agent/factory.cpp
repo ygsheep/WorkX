@@ -36,6 +36,7 @@
 #include "agent/tool/AgentTool/agent_tool.h"
 #include "agent/tool/BashTool/bash_tool.h"
 #include "agent/tool/AskUser/AskUserTool.h"
+#include "agent/tool/BriefTool/BriefTool.h"
 #include "agent/tool/PlanMode/enter_plan_mode_tool.h"
 #include "agent/tool/PlanMode/exit_plan_mode_v2_tool.h"
 #include "agent/tool/Task/task_output_tool.h"
@@ -191,6 +192,24 @@ SessionResult create_session(IConfigManager& cfg,
 
     // 复用 create_backend：URL/Model 解析 + 后端创建与初始化
     auto backend_result = create_backend(cfg, preset, event_bus);
+
+    // 兜底：当前 provider 为自定义条目（无 preset 默认 URL，且顶层未显式配置
+    // remote_url）时，create_backend 解析不出 URL → 启动无会话 → 之后 /provider
+    // 热切换因 session==null 静默失效（面板关闭但配置/界面无任何变化）。
+    // 此时按 cfg.PROVIDER 在 providers 列表中定位活动条目，以条目自身配置创建后端。
+    if (!backend_result.provider) {
+        const std::string active = cfg.get_or<std::string>(keys::PROVIDER, "");
+        if (!active.empty()) {
+            for (const auto& e : load_provider_configs(cfg)) {
+                if (e.id == active || e.name == active) {
+                    auto entry_result = create_backend_for_entry(cfg, e, event_bus);
+                    if (entry_result.provider) backend_result = std::move(entry_result);
+                    break;
+                }
+            }
+        }
+    }
+
     result.remote_url = backend_result.remote_url;
     result.model_name = backend_result.model_name;
 
@@ -235,16 +254,25 @@ SessionResult create_session(IConfigManager& cfg,
     auto tool_registry = std::make_shared<tool::ToolRegistry>();
     register_builtin_tools(*tool_registry, mcp_manager);
     result.session->set_tool_registry(tool_registry);
+    // #56 方案 D：把父会话全局 MCP 管理器注入 ChatSession，AgentTool 子 Agent
+    //              mcpServers 字符串引用从该管理器复用 client（引用复用不清理）。
+    result.session->set_mcp_manager(mcp_manager);
 
     // 宿主接线：FileWriteTool 写文件后失效 TUI @ 补全索引（mark_dirty 仅原子置位）
     result.session->set_file_index_invalidator([] { global_file_index().mark_dirty(); });
 
     // 系统提示词
-    std::string sys_prompt = build_system_prompt(
-        cfg.get_or<std::string>(keys::SYSTEM_PROMPT, ""), *tool_registry);
+    const std::string user_prompt = cfg.get_or<std::string>(keys::SYSTEM_PROMPT, "");
+    std::string sys_prompt = build_system_prompt(user_prompt, *tool_registry);
     if (!sys_prompt.empty()) {
         result.session->set_system_prompt(sys_prompt);
     }
+    // 极简/标准模式切换时重建系统提示词（方案 A）：工具说明段随模式收窄/恢复。
+    // 会话持有构建回调（捕获 user_prompt 与注册表），切换模式时由会话调用。
+    result.session->set_system_prompt_builder(
+        [user_prompt, tool_registry](tool::SessionMode mode) -> std::string {
+            return build_system_prompt(user_prompt, *tool_registry, mode);
+        });
 
     // DS_CACHE H-4：从 provider preset 或 cfg 注入上下文窗口到压缩器
     // 优先级：cfg.backend.context_length > preset.default_context_length > 0（压缩器内部 fallback 1M）
@@ -304,6 +332,8 @@ void register_builtin_tools(tool::ToolRegistry& registry,
     registry.register_tool(std::make_shared<tool::GlobTool>());
     registry.register_tool(std::make_shared<tool::GrepTool>());
     registry.register_tool(std::make_shared<tool::AskUserTool>());
+    // #56 方案 B：强制用户通信通道（开工/临门一脚确认）
+    registry.register_tool(std::make_shared<tool::BriefTool>());
     // #28：计划模式工具（大型任务先规划后执行）
     registry.register_tool(std::make_shared<tool::EnterPlanModeTool>());
     registry.register_tool(std::make_shared<tool::ExitPlanModeV2Tool>());
@@ -471,7 +501,8 @@ std::string build_environment_context() {
 } // anonymous namespace
 
 std::string build_system_prompt(const std::string& user_prompt,
-                                const tool::ToolRegistry& registry) {
+                                const tool::ToolRegistry& registry,
+                                tool::SessionMode mode) {
     std::string sys_prompt = user_prompt;
 
     // 注入环境上下文（<env> 段，对齐 Claude Code）
@@ -486,18 +517,21 @@ std::string build_system_prompt(const std::string& user_prompt,
         sys_prompt += project_memory;
     }
 
-    // 拼接工具 prompt
+    // 拼接工具 prompt（极简模式仅白名单工具：Skill/Bash/Read/Write/Edit）
     for (const auto& t : registry.get_all_tools()) {
+        if (mode == tool::SessionMode::Minimal && !tool::is_minimal_mode_tool(t->name())) {
+            continue;
+        }
         sys_prompt += "\n\n";
         sys_prompt += t->prompt();
     }
 
-    // @file 引用说明
+    // @file 引用说明：@path 只是路径引用，内容不注入；需要时用 Read 工具读取
     sys_prompt +=
         "\n\n"
-        "用户消息中可能出现 <file path=\"...\">...</file> 标签，这是用户通过 "
-        "@path 语法引用的文件内容，已由前端读取并注入。对此类标签内的路径，"
-        "禁止再次调用 Read 工具读取；直接基于标签内已有内容回答用户问题。";
+        "用户消息中可能包含 @path 形式的文件引用（例如 @src/main.cpp），"
+        "这只是文件路径，文件内容不会注入消息。如需读取该文件，"
+        "请调用 Read 工具获取内容后再回答。";
 
     return sys_prompt;
 }

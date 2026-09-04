@@ -6,10 +6,14 @@
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <thread>
 #include <chrono>
 
 #include "agent/session/session_store.h"
+#include "agent/tool/TodoStore/todo_store.h"
+#include "core/todo/todo_item.h"
 
 using namespace agent::session;
 
@@ -42,6 +46,15 @@ public:
 private:
     std::filesystem::path path_;
 };
+
+/// @brief 与 session_store.cpp 内部 djb2_hex 保持一致的稳定 hash 计算（测试断言用）
+std::string djb2_for_test(const std::string& s) {
+    unsigned long h = 5381;
+    for (unsigned char c : s) h = h * 33 + c;
+    std::ostringstream oss;
+    oss << std::hex << std::setw(8) << std::setfill('0') << h;
+    return oss.str();
+}
 
 } // anonymous namespace
 
@@ -98,6 +111,35 @@ TEST_CASE("session_store: append is idempotent (no truncate)", "[session][store]
     REQUIRE(events.size() == 2);
     REQUIRE(events[0]["content"] == "first");
     REQUIRE(events[1]["content"] == "second");
+}
+
+// ============================================================
+// system_prompt 事件
+// ============================================================
+
+TEST_CASE("session_store: system_prompt records reason/content/hash", "[session][store]") {
+    TempFile tmp("workx_test_sysprompt.jsonl");
+
+    {
+        SessionStore store(tmp.string(), "test-session-id");
+        REQUIRE(store.open());
+        REQUIRE(store.append_system_prompt("initial", "you are a helpful assistant"));
+        REQUIRE(store.append_system_prompt("changed", "you are a strict reviewer"));
+        store.close();
+    }
+
+    auto events = SessionStore::read_all(tmp.string());
+    REQUIRE(events.size() == 2);
+    REQUIRE(events[0]["type"] == "system_prompt");
+    REQUIRE(events[0]["reason"] == "initial");
+    REQUIRE(events[0]["content"] == "you are a helpful assistant");
+    REQUIRE(events[0]["sessionId"] == "test-session-id");
+    REQUIRE_FALSE(events[0]["hash"].get<std::string>().empty());
+    REQUIRE(events[1]["reason"] == "changed");
+    // 内容不同 → hash 必须不同（前端据此检测提示词变更）
+    REQUIRE(events[0]["hash"].get<std::string>() != events[1]["hash"].get<std::string>());
+    // hash 稳定：相同内容两次写入得到相同 hash
+    REQUIRE(events[0]["hash"].get<std::string>() == djb2_for_test("you are a helpful assistant"));
 }
 
 // ============================================================
@@ -422,5 +464,103 @@ TEST_CASE("session_store: multiple title events override", "[session][store][tit
     auto meta = SessionStore::load_meta(tmp.string());
     REQUIRE(meta.has_value());
     REQUIRE(meta->title == "第三版");  // 最后一条生效
+}
+
+// ============================================================
+// #24：Todo 清单全链路往返（TodoStore → JSONL → load_todos → restore_todos）
+// ============================================================
+
+TEST_CASE("session_store: todo persist restore roundtrip via TodoStore",
+          "[session][store][todo]") {
+    auto& store = agent::tool::TodoStore::instance();
+    store.clear_for_test();
+
+    TempFile tmp("workx_test_todo_roundtrip.jsonl");
+    const std::string session_id = "todo-session-1";
+
+    // 1. 持久化：接线 persist_cb（同 ChatSession::wire_todo_persistence）→
+    //    TodoStore 每次变更写 JSONL todo 快照
+    {
+        SessionStore s(tmp.string(), session_id);
+        REQUIRE(s.open());
+        store.set_persist_callback(
+            session_id,
+            [&s](const std::vector<core::todo::TodoItem>& todos) { s.append_todo(todos); });
+
+        core::todo::TodoItem a;
+        a.content = "探索代码";
+        a.active_form = "探索代码中";
+        a.status = core::todo::TodoStatus::InProgress;
+        REQUIRE(store.create_todo(session_id, a) == "1");  // 自增 id
+
+        core::todo::TodoItem b;
+        b.content = "跑测试";
+        REQUIRE(store.create_todo(session_id, b) == "2");
+        s.close();
+    }
+
+    // 2. 读回：load_todos 取最后一条 todo 快照（append-only 覆盖语义）
+    auto todos = SessionStore::load_todos(tmp.string());
+    REQUIRE(todos.size() == 2);
+    REQUIRE(todos[0].id == "1");
+    REQUIRE(todos[0].content == "探索代码");
+    REQUIRE(todos[0].active_form == "探索代码中");
+    REQUIRE(todos[0].status == core::todo::TodoStatus::InProgress);
+    REQUIRE(todos[1].id == "2");
+    REQUIRE(todos[1].content == "跑测试");
+    REQUIRE(todos[1].status == core::todo::TodoStatus::Pending);
+
+    // 3. 恢复：restore_todos 复原内存态 + next_id 高水位（同 switch_session）。
+    //    真实场景中 switch_session 先 restore（新 session_id 的 persist_cb 尚为空），
+    //    再 wire_todo_persistence 接线。此处先解除回调，避免恢复快照触发
+    //    持久化回调写回已关闭的 store（悬垂引用）。
+    store.set_persist_callback(session_id, {});
+    store.restore_todos(session_id, todos);
+    auto restored = store.list_todos(session_id);
+    REQUIRE(restored.size() == 2);
+    REQUIRE(restored[0].content == "探索代码");
+    REQUIRE(restored[1].content == "跑测试");
+
+    // next_id 高水位：恢复后新建应继续分配 3（不复用旧 id）
+    core::todo::TodoItem c;
+    c.content = "第三项";
+    REQUIRE(store.create_todo(session_id, c) == "3");
+    REQUIRE(store.list_todos(session_id).size() == 3);
+
+    store.clear_for_test();
+}
+
+TEST_CASE("session_store: todo empty snapshot clears on resume",
+          "[session][store][todo]") {
+    auto& store = agent::tool::TodoStore::instance();
+    store.clear_for_test();
+
+    TempFile tmp("workx_test_todo_empty.jsonl");
+    const std::string session_id = "todo-session-2";
+
+    // 写入两个 todo 快照，最后追加空快照（清空语义：reset_session / 全部完成）
+    {
+        SessionStore s(tmp.string(), session_id);
+        REQUIRE(s.open());
+        store.set_persist_callback(
+            session_id,
+            [&s](const std::vector<core::todo::TodoItem>& todos) { s.append_todo(todos); });
+
+        core::todo::TodoItem a;
+        a.content = "会消失的任务";
+        store.create_todo(session_id, a);
+        s.append_todo({});  // 空快照：模拟 reset_session 清空落盘
+        s.close();
+    }
+
+    // 恢复应得到空清单（最后一条快照为空 → 不残留旧任务）
+    // 先解除回调（同上：避免 restore 触发写回已析构的 store）
+    store.set_persist_callback(session_id, {});
+    auto todos = SessionStore::load_todos(tmp.string());
+    REQUIRE(todos.empty());
+    store.restore_todos(session_id, todos);
+    REQUIRE(store.list_todos(session_id).empty());
+
+    store.clear_for_test();
 }
 

@@ -5,7 +5,7 @@
  *          V2-4：execute() 返回 ResultV2<ExecutionResult>，错误携带 Error
  *          M-3：execute() 拆分为 lookup_tool / run_with_safety / finalize_result
  *               三个职责单一的私有方法，便于独立测试与未来替换日志策略
- * @version 2.1.1
+ * @version 2.2.0
  * @date 2026-07
  */
 
@@ -27,7 +27,10 @@
 #include "registry.h"
 #include "result.h"
 #include "context.h"
+#include "agent/tool/encoding.h"
 #include "agent/audit/audit_logger.h"
+#include "agent/hook/hook_event.h"   // #50 通用 Hook 事件系统：PermissionRequest
+#include "agent/hook/hook_manager.h" // HookManager::dispatch
 
 namespace agent::tool {
 
@@ -124,8 +127,13 @@ public:
         const nlohmann::json& input,
         const ToolContext& ctx
     ) const {
+        // 仅在可能抛出的序列化处加保护（工具入参可能含非 UTF-8 字节）
+        size_t input_size = 0;
+        try { input_size = input.dump().size(); }
+        catch (const std::exception&) { input_size = 0; }
+
         LOG_INFO("[tool_executor] begin, tool={}, input_size={}, thread={}",
-                 tool_name, input.dump().size(),
+                 tool_name, input_size,
                  std::hash<std::thread::id>{}(std::this_thread::get_id()));
 
         const auto t0 = std::chrono::steady_clock::now();
@@ -142,6 +150,21 @@ public:
                          tool_name};
         }
 
+        // 1.5 极简模式守卫：仅放行白名单工具（Skill/Bash/Read/Write/Edit）
+        //     第二道防线——schema 过滤后 LLM 仍可能幻觉出其他工具名，这里直接拒绝。
+        if (ctx.session_mode == SessionMode::Minimal &&
+            !is_minimal_mode_tool(tool_name)) {
+            LOG_WARN("[tool_executor] tool={} denied by minimal mode", tool_name);
+            audit::AuditLogger::instance().log_tool_invoke(
+                tool_name, input, ctx.session_id, ctx.request_id,
+                "deny", "minimal mode: tool not allowed", 0);
+            return Error{Error::Code::PermissionDenied,
+                         "Tool '" + tool_name +
+                             "' is not available in minimal mode "
+                             "(only Skill/Bash/Read/Write/Edit)",
+                         tool_name};
+        }
+
         // 2. 检查取消信号
         if (ctx.is_cancelled()) {
             LOG_INFO("[tool_executor] tool={} cancelled before execution", tool_name);
@@ -151,6 +174,26 @@ public:
             return Error{Error::Code::Cancelled,
                          "Tool execution cancelled",
                          tool_name};
+        }
+
+        // 2.5 #50 PermissionRequest hook：在常规权限检查前派发，hook 可动态授权/阻断
+        // 匹配已由 HookManager 内 HookMatcher 完成（event+tool_name），未匹配则零开销返回。
+        if (ctx.hook_manager_ptr && !ctx.hook_manager_ptr->empty()) {
+            hook::HookContext hctx;
+            hctx.session_id = ctx.session_id;
+            hctx.cwd = ctx.cwd;
+            hctx.request_id = ctx.request_id;
+            hctx.tool_name = tool_name;
+            hctx.tool_input = input;
+            auto hres = ctx.hook_manager_ptr->dispatch(hook::HookEvent::PermissionRequest, hctx);
+            if (hres.blockingError && !hres.blockingError->empty()) {
+                LOG_WARN("[tool_executor] tool={} blocked by PermissionRequest hook: {}",
+                         tool_name, *hres.blockingError);
+                audit::AuditLogger::instance().log_tool_invoke(
+                    tool_name, input, ctx.session_id, ctx.request_id,
+                    "deny", *hres.blockingError, 0);
+                return Error{Error::Code::PermissionDenied, *hres.blockingError, tool_name};
+            }
         }
 
         // 3. 权限检查
@@ -272,6 +315,10 @@ private:
         ExecutionResult exec_result;
         exec_result.tool_name = tool_name;
         exec_result.result = std::move(result);
+
+        // UTF-8 清洗：去除工具输出中的非法 UTF-8 字节（如 GBK 子进程 stdout），
+        // 避免下游 json 序列化（审计/to_string）抛 type_error.316
+        exec_result.result.text = sanitize_utf8(exec_result.result.text);
 
         // 3.4：结果截断（防止 grep/bash 长输出撑爆上下文）
         if (!exec_result.result.text.empty() &&

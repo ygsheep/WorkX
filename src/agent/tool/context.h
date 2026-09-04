@@ -3,13 +3,14 @@
  * @brief ToolContext — 工具执行上下文
  * @details 在工具执行过程中传递的运行时信息：会话 ID、工作目录、权限模式、取消信号、
  *          任务管理器、进度回调
- * @version 1.3.0
+ * @version 1.4.0
  * @date 2026-07
  */
 
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -28,6 +29,15 @@ class IEventBus;
 
 // 前向声明：ICompletionProvider（用于 AgentTool 等启动子 Agent 的工具）
 class ICompletionProvider;
+
+// 前向声明：HookManager（#50 通用 Hook 事件系统，工具线程触发 PermissionRequest / Subagent* 事件）
+namespace hook { class HookManager; }
+
+// 前向声明：McpClientManager（#56 方案 D，MCP 连接管理器；完整类型位于 agent/mcp/mcp_client_manager.h）
+namespace mcp { class McpClientManager; }
+
+// 前向声明：CommandRegistry（#56 方案 C，命令注册表；完整类型位于 agent/command/inclaude/registry.h）
+namespace command { class CommandRegistry; }
 
 namespace tool {
 
@@ -52,6 +62,34 @@ enum class PermissionMode : uint8_t {
     Plan = 2,
     BypassPermissions = 3,
 };
+
+/// @brief 会话工作模式（模式列表：标准 / 计划 / 极简）
+/// @details 与权限模式正交：模式是用户侧的顶层选择（状态栏最前位展示），
+///          权限（手动审批 / 完全访问）在模式内部独立切换。
+///          - Standard：标准模式，全部工具可用
+///          - Plan：计划模式，只读规划（进入时联动权限 Plan，退出时恢复）
+///          - Minimal：极简模式，仅暴露 Skill/Bash/Read/Write/Edit 五个工具
+enum class SessionMode : uint8_t {
+    Standard = 0,  ///< 标准模式：全部工具 + 权限独立
+    Plan = 1,      ///< 计划模式：只读规划（对齐 PermissionMode::Plan）
+    Minimal = 2,   ///< 极简模式：仅 Skill/Bash/Read/Write/Edit
+};
+
+/// @brief 极简模式工具白名单（SessionMode::Minimal 下唯一允许调用的工具）
+/// @details schema 过滤（LLM 看不到的工具不会调用）与 ToolExecutor 守卫（幻觉
+///          工具名直接拒绝）共用此单一来源，避免两处漂移。
+inline constexpr const char* kMinimalModeToolNames[] = {
+    "Skill", "Bash", "Read", "Write", "Edit",
+};
+inline constexpr int kMinimalModeToolCount = 5;
+
+/// @brief 判断工具名是否在极简模式白名单内
+inline bool is_minimal_mode_tool(std::string_view name) {
+    for (int i = 0; i < kMinimalModeToolCount; ++i) {
+        if (name == kMinimalModeToolNames[i]) return true;
+    }
+    return false;
+}
 
     /// @brief 工具 touch 回调类型
     /// @details 工具执行过程中上报访问过的文件路径（绝对路径），
@@ -96,6 +134,11 @@ struct ToolContext {
     /// @details 默认 Default；宿主可在构造时注入（如 CLI 的 --bypass-permissions）。
     ///          工具 check_permissions 依据该模式决定放行/确认/拒绝。
     PermissionMode permission_mode{PermissionMode::Default};
+
+    /// @brief 会话工作模式（标准 / 计划 / 极简）
+    /// @details 由 ReActLoop 在 turn 开始时注入。ToolExecutor 依据该模式做
+    ///          第二道守卫：Minimal 下仅允许白名单工具（幻觉工具名直接拒绝）。
+    SessionMode session_mode{SessionMode::Standard};
 
     /// @brief 权限模式变更回调类型（#28：EnterPlanMode/ExitPlanMode 注入路径）
     /// @details 工具通过 set_permission_mode() 请求模式切换，由宿主（ReActLoop）
@@ -175,6 +218,28 @@ struct ToolContext {
     ///          AgentTool 为子 Agent 构造工具集（get_all_schemas）。
     ///          nullptr 时子 Agent 无工具可用。
     std::shared_ptr<ToolRegistry> tool_registry;
+
+    /// @brief 技能/命令注册表（可选，非拥有，#56 方案 C）
+    /// @details 由调用方（ReActLoop）显式注入其持有的 CommandRegistry（bundled + 磁盘技能）。
+    ///          AgentTool 按 skill 名预加载全文到子 Agent 初始消息。
+    ///          nullptr 时 skill 预加载静默跳过。生命周期由调用方（ChatSession）保证。
+    command::CommandRegistry* command_registry_ptr = nullptr;
+
+    /// @brief MCP 连接管理器指针（可选，非拥有，#56 方案 D）
+    /// @details 由调用方（ReActLoop / 子 Agent 构造）显式注入。MCPTool 实际自行持有
+    ///          manager，本指针供工具在需要时访问当前作用域可用的 MCP server 集合
+    ///          （父会话全局 manager 或子 Agent 临时 manager）。nullptr 表示无可用的
+    ///          MCP 通道。生命周期由调用方保证。
+    mcp::McpClientManager* mcp_manager_ptr = nullptr;
+
+    /// @brief Hook 事件管理器（可选；#50 通用 Hook 事件系统）
+    /// @details 由调用方（ReActLoop）注入循环级 HookManager，供工具线程触发
+    ///          PermissionRequest / SubagentStart / SubagentStop 事件。
+    ///          线程安全：dispatch 内部互斥锁保证并发安全。
+    ///          共享语义：持有 shared_ptr 保证工具异步线程执行 dispatch 期间
+    ///            HookManager（及其中注册表）不提前析构。
+    ///          生命周期：与所属循环（ReActLoop/子 Agent loop）一致。
+    std::shared_ptr<agent::hook::HookManager> hook_manager_ptr;
 
     /// @brief 进度回调（可选）
     /// @details 由调用方（ReActLoop）注入，工具在长任务执行过程中调用以上报进度。

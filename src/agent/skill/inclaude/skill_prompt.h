@@ -18,6 +18,23 @@
 
 namespace agent::skill {
 
+/// @brief 提取技能全文（多 PromptBlock 的 Text 部分拼接，#56 方案 C 共享 helper）
+/// @details 复用于 SkillTool（加载技能）与 AgentTool（子 Agent 预加载 skill 到初始消息），
+///          避免两处取全文逻辑漂移。仅取 Text 块，图片/工具结果块跳过。
+/// @param cmd 技能对应的 PromptCommand（须为技能：loaded_from==Skills + type==prompt）
+/// @param cctx 执行上下文（cwd/model/session_id，供技能内展开）
+/// @return 技能全文；无 Text 块时返回空串
+inline std::string build_skill_full_text(const command::PromptCommand& cmd,
+                                         const command::CommandContext& cctx) {
+    std::string text;
+    for (const auto& block : cmd.generate_prompt("", cctx)) {
+        if (block.type != command::PromptBlockType::Text) continue;
+        if (!text.empty()) text += "\n";
+        text += block.text;
+    }
+    return text;
+}
+
 /// @brief 构建 skills 提示词小节
 /// @param registry 命令注册表
 /// @param active_agent 当前 agent 名；声明了 agent 字段且不匹配的 skill 不注入（空 = 不过滤）

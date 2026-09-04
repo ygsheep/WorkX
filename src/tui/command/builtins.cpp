@@ -79,6 +79,16 @@ void register_ftx_builtins(CommandRegistry& registry,
     });
     registry.register_command(new_cmd);
 
+    auto compact_cmd =
+        agent::command::make_local_command("compact", std::string(str::kCmdCompactDesc));
+    compact_cmd->set_argument_hint("/compact");
+    compact_cmd->set_call([on_compact = cb.on_compact](
+                              const std::string&, const CommandContext&) -> CommandResult {
+        if (on_compact) on_compact();
+        return CommandResult::ok("");
+    });
+    registry.register_command(compact_cmd);
+
     auto model_cmd =
         agent::command::make_local_command("model", std::string(str::kCmdModelDesc));
     model_cmd->set_argument_hint("/model");
@@ -141,10 +151,10 @@ void register_ftx_builtins(CommandRegistry& registry,
 
     auto nvim_cmd =
         agent::command::make_local_command("nvim", std::string(str::kCmdNvimDesc));
-    nvim_cmd->set_argument_hint("/nvim");
-    nvim_cmd->set_call([on_nvim = cb.on_nvim](const std::string&,
+    nvim_cmd->set_argument_hint("/nvim [<file>]");
+    nvim_cmd->set_call([on_nvim = cb.on_nvim](const std::string& args,
                                               const CommandContext&) -> CommandResult {
-        if (on_nvim) on_nvim();
+        if (on_nvim) on_nvim(args);
         return CommandResult::ok("");
     });
     registry.register_command(nvim_cmd);

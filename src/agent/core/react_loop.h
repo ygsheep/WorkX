@@ -4,7 +4,7 @@
  * @details 实现 Thought/Action/Observation 三阶段显式分离的 agent 循环，
  *          替代 ChatSession 中的扁平 while 循环。
  *          使用原生 function calling（Anthropic/OpenAI），不依赖文本解析。
- * @version 1.1.0
+ * @version 1.2.0
  * @date 2026-07
  */
 
@@ -35,6 +35,9 @@ class IConfigManager;  // D-5：前向声明，避免头文件强依赖
 class ITaskManager;    // BashTool 后台任务 DI（agent 命名空间下）
 class IEventBus;       // AskUserTool 事件发布 DI
 namespace skill { class TouchCollector; }  // conditional skills touch 收集器
+namespace hook { class HookManager; }      // Issue #50：通用 Hook 事件系统
+namespace command { class CommandRegistry; }   // #56 方案 C：技能/命令注册表
+namespace mcp { class McpClientManager; }      // #56 方案 D：MCP 连接管理器
 
 // ============================================================
 // ReAct 步骤类型
@@ -182,10 +185,15 @@ public:
         int review_stall_window = 4;
         /// 评审"继续"时追加的额外迭代预算（块大小）
         int review_extra_budget = 8;
-        /// 达上限评审的"继续"允许次数上限（硬性总预算 = max_iterations + extra*grants）
-        int review_max_grants = 2;
-        CacheAwareCompactor::Config compactor_cfg; ///< DS_CACHE: 缓存感知压缩配置
-    };
+        /// @brief 达上限评审的"继续"允许次数上限（硬性总预算 = max_iterations + extra*grants）
+    int review_max_grants = 2;
+    CacheAwareCompactor::Config compactor_cfg; ///< DS_CACHE: 缓存感知压缩配置
+
+    /// @brief Issue #50：通用 Hook 事件系统（可空；空则全部跳过，零开销）
+    /// @details ReActLoop 在 PreToolUse / PostToolUse / Stop 三处调用，
+    ///          blockingError/preventContinuation 语义作用于当前 turn。
+    std::shared_ptr<hook::HookManager> hooks;
+};
 
     /// @brief 步骤回调（每完成一个步骤时调用）
     ///
@@ -217,6 +225,8 @@ public:
     /// @param touch_collector 工具 touch 收集器（可选，用于 conditional skills）
     /// @param file_index_invalidator 宿主文件索引失效回调（可选，FileWriteTool 写文件后调用，
     ///                                无宿主时为 nullptr）
+    /// @param queue_inject_cb 消息队列冲刷回调（可选，模型忙碌时前端入队的用户消息，
+    ///                        在工具轮边界合并为单条 user 消息注入 messages；空 = 无队列）
     ReActLoop(ICompletionProvider* provider,
               std::shared_ptr<tool::ToolRegistry> registry,
               Config config,
@@ -227,7 +237,8 @@ public:
               IEventBus* event_bus = nullptr,
               skill::TouchCollector* touch_collector = nullptr,
               std::function<void()> file_index_invalidator = nullptr,
-              std::string session_id = "");
+              std::string session_id = "",
+              std::function<void(std::vector<ChatMessage>&)> queue_inject_cb = {});
 
     /// @brief 构造（使用默认配置）
     /// @param config_manager 配置管理器（H-5：必须非空，注入到 ToolContext）
@@ -320,6 +331,24 @@ public:
         m_permission_mode = mode;
         m_permission_mode_before_plan = before_plan;
         m_in_plan_mode = in_plan;
+    }
+
+    /// @brief 设置会话工作模式（标准 / 计划 / 极简）
+    /// @details 每轮新建 ReActLoop 时由宿主注入（与 apply_permission_state 同路径），
+    ///          构造 ToolContext 时携带，ToolExecutor 据此执行极简模式白名单守卫。
+    void set_session_mode(tool::SessionMode mode) { m_session_mode = mode; }
+    tool::SessionMode session_mode() const { return m_session_mode; }
+
+    /// @brief #56 方案 C：注入命令注册表（bundled + 磁盘技能），供 AgentTool 子 Agent
+    ///        skill 预加载取全文；构造 ToolContext 时注入 command_registry_ptr。
+    void set_command_registry(std::shared_ptr<command::CommandRegistry> registry) {
+        m_command_registry = std::move(registry);
+    }
+
+    /// @brief #56 方案 D：注入会话级 MCP 连接管理器，构造 ToolContext 时注入
+    ///        mcp_manager_ptr（供工具访问当前作用域可用 MCP server）。
+    void set_mcp_manager(std::shared_ptr<agent::mcp::McpClientManager> mgr) {
+        m_mcp_manager = std::move(mgr);
     }
 
     /// @brief H-1（PR #46 评审）：权限状态变更通知回调（宿主 ChatSession 注入）
@@ -449,6 +478,17 @@ private:
         }
     }
 
+    /// @brief 工具轮边界冲刷队列（消息队列：模型忙碌时前端入队的用户消息）
+    /// @details 仅在显式请求冲刷（Ctrl+Enter）时注入；普通 Enter 入队的消息
+    ///          由 ChatSession::flush_pending_after_run 在整轮结束统一冲刷。
+    ///          注入到 messages（下一轮 Thought 一并发送）。空回调 = 无队列。
+    /// @param messages 会话历史（会被追加合并后的 user 消息）
+    void maybe_inject_queue(std::vector<ChatMessage>& messages) {
+        if (m_queue_inject_cb) {
+            m_queue_inject_cb(messages);
+        }
+    }
+
     // ============================================================
     // 成员
     // ============================================================
@@ -469,8 +509,16 @@ private:
     tool::PermissionMode m_permission_mode{tool::PermissionMode::Default};  ///< #28：会话级权限模式
     tool::PermissionMode m_permission_mode_before_plan{tool::PermissionMode::Default};  ///< #28 评审 #1：进入计划模式前保存的原模式，退出时恢复
     bool m_in_plan_mode{false};  ///< #28 评审 #1/#3：是否处于计划模式（幂等进入判定）
+    tool::SessionMode m_session_mode{tool::SessionMode::Standard};  ///< 会话工作模式（标准/计划/极简）
     /// @brief H-1（PR #46 评审）：权限状态变更通知回调（宿主 ChatSession 注入，回写持久状态）
     PermissionStateChangedCallback m_perm_state_changed_cb;
+    /// @brief 消息队列冲刷回调（可选；工具轮边界把排队用户消息注入 messages）
+    std::function<void(std::vector<ChatMessage>&)> m_queue_inject_cb;
+
+    /// @brief #56 方案 C：命令注册表（bundled + 磁盘技能；注入 ToolContext.command_registry_ptr）
+    std::shared_ptr<command::CommandRegistry> m_command_registry;
+    /// @brief #56 方案 D：会话级 MCP 连接管理器（注入 ToolContext.mcp_manager_ptr）
+    std::shared_ptr<agent::mcp::McpClientManager> m_mcp_manager;
 };
 
 } // namespace agent

@@ -257,6 +257,61 @@ TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor denies on permission failure
 }
 
 // ============================================================================
+// 极简模式白名单守卫（SessionMode::Minimal 仅放行 Skill/Bash/Read/Write/Edit）
+// ============================================================================
+
+TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor denies non-allowlisted tool in minimal mode",
+                 "[tool_executor][minimal_mode]") {
+    ctx.session_mode = SessionMode::Minimal;
+
+    // Echo 不在白名单内：极简模式下直接拒绝（幻觉工具名防线）
+    auto result = executor->execute("Echo", R"({"text":"hi"})"_json, ctx);
+
+    REQUIRE(result.is_err());
+    REQUIRE(result.error().code == Error::Code::PermissionDenied);
+    REQUIRE(result.error().message.find("minimal mode") != std::string::npos);
+    REQUIRE(echo->call_count == 0);  // 未执行工具
+}
+
+TEST_CASE_METHOD(ToolExecutorFixture, "ToolExecutor allows allowlisted tool in minimal mode",
+                 "[tool_executor][minimal_mode]") {
+    // 注册一个名字在白名单内的工具（模拟 Bash）
+    class BashNamedTool : public EchoTool {
+    public:
+        const std::string& name() const override {
+            static const std::string n = "Bash";
+            return n;
+        }
+    };
+    auto bash_tool = std::make_shared<BashNamedTool>();
+    registry->register_tool(bash_tool);
+
+    ctx.session_mode = SessionMode::Minimal;
+
+    // 白名单工具可执行
+    auto ok = executor->execute("Bash", R"({"text":"ls"})"_json, ctx);
+    REQUIRE(ok.is_ok());
+    REQUIRE(ok.value().result.text.find("echo: ls") != std::string::npos);
+    REQUIRE(bash_tool->call_count == 1);
+
+    // 标准模式不受白名单限制（Echo 可执行）
+    ctx.session_mode = SessionMode::Standard;
+    auto standard = executor->execute("Echo", R"({"text":"x"})"_json, ctx);
+    REQUIRE(standard.is_ok());
+}
+
+TEST_CASE("is_minimal_mode_tool matches the allowlist", "[tool_executor][minimal_mode]") {
+    REQUIRE(is_minimal_mode_tool("Skill"));
+    REQUIRE(is_minimal_mode_tool("Bash"));
+    REQUIRE(is_minimal_mode_tool("Read"));
+    REQUIRE(is_minimal_mode_tool("Write"));
+    REQUIRE(is_minimal_mode_tool("Edit"));
+    REQUIRE_FALSE(is_minimal_mode_tool("Echo"));
+    REQUIRE_FALSE(is_minimal_mode_tool("WebSearch"));
+    REQUIRE_FALSE(is_minimal_mode_tool(""));
+}
+
+// ============================================================================
 // 输入验证
 // ============================================================================
 

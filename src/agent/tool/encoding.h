@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <nlohmann/json.hpp>
 
 namespace agent::tool {
 
@@ -106,5 +107,20 @@ void normalize_eol(std::string& line);
 /// @param file 已打开的输入流（文本模式）
 /// @return true 表示 BOM 已跳过；false 表示无 BOM
 bool skip_utf8_bom(std::ifstream& file);
+
+/// @brief 清洗字符串中的非法 UTF-8 字节，替换为 U+FFFD（U+FFFD: EF BF BD）
+/// @details 用于将任意字节序列规整为合法 UTF-8，避免 nlohmann::json 在
+///          dump()/序列化时因遇到不完整 UTF-8 序列抛出 type_error.316。
+///          会保留合法多字节序列，仅替换非法/孤立续字节与截断的序列。
+/// @param text 待清洗的原始字节序列
+/// @return 清洗后的合法 UTF-8 字符串
+std::string sanitize_utf8(std::string_view text);
+
+/// @brief 递归清洗 nlohmann::json 中所有字符串字段的非法 UTF-8 字节
+/// @details 递归遍历 object/array，对每个 string 值调用 sanitize_utf8。
+///          返回新的 json（不修改入参），保证 dump() 不会抛 type_error.316。
+/// @param j 待清洗的 json
+/// @return 清洗后的 json（所有 string 均为合法 UTF-8）
+nlohmann::json sanitize_json_strings(const nlohmann::json& j);
 
 } // namespace agent::tool

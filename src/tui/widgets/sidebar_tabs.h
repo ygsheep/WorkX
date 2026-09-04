@@ -34,11 +34,15 @@ std::string sub_agent_label(const SubAgentLite& a);
 /// @param section_hits 非空时记录侧栏可折叠区块标题命中区（MCP/TODO 点击用）
 /// @param sub_menu_elem 子 Agent 菜单元素（App 侧渲染 Menu 组件；空 = 无子 Agent）
 /// @param change_viewer_elem 变更记录组件渲染元素（App 侧渲染；空 = 回退纯渲染）
+/// @param project_tree_elem 项目文件树组件渲染元素（App 侧渲染；空 = 回退纯渲染）
+/// @param file_viewer_elem 文件查看器组件渲染元素（App 侧渲染；空 = 回退纯渲染）
 ftxui::Element build_sidebar_tabs(const SidebarTabsModel& tabs,
                                   const SidebarModel& sidebar,
                                   std::deque<TabHit>* hit_boxes = nullptr,
                                   std::deque<SectionHit>* section_hits = nullptr,
                                   const ftxui::Element& sub_menu_elem = ftxui::emptyElement(),
-                                  const ftxui::Element& change_viewer_elem = ftxui::Element());
+                                  const ftxui::Element& change_viewer_elem = ftxui::Element(),
+                                  const ftxui::Element& project_tree_elem = ftxui::Element(),
+                                  const ftxui::Element& file_viewer_elem = ftxui::Element());
 
 }  // namespace ftxtui

@@ -39,8 +39,64 @@ bool ViewModel::apply_variant(const ActionAppendMessage& a) {
     n.role = a.role == "user" ? MsgRole::User : MsgRole::Assistant;
     n.text = a.text;
     n.sealed = true;
+    // assistant 追加均为 UI 通知/命令输出，非模型回复 → 不显示重试/复制按钮栏
+    n.notice = (n.role == MsgRole::Assistant);
     messages.push_back(std::move(n));
     return true;
+}
+
+bool ViewModel::apply_variant(const ActionAppendSkill& a) {
+    MessageNode n;
+    n.role = MsgRole::Assistant;
+    n.sealed = true;
+    ToolCallNode t;
+    t.tool_name = "Skill";
+    t.call_id = "";  // 本地合成，无真实 tool_call id
+    // arguments 需为 {"name":...} JSON，skill_name_from_args 据此显示「Skills：名」
+    t.arguments = nlohmann::json{{"name", a.name}}.dump();
+    if (a.is_error) {
+        t.result = "(技能本地解析失败)";
+    } else {
+        t.result = "(技能已本地解析，指令已交由模型处理" +
+                   (a.input.empty() ? std::string{} : std::string("：") + a.input) + ")";
+    }
+    t.done = true;     // 本地技能同步解析完成
+    t.running = false;
+    t.is_error = a.is_error;
+    t.expanded = a.is_error;  // 出错默认展开
+    t.text_pos = n.text.size();
+    n.tool_calls.push_back(std::move(t));
+    messages.push_back(std::move(n));
+    return true;
+}
+
+bool ViewModel::apply_variant(const ActionAppendCmdResult& a) {
+    // ！命令执行结果：合成独立 assistant 消息承载 Bash 卡（复用 Shell 工具卡渲染：
+    // tool_name="Bash" → 标题取 arguments.command，结果剥离 <stdout>/<stderr>/<exit_code>
+    // 标签、<error> 红色显示）。本地合成完成态（无 running），出错默认展开。
+    MessageNode n;
+    n.role = MsgRole::Assistant;
+    n.sealed = true;
+    n.notice = true;  // UI 通知，非模型回复 → 不显示重试/复制按钮栏
+    ToolCallNode t;
+    t.tool_name = "Bash";
+    t.call_id = "";  // 本地合成，无真实 tool_call id
+    t.arguments = nlohmann::json{{"command", a.command}}.dump();
+    t.result = a.result;
+    t.done = true;
+    t.running = false;
+    t.is_error = a.is_error;
+    t.expanded = a.is_error;
+    t.text_pos = n.text.size();
+    n.tool_calls.push_back(std::move(t));
+    messages.push_back(std::move(n));
+    return true;
+}
+
+bool ViewModel::apply_variant(const ActionSubmitCmdToModel&) {
+    // 由 App 层在 drain 中处理（回显 user + 置 busy + on_submit），此处仅满足
+    // std::visit 编译对全部 variant 类型需有重载的要求，不参与渲染。
+    return false;
 }
 
 bool ViewModel::apply_variant(const ActionTokenDelta& a) {
@@ -175,8 +231,17 @@ bool ViewModel::apply_variant(const ActionPermissions& a) {
     return true;
 }
 
+bool ViewModel::apply_variant(const ActionSetMode& a) {
+    if (sidebar.mode == a.label) return false;
+    sidebar.mode = a.label;
+    return true;
+}
+
 bool ViewModel::apply_variant(const ActionAskUser&) { return true; }
 bool ViewModel::apply_variant(const ActionAskUserTimeout&) { return true; }
+
+// ActionOpenPlan 由 App::drain 直接消费（打开侧边栏预览），ViewModel 不处理
+bool ViewModel::apply_variant(const ActionOpenPlan&) { return true; }
 
 bool ViewModel::apply_variant(const ActionCacheDiagnostics& a) {
     // 仅 prefix_changed 时提示（对齐 src/tui ChatRenderer 语义）
@@ -200,6 +265,16 @@ bool ViewModel::apply_variant(const ActionCompactionPaused& a) {
                                         + std::to_string(a.consecutive_compacts)
                                         + std::string(str::kCompactPausedSuffix);
     else prompt_echo = std::string(str::kCompactResumed);
+    return true;
+}
+
+bool ViewModel::apply_variant(const ActionQueueUpdate& a) {
+    // 消息队列更新：替换为最新快照（空 = 已清空/已发送，卡片消失）
+    message_queue.items = a.items;
+    // 队列清空时复位展开态（避免下次入队残留展开状态）
+    if (message_queue.items.empty()) {
+        message_queue.expanded = false;
+    }
     return true;
 }
 
@@ -319,6 +394,30 @@ bool ViewModel::apply_variant(const ActionSubAgentCompleted& a) {
     return true;
 }
 
+bool ViewModel::apply_variant(const ActionHookProgress& a) {
+    // 按 hook_id 关联同一条 hook 的 start / done(failed) 两拍，合并为一行
+    auto it = std::find_if(hook_progress.begin(), hook_progress.end(),
+        [&](const HookRow& r) { return r.hook_id == a.hook_id; });
+    HookRow row;
+    row.hook_id = a.hook_id;
+    row.event = a.event;
+    row.hook_type = a.hook_type;
+    row.tool_name = a.tool_name;
+    row.label = a.hook_label;
+    row.phase = a.phase;
+    row.message = a.message;
+    if (it == hook_progress.end()) {
+        hook_progress.push_back(std::move(row));
+    } else {
+        *it = std::move(row);
+    }
+    // FIFO 淘汰最旧条目（历史 done/failed 行随新事件滚动离开，保持面板精简）
+    if (hook_progress.size() > kMaxHookRows)
+        hook_progress.erase(hook_progress.begin(), hook_progress.begin() +
+            static_cast<std::ptrdiff_t>(hook_progress.size() - kMaxHookRows));
+    return true;
+}
+
 bool ViewModel::apply_variant(const ActionShutdown&) {
     pending_exit = true;
     return true;
@@ -362,6 +461,46 @@ bool ViewModel::apply_variant(const ActionMcpStatus& a) {
     }
     if (sidebar.mcp_servers == entries) return false;  // 无变化，避免无谓重绘
     sidebar.mcp_servers = std::move(entries);
+    return true;
+}
+
+namespace {
+
+/// @brief 复制时合并新树到旧树：目录递归继承旧展开状态（按 rel_path 匹配）
+void merge_project_expand(const std::vector<ProjectNode>& src,
+                          std::vector<ProjectNode>& dst) {
+    for (auto& d : dst) {
+        if (!d.is_dir) continue;
+        // 在旧树中找同路径目录，继承其 expanded
+        for (const auto& s : src) {
+            if (s.is_dir && s.rel_path == d.rel_path) {
+                d.expanded = s.expanded;
+                break;
+            }
+        }
+        if (!d.children.empty()) {
+            for (const auto& s : src)
+                if (s.is_dir && s.rel_path == d.rel_path && !s.children.empty()) {
+                    merge_project_expand(s.children, d.children);
+                    break;
+                }
+        }
+    }
+}
+
+}  // namespace
+
+bool ViewModel::apply_variant(const ActionProjectFiles& a) {
+    if (!a.loading) {
+        // 复制后合并保留既有目录展开状态，避免 git 刷新后目录全部重开
+        std::vector<ProjectNode> merged = a.tree;
+        merge_project_expand(tabs.project.tree, merged);
+        tabs.project.tree = std::move(merged);
+    }
+    if (!a.root.empty()) tabs.project.root = a.root;
+    tabs.project.is_git = a.is_git;
+    tabs.project.loading = a.loading;
+    tabs.project.ready = a.loading ? tabs.project.ready : true;
     return true;
 }
 

@@ -176,8 +176,9 @@ TEST_CASE("estimate_message_height matches user message", "[layout][message]") {
     m.text = "hi\n```cpp\nx\n```";
     m.sealed = true;
     REQUIRE(estimate_message_height(m, 240) == rendered_height(m));
-    // 上下留白 2 + 内容（段落 1 行×行距2=2 + 代码块：1 代码行 + 1 lang 行 + 2 留白 = 4） = 8
-    REQUIRE(estimate_message_height(m, 240) == 8);
+    // 紧凑段落：私信 1 行×1 + 代码块（1 代码行 + 1 lang 行，compact 无上下留白 = 2） = 3
+    // 用户消息块自带上下各 1 空行（build_message 的 UserMessageBox 布局约束，+2） → 5
+    REQUIRE(estimate_message_height(m, 240) == 5);
 }
 
 TEST_CASE("estimate_message_height matches user message with empty text", "[layout][message]") {
@@ -185,6 +186,14 @@ TEST_CASE("estimate_message_height matches user message with empty text", "[layo
     m.role = MsgRole::User;
     m.sealed = true;
     REQUIRE(estimate_message_height(m, 240) == rendered_height(m));
+    REQUIRE(estimate_message_height(m, 240) == 0);
+}
+
+TEST_CASE("estimate_message_height matches notice assistant (no action bar)", "[layout][message]") {
+    MessageNode m = assistant_msg("notice text");
+    m.notice = true;
+    REQUIRE(estimate_message_height(m, 240) == rendered_height(m));
+    // 正文 1×行距2=2，notice 不显示操作按钮栏 → 2
     REQUIRE(estimate_message_height(m, 240) == 2);
 }
 
@@ -218,8 +227,8 @@ TEST_CASE("estimate_message_height matches tool card", "[layout][message]") {
     t.result = "line1\nline2";
     m.tool_calls.push_back(t);
     REQUIRE(estimate_message_height(m, 240) == rendered_height(m));
-    // 工具卡 3(边框2+头1) + vPad 2 + 展开 2 + 正文 1×行距2=2 + 操作按钮栏 1 = 12
-    REQUIRE(estimate_message_height(m, 240) == 12);
+    // 工具卡 3(边框2+头1) + 展开 2 + 正文 1×行距2=2 + 暂不计算 result 包裹留白 + 操作按钮栏 1 = 11
+    REQUIRE(estimate_message_height(m, 240) == 11);
 }
 
 TEST_CASE("estimate_message_height matches tool card collapsed", "[layout][message]") {
@@ -231,8 +240,8 @@ TEST_CASE("estimate_message_height matches tool card collapsed", "[layout][messa
     t.expanded = false;
     m.tool_calls.push_back(t);
     REQUIRE(estimate_message_height(m, 240) == rendered_height(m));
-    // 工具卡 3 + vPad 2 + 正文 1×行距2=2 + 操作按钮栏 1 = 8
-    REQUIRE(estimate_message_height(m, 240) == 8);
+    // 折叠工具卡：正文 1×2=2 + 卡 3 行（无非展开内容）+ 卡前空 1 + 按钮栏 1 = 7
+    REQUIRE(estimate_message_height(m, 240) == 7);
 }
 
 TEST_CASE("estimate_message_height matches tool card with file path header", "[layout][message]") {
@@ -246,8 +255,8 @@ TEST_CASE("estimate_message_height matches tool card with file path header", "[l
     t.result = "line1\nline2";
     m.tool_calls.push_back(t);
     REQUIRE(estimate_message_height(m, 240) == rendered_height(m));
-    // 工具卡 3 + vPad 2 + 路径行 1 + 展开 2 + 正文 1×行距2=2 + 操作按钮栏 1 = 13
-    REQUIRE(estimate_message_height(m, 240) == 13);
+    // 展开工具卡：正文 1×2=2 + 卡：头 1 + 路径行 1 + 结果（status 1+vPad 2+2 行=...见下）+ 卡前空 1 + 按钮栏 1 = 14
+    REQUIRE(estimate_message_height(m, 240) == 14);
 }
 
 TEST_CASE("estimate_message_height ignores tool card non-json arguments", "[layout][message]") {
@@ -261,8 +270,8 @@ TEST_CASE("estimate_message_height ignores tool card non-json arguments", "[layo
     t.result = "line1";
     m.tool_calls.push_back(t);
     REQUIRE(estimate_message_height(m, 240) == rendered_height(m));
-    // 工具卡 3 + vPad 2 + 展开 1 + 正文 1×行距2=2 + 操作按钮栏 1 = 10（无路径行）
-    REQUIRE(estimate_message_height(m, 240) == 10);
+    // 展开工具卡（无路径行）：正文 1×2=2 + 卡：头 1 + 结果（status 1+vPad 2+1 行）+ 卡前空 1 + 按钮栏 1 = 9
+    REQUIRE(estimate_message_height(m, 240) == 9);
 }
 
 TEST_CASE("estimate_message_height matches two adjacent tool cards", "[layout][message]") {
@@ -280,9 +289,8 @@ TEST_CASE("estimate_message_height matches two adjacent tool cards", "[layout][m
     t2.expanded = false;
     m.tool_calls.push_back(t2);
     REQUIRE(estimate_message_height(m, 240) == rendered_height(m));
-    // 正文 1×行距2=2 + 卡片 3+3 + 分隔(每卡前 1 + 最后卡后 1 = 3) + 操作按钮栏 1 = 12
-    //（相邻卡片之间只留 1 行，不再双倍叠加）
-    REQUIRE(estimate_message_height(m, 240) == 12);
+    // 两张折叠卡：正文 1×2=2 + 卡 3+3 + 卡前空 1 + 末卡后空 1 + 按钮栏 1 = 10
+    REQUIRE(estimate_message_height(m, 240) == 10);
 }
 
 TEST_CASE("estimate_message_height matches error message", "[layout][message]") {

@@ -2,15 +2,17 @@
  * @file chat_session.cpp
  * @brief 对话状态机实现
  * @details 编排用户输入、ReAct 循环、流式事件发布、自动重试、会话持久化
- * @version 3.1.1
+ * @version 3.1.2
  * @date 2026-07
  */
 
 #include "agent/core/chat_session.h"
 #include "agent/core/react_loop.h"
-#include "agent/core/agent_type.h"          // 0.6.x：#31 AgentType 路由
+#include "agent/core/agent_type.h"          // 0.6.x：#31 AgentType 枚举 + 别名解析
 #include "agent/core/goal_guarded_agent.h"  // 0.6.x：#31 GoalGuardedAgent + parse_goal
 #include "agent/core/query_engine.h"        // 0.6.x：QueryEngine 唯一编排入口
+#include "agent/plan/plan_coordinator.h"   // #54：Plan Mode V2 五阶段协调器
+#include "agent/tool/path_matcher.h"       // #54：~/.workx/plan 家目录展开
 #include "agent/message/types.h"
 #include "agent/tool/tool_kind.h"
 #include "agent/tool/TodoStore/todo_store.h"  // #24：待办清单持久化接线
@@ -18,7 +20,11 @@
 #include "agent/command/inclaude/registry.h"
 #include "agent/skill/inclaude/conditional.h"
 #include "agent/skill/inclaude/hooks.h"
+#include "agent/mcp/mcp_client_manager.h"  // #56 方案 D：MCP 连接管理器成员
 #include "agent/config/app_config.h"
+#include "agent/tool/AgentTool/agent_tool.h"  // #54：SubAgentLaunchOptions / launch_sub_agent（explore 并行）
+#include "agent/hook/hook_manager.h"  // #50 通用 Hook 事件系统：会话级 SessionStart/End
+#include "agent/audit/audit_logger.h"  // 会话生命周期审计
 #include "core/task/task_manager.h"
 #include "core/config/config_manager.h"
 #include "core/utils/uuid.h"  // 项目会话恢复：UUID 生成
@@ -65,7 +71,7 @@ std::string now_iso() {
 
 namespace {
 
-/// @brief 提取消息中的 <file path="..."> 引用（@file 展开产物），加入 touch 收集器
+/// @brief 提取消息中的 <file path="..."> 引用，加入 touch 收集器
 /// @details 只识别显式 file 标签，避免裸路径误报
 void extract_file_path_touches(const std::string& text, skill::TouchCollector& collector) {
     static const std::string kTag = "<file path=\"";
@@ -197,12 +203,32 @@ ChatSession::ChatSession(std::unique_ptr<ICompletionProvider> provider,
     // #24：接线 TodoStore 事件总线（变更后发布 TodoUpdatedEvent → UI 侧边栏/StatusBar）
     tool::TodoStore::instance().set_event_bus(&m_event_bus.get());
 
+    // #50：装配会话级 HookManager（SessionStart/SessionEnd 事件；复用循环级同一装配逻辑）。
+    //      会话级无独立工具 registry，agent 类型 hook 在此降级为纯 prompt 判定（白名单可空）。
+    m_hooks = hook::make_hook_manager(m_config_manager.get(), nullptr,
+                                      m_provider.get(), &m_event_bus.get());
+
     subscribe_interrupt();
     subscribe_sub_agent_persistence();
+
+    // #54：Plan Mode V2 协调器（会话语义级驱动五阶段 + 并行 explore 编排）
+    m_plan_coordinator = std::make_unique<plan::PlanCoordinator>(m_config_manager.get());
+    subscribe_plan_events();
 }
 
 ChatSession::~ChatSession() {
+    // #50 SessionEnd hook：会话析构收尾时触发一次（switch_session 不触发，语义与现有
+    //      持久化约定对齐——会话可被多次 resume 继续）。执行在本类成员仍存活期内。
+    if (m_hooks && !m_hooks->empty() && !m_session_end_hook_fired) {
+        m_session_end_hook_fired = true;
+        hook::HookContext hctx;
+        hctx.session_id = m_session_id;
+        hctx.cwd = m_cwd;
+        hctx.stop_reason = "session_ended";
+        m_hooks->dispatch(hook::HookEvent::SessionEnd, hctx);
+    }
     unsubscribe_sub_agent_persistence();
+    unsubscribe_plan_events();
     unsubscribe_interrupt();
     if (m_provider) {
         m_provider->interrupt();
@@ -268,8 +294,21 @@ void ChatSession::cancel_and_wait_current_task() {
 }
 
 void ChatSession::set_system_prompt(const std::string& prompt) {
+    std::string reason;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        if (prompt == m_system_prompt) return;
+        m_system_prompt = prompt;
+        // 已落盘过 → 运行时变更；首次设置 → 待懒创建 store 后补写 initial
+        reason = m_system_prompt_recorded ? "changed" : "initial";
+    }
+    persist_system_prompt(reason);
+}
+
+void ChatSession::set_system_prompt_builder(
+    std::function<std::string(tool::SessionMode)> builder) {
     std::lock_guard<std::mutex> lock(m_state_mutex);
-    m_system_prompt = prompt;
+    m_system_prompt_builder = std::move(builder);
 }
 
 std::string ChatSession::system_prompt() const {
@@ -303,6 +342,16 @@ std::shared_ptr<command::CommandRegistry> ChatSession::command_registry() const 
     return m_command_registry;
 }
 
+void ChatSession::set_mcp_manager(std::shared_ptr<mcp::McpClientManager> manager) {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    m_mcp_manager = std::move(manager);
+}
+
+std::shared_ptr<mcp::McpClientManager> ChatSession::mcp_manager() const {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    return m_mcp_manager;
+}
+
 skill::TouchCollector& ChatSession::touch_collector() {
     return m_touch_collector;
 }
@@ -322,6 +371,11 @@ void ChatSession::clear_history() {
     m_activated_skills.clear();
     // #24：清空待办清单（写空快照到 JSONL 防止 /resume 恢复旧清单，保留持久化回调）
     tool::TodoStore::instance().reset_session(m_session_id);
+    // 消息队列：清空待发送缓存（避免残留消息进入新历史/被误冲刷）
+    clear_pending_queue();
+    // 审计：会话结束（清空历史）
+    audit::AuditLogger::instance().log_session_lifecycle(
+        audit::EventType::SessionEnd, m_session_id);
 }
 
 void ChatSession::set_compactor_context_window(int32_t context_window_tokens) {
@@ -343,16 +397,48 @@ void ChatSession::set_session_store(std::shared_ptr<agent::session::SessionStore
     m_session_store = std::move(store);
 }
 
+void ChatSession::append_skill_event(const agent::session::SkillEvent& ev) {
+    std::shared_ptr<agent::session::SessionStore> store;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        store = m_session_store;
+    }
+    if (store) store->append_skill(ev);
+}
+
 void ChatSession::configure_session_store(const std::string& project_dir,
                                            const std::string& cwd,
                                            const std::string& model,
                                            const std::string& git_branch) {
-    std::lock_guard<std::mutex> lock(m_state_mutex);
-    m_store_configured = true;
-    m_store_project_dir = project_dir;
-    m_store_cwd = cwd;
-    m_store_model = model;
-    m_store_git_branch = git_branch;
+    // 锁内仅做状态写入；SessionStart hook 派发在锁外执行（可长耗时，含 command/http/prompt）
+    std::string disp_hook_session_id;
+    std::string disp_hook_cwd;
+    bool dispatch_start = false;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        m_store_configured = true;
+        m_store_project_dir = project_dir;
+        m_store_cwd = cwd;
+        m_store_model = model;
+        m_store_git_branch = git_branch;
+        // 审计：会话开始（启动装配时必然调用，保证审计日志文件必然生成）
+        audit::AuditLogger::instance().log_session_lifecycle(
+            audit::EventType::SessionStart, m_session_id);
+
+        // #50 SessionStart hook：会话装配完成、首条消息前触发一次（每个 ChatSession 实例仅一次）
+        if (m_hooks && !m_hooks->empty() && !m_session_start_hook_fired) {
+            m_session_start_hook_fired = true;
+            dispatch_start = true;
+            disp_hook_session_id = m_session_id;
+            disp_hook_cwd = m_store_cwd;
+        }
+    }
+    if (dispatch_start) {
+        hook::HookContext hctx;
+        hctx.session_id = disp_hook_session_id;
+        hctx.cwd = disp_hook_cwd;
+        m_hooks->dispatch(hook::HookEvent::SessionStart, hctx);
+    }
 }
 
 bool ChatSession::restore_from_file(const std::string& file_path) {
@@ -365,6 +451,11 @@ bool ChatSession::restore_from_file(const std::string& file_path) {
                       std::make_move_iterator(messages.begin()),
                       std::make_move_iterator(messages.end()));
     return true;
+}
+
+CacheAwareCompactor::Result ChatSession::compact_context() {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    return m_compactor.maybe_compact(m_messages);
 }
 
 void ChatSession::import_messages(std::vector<ChatMessage> messages) {
@@ -430,6 +521,13 @@ bool ChatSession::switch_session(const std::string& file_path) {    // 加载历
     auto todos = agent::session::SessionStore::load_todos(file_path);
     tool::TodoStore::instance().restore_todos(new_session_id, std::move(todos));
     wire_todo_persistence();
+    // 会话轨迹调试：切换后记录当前系统提示词为 resume 快照（file 已打开）
+    if (!m_system_prompt.empty()) {
+        persist_system_prompt("resume");
+    }
+    // 审计：切换到恢复的会话
+    audit::AuditLogger::instance().log_session_lifecycle(
+        audit::EventType::SessionStart, new_session_id);
 
     return true;
 }
@@ -455,6 +553,11 @@ void ChatSession::new_session() {
         m_last_prefix_shape = PrefixShape{};
         m_touch_collector.clear();
         m_activated_skills.clear();
+        // 新会话文件懒创建后补写 initial system_prompt 快照（会话轨迹调试）
+        m_system_prompt_recorded = false;
+        m_pending_system_prompt = !m_system_prompt.empty();
+        // 消息队列：清空待发送缓存（新会话从空队列开始）
+        clear_pending_queue();
         // 懒创建参数（m_store_configured 等）保持不变，复用启动时配置
     }  // 释放 m_state_mutex
 
@@ -462,6 +565,9 @@ void ChatSession::new_session() {
     // 持锁调用会对非递归 mutex 二次锁定 → EDEADLK，与 switch_session 同理）。
     tool::TodoStore::instance().restore_todos(new_session_id, {});
     wire_todo_persistence();
+    // 审计：新会话开始
+    audit::AuditLogger::instance().log_session_lifecycle(
+        audit::EventType::SessionStart, new_session_id);
 }
 
 void ChatSession::wire_todo_persistence() {
@@ -537,6 +643,10 @@ void ChatSession::persist_message(const ChatMessage& msg) {
                 m_session_store = new_store;
             }
             store = new_store;
+            // 补写待记录的 initial system_prompt 快照（会话轨迹调试）
+            if (m_pending_system_prompt) {
+                persist_system_prompt("initial");
+            }
             // #24：接线 TodoStore 持久化回调（新会话从空清单开始）
             wire_todo_persistence();
         } catch (const std::exception&) {
@@ -626,6 +736,25 @@ void ChatSession::persist_messages_range(size_t start_idx, const std::string& pa
         }
         current_parent = uuid;  // 链式传递 parent_uuid
     }
+}
+
+void ChatSession::persist_system_prompt(const std::string& reason) {
+    std::shared_ptr<agent::session::SessionStore> store;
+    std::string prompt;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        store = m_session_store;
+        prompt = m_system_prompt;
+        if (!store) {
+            // store 未创建（首条 user 消息前）：置 pending，懒创建后补写 initial 快照
+            m_pending_system_prompt = true;
+            return;
+        }
+    }
+    store->append_system_prompt(reason, prompt);
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    m_system_prompt_recorded = true;
+    m_pending_system_prompt = false;
 }
 
 std::string ChatSession::summarize_with_llm(const std::vector<ChatMessage>& middle) {
@@ -763,18 +892,135 @@ void ChatSession::regenerate_from(const std::string& user_text) {
 void ChatSession::send_message(const std::string& text,
                                const std::vector<std::string>& images) {
     if (m_generating.load()) {
-        m_event_bus.get().publish_async(StreamErrorEvent{
-            .session_id = m_session_id,
-            .message = "Still generating, please wait or press Ctrl+C to interrupt",
-            .retryable = true
-        });
+        // 模型忙碌：进入待发送队列（不丢消息；Ctrl+Enter 由 TUI 先行 request_flush）
+        enqueue_message(text, images);
         return;
     }
 
     run_completion(text, images);
 }
 
-// #45：会话级权限模式（三态切换 Default → Plan → Bypass → Default）
+// ============================================================
+// 消息队列（模型忙碌时缓存用户输入，工具轮边界/整轮结束冲刷）
+// ============================================================
+
+bool ChatSession::enqueue_message(const std::string& text,
+                                  const std::vector<std::string>& images) {
+    // 模型空闲时入队无意义：调用方（TUI send_input）应走 send_message 直接发送。
+    // 返回 false 让调用方回退到直接发送路径。
+    if (!m_generating.load()) return false;
+
+    QueuedMessageItem item;
+    item.id = core::util::generate_uuid();
+    item.text = text;
+    item.images = images;
+    item.queued_at_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    {
+        std::lock_guard<std::mutex> lock(m_queue_mutex);
+        m_pending_queue.push_back(std::move(item));
+    }
+    publish_queue_update();
+    return true;
+}
+
+void ChatSession::request_flush() {
+    // 冲刷请求：ReActLoop 在下一个工具轮边界调用 inject_pending_queue 时消费。
+    // 置位不持锁（原子），避免与后台线程持锁顺序冲突。
+    m_flush_requested.store(true);
+}
+
+void ChatSession::remove_queued_message(const std::string& id) {
+    bool removed = false;
+    {
+        std::lock_guard<std::mutex> lock(m_queue_mutex);
+        for (auto it = m_pending_queue.begin(); it != m_pending_queue.end(); ++it) {
+            if (it->id == id) {
+                m_pending_queue.erase(it);
+                removed = true;
+                break;
+            }
+        }
+    }
+    if (removed) publish_queue_update();
+}
+
+void ChatSession::clear_pending_queue() {
+    bool had_items = false;
+    {
+        std::lock_guard<std::mutex> lock(m_queue_mutex);
+        had_items = !m_pending_queue.empty();
+        m_pending_queue.clear();
+        m_flush_requested.store(false);
+    }
+    if (had_items) publish_queue_update();
+}
+
+std::vector<QueuedMessageItem> ChatSession::queued_messages() const {
+    std::lock_guard<std::mutex> lock(m_queue_mutex);
+    return {m_pending_queue.begin(), m_pending_queue.end()};
+}
+
+void ChatSession::publish_queue_update() {
+    m_event_bus.get().publish_async(MessageQueueUpdatedEvent{
+        .session_id = m_session_id,
+        .items = queued_messages(),
+    });
+}
+
+void ChatSession::inject_pending_queue(std::vector<ChatMessage>& messages) {
+    // 仅在显式请求冲刷（Ctrl+Enter）时在工具轮边界注入；
+    // 普通 Enter 入队的消息由 flush_pending_after_run 在整轮结束统一冲刷。
+    if (!m_flush_requested.load()) return;
+
+    std::vector<QueuedMessageItem> items;
+    {
+        std::lock_guard<std::mutex> lock(m_queue_mutex);
+        if (m_pending_queue.empty()) return;
+        items.assign(m_pending_queue.begin(), m_pending_queue.end());
+        m_pending_queue.clear();
+        m_flush_requested.store(false);
+    }
+    const std::string merged = merge_queued_text(items);
+    messages.push_back(ChatMessage::user(merged));
+    publish_queue_update();
+    // 通知 UI 在转录区回显该合并 user 消息（Ctrl+Enter 工具轮边界冲刷）
+    m_event_bus.get().publish_async(QueuedMessagesFlushedEvent{
+        .session_id = m_session_id,
+        .merged_text = merged,
+    });
+}
+
+void ChatSession::flush_pending_after_run() {
+    std::vector<QueuedMessageItem> items;
+    {
+        std::lock_guard<std::mutex> lock(m_queue_mutex);
+        if (m_pending_queue.empty() || m_generating.load()) return;
+        items.assign(m_pending_queue.begin(), m_pending_queue.end());
+        m_pending_queue.clear();
+        m_flush_requested.store(false);
+    }
+    publish_queue_update();
+    // 通知 UI 在转录区回显该合并 user 消息 + 置 busy（整轮收尾冲刷开启新一轮）
+    m_event_bus.get().publish_async(QueuedMessagesFlushedEvent{
+        .session_id = m_session_id,
+        .merged_text = merge_queued_text(items),
+    });
+    // 队列消息合并为单条 user 消息，开启新一轮推理
+    run_completion(merge_queued_text(items));
+}
+
+std::string ChatSession::merge_queued_text(
+    const std::vector<QueuedMessageItem>& items) {
+    std::string merged;
+    for (size_t i = 0; i < items.size(); ++i) {
+        merged += std::format("[排队消息 {}/{}]\n{}\n━━━━━━━━━━\n",
+                              i + 1, items.size(), items[i].text);
+    }
+    return merged;
+}
+
+// #45：会话级权限模式（两态切换 Default ↔ Bypass，Plan 归入工作模式管理）
 void ChatSession::set_permission_mode(tool::PermissionMode mode) {
     std::lock_guard<std::mutex> lock(m_state_mutex);
     m_permission_mode = mode;
@@ -785,25 +1031,92 @@ tool::PermissionMode ChatSession::permission_mode() const {
     return m_permission_mode;
 }
 
+/// @brief 权限两态切换（手动审批 ↔ 完全访问）
+/// @details 计划模式已从权限循环中独立为工作模式（m_session_mode），
+///          故 Shift+Tab 仅在 Default / BypassPermissions 之间循环。
+///          计划模式联动由 toggle_session_mode / EnterPlanMode 工具负责。
 void ChatSession::toggle_permission_mode() {
     std::lock_guard<std::mutex> lock(m_state_mutex);
+    // 计划模式下不直接切换权限（由模式切换统一管理，退出计划时恢复）
+    if (m_session_mode == tool::SessionMode::Plan) {
+        return;
+    }
     switch (m_permission_mode) {
         case tool::PermissionMode::Default:
-            // 进入 Plan：记录 before_plan（ExitPlanMode 退出恢复用）
-            m_permission_mode_before_plan = tool::PermissionMode::Default;
-            m_permission_mode = tool::PermissionMode::Plan;
-            break;
-        case tool::PermissionMode::Plan:
-            // 退出 Plan，进入 Bypass（完全放行）
             m_permission_mode = tool::PermissionMode::BypassPermissions;
             break;
         case tool::PermissionMode::BypassPermissions:
-            // 回归常规（不经过 Plan，避开"Bypass 禁止降级到 Plan"约束）
+            m_permission_mode = tool::PermissionMode::Default;
+            break;
+        case tool::PermissionMode::Plan:
+            // 理论不可达（Plan 由模式管理）；保守回退到 Default
             m_permission_mode = tool::PermissionMode::Default;
             break;
         case tool::PermissionMode::AcceptEdits:
-            break;  // 占位模式，不参与三态循环
+            break;  // 占位模式，不参与循环
     }
+}
+
+tool::SessionMode ChatSession::session_mode() const {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    return m_session_mode;
+}
+
+void ChatSession::set_session_mode(tool::SessionMode mode) {
+    std::string persist_reason;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        // 离开 Plan：恢复进入前的权限模式（与 ExitPlanMode 工具语义一致）
+        if (m_session_mode == tool::SessionMode::Plan && mode != tool::SessionMode::Plan) {
+            m_permission_mode = m_permission_mode_before_plan;
+        }
+        // 进入 Plan：记录 before_plan 并强制只读（对齐 EnterPlanMode 工具语义）
+        if (mode == tool::SessionMode::Plan && m_session_mode != tool::SessionMode::Plan) {
+            m_permission_mode_before_plan = m_permission_mode;
+            m_permission_mode = tool::PermissionMode::Plan;
+        }
+        m_session_mode = mode;
+        // 方案 A：模式变化后按目标模式重建系统提示词（工具说明随模式收窄/恢复）
+        persist_reason = rebuild_system_prompt_locked();
+    }
+    if (!persist_reason.empty()) persist_system_prompt(persist_reason);
+}
+
+void ChatSession::toggle_session_mode() {
+    std::string persist_reason;
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        switch (m_session_mode) {
+            case tool::SessionMode::Standard:
+                // 标准 → 极简：纯降级，权限不变
+                m_session_mode = tool::SessionMode::Minimal;
+                break;
+            case tool::SessionMode::Minimal:
+                // 极简 → 计划：记录 before_plan（退出计划恢复用）
+                m_permission_mode_before_plan = m_permission_mode;
+                m_permission_mode = tool::PermissionMode::Plan;
+                m_session_mode = tool::SessionMode::Plan;
+                break;
+            case tool::SessionMode::Plan:
+                // 计划 → 标准：退出计划，恢复进入前的权限模式
+                m_permission_mode = m_permission_mode_before_plan;
+                m_session_mode = tool::SessionMode::Standard;
+                break;
+        }
+        // 方案 A：模式变化后按目标模式重建系统提示词
+        persist_reason = rebuild_system_prompt_locked();
+    }
+    if (!persist_reason.empty()) persist_system_prompt(persist_reason);
+}
+
+std::string ChatSession::rebuild_system_prompt_locked() {
+    std::string reason;
+    if (!m_system_prompt_builder) return reason;
+    std::string rebuilt = m_system_prompt_builder(m_session_mode);
+    if (rebuilt == m_system_prompt) return reason;
+    m_system_prompt = std::move(rebuilt);
+    reason = m_system_prompt_recorded ? "changed" : "initial";
+    return reason;
 }
 
 std::vector<ChatMessage> ChatSession::get_messages() const {
@@ -856,6 +1169,26 @@ void ChatSession::run_completion(const std::string& user_text,
                         body = "[skill hooks]\n" + hook_block + "\n" + body;
                     }
                 }
+                // 对象式通用 Hook：激活时注册到会话级 HookManager（会话期间生效）
+                if (m_hooks && !m_hooks->empty() && !sk->hooks_json().empty()) {
+                    for (const auto& json_str : sk->hooks_json()) {
+                        try {
+                            auto arr = nlohmann::json::parse(json_str);
+                            if (!arr.is_array()) continue;
+                            for (const auto& obj : arr) {
+                                hook::HookDefinition def = hook::HookDefinition::from_json(obj);
+                                if (def.command.empty() && def.url.empty() && def.prompt.empty()) {
+                                    LOG_WARN("[hook] frontmatter hook def missing command/url/prompt, skipped: {}",
+                                             obj.dump());
+                                    continue;
+                                }
+                                m_hooks->register_hook(std::move(def));
+                            }
+                        } catch (const std::exception& e) {
+                            LOG_WARN("[hook] invalid frontmatter hooks JSON, skipped: {}", e.what());
+                        }
+                    }
+                }
                 prefix += "[Activated skill: " + sk->name() + "]\n" + body + "\n";
                 m_activated_skills.insert(sk->name());
             }
@@ -893,7 +1226,15 @@ void ChatSession::run_completion(const std::string& user_text,
             // ---- 构建 tools_schema ----
             nlohmann::json tools_schema = nlohmann::json::array();
             if (m_tool_registry && m_tool_registry->size() > 0) {
-                tools_schema = m_tool_registry->get_all_schemas();
+                // 极简模式：仅暴露 Skill/Bash/Read/Write/Edit 五个工具
+                //（其余工具对 LLM 不可见，配合 ToolExecutor 守卫双重保障）
+                if (session_mode() == tool::SessionMode::Minimal) {
+                    tools_schema = m_tool_registry->get_schemas_by_names(
+                        {tool::kMinimalModeToolNames,
+                         tool::kMinimalModeToolNames + tool::kMinimalModeToolCount});
+                } else {
+                    tools_schema = m_tool_registry->get_all_schemas();
+                }
             }
 
             // ---- 0.6.x：QueryEngine 统一编排入口（验收标准：唯一 loop 入口）----
@@ -918,6 +1259,16 @@ void ChatSession::run_completion(const std::string& user_text,
                 .touch_collector = &m_touch_collector,
                 .file_index_invalidator = m_file_index_invalidator,
                 .session_id = m_session_id,
+                // 消息队列：模型忙碌时前端入队的用户消息，在 ReAct 工具轮边界
+                // 合并为单条 user 消息注入循环（Ctrl+Enter 显式冲刷请求）。
+                // 本 lambda 运行于任务线程，this 生命周期由 ChatSession 任务管理保证。
+                .queue_inject_cb = [this](std::vector<ChatMessage>& messages) {
+                    inject_pending_queue(messages);
+                },
+                // #56 方案 C：命令注册表 → ToolContext（AgentTool skill 预加载来源）
+                .command_registry = m_command_registry,
+                // #56 方案 D：父会话全局 MCP 管理器（AgentTool 子 Agent mcpServers 引用复用来源）
+                .mcp_manager = m_mcp_manager,
             };
             QueryEngine query_engine(std::move(gdeps));
 
@@ -925,19 +1276,28 @@ void ChatSession::run_completion(const std::string& user_text,
             // 由 QueryEngine 落到 ReAct 循环与 GoalGuarded 内部循环（后者此前缺失）。
             // 回调写回 ChatSession（受 m_state_mutex 保护）统一状态源，对齐
             // EnterPlanMode/ExitPlanModeV2/on_permission_mode_changed（H-1 PR #46 评审）。
-            {
+            {   
                 std::lock_guard<std::mutex> lock(m_state_mutex);
                 query_engine.set_permission(PermissionSnapshot{
                     .mode = m_permission_mode,
                     .before_plan = m_permission_mode_before_plan,
                     .on_changed = [this](tool::PermissionMode mode,
                                          tool::PermissionMode before_plan,
-                                         bool /*in_plan*/) {
+                                         bool in_plan) {
                         std::lock_guard<std::mutex> lk(m_state_mutex);
                         m_permission_mode = mode;
                         m_permission_mode_before_plan = before_plan;
+                        // 工具路径（EnterPlanMode/ExitPlanModeV2）同步工作模式：
+                        // 进入计划 → 模式=计划；退出计划 → 回落到标准模式
+                        if (in_plan) {
+                            m_session_mode = tool::SessionMode::Plan;
+                        } else if (m_session_mode == tool::SessionMode::Plan) {
+                            m_session_mode = tool::SessionMode::Standard;
+                        }
                     },
                 });
+                // 注入会话工作模式（标准/计划/极简）：极简模式白名单守卫依据
+                query_engine.set_session_mode(m_session_mode);
             }
 
             // 3.2：使用 IReActObserver 接口替代 lambda 回调
@@ -1041,6 +1401,7 @@ void ChatSession::run_completion(const std::string& user_text,
                     .reasoning_ms = react_result.reasoning_ms
                 });
                 m_generating.store(false);
+                flush_pending_after_run();  // 队列收尾冲刷（中断也算本轮结束）
                 return;
             }
 
@@ -1067,6 +1428,7 @@ void ChatSession::run_completion(const std::string& user_text,
                     while (std::chrono::steady_clock::now() < wait_until) {
                         if (should_cancel) {
                             m_generating.store(false);
+                            flush_pending_after_run();  // 等待期被打断：本轮终止，收尾冲刷
                             return;
                         }
                         std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -1077,6 +1439,9 @@ void ChatSession::run_completion(const std::string& user_text,
                         // ReAct loop 在流式失败时不会添加 partial assistant 消息，
                         // 所以 m_messages 中只有成功的 round，直接重试即可
                         run_completion(user_text, {}, retry_attempt + 1);
+                        // 递归重试已接管 m_generating（保持 true），本任务退出；
+                        // 队列由重试任务的终止路径冲刷，此处不重复冲刷。
+                        return;
                     }
                     break;
                 }
@@ -1093,6 +1458,7 @@ void ChatSession::run_completion(const std::string& user_text,
                     break;
                 }
                 m_generating.store(false);
+                flush_pending_after_run();  // 不可重试错误终止：收尾冲刷
                 return;
             }
 
@@ -1147,6 +1513,7 @@ void ChatSession::run_completion(const std::string& user_text,
             });
 
             m_generating.store(false);
+            flush_pending_after_run();  // 成功完成：队列仍有未发消息则开启新一轮
 
             } // end try
             catch (const std::exception& e) {
@@ -1156,6 +1523,7 @@ void ChatSession::run_completion(const std::string& user_text,
                     .retryable = false
                 });
                 m_generating.store(false);
+                flush_pending_after_run();
             } catch (...) {
                 m_event_bus.get().publish_async(StreamErrorEvent{
                     .session_id = m_session_id,
@@ -1163,6 +1531,7 @@ void ChatSession::run_completion(const std::string& user_text,
                     .retryable = false
                 });
                 m_generating.store(false);
+                flush_pending_after_run();
             }
         },
         TaskType::Normal
@@ -1342,9 +1711,16 @@ ChatSession::deserialize_state(const nlohmann::json& j) {
 // C-1：一次性加锁提交状态到成员
 void ChatSession::commit_state(std::vector<ChatMessage> messages,
                                 std::string system_prompt) {
-    std::lock_guard<std::mutex> lock(m_state_mutex);
-    m_messages = std::move(messages);
-    m_system_prompt = std::move(system_prompt);
+    bool record_resume = !system_prompt.empty();
+    {
+        std::lock_guard<std::mutex> lock(m_state_mutex);
+        m_messages = std::move(messages);
+        m_system_prompt = std::move(system_prompt);
+    }
+    // 会话轨迹调试：恢复的提示词落盘一条 resume 快照（store 已配置时）
+    if (record_resume) {
+        persist_system_prompt("resume");
+    }
 }
 
 // ============================================================
@@ -1487,6 +1863,99 @@ void ChatSession::subscribe_sub_agent_persistence() {
 void ChatSession::unsubscribe_sub_agent_persistence() {
     m_event_bus.get().unsubscribe<SubAgentProgressEvent>(m_sub_progress_token);
     m_event_bus.get().unsubscribe<SubAgentCompletedEvent>(m_sub_completed_token);
+}
+
+// ============================================================
+// #54：Plan Mode V2 事件驱动（五阶段 + 并行 explore 编排）
+// ============================================================
+
+void ChatSession::subscribe_plan_events() {
+    if (!m_plan_coordinator) return;
+
+    // #54：接线真实并行 explore 子 Agent——复用 AgentTool 的子 Agent 启动链路（launch_sub_agent）。
+    // 每个 explore 的 task_id 即子 Agent 任务名；完成后发布的 SubAgentCompletedEvent
+    // 由下方 m_plan_sub_completed_token 回投 m_plan_coordinator->on_explore_task_done。
+    // 权限模式取 Plan（只读）：launch_sub_agent 内会对非只读工具过滤，杜绝写/执行能力。
+    m_plan_coordinator->set_explore_runner(
+        [this](const std::string& task_id, const std::string& /*area*/,
+               const std::string& prompt) {
+            tool::SubAgentLaunchOptions opts;
+            opts.task_id = task_id;
+            opts.prompt = prompt;
+            opts.provider = m_provider.get();
+            opts.sub_registry = m_tool_registry;
+            opts.command_registry = m_command_registry.get();
+            opts.config_manager = &m_config_manager.get();
+            opts.task_manager = &m_task_manager.get();
+            opts.event_bus = &m_event_bus.get();
+            opts.cwd = m_cwd;
+            opts.session_id = m_session_id;
+            opts.permission_mode = tool::PermissionMode::Plan;  // 只读探索，杜绝写/执行
+            opts.hook_manager = m_hooks;
+            tool::launch_sub_agent(opts);
+        });
+
+    // 进入 Plan（EnterPlanMode 事件）→ 启动 interview/探索流程
+    m_plan_enter_token = m_event_bus.get().subscribe<EnterPlanModeEvent>(
+        [this](const EnterPlanModeEvent& e) {
+            if (!m_plan_coordinator) return;
+            m_plan_coordinator->begin_plan(e.reason);
+            // interview 开启路径：收集的约束以进入原因代填，随后自动推进探索。
+            // （交互式 Interview 面板可由宿主另行扩展；当前架构支持在
+            //   PlanCoordinator.set_interview_notes 注入真实收集结果。）
+            if (m_plan_coordinator->stage() == plan::PlanStage::Interview) {
+                m_plan_coordinator->set_interview_notes(e.reason);
+            }
+            // 探索完成（机械 fallback 合成时同步到 AwaitingApproval）：落盘方案文件
+            maybe_persist_plan_artifact();
+        });
+
+    // 退出 Plan（ExitPlanModeV2 工具批准/驳回）→ 推进阶段终态
+    m_plan_exit_token = m_event_bus.get().subscribe<ExitPlanModeEvent>(
+        [this](const ExitPlanModeEvent& e) {
+            if (!m_plan_coordinator) return;
+            m_plan_coordinator->set_approved(e.approved);
+            // #54：审批时消费结构化 critical_files（工具缺省 → 产物已聚合；工具显式传入 →
+            //       并入产物使执行阶段程序化读取关键文件）
+            if (e.approved && !e.critical_files.empty()) {
+                m_plan_coordinator->set_critical_files(e.critical_files);
+            }
+        });
+
+    // 子 Agent 完成 → 回报 explore 发现（按 task_id 匹配）
+    m_plan_sub_completed_token = m_event_bus.get().subscribe<SubAgentCompletedEvent>(
+        [this](const SubAgentCompletedEvent& e) {
+            if (!m_plan_coordinator) return;
+            m_plan_coordinator->on_explore_task_done(e.task_id, e.final_answer, e.was_error);
+            maybe_persist_plan_artifact();
+        });
+}
+
+void ChatSession::unsubscribe_plan_events() {
+    m_event_bus.get().unsubscribe<EnterPlanModeEvent>(m_plan_enter_token);
+    m_event_bus.get().unsubscribe<ExitPlanModeEvent>(m_plan_exit_token);
+    m_event_bus.get().unsubscribe<SubAgentCompletedEvent>(m_plan_sub_completed_token);
+}
+
+/// @brief 计划产物就绪（AwaitingApproval，含 mechanical fallback）时落盘方案 markdown
+/// @details 复写 ~/.workx/plan/plan_<session>.md，供 ExitPlanModeV2 / 侧边栏预览。
+void ChatSession::maybe_persist_plan_artifact() {
+    if (!m_plan_coordinator) return;
+    const auto& art = m_plan_coordinator->artifact();
+    if (m_plan_coordinator->stage() != plan::PlanStage::AwaitingApproval ||
+        art.markdown.empty()) {
+        return;
+    }
+    namespace fs = std::filesystem;
+    try {
+        fs::path dir = fs::path(tool::expand_home("~/.workx/plan"));
+        fs::create_directories(dir);
+        fs::path file = dir / ("plan_" + m_session_id + ".md");
+        std::ofstream ofs(file, std::ios::trunc | std::ios::binary);
+        if (ofs) ofs << art.markdown;
+    } catch (const std::exception&) {
+        // 落盘失败静默（不阻断退出确认流程）
+    }
 }
 
 } // namespace agent

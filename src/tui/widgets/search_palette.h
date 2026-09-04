@@ -30,7 +30,7 @@ enum class SearchCategory {
 
 /// @brief 面板条目（UI 侧独立数据模型）
 struct SearchEntry {
-    SearchCategory category;
+    SearchCategory category = SearchCategory::Feature; ///< 条目类别（默认 Feature）
     std::string title;    ///< 主标题（命令名 / 文件名 / 会话标题 / 设置名 / 模型名）
     std::string subtitle; ///< 副标题（描述 / 路径 / URL），可空
     std::string keywords; ///< 额外搜索词（中英文别名），可空

@@ -26,8 +26,11 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 if(MSVC)
     add_compile_options(/W4 /utf-8 /Zc:preprocessor /FS)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+    # 提升未初始化变量警告为错误
+    add_compile_options(/we4700 /we4701 /we4702 /we4703)
 else()
-    add_compile_options(-Wall -Wextra -Wpedantic)
+    add_compile_options(-Wall -Wextra -Wpedantic -Wuninitialized -Wmaybe-uninitialized)
+    add_compile_options(-Werror=uninitialized -Werror=maybe-uninitialized)
 endif()
 
 # nlohmann_json / CURL 是硬依赖：公共头无条件 include <nlohmann/json.hpp>
@@ -177,7 +180,33 @@ function(workx_fetch_ts_grammar name git_repo git_tag)
     target_include_directories("ts_${name}" PUBLIC "${_src_dir}")
     target_link_libraries("ts_${name}" PUBLIC ${WORKX_TS_RUNTIME_LIB})
     if(MSVC)
-        target_compile_options("ts_${name}" PRIVATE /utf-8)
+        # 本项目在根 CMakeLists 用 /we4700-4703 把「未初始化变量」类告警转错误。
+        # 命令行 /wd 无法降级已被 /we 提升的告警（/we 优先），但对 /FI 强制
+        # 注入的源码级 #pragma warning(disable:...) 则不生效于该策略，故只有
+        # force-include 抑制头能豁免 vendored 目标。此处复用 ftxui 的通用
+        # MSVC 告警抑制头，并顺带压掉第三方 scanner 常见噪音告警（4244/4100
+        # /4267/4293），保证集成到 workx 的语法库能在本项目的告警策略下编译通过。
+        target_compile_options("ts_${name}" PRIVATE
+            /utf-8
+            "/FI${CMAKE_SOURCE_DIR}/third_party/ftxui/suppress_msvc_warnings.h"
+            /wd4244 /wd4100 /wd4267 /wd4293 /wd4456
+        )
+    else()
+        # GCC/Clang：项目级 add_compile_options(-Wall -Wextra -Wpedantic
+        # -Werror=uninitialized -Werror=maybe-uninitialized) 会波及 vendored
+        # tree-sitter grammar 的 scanner.c/parser.c（第三方自动生成代码）。
+        # ts_perl 已触发 -Wmaybe-uninitialized 告警并被当作错误（GCC 报
+        # "some warnings being treated as errors"），ts_php 也含
+        # -Wimplicit-fallthrough 噪音。第三方代码不受本项目告警纪律约束，
+        # 此处在目标级显式降级并抑制常见噪音，与上面 MSVC /we 豁免策略对齐。
+        target_compile_options("ts_${name}" PRIVATE
+            -Wno-error=uninitialized
+            -Wno-error=maybe-uninitialized
+            -Wno-maybe-uninitialized
+            -Wno-implicit-fallthrough
+            -Wno-unused-variable
+            -Wno-unused-but-set-variable
+        )
     endif()
 
     # 部分第三方 grammar 的 scanner.c 定义了非 static 的通用函数

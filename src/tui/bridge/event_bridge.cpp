@@ -89,11 +89,19 @@ void EventBridge::start() {
     subscribe_typed<agent::AskUserTimeoutEvent>(
         [this](const agent::AskUserTimeoutEvent&) { push(ActionAskUserTimeout{}); });
 
+    // 计划模式已从权限循环中独立为工作模式：进入/退出计划同步模式位
+    //（权限位由 ChatSession on_changed 回调统一回写，此处只动模式）
     subscribe_typed<agent::EnterPlanModeEvent>(
-        [this](const agent::EnterPlanModeEvent&) { push(ActionPermissions{.label = "plan"}); });
+        [this](const agent::EnterPlanModeEvent&) { push(ActionSetMode{.label = "plan"}); });
 
     subscribe_typed<agent::ExitPlanModeEvent>(
-        [this](const agent::ExitPlanModeEvent&) { push(ActionPermissions{.label = ""}); });
+        [this](const agent::ExitPlanModeEvent&) { push(ActionSetMode{.label = "standard"}); });
+
+    // 方案预览：退出规划模式时在侧边栏打开方案 markdown 文件
+    subscribe_typed<agent::PlanPreviewEvent>(
+        [this](const agent::PlanPreviewEvent& e) {
+            if (!e.plan_path.empty()) push(ActionOpenPlan{e.plan_path});
+        });
 
     // B3：缓存诊断 / 压缩暂停 / 子 Agent 进度（对齐设计文档 §5 事件映射）
     subscribe_typed<agent::CacheDiagnosticsEvent>(
@@ -114,6 +122,31 @@ void EventBridge::start() {
                 .consecutive_compacts = e.consecutive_compacts,
                 .notice = e.notice,
             });
+        });
+
+    // 消息队列更新（模型忙碌时前端入队的用户消息）→ 队列卡片重绘
+    subscribe_typed<agent::MessageQueueUpdatedEvent>(
+        [this](const agent::MessageQueueUpdatedEvent& e) {
+            std::vector<QueueItemLite> items;
+            items.reserve(e.items.size());
+            for (const auto& it : e.items) {
+                items.push_back(QueueItemLite{
+                    .id = it.id,
+                    .text = it.text,
+                    .queued_at_ms = it.queued_at_ms,
+                });
+            }
+            push(ActionQueueUpdate{.session_id = e.session_id, .items = std::move(items)});
+        });
+
+    // 队列冲刷：排队消息合并为真实 user 消息注入 ReAct 循环
+    //（运行中的 ChatSession 内部完成，绕过 send_input，UI 不会自行回显）。
+    // 先回显 user 消息、再置 busy，为新一轮流式回复建立上下文，否则该条 user
+    // 消息只停留在队列卡片、冲刷后消失，新一轮回复成为无前置消息的孤儿节点。
+    subscribe_typed<agent::QueuedMessagesFlushedEvent>(
+        [this](const agent::QueuedMessagesFlushedEvent& e) {
+            push(ActionAppendMessage{.role = "user", .text = e.merged_text});
+            push(ActionSetBusy{.busy = true});
         });
 
     subscribe_typed<agent::SubAgentProgressEvent>(
@@ -163,6 +196,20 @@ void EventBridge::start() {
                 });
             }
             push(ActionMcpStatus{std::move(servers)});
+        });
+
+    // Issue #50 M-2：Hook 执行进度（start/done/failed）→ 输入区上方进度条
+    subscribe_typed<agent::HookProgressEvent>(
+        [this](const agent::HookProgressEvent& e) {
+            push(ActionHookProgress{
+                .hook_id = e.hook_id,
+                .event = e.event,
+                .phase = e.phase,
+                .hook_type = e.hook_type,
+                .tool_name = e.tool_name,
+                .message = e.message,
+                .hook_label = e.hook_label,
+            });
         });
 
     subscribe_typed<agent::ShutdownEvent>(

@@ -3,12 +3,13 @@
  * @brief Skill 磁盘加载器实现
  * @details 目录遍历 + SKILL.md 解析 + PromptCommand 构建。
  *          仅支持 <name>/SKILL.md 目录格式（对齐 example/cc）。
- * @version 1.0.0
+ * @version 1.0.1
  * @date 2026-08
  */
 
 #include "agent/skill/inclaude/skill_loader.h"
 #include "agent/skill/inclaude/frontmatter.h"
+#include "core/process/tool_registry.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -116,6 +117,7 @@ std::vector<std::shared_ptr<command::PromptCommand>> build_commands(
         if (fm.context) cmd->set_context(*fm.context);
         if (fm.agent) cmd->set_agent(*fm.agent);
         if (!fm.hooks.empty()) cmd->set_hooks(fm.hooks);
+        if (!fm.hooks_json.empty()) cmd->set_hooks_json(fm.hooks_json);
         if (!fm.paths.empty()) cmd->set_paths(fm.paths);
         return cmd;
     };
@@ -166,17 +168,47 @@ std::vector<std::shared_ptr<command::PromptCommand>> load_skills_from_dirs(
 }
 
 size_t register_bundled_skill(command::CommandRegistry& registry,
-                              const std::string& skill_dir) {
+                              const std::string& skill_dir,
+                              std::unordered_set<std::string>* seen_names) {
     const auto content = read_file_text(fs::path(skill_dir) / "SKILL.md");
     if (!content) return 0;
 
     const auto parsed = parse_skill_content(*content, fs::path(skill_dir).filename().string());
     auto cmds = build_commands(parsed, fs::path(skill_dir));
+    size_t n = 0;
     for (auto& cmd : cmds) {
         cmd->set_loaded_from(command::LoadSource::Bundled);
+        if (seen_names && !seen_names->insert(cmd->name()).second) continue;  // #56 M-1：同名跳过（首个注册优先）
         registry.register_command(cmd);
+        ++n;
     }
-    return cmds.size();
+    return n;
+}
+
+std::string find_bundled_skills_dir() {
+    const auto exe_dir = agent::process::ToolRegistry::executable_dir();
+    if (exe_dir.empty()) return {};
+    std::error_code ec;
+    fs::path root = fs::path(exe_dir) / "skills" / "bundled";
+    if (!fs::is_directory(root, ec) || ec) return {};
+    return root.string();
+}
+
+size_t register_bundled_skills(command::CommandRegistry& registry,
+                               const std::string& root) {
+    if (root.empty()) return 0;
+    std::error_code ec;
+    fs::directory_iterator it(root, fs::directory_options::skip_permission_denied, ec);
+    if (ec) return 0;
+
+    size_t total = 0;
+    std::unordered_set<std::string> seen_names;  // #56 M-1：跨技能命令名去重（首个注册优先）
+    for (const auto& entry : it) {
+        ec.clear();
+        if (!entry.is_directory(ec) || ec) continue;
+        total += register_bundled_skill(registry, entry.path().string(), &seen_names);
+    }
+    return total;
 }
 
 } // namespace agent::skill

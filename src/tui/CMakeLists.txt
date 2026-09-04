@@ -11,6 +11,39 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(ftxui)
 
+# 根 CMakeLists 把 /we4700-4703（MSVC 告警转错误）作为第一方代码策略，但会
+# 继承到 vendored 第三方 ftxui，使其 C4702「不可达代码」等告警变成编译错误
+# （screen/terminal.cpp、component/event.cpp 等）。为 ftxui 三个库目标统一
+# 强制包含抑制头，在 TU 最顶端禁用这些告警，且不改动 ftxui 源码。
+if(MSVC)
+    foreach(_ftxui_target screen dom component)
+        if(TARGET ${_ftxui_target})
+            target_compile_options(${_ftxui_target} PRIVATE
+                "/FI${CMAKE_SOURCE_DIR}/third_party/ftxui/suppress_msvc_warnings.h")
+        endif()
+    endforeach()
+endif()
+
+# ---- stb_image（vendored 单头图像解码库）----
+# 实现单元 stb_image.cpp 独立编译为静态库，避免把第三方实现直接编进 workx
+# 目标（会继承宿主 /we 告警策略）。MSVC 下 /FI 注入抑制头豁免 /we（同 ftxui/
+# tree-sitter grammar 的处理），并顺带压掉第三方常见噪音告警。
+add_library(stb_image STATIC
+    ${CMAKE_SOURCE_DIR}/third_party/stb/stb_image.cpp
+)
+target_include_directories(stb_image PUBLIC ${CMAKE_SOURCE_DIR}/third_party/stb)
+if(MSVC)
+    target_compile_options(stb_image PRIVATE
+        "/FI${CMAKE_SOURCE_DIR}/third_party/stb/suppress_msvc_warnings.h"
+        /wd4244 /wd4100 /wd4267 /wd4456 /wd4996
+    )
+else()
+    target_compile_options(stb_image PRIVATE
+        -Wno-unused-function
+        -Wno-unused-variable
+    )
+endif()
+
 add_executable(workx
     main.cpp
     app.cpp
@@ -21,11 +54,14 @@ add_executable(workx
     bridge/action_queue.cpp
     bridge/event_bridge.cpp
     render/markdown_to_elements.cpp
+    render/code_card.cpp
+    render/image_view.cpp
     render/syntax_highlight.cpp
     widgets/sidebar.cpp
     widgets/sidebar_tabs.cpp
     widgets/file_viewer.cpp
     widgets/change_viewer.cpp
+    widgets/project_tree.cpp
     widgets/composer.cpp
     widgets/input_history.cpp
     widgets/status_line.cpp
@@ -111,6 +147,15 @@ if(WORKX_HAS_VENDOR_JQ)
     target_compile_definitions(workx PRIVATE WORKX_HAS_BUNDLED_JQ=1)
 endif()
 
+# --- bundled skills：拷贝源码目录到 <exe_dir>/skills/bundled ---
+# 运行时由 skill 加载器 find_bundled_skills_dir() 发现（与 <exe_dir>/tools 约定一致）
+add_custom_command(TARGET workx POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/src/agent/skill/bundled"
+        "$<TARGET_FILE_DIR:workx>/skills/bundled"
+    COMMENT "Bundling built-in skills: ${CMAKE_SOURCE_DIR}/src/agent/skill/bundled"
+)
+
 target_include_directories(workx PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -119,6 +164,8 @@ target_include_directories(workx PRIVATE
 target_link_libraries(workx PRIVATE
     workx_agent
     workx_core
+    workx_island
+    stb_image
     ftxui::screen
     ftxui::dom
     ftxui::component

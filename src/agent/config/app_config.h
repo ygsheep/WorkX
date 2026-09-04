@@ -2,7 +2,7 @@
  * @file app_config.h
  * @brief 应用配置键定义与配置加载
  * @details 配置键常量、默认值注册、环境变量/配置文件加载
- * @version 1.0.1
+ * @version 1.1.0
  * @date 2026-07
  */
 
@@ -56,6 +56,16 @@ namespace keys {
     /// （agent.max_iterations + 停滞恢复），会评审"是否继续"并追加额外预算。
     constexpr const char* AGENT_MAX_ITERATIONS = "agent.max_iterations";
 
+    // Plan Mode V2（#54：五阶段多 Agent 规划流程）
+    /// 进入 Plan 后是否自动触发 interview→explore→plan 全流程（false 仅保留原手动行为）
+    constexpr const char* PLAN_AUTO = "plan.auto";
+    /// 是否启用 Interview 阶段（进入 Plan 后先澄清需求/收集约束）
+    constexpr const char* PLAN_INTERVIEW_ENABLED = "plan.interview_enabled";
+    /// 并行 explore agent 数量（对应 cc getPlanModeV2ExploreAgentCount，默认 3）
+    constexpr const char* PLAN_EXPLORE_AGENT_COUNT = "plan.explore_agent_count";
+    /// explore 聚焦子域列表（逗号分隔；空 → 按 agent_count 生成通用探索 prompt）
+    constexpr const char* PLAN_EXPLORE_AREAS = "plan.explore_areas";
+
     // Logging
     constexpr const char* LOG_LEVEL        = "logging.level";
     constexpr const char* LOG_FILE         = "logging.file";
@@ -95,6 +105,14 @@ namespace keys {
     constexpr const char* WEB_SEARCH_TAVILY_KEY   = "web.search.tavily_api_key";
     /// SearXNG 实例地址（免 Key 兜底；默认公共实例，可换自建）
     constexpr const char* WEB_SEARCH_SEARXNG_URL  = "web.search.searxng_url";
+
+    // Hooks（#50 通用 Hook 事件系统）
+    /// Hook 总开关（false 时全部禁用，QueryEngine 不构建 HookManager）
+    constexpr const char* HOOKS_ENABLED   = "hooks.enabled";
+    /// hook 定义 JSON 数组（元素为 hook.HookDefinition 对象）
+    constexpr const char* HOOKS_DEFINITIONS = "hooks.definitions";
+    /// 全局默认 hook 超时（毫秒，单条未指定时使用）
+    constexpr const char* HOOKS_TIMEOUT_MS = "hooks.timeout_ms";
 }
 
 /// @brief 注册所有配置项的结构化 Schema（类型/默认值/范围/枚举/环境变量映射）

@@ -143,6 +143,42 @@ std::shared_ptr<McpClient> McpClientManager::get_client(const std::string& name)
     return it != m_clients.end() ? it->second : nullptr;
 }
 
+std::shared_ptr<McpClient> McpClientManager::connect_one_off(const McpServerConfig& cfg,
+                                                             int timeout_ms) {
+    auto client = std::make_shared<McpClient>();
+    auto result = client->connect(cfg, timeout_ms);
+    if (result.is_err()) {
+        LOG_WARN("[mcp] 临时 server '{}' 连接失败: {}", cfg.name, result.error().message);
+        return nullptr;
+    }
+    return client;
+}
+
+void McpClientManager::dispose(const std::shared_ptr<McpClient>& client) {
+    if (client) client->disconnect();
+}
+
+void McpClientManager::register_client(const std::string& name,
+                                       std::shared_ptr<McpClient> client) {
+    if (!client || name.empty()) return;
+    // 预取工具名单（失败静默置空，不阻断注册）
+    std::vector<std::string> tool_names;
+    auto tools = client->list_tools();
+    if (tools.is_ok()) {
+        for (const auto& t : tools.value()) {
+            tool_names.push_back(t.name);
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (std::find(m_order.begin(), m_order.end(), name) == m_order.end()) {
+            m_order.push_back(name);
+        }
+        m_clients[name] = client;
+        m_tool_names[name] = tool_names;
+    }
+}
+
 std::vector<std::shared_ptr<McpClient>> McpClientManager::clients() const {
     std::lock_guard<std::mutex> lock(m_mutex);
     std::vector<std::shared_ptr<McpClient>> result;

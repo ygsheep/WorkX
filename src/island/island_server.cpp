@@ -41,11 +41,11 @@ IslandServer::IslandServer(IslandServerConfig cfg,
     : m_cfg(std::move(cfg)),
       m_listener(listener ? std::move(listener) : ipc::create_listener()),
       m_registry(registry) {
-    if (m_cfg.endpoint.empty()) {
-        m_cfg.endpoint = ipc::default_endpoint(m_cfg.pid);
-    }
     if (m_cfg.pid == 0) {
         m_cfg.pid = current_pid();
+    }
+    if (m_cfg.endpoint.empty()) {
+        m_cfg.endpoint = ipc::default_endpoint(m_cfg.pid);
     }
     if (m_cfg.started_at == 0) {
         m_cfg.started_at = static_cast<int64_t>(now_ts());

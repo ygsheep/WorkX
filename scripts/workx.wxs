@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  workx.wxs - Workx terminal Agent WiX v3 installer script
+  - Install dir: C:\Program Files\Workx (per-machine, requires elevation once)
+  - Auto-append C:\Program Files\Workx to User PATH (HKCU\Environment)
+  - Chinese UI via WixUI_zh-CN.wxl localization
+  - Workx icon embedded (package icon + Add/Remove Programs + Start Menu shortcut)
+  Compile (via scripts/build-msi.ps1):
+    candle workx.wxs components.wxs -dWorkxVersion=0.6.0 -dIconPath=... -dWixUILangPath=...
+    light  workx.wixobj components.wixobj -cultures zh-CN -ext WixUIExtension -o workx-0.6.0-x64.msi
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+
+  <Product Id="*"
+           Name="Workx"
+           Language="2052"
+           Version="$(var.WorkxVersion)"
+           Manufacturer="Workx Project"
+           UpgradeCode="D2F60574-0FDA-43A2-B9E2-CEBADD6C0C08">
+
+    <Package Id="*"
+             Keywords="Installer"
+             Description="Workx - Modern terminal Code Agent / Work Agent"
+             Comments="Workx $(var.WorkxVersion)"
+             Manufacturer="Workx Project"
+             InstallerVersion="500"
+             Languages="2052"
+             Compressed="yes"
+             SummaryCodepage="936"
+             InstallScope="perMachine"
+             Platform="x64" />
+
+    <!-- Compressed media: all files into single embedded CAB -->
+    <Media Id="1" Cabinet="workx.cab" EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- Workx icon: package icon (shown in Explorer + Add/Remove Programs) -->
+    <Icon Id="WorkxIcon" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="WorkxIcon" />
+
+    <!-- Install dir: C:\Program Files\Workx -->
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLDIR" Name="Workx" />
+      </Directory>
+
+      <!-- Start Menu shortcut (with Workx icon) -->
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="WorkxMenuDir" Name="Workx">
+          <Component Id="StartMenuShortcut"
+                     Guid="26E1F33E-65F8-426D-882E-90891020170A"
+                     Win64="yes">
+            <Shortcut Id="WorkxStartMenuShortcut"
+                      Name="Workx"
+                      Description="Launch Workx Terminal Agent"
+                      Target="[INSTALLDIR]workx.exe"
+                      WorkingDirectory="INSTALLDIR"
+                      Icon="WorkxIcon" />
+            <RemoveFolder Id="RemoveWorkxMenuDir" Directory="WorkxMenuDir" On="uninstall" />
+            <RegistryValue Root="HKCU"
+                           Key="Software\Workx"
+                           Name="MenuShortcut"
+                           Type="integer"
+                           Value="1"
+                           KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <!-- Core component set: harvested from staging dir by build-msi.ps1 (heat.exe) -->
+    <Feature Id="MainFeature" Title="Workx" Level="1">
+      <ComponentGroupRef Id="WorkxComponents" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="UserPathEntry" />
+    </Feature>
+
+    <!-- User PATH environment variable append (auto-rolled-back on uninstall) -->
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="UserPathEntry"
+                 Guid="EE85AEF9-B60E-4463-B782-19D4B1FE8950"
+                 Win64="yes">
+        <Environment Id="UpdateUserPath"
+                     Name="PATH"
+                     Value="[INSTALLDIR]"
+                     Part="last"
+                     Action="set"
+                     System="no" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\Workx"
+                       Name="PathEntry"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- Chinese install UI (WixUI_InstallDir + zh-CN localization) -->
+    <UIRef Id="WixUI_InstallDir" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
+  </Product>
+</Wix>

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  bundle.wxs — Workx 引导安装程序（WiX Burn Bootstrapper）
+  生成 setup.exe：带 Workx 图标 + 中文引导界面，内部调用 workx-<ver>-x64.msi
+  编译:
+    candle bundle.wxs -ext WixBalExtension -dWorkxVersion=0.6.0 \
+                      -dIconPath=src\icon.ico -dMsiPath=dist\workx-0.6.0-x64.msi
+    light bundle.wixobj -ext WixBalExtension -ext WixUtilExtension \
+                        -b scripts -b dist -o dist\setup.exe
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:bal="http://schemas.microsoft.com/wix/BalExtension">
+
+  <Bundle Name="Workx"
+          Version="$(var.WorkxVersion)"
+          Manufacturer="Workx Project"
+          UpgradeCode="79D9D78D-4911-4F65-A293-ED61C8E69BC9"
+          IconSourceFile="$(var.IconPath)"
+          AboutUrl="https://github.com/ygsheep/WorkX"
+          Compressed="yes"
+          DisableModify="yes"
+          DisableRepair="yes">
+
+    <BootstrapperApplicationRef Id="WixStandardBootstrapperApplication">
+      <bal:WixStandardBootstrapperApplication
+          LicenseFile="license.rtf"
+          Theme="RtfTheme"
+          SuppressOptionsUI="yes"
+          ShowVersion="yes" />
+    </BootstrapperApplicationRef>
+
+    <Chain>
+      <MsiPackage SourceFile="$(var.MsiPath)"
+                  Vital="yes"
+                  DisplayInternalUI="no"
+                  ForcePerMachine="yes" />
+    </Chain>
+  </Bundle>
+</Wix>

@@ -20,15 +20,21 @@ std::unique_ptr<ReActLoop> ReActLoopFactory::make(
         deps.provider, std::move(registry), std::move(cfg),
         deps.config_manager, deps.task_manager, deps.cwd,
         deps.external_compactor, deps.event_bus, deps.touch_collector,
-        deps.file_index_invalidator, deps.session_id);
+        deps.file_index_invalidator, deps.session_id, deps.queue_inject_cb);
     // 0.6.x：把会话级权限三态应用到循环 + 注册变更回调，
     // 修复路由（此前权限状态只在 chat_session 手动 ReAct 分支上应用）的缺口。
     loop->apply_permission_state(
         deps.permission_mode, deps.permission_mode_before_plan,
         deps.permission_mode == tool::PermissionMode::Plan);
+    // 会话工作模式（标准/计划/极简）注入循环（极简模式白名单守卫依据）
+    loop->set_session_mode(deps.session_mode);
     if (deps.permission_state_changed_cb) {
         loop->set_permission_state_changed_callback(deps.permission_state_changed_cb);
     }
+    // #56 方案 C：注入命令注册表 → ToolContext.command_registry_ptr（子 Agent skill 预加载）
+    loop->set_command_registry(deps.command_registry);
+    // #56 方案 D：注入父会话全局 MCP 管理器 → ToolContext.mcp_manager_ptr
+    loop->set_mcp_manager(deps.mcp_manager);
     return loop;
 }
 

@@ -30,12 +30,14 @@ struct FtuiCommandCallbacks {
     std::function<void()> on_clear;
     /// @brief /new：新建会话并切换（保留旧会话文件）
     std::function<void()> on_new;
+    /// @brief /compact：手动压缩上下文
+    std::function<void()> on_compact;
     /// @brief /view：打开文件只读查看器（args 为文件路径）
     std::function<void(const std::string&)> on_view;
     /// @brief /edit：内嵌 nvim 编辑文件（args 为文件路径）
     std::function<void(const std::string&)> on_edit;
-    /// @brief /nvim：启动 nvim（当前目录）
-    std::function<void()> on_nvim;
+    /// @brief /nvim：启动 nvim（可选文件参数）
+    std::function<void(const std::string&)> on_nvim;
     /// @brief /Test:askuser：弹出 AskUser 提问弹窗（测试模态渲染/交互）
     std::function<void()> on_test_askuser;
 };

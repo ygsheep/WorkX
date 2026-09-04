@@ -518,8 +518,8 @@ std::string normalize_lang(std::string_view lang) {
 }
 
 struct Span {
-    uint32_t start;
-    uint32_t end;
+    uint32_t start = 0;
+    uint32_t end = 0;
     Color color;
 };
 
@@ -564,6 +564,54 @@ Element build_line_element(const std::string& code, uint32_t ls, uint32_t le,
     }
     if (toks.empty()) return ftxui::text("");
     return ftxui::hbox(std::move(toks));
+}
+
+/// 整块 AST 高亮：返回逐逻辑行字节级 span（供折行渲染复用）
+/// 把 collect_spans 产出的全文件绝对字节区间换算为每行行首相对偏移
+std::vector<std::vector<HighlightSpan>> spans_with_ts(
+    const std::vector<std::string>& lines, const TSLanguage* lang) {
+    std::string code;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (i > 0) code.push_back('\n');
+        code += lines[i];
+    }
+    if (code.empty()) return {};
+
+    TSParser* parser = get_parser_for_lang(lang);
+    if (!parser) return {};
+
+    TSTree* tree = ts_parser_parse_string(parser, nullptr, code.data(),
+                                          static_cast<uint32_t>(code.size()));
+    if (!tree) return {};
+
+    std::vector<Span> spans;
+    spans.reserve(64);
+    collect_spans(ts_tree_root_node(tree), spans);
+    ts_tree_delete(tree);
+
+    if (spans.empty()) return {};
+
+    std::vector<std::vector<HighlightSpan>> out;
+    out.resize(lines.size());
+    size_t span_idx = 0;
+    uint32_t off = 0;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        const uint32_t ls = off;
+        const uint32_t le = ls + static_cast<uint32_t>(lines[i].size());
+        while (span_idx < spans.size() && spans[span_idx].end <= ls) ++span_idx;
+        for (size_t j = span_idx; j < spans.size() && spans[j].start < le; ++j) {
+            const Span& s = spans[j];
+            const uint32_t a = (s.start > ls) ? s.start - ls : 0;
+            const uint32_t b = (s.end <= le) ? s.end - ls : le - ls;
+            if (b > a) out[i].push_back({a, b, s.color});
+            if (s.end > le) {  // span 跨行，下一行继续使用同一 span
+                span_idx = j;
+                break;
+            }
+        }
+        off = le + 1;  // +1 跳过 '\n'
+    }
+    return out;
 }
 
 /// 整块 AST 高亮：返回每行 Element
@@ -647,6 +695,57 @@ std::vector<Element> highlight_code_block(const std::vector<std::string>& lines,
     out.reserve(lines.size());
     for (const auto& l : lines) out.push_back(highlight_code_line(l, lang));
     return out;
+}
+
+std::vector<std::vector<HighlightSpan>> highlight_block_spans(
+    const std::vector<std::string>& lines, std::string_view lang) {
+    if (lines.empty()) return {};
+
+#ifdef WORKX_HAS_TREE_SITTER
+    const std::string nlang = normalize_lang(lang);
+    if (!nlang.empty()) {
+        GrammarRegistry& reg = registry();
+        const TSLanguage* ts_lang = nullptr;
+        {
+            std::lock_guard<std::mutex> lk(reg.mtx);
+            auto it = reg.langs.find(nlang);
+            if (it != reg.langs.end()) ts_lang = it->second;
+        }
+        if (ts_lang) {
+            std::vector<std::vector<HighlightSpan>> hl = spans_with_ts(lines, ts_lang);
+            if (!hl.empty()) return hl;
+        }
+    }
+#else
+    (void)lines;
+    (void)lang;
+#endif  // WORKX_HAS_TREE_SITTER
+
+    // 空返回：无 tree-sitter 或语言无 grammar，调用方按行回退关键字高亮
+    return {};
+}
+
+Element render_spans_range(std::string_view text,
+                           uint32_t byte_from, uint32_t byte_to,
+                           const std::vector<HighlightSpan>& spans) {
+    Elements toks;
+    uint32_t pos = byte_from;
+    size_t idx = 0;
+    while (idx < spans.size() && spans[idx].end <= byte_from) ++idx;
+    while (idx < spans.size() && spans[idx].start < byte_to) {
+        const HighlightSpan& s = spans[idx];
+        const uint32_t a = std::max(s.start, byte_from);
+        const uint32_t b = std::min(s.end, byte_to);
+        if (a > pos) toks.push_back(ftxui::text(text.substr(pos, a - pos)));
+        if (b > a)
+            toks.push_back(ftxui::color(s.color)(ftxui::text(text.substr(a, b - a))));
+        pos = b;
+        if (s.end >= byte_to) break;
+        ++idx;
+    }
+    if (pos < byte_to) toks.push_back(ftxui::text(text.substr(pos, byte_to - pos)));
+    if (toks.empty()) return ftxui::text("");
+    return ftxui::hbox(std::move(toks));
 }
 
 }  // namespace ftxtui

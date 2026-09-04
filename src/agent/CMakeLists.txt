@@ -107,6 +107,11 @@ target_sources(workx_agent PRIVATE
     skill/source/conditional.cpp
     skill/source/hooks.cpp
 
+    # hook: 通用 Hook 事件系统（#50）
+    hook/hook_event.cpp
+    hook/hook_match.cpp
+    hook/hook_manager.cpp
+
     # compact
     compact/token_count.cpp
     compact/prefix_shape.cpp
@@ -174,8 +179,12 @@ target_sources(workx_agent PRIVATE
     tool/AgentTool/agent_tool.cpp
     tool/AskUser/AskUserTool.cpp
     tool/AskUser/ask_user_config.cpp
+    tool/BriefTool/BriefTool.cpp
     tool/PlanMode/enter_plan_mode_tool.cpp
     tool/PlanMode/exit_plan_mode_v2_tool.cpp
+
+    # plan: Plan Mode V2（#54）五阶段协调器
+    plan/plan_coordinator.cpp
     tool/Task/task_output_tool.cpp
     tool/Task/task_stop_tool.cpp
     tool/MCPTool/mcp_tool.cpp

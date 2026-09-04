@@ -36,11 +36,15 @@ size_t bridge_subscriber_count(MockEventBus& bus) {
     n += bus.subscriber_count_typed<agent::EnterPlanModeEvent>();
     n += bus.subscriber_count_typed<agent::ExitPlanModeEvent>();
     n += bus.subscriber_count_typed<agent::CacheDiagnosticsEvent>();
+    n += bus.subscriber_count_typed<agent::PlanPreviewEvent>();  // 计划模式进入前预览
     n += bus.subscriber_count_typed<agent::CompactionPausedEvent>();
     n += bus.subscriber_count_typed<agent::SubAgentProgressEvent>();
     n += bus.subscriber_count_typed<agent::SubAgentCompletedEvent>();
     n += bus.subscriber_count_typed<agent::TodoUpdatedEvent>();  // #24：待办清单更新
     n += bus.subscriber_count_typed<agent::McpStatusChangedEvent>();  // #27 M4：MCP 状态
+    n += bus.subscriber_count_typed<agent::MessageQueueUpdatedEvent>();  // 消息队列更新
+    n += bus.subscriber_count_typed<agent::QueuedMessagesFlushedEvent>();  // 队列冲刷回显
+    n += bus.subscriber_count_typed<agent::HookProgressEvent>();  // Issue #50 M-2：Hook 进度
     n += bus.subscriber_count_typed<agent::ShutdownEvent>();
     return n;
 }
@@ -53,8 +57,8 @@ TEST_CASE("EventBridge start subscribes all UI events", "[event_bridge][start]")
     EventBridge bridge(bus, queue);
     bridge.start();
 
-    REQUIRE(bridge_subscriber_count(bus) == 18);
-    REQUIRE(bus.total_subscriber_count() == 18);
+    REQUIRE(bridge_subscriber_count(bus) == 22);
+    REQUIRE(bus.total_subscriber_count() == 22);
 }
 
 TEST_CASE("EventBridge stop unsubscribes every registered event", "[event_bridge][stop]") {
@@ -150,4 +154,53 @@ TEST_CASE("EventBridge dispatch maps McpStatusChangedEvent to ActionMcpStatus",
     REQUIRE(status->servers[1].name == "broken");
     REQUIRE(status->servers[1].state == 2);
     REQUIRE(status->servers[1].error == "spawn failed");
+}
+
+TEST_CASE("EventBridge dispatch maps QueuedMessagesFlushedEvent to user echo + busy",
+          "[event_bridge][dispatch][queue]") {
+    MockEventBus bus;
+    ActionQueue queue;
+    EventBridge bridge(bus, queue);
+    bridge.start();
+    bus.set_dispatch_enabled(true);
+
+    const std::string merged = "[排队消息 1/1]\n你好\n━━━━━━━━━━";
+    bus.publish(agent::QueuedMessagesFlushedEvent{
+        .session_id = "s",
+        .merged_text = merged,
+    });
+    auto actions = queue.drain();
+    REQUIRE(actions.size() == 2);
+    // 先回显 user 消息，再置 busy=true（为新一轮流式回复建立上下文）
+    const auto* append = std::get_if<ActionAppendMessage>(&actions[0]);
+    REQUIRE(append != nullptr);
+    REQUIRE(append->role == "user");
+    REQUIRE(append->text == merged);
+    const auto* busy = std::get_if<ActionSetBusy>(&actions[1]);
+    REQUIRE(busy != nullptr);
+    REQUIRE(busy->busy == true);
+}
+
+TEST_CASE("EventBridge plan events map to ActionSetMode", "[event_bridge][dispatch][mode]") {
+    MockEventBus bus;
+    ActionQueue queue;
+    EventBridge bridge(bus, queue);
+    bridge.start();
+    bus.set_dispatch_enabled(true);
+
+    // 进入计划模式（AI 工具 EnterPlanMode）→ 模式位切到 plan
+    bus.publish(agent::EnterPlanModeEvent{.session_id = "s", .reason = "research"});
+    auto actions = queue.drain();
+    REQUIRE(actions.size() == 1);
+    const auto* enter = std::get_if<ActionSetMode>(&actions[0]);
+    REQUIRE(enter != nullptr);
+    REQUIRE(enter->label == "plan");
+
+    // 退出计划模式（ExitPlanModeV2）→ 模式位回到标准
+    bus.publish(agent::ExitPlanModeEvent{.session_id = "s", .plan = "", .approved = true});
+    actions = queue.drain();
+    REQUIRE(actions.size() == 1);
+    const auto* exit = std::get_if<ActionSetMode>(&actions[0]);
+    REQUIRE(exit != nullptr);
+    REQUIRE(exit->label == "standard");
 }

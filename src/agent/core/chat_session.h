@@ -2,7 +2,7 @@
  * @file chat_session.h
  * @brief 对话状态机
  * @details 持有 ICompletionProvider，处理用户事件，后台推理，发布流式事件
- * @version 3.0.0
+ * @version 3.1.0
  * @date 2026-07
  */
 
@@ -14,6 +14,7 @@
 #include <memory>
 #include <atomic>
 #include <mutex>
+#include <deque>
 #include <condition_variable>
 #include <functional>
 #include <unordered_set>
@@ -23,22 +24,34 @@
 #include "agent/api/retry.h"  // H-3：HttpRetryPolicy
 #include "agent/core/react_observer.h"
 #include "core/events/event_bus.h"
+#include "core/events/agent_events.h"  // QueuedMessageItem / MessageQueueUpdatedEvent
 #include "core/config/config_manager.h"
 #include "core/utils/result.h"
 #include "agent/message/types.h"
 #include "agent/tool/registry.h"
 #include "agent/tool/executor.h"
-#include "agent/tool/context.h"  // #45：PermissionMode（会话级三态权限模式）
+#include "agent/tool/context.h"  // #45：PermissionMode / SessionMode（会话级权限 + 工作模式）
 #include "agent/compact/prefix_shape.h"  // DS_CACHE: 前缀形状追踪
 #include "agent/compact/cache_aware_compactor.h"  // DS_CACHE H-3: 跨 turn 持久化的压缩器
 #include "agent/session/session_store.h"  // 项目会话恢复：JSONL 持久化
 #include "agent/skill/inclaude/conditional.h"  // conditional skills：TouchCollector（按值成员）
 #include "core/task/task_manager.h"
 
+// #54：Plan Mode V2 会话语义级协调器（五阶段多 Agent 规划）
+// 注意：实现位于 agent::plan，前向声明必须进同名命名空间，
+//       否则 ChatSession 成员 unique_ptr<plan::PlanCoordinator> 会误绑定到 ::plan 占位。
+namespace agent::plan { class PlanCoordinator; }
+
 namespace agent {
 
 // 前向声明（conditional skills 支持）
 namespace command { class CommandRegistry; }
+
+// #56 方案 D：MCP 连接管理器前向声明（shared_ptr 成员）
+namespace mcp { class McpClientManager; }
+
+// #50：会话级 HookManager 前向声明（shared_ptr 成员）
+namespace hook { class HookManager; }
 
 /// @brief 后端接口前向声明（供 ChatSession::backend() 返回类型使用）
 class IBackend;
@@ -102,6 +115,12 @@ public:
     /// @brief 添加系统提示词
     void set_system_prompt(const std::string& prompt);
 
+    /// @brief 设置系统提示词重建回调（方案 A）
+    /// @details 会话在切换工作模式（极简/标准/计划）时调用该回调，按目标模式重建
+    ///          系统提示词（极简模式只拼白名单工具说明），使提示词的工具介绍段
+    ///          与 function-calling schema 过滤保持联动。nullptr 表示不重建。
+    void set_system_prompt_builder(std::function<std::string(tool::SessionMode)> builder);
+
     /// @brief 获取系统提示词（返回拷贝，线程安全）
     std::string system_prompt() const;
 
@@ -124,6 +143,13 @@ public:
 
     /// @brief 获取命令注册表（返回拷贝，线程安全）
     std::shared_ptr<command::CommandRegistry> command_registry() const;
+
+    /// @brief 设置 MCP 连接管理器（#56 方案 D）
+    /// @param manager 父会话全局 MCP 管理器（AgentTool 子 Agent mcpServers 引用复用来源）
+    void set_mcp_manager(std::shared_ptr<mcp::McpClientManager> manager);
+
+    /// @brief 获取 MCP 连接管理器（返回拷贝，线程安全）
+    std::shared_ptr<mcp::McpClientManager> mcp_manager() const;
 
     /// @brief 获取 touch 收集器（conditional skills 用）
     /// @return TouchCollector 引用（会话内有效）
@@ -150,9 +176,15 @@ public:
     void set_compactor_context_window(int32_t context_window_tokens);
 
     /// @brief DS_CACHE M-1：配置压缩器归档目录（compact 折叠前归档原消息）
-    /// @details 必须在首次 send_message 前调用。非空时折叠的中段消息会被
+    /// @details 必须在首次 maybe_compact 前调用。非空时折叠的中段消息会被
     ///          序列化到 <archive_dir>/<timestamp>.jsonl，保证可追溯。
     void set_compactor_archive_dir(const std::string& dir);
+
+    /// @brief 手动压缩上下文（搜索面板「压缩上下文」/ /compact 命令调用）
+    /// @details 在 m_state_mutex 保护下就地压缩 m_messages（与 ReActLoop 构建请求
+    ///          前自动压缩同一入口）；返回压缩结果。调用方须先确认
+    ///          is_generating()==false，避免与后台任务竞争 m_messages。
+    CacheAwareCompactor::Result compact_context();
 
     /// @brief 设置 SessionStore（可选，设置后每条消息实时持久化到 JSONL）
     /// @details 必须在首次 send_message 前调用。设置后：
@@ -160,6 +192,11 @@ public:
     ///          - run() 返回后批量 append 新增的 assistant/tool 消息
     ///          - restore_from_file 加载的历史不会重复持久化
     void set_session_store(std::shared_ptr<agent::session::SessionStore> store);
+
+    /// @brief 追加手动调用技能事件（合成 Skill 卡持久化，/resume 重建转录显示）
+    /// @details 需在首条消息后、store 可用时调用；无 store 时静默忽略。
+    ///          query 字段用于 /resume 时定位对应会话 user 消息，转为其"原始输入 + Skill 卡"。
+    void append_skill_event(const agent::session::SkillEvent& ev);
 
     /// @brief 配置懒创建 SessionStore 的参数（首条 user 消息时才创建文件）
     /// @details factory 调用此方法传入配置，不立即创建文件。
@@ -241,13 +278,34 @@ public:
     ///          线程安全（受 m_state_mutex 保护）。跨 turn 生效（下一轮 ReActLoop 注入）。
     void set_permission_mode(tool::PermissionMode mode);
 
+    /// @brief #54：Plan Mode V2 协调器访问器（供宿主/工具读取阶段与规划产物）
+    /// @return 协调器指针（为空表示未创建）；生命周期与 ChatSession 绑定
+    plan::PlanCoordinator* plan_coordinator() const { return m_plan_coordinator.get(); }
+
     /// @brief #45：获取当前权限模式（线程安全）
     tool::PermissionMode permission_mode() const;
 
-    /// @brief #45：三态切换权限模式（Default → Plan → Bypass → Default）
-    /// @details Shift+Tab 触发。进入 Plan 时记录 before_plan（ExitPlanMode 工具
-    ///          退出恢复用）。线程安全（受 m_state_mutex 保护）。
+    /// @brief #45：两态切换权限模式（Default ↔ BypassPermissions）
+    /// @details Shift+Tab 触发。计划模式已从权限循环独立为工作模式（toggle_session_mode
+    ///          统一管理，进入 Plan 联动权限并记录 before_plan，退出时恢复）。
+    ///          计划模式下直接忽略（避免与模式状态机打架）。线程安全。
     void toggle_permission_mode();
+
+    /// @brief 获取当前会话工作模式（标准 / 计划 / 极简）
+    /// @details 线程安全（受 m_state_mutex 保护）。模式与权限正交：
+    ///          模式为顶层选择，权限（手动审批 / 完全访问）在模式内部切换。
+    tool::SessionMode session_mode() const;
+
+    /// @brief 设置会话工作模式
+    /// @details 跨 turn 生效（下一轮 ReActLoop 注入；极简模式同时过滤工具 schema）。
+    ///          进入 Plan 时联动权限=Plan（保存 before_plan），退出 Plan 时恢复原权限。
+    ///          线程安全（受 m_state_mutex 保护）。
+    void set_session_mode(tool::SessionMode mode);
+
+    /// @brief 三态循环切换工作模式（Standard → Minimal → Plan → Standard）
+    /// @details 模式切换键触发（TUI）。进入 Plan 记录 before_plan；离开 Plan 恢复。
+    ///          线程安全（受 m_state_mutex 保护）。
+    void toggle_session_mode();
 
     /// @brief 是否正在生成
     bool is_generating() const { return m_generating.load(); }
@@ -260,7 +318,39 @@ public:
     /// @brief 提交用户消息，触发 LLM 推理
     /// @param text 用户文本
     /// @param images 图片附件绝对路径（多模态，可为空）
+    /// @details 模型忙碌（is_generating）时自动入队（不直接发送），空闲时正常触发推理。
     void send_message(const std::string& text, const std::vector<std::string>& images = {});
+
+    // ============================================================
+    // 消息队列（模型忙碌时缓存用户输入）
+    // ============================================================
+
+    /// @brief 入队一条用户消息（模型忙碌时缓存，空闲时直接发送不走队列）
+    /// @details 线程安全。入队后发布 MessageQueueUpdatedEvent（TUI 队列卡片刷新）。
+    ///          不影响 m_messages（未发送前不持久化）。返回是否实际入队
+    ///          （模型空闲时入队无意义，调用方应直接 send_message）。
+    /// @return true=已入队（模型忙碌）；false=未入队（模型空闲，应走 send_message）
+    bool enqueue_message(const std::string& text, const std::vector<std::string>& images = {});
+
+    /// @brief 请求立即冲刷队列（Ctrl+Enter）
+    /// @details 置位 m_flush_requested，ReActLoop 在下一个工具轮边界调用
+    ///          inject_pending_queue 把队列合并为单条 user 消息注入当前循环。
+    void request_flush();
+
+    /// @brief 单条移除队列消息（TUI 队列卡片 ✕ 按钮）
+    /// @param id QueuedMessageItem.id
+    void remove_queued_message(const std::string& id);
+
+    /// @brief 清空队列（clear_history / new_session 时调用）
+    void clear_pending_queue();
+
+    /// @brief 获取当前队列快照（返回拷贝，线程安全）
+    std::vector<QueuedMessageItem> queued_messages() const;
+
+    /// @brief 合并排队消息为单条 user 消息文本（序号 + 分隔线）
+    /// @details 公开为 public 以便单元测试直接验证合并格式（纯静态函数，无成员依赖）。
+    /// @param items 排队消息（非空）
+    static std::string merge_queued_text(const std::vector<QueuedMessageItem>& items);
 
     /// @brief 保存对话历史到文件
     /// @details H-6：仅做 serialize_state() → ofstream，序列化逻辑在 serialize_state() 中
@@ -326,6 +416,19 @@ private:
     /// @brief 取消中断订阅
     void unsubscribe_interrupt();
 
+    /// @brief 发布当前队列快照事件（TUI 队列卡片刷新；锁外调用，内部持 m_queue_mutex）
+    void publish_queue_update();
+
+    /// @brief 工具轮边界冲刷：请求冲刷且队列非空时，合并为单条 user 消息注入 messages
+    /// @param messages 当前循环的消息列表（ReActLoop 线程直接写入，无额外锁）
+    /// @details 由 ReActLoop 通过 GoalAgentDeps.queue_injector 回调调用。
+    void inject_pending_queue(std::vector<ChatMessage>& messages);
+
+    /// @brief 整轮收尾冲刷：run_completion 结束时若队列仍有未发送消息，自动开启新一轮
+    /// @details 合并队列为单条 user 消息并调用 run_completion 继续发送；
+    ///          仅在 m_generating 已复位为 false 后调用（防止与当前任务并发）。
+    void flush_pending_after_run();
+
     /// @brief 订阅子 Agent 进度/完成事件并持久化到 SessionStore
     /// @details 第二层（子 Agent 记录）持久化：SubAgentProgressEvent/SubAgentCompletedEvent
     ///          发布时追加 sub_agent 事件到当前 SessionStore，/resume 时按序重放恢复。
@@ -333,6 +436,17 @@ private:
 
     /// @brief 取消子 Agent 事件持久化订阅
     void unsubscribe_sub_agent_persistence();
+
+    /// @brief #54：订阅 Plan Mode V2 事件（Enter/Exit/子 Agent 完成 → 驱动协调器流转）
+    /// @details 进入 Plan 触发 interview→explore；子 Agent 完成回报 explore 发现；
+    ///          Exit 批准/驳回推进阶段终态。产物就绪（AwaitingApproval）时落盘方案文件。
+    void subscribe_plan_events();
+
+    /// @brief #54：取消 Plan Mode V2 事件订阅
+    void unsubscribe_plan_events();
+
+    /// @brief #54：计划产物就绪（AwaitingApproval）时落盘方案 markdown（供退出确认预览）
+    void maybe_persist_plan_artifact();
 
     /// @brief DS_CACHE M-4：LLM 摘要回调（注入到 m_compactor）
     /// @param middle 待摘要的中段消息序列
@@ -368,16 +482,34 @@ private:
     ///          回调捕获 store 的 shared_ptr，TodoStore 每次变更时追加全量快照。
     void wire_todo_persistence();
 
+    /// @brief 记录 system_prompt 事件到 SessionStore（会话轨迹调试）
+    /// @param reason 记录原因：initial / changed / resume
+    /// @details store 未创建时置 m_pending_system_prompt，待懒创建后补写 initial。
+    ///          仅在提示词内容相对上次记录有变化时落盘，避免重复快照。
+    void persist_system_prompt(const std::string& reason);
+
+    /// @brief 按当前会话模式重建系统提示词（方案 A）
+    /// @details 调用方必须已持有 m_state_mutex。回调非空且重建结果与现提示词不同时
+    ///          覆写 m_system_prompt 并返回落盘 reason（changed/initial），无变化返回空串。
+    /// @return 非空表示需要锁外调用 persist_system_prompt 落盘
+    std::string rebuild_system_prompt_locked();
+
     std::unique_ptr<ICompletionProvider> m_provider;
     std::vector<ChatMessage> m_messages;
     std::string m_system_prompt;
+    /// @brief 系统提示词重建回调（方案 A，由 m_state_mutex 保护）
+    /// @details 模式切换时按目标模式重建提示词（极简只拼白名单工具说明）；nullptr 不重建。
+    std::function<std::string(tool::SessionMode)> m_system_prompt_builder;
     std::string m_session_id;           ///< 会话标识（switch_session 可变更，由 m_state_mutex 保护）
     std::string m_cwd;                  ///< 会话启动时的工作目录（构造时捕获，注入到 ReActLoop）
 
-    // #45：会话级权限模式（三态：Default/Plan/Bypass），由 m_state_mutex 保护
+    // #45：会话级权限模式（两态 UI：Default/Plan/Bypass，由 m_state_mutex 保护）
     tool::PermissionMode m_permission_mode{tool::PermissionMode::Default};
     ///< 进入 Plan 前的原模式（Plan 退出恢复用，由 m_state_mutex 保护）
     tool::PermissionMode m_permission_mode_before_plan{tool::PermissionMode::Default};
+
+    // 会话工作模式（标准 / 计划 / 极简），由 m_state_mutex 保护
+    tool::SessionMode m_session_mode{tool::SessionMode::Standard};
     std::atomic<bool> m_generating{false};
 
     // DS_CACHE M-3：移除 m_cache_hit_total/m_cache_miss_total 死代码
@@ -406,6 +538,9 @@ private:
     // conditional skills：命令注册表（激活匹配用，可选）
     std::shared_ptr<command::CommandRegistry> m_command_registry;
 
+    // #56 方案 D：父会话全局 MCP 连接管理器（AgentTool 子 Agent mcpServers 引用复用来源）
+    std::shared_ptr<mcp::McpClientManager> m_mcp_manager;
+
     // conditional skills：touch 路径收集器（会话级累积）+ 已激活 skill 名（避免重复注入）
     skill::TouchCollector m_touch_collector;
     std::unordered_set<std::string> m_activated_skills;
@@ -416,12 +551,22 @@ private:
     // 项目会话恢复：JSONL 持久化（可选，设置后每条消息实时追加）
     std::shared_ptr<agent::session::SessionStore> m_session_store;
 
+    // #50 会话级 HookManager（SessionStart / SessionEnd 事件；装配期由 make_hook_manager 构建）
+    std::shared_ptr<agent::hook::HookManager> m_hooks;
+    // 会话启停 hook 单次触发守卫（避免 configure_session_store/析构的多次调用重复触发）
+    bool m_session_start_hook_fired = false;
+    bool m_session_end_hook_fired = false;
+
     // 懒创建 SessionStore 配置（首条 user 消息时才创建文件）
     bool m_store_configured = false;
     std::string m_store_project_dir;
     std::string m_store_cwd;
     std::string m_store_model;
     std::string m_store_git_branch;
+
+    // system_prompt 事件记录状态（由 m_state_mutex 保护）
+    bool m_system_prompt_recorded = false;  ///< 当前提示词是否已落盘
+    bool m_pending_system_prompt = false;   ///< store 未创建时待补写的 initial 快照
 
     // H-3：重试策略统一由 HttpRetryPolicy 管理
     HttpRetryPolicy m_retry_policy;
@@ -433,12 +578,27 @@ private:
     EventToken m_sub_progress_token;
     EventToken m_sub_completed_token;
 
+    /// @brief #54：Plan Mode V2 协调器（会话语义级，五阶段 + 并行 explore 编排）
+    /// @details 由构造函数创建并接线事件订阅；宿主可通过 accessor 读取阶段与产物。
+    std::unique_ptr<plan::PlanCoordinator> m_plan_coordinator;
+    /// #54 Plan Mode V2 事件订阅令牌（Enter/Exit/子 Agent 完成）
+    EventToken m_plan_enter_token;
+    EventToken m_plan_exit_token;
+    EventToken m_plan_sub_completed_token;
+
     // 并发控制：保护 m_messages / m_system_prompt / m_tool_registry / m_current_task
     mutable std::mutex m_state_mutex;
     std::shared_ptr<Task> m_current_task;  // 跟踪当前后台任务，用于析构等待
     std::condition_variable m_task_cv;
     /// 本会话已分发的后台任务 id（P1-1 定向取消；受 m_state_mutex 保护）
     std::vector<std::string> m_background_task_ids;
+
+    // ---- 消息队列（模型忙碌时缓存用户输入）----
+    /// 排队消息（FIFO；受 m_queue_mutex 保护）
+    std::deque<QueuedMessageItem> m_pending_queue;
+    mutable std::mutex m_queue_mutex;
+    /// 冲刷请求（Ctrl+Enter 置位，工具轮边界注入后复位；原子读避免持锁）
+    std::atomic<bool> m_flush_requested{false};
 };
 
 } // namespace agent

@@ -2,7 +2,7 @@
  * @file app_config.cpp
  * @brief 应用配置加载实现
  * @details 配置 Schema 注册、环境变量加载、配置文件加载、默认路径
- * @version 2.0.0
+ * @version 2.0.1
  * @date 2026-07
  *
  * v2.0.0 变更（C-2/C-4）：
@@ -178,6 +178,60 @@ void register_config_defaults(ConfigManager& cfg) {
         .default_value = 40,
         .type = ConfigSchema::Type::Int,
         .int_range = std::make_pair<int64_t, int64_t>(1, 2000)
+    });
+
+    // === Plan Mode V2（#54：五阶段多 Agent 规划流程）===
+    cfg.register_schema({
+        .key = keys::PLAN_AUTO,
+        .description = "Auto-run the plan stages (interview→explore→plan) on entering "
+                       "plan mode. When false, only the legacy manual behavior remains.",
+        .default_value = true,
+        .type = ConfigSchema::Type::Bool
+    });
+    cfg.register_schema({
+        .key = keys::PLAN_INTERVIEW_ENABLED,
+        .description = "Enable the Interview stage: clarify requirements / collect "
+                       "constraints before exploring the codebase.",
+        .default_value = true,
+        .type = ConfigSchema::Type::Bool
+    });
+    cfg.register_schema({
+        .key = keys::PLAN_EXPLORE_AGENT_COUNT,
+        .description = "Number of explore agents to run in parallel (getPlanModeV2ExploreAgentCount)",
+        .default_value = 3,
+        .type = ConfigSchema::Type::Int,
+        .int_range = std::make_pair<int64_t, int64_t>(1, 8)
+    });
+    cfg.register_schema({
+        .key = keys::PLAN_EXPLORE_AREAS,
+        .description = "Comma-separated subdomains to explore in parallel (empty = generate "
+                       "generic prompts per explore agent)",
+        .default_value = std::string(""),
+        .type = ConfigSchema::Type::String
+    });
+
+    // === Hooks（#50 通用 Hook 事件系统）===
+    cfg.register_schema({
+        .key = keys::HOOKS_ENABLED,
+        .description = "Enable the general hook event system (PreToolUse/PostToolUse/Stop "
+                       "et al). When disabled, no HookManager is built and hooks never run.",
+        .default_value = true,
+        .type = ConfigSchema::Type::Bool
+    });
+    cfg.register_schema({
+        .key = keys::HOOKS_DEFINITIONS,
+        .description = "JSON string array of hook definitions, each matching HookDefinition: "
+                       "{event,type,match,command,url,prompt,timeout_ms,once,...}",
+        .default_value = std::string("[]"),
+        .type = ConfigSchema::Type::String  // JSON 以字符串承载（schema 无原生 JSON 类型）
+    });
+    cfg.register_schema({
+        .key = keys::HOOKS_TIMEOUT_MS,
+        .description = "Default hook execution timeout in milliseconds (per-hook "
+                       "timeout_ms overrides)",
+        .default_value = 30000,
+        .type = ConfigSchema::Type::Int,
+        .int_range = std::make_pair<int64_t, int64_t>(100, 3600000)
     });
 
     // === Logging ===
@@ -405,10 +459,16 @@ void cleanup_expired_logs(int retention_days) {
         if (ec) break;
         if (!entry.is_regular_file()) continue;
 
-        // 仅清理运行日志 workx_*.log，不影响 audit.jsonl / crash.log / codex_run.log
+        // 仅清理主运行日志的轮转文件（workx.log.N）与旧版时间戳日志
+        // （workx_YYYYMMDD_HHMMSS.log），不影响活动文件 workx.log、
+        // workx_tui.log / workx_crash.log / workx_audit.jsonl
         const std::string name = entry.path().filename().string();
-        if (name.rfind("workx_", 0) != 0 || name.size() < 5 ||
-            name.compare(name.size() - 4, 4, ".log") != 0) {
+        const bool is_rotated = name.rfind("workx.log.", 0) == 0;
+        const bool is_legacy_ts =
+            name.rfind("workx_", 0) == 0 && name.size() >= 5 &&
+            name.compare(name.size() - 4, 4, ".log") == 0 &&
+            name != "workx_tui.log" && name != "workx_crash.log";
+        if (!is_rotated && !is_legacy_ts) {
             continue;
         }
 

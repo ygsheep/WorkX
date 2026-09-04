@@ -3,6 +3,7 @@
 #include "liblogger/logger.h"
 
 #include <algorithm>
+#include <optional>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -10,7 +11,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <memory>
+#include <set>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -29,6 +33,7 @@
 #include "agent/api/i_backend_admin.h"
 #include "agent/api/chat_types.h"
 #include "agent/command/inclaude/registry.h"
+#include "agent/compact/cache_aware_compactor.h"  // 手动压缩上下文（搜索面板 / /compact）
 #include "agent/compact/token_count.h"  // /resume 上下文统计还原
 #include "agent/config/app_config.h"
 #include "agent/core/chat_session.h"
@@ -39,7 +44,9 @@
 #include "agent/mcp/mcp_client_manager.h"  // #27 M4：MCP server 状态查询
 #include "agent/session/session_store.h"
 #include "agent/skill/inclaude/skill_loader.h"
+#include "agent/skill/inclaude/skill_prompt.h"  // build_skills_prompt_section：skills 摘要注入 System Prompt
 #include "command/builtins.h"
+#include "agent/tool/ShellTool/shell_detector.h"  // ！命令 shell（Windows 优先 Git Bash，降级 cmd.exe）
 #include "core/events/stream_events.h"
 #include "core/process/subprocess.h"
 #include "core/process/tool_registry.h"
@@ -48,12 +55,14 @@
 #include "theme/strings.h"
 #include "theme/theme.h"
 #include "clipboard.h"
+#include "render/image_view.h"
 #include "render/markdown_to_elements.h"
 #include "render/transcript_layout.h"
 #include "widgets/sidebar.h"
 #include "widgets/sidebar_tabs.h"
 #include "widgets/change_viewer.h"
 #include "widgets/file_viewer.h"
+#include "widgets/project_tree.h"
 #include "widgets/status_line.h"
 #include "widgets/composer.h"
 #include "widgets/suggest_panel.h"
@@ -228,6 +237,19 @@ std::string status_text(const std::string& status) {
     if (status == "failed") return std::string(str::kSubStatusFailed);
     return std::string(str::kSubStatusDone);
 }
+
+/// @brief 规范化 /view、/edit、/nvim 的文件参数：去首尾空白，剥离前导 '@'
+///        （输入 `/view @path` 触发文件搜索面板，选中后保留 '@' 前缀，需去掉再解析路径）
+std::string normalize_cmd_path(const std::string& args) {
+    std::string s = args;
+    const auto is_space = [](char c) {
+        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+    };
+    while (!s.empty() && is_space(s.front())) s.erase(s.begin());
+    while (!s.empty() && is_space(s.back())) s.pop_back();
+    if (!s.empty() && s.front() == '@') s.erase(s.begin());
+    return s;
+}
 }  // namespace
 
 App::App(AppDeps deps)
@@ -245,39 +267,63 @@ App::App(AppDeps deps)
     }
     register_ftx_builtins(*m_deps.command_registry, FtuiCommandCallbacks{
         .on_exit = [this] {
+            log_run("ctrl-c exit: on_exit begin");
             m_vm.apply(ActionShutdown{});
-            if (m_vm.pending_exit) m_screen.Exit();
+            log_run("ctrl-c exit: ActionShutdown applied, pending_exit=" +
+                    std::to_string(m_vm.pending_exit));
+            if (m_vm.pending_exit) {
+                log_run("ctrl-c exit: calling m_screen.Exit()");
+                m_screen.Exit();
+                log_run("ctrl-c exit: m_screen.Exit() returned");
+            }
         },
         .on_model_select = [this] { open_model_selector(); },
         .on_provider_select = [this] { open_provider_palette(); },
         .on_resume = [this](const std::string& args) { cmd_resume(args); },
         .on_rename = [this](const std::string& args) { cmd_rename(args); },
         .on_clear = [this] { cmd_clear(); },
-        .on_new = [this] {
-            if (!m_deps.session) return;
-            m_deps.session->new_session();
-            reset_vm_for_new_session();
-        },
+        .on_new = [this] { cmd_new(); },
+        .on_compact = [this] { compact_context(); },
         .on_view = [this](const std::string& args) { cmd_view(args); },
         .on_edit = [this](const std::string& args) { cmd_edit(args); },
-        .on_nvim = [this] { cmd_nvim(); },
+        .on_nvim = [this](const std::string& args) { cmd_nvim(args); },
         .on_test_askuser = [this] { cmd_test_askuser(); },
     });
 
     // B2 统一命令：App 持有唯一命令处理器（消费 agent 注册表，含内置命令）
     m_command_processor = std::make_unique<agent::input::InputProcessor>(
-        m_deps.command_registry, std::make_shared<agent::input::LocalFileLoader>());
+        m_deps.command_registry);
 
-    // 加载磁盘 skills（.claude/skills）并注册为命令 → "/" 提示面板与 Skill 工具共用
+    // 加载 skills 并注册为命令 → "/" 提示面板与 Skill 工具共用
     // （对齐 src/app/main.cpp；终端 author 在 ftxtui 路径保留 skill 为斜杠命令可执行）
+    // 顺序：先注册 bundled 内置技能（LoadSource::Bundled，具有最高优先级），
+    // 再加载磁盘 skills（.claude/skills），同名冲突时磁盘技能不覆盖内置技能。
     {
         namespace fs = std::filesystem;
+        const auto bundled_root = agent::skill::find_bundled_skills_dir();
+        if (!bundled_root.empty()) {
+            agent::skill::register_bundled_skills(*m_deps.command_registry, bundled_root);
+        }
         auto base_dirs = agent::skill::find_skill_dirs_up_to_home(fs::current_path().string());
         for (const auto& dir : agent::skill::find_user_skill_dirs()) base_dirs.push_back(dir);
-        const auto skills = agent::skill::load_skills_from_dirs(base_dirs);
-        for (const auto& s : skills) m_deps.command_registry->register_command(s);
+        for (const auto& s : agent::skill::load_skills_from_dirs(base_dirs)) {
+            // bundled 优先级最高：磁盘技能若与内置同名则不覆盖
+            if (!m_deps.command_registry->exists(s->name())) {
+                m_deps.command_registry->register_command(s);
+            }
+        }
         // conditional skills：会话持有命令注册表（激活匹配 SkillTool 用）
-        if (m_deps.session) m_deps.session->set_command_registry(m_deps.command_registry);
+        if (m_deps.session) {
+            m_deps.session->set_command_registry(m_deps.command_registry);
+            // skills 摘要注入 System Prompt：仅列 name + description + when_to_use，
+            // 让模型知晓可用技能而无需加载全文（减少/避免触发 Skill 全文加载导致上下文溢出）。
+            const std::string skills_section =
+                agent::skill::build_skills_prompt_section(*m_deps.command_registry);
+            if (!skills_section.empty()) {
+                auto cur = m_deps.session->system_prompt();
+                m_deps.session->set_system_prompt(cur + skills_section);
+            }
+        }
     }
 
     m_bridge.set_wake_callback([this] { m_screen.PostEvent(Event::Custom); });
@@ -292,6 +338,9 @@ App::App(AppDeps deps)
         }
         m_queue.push(ActionMcpStatus{std::move(servers)});
     }
+
+    // 项目文件树（项目 tab）：后台 git 扫描启动（先推 loading 占位，线程完成后推快照）
+    start_project_scan();
 
     // 输入历史：启动时从配置目录加载（~/.workx/history.json）
     m_input_history.load(agent::default_config_path().parent_path() / "history.json");
@@ -313,8 +362,22 @@ App::~App() {
     if (m_anim_thread.joinable()) m_anim_thread.join();
     m_stream_run = false;
     if (m_stream_thread.joinable()) m_stream_thread.join();
+    // ！命令执行线程：join 确保无在途 push 后，队列才随成员析构销毁。
+    if (m_cmd_thread.joinable()) m_cmd_thread.join();
     // 复制提示自清除线程不触碰任何成员（析构安全）；join 等待它结束时 m_screen 仍存活。
     if (m_copy_flash_thread.joinable()) m_copy_flash_thread.join();
+    // 先置停止信号并 join 项目扫描线程，确保无在途入队后，再停桥接清空队列。
+    m_project_watch_run.store(false);
+    if (m_project_watch_thread.joinable()) m_project_watch_thread.join();
+    // Ctrl+G 异步编辑轮询线程：先停轮询再 join，避免析构期在途读文件/PostEvent
+    m_prompt_editing.store(false);
+    if (m_prompt_watch_thread.joinable()) m_prompt_watch_thread.join();
+#ifdef _WIN32
+    if (m_prompt_editor_proc) {
+        CloseHandle(static_cast<HANDLE>(m_prompt_editor_proc));
+        m_prompt_editor_proc = nullptr;
+    }
+#endif
     m_bridge.stop();
 }
 
@@ -479,6 +542,12 @@ void App::drain() {
                 changed = true;
                 continue;
             }
+            if (auto* open_plan = std::get_if<ActionOpenPlan>(&a)) {
+                // 退出规划模式：侧边栏预览方案 markdown（复用 /view，同路径仅切 tab）
+                cmd_view(open_plan->plan_path);
+                changed = true;
+                continue;
+            }
             if (auto* toast = std::get_if<ActionToast>(&a)) {
                 m_vm.prompt_echo = toast->text;
                 changed = true;
@@ -527,6 +596,22 @@ void App::drain() {
                 changed = true;
                 continue;
             }
+            // ！命令 Ctrl+Enter：把结构化命令结果作为用户消息提交给模型
+            //（Bash 卡已由 ActionAppendCmdResult 先行渲染，此处仅发送）
+            if (auto* cmd2m = std::get_if<ActionSubmitCmdToModel>(&a)) {
+                m_vm.apply(ActionAppendMessage{.role = "user", .text = cmd2m->text});
+                m_vm.apply(ActionSetBusy{.busy = true});
+                m_follow = true;
+                if (m_deps.on_submit) {
+                    m_deps.on_submit(cmd2m->text, {});
+                    // 唤醒事件循环消费积压事件（同 send_input / run_command）
+                    m_screen.PostEvent(Event::Custom);
+                } else {
+                    m_vm.apply(ActionSetBusy{.busy = false});
+                }
+                changed = true;
+                continue;
+            }
             changed |= m_vm.apply(a);
         } catch (const std::exception& ex) {
             log_run(std::string("drain: action exception: ") + ex.what());
@@ -555,9 +640,9 @@ void App::drain() {
 
 void App::log_run(std::string_view msg) {
     std::lock_guard<std::mutex> lock(m_log_mutex);
-    // B4：日志路径平台无关，统一写 ~/.workx/logs/codex_run.log（复用 agent 配置约定）
+    // B4：日志路径平台无关，统一写 ~/.workx/logs/workx_tui.log（复用 agent 配置约定）
     namespace fs = std::filesystem;
-    fs::path log_path = agent::default_log_path().parent_path() / "codex_run.log";
+    fs::path log_path = agent::default_log_path().parent_path() / "workx_tui.log";
     std::error_code ec;
     if (auto parent = log_path.parent_path(); !parent.empty()) {
         fs::create_directories(parent, ec);
@@ -591,6 +676,7 @@ void App::open_model_selector() {
     // 面板互斥：同一时刻只开一个悬浮面板
     m_palette_open = false;
     m_resume_open = false;
+    m_mode_open = false;
     m_provider_open = false;
     m_model_items.clear();
     rebuild_model_entries();  // 空列表（加载中）
@@ -633,6 +719,11 @@ void App::apply_model(int index) {
     if (name.rfind(std::string(str::kModelListFailed), 0) == 0) return;  // 占位错误行，忽略
     if (m_deps.backend_admin) m_deps.backend_admin->set_model_name(name);
     m_vm.sidebar.model = name;
+    // 持久化模型名：写 backend.model_name 并落盘，否则重启读取旧配置还原为上一模型
+    if (m_deps.config_manager) {
+        m_deps.config_manager->set(agent::keys::MODEL_NAME, name);
+        if (m_deps.save_config) m_deps.save_config();
+    }
     // 上下文窗口：模型切换后经 resolver 重解析（provider→cfg→catalog→capability→preset→default）
     if (m_deps.config_manager) {
         int32_t sel_ctx = 0;
@@ -656,6 +747,68 @@ void App::apply_model(int index) {
         }
     }
     if (m_deps.on_model_changed) m_deps.on_model_changed();
+}
+
+// ---------------------------------------------------------------------------
+// 模式选择（Ctrl+P → 切换模式：与 /model 同款悬浮选择 + 模式介绍）
+// ---------------------------------------------------------------------------
+
+void App::open_mode_selector() {
+    // 面板互斥：同一时刻只开一个悬浮面板
+    m_palette_open = false;
+    m_resume_open = false;
+    m_model_open = false;
+    m_provider_open = false;
+    rebuild_mode_entries();  // 3 个模式条目 + active 标记 + 介绍副标题
+    m_mode_open = true;
+    if (m_mode_comp) m_mode_comp->TakeFocus();
+}
+
+void App::rebuild_mode_entries() {
+    m_mode_entries.clear();
+    const std::string& cur = m_vm.sidebar.mode;  // 当前模式（空=标准）
+    struct ModeItem {
+        std::string_view label;   ///< "standard" / "plan" / "minimal"
+        std::string_view title;   ///< 中文模式名
+        std::string_view desc;    ///< 模式介绍（副标题）
+    };
+    static const ModeItem kModes[] = {
+        {"standard", str::kStatusStandard, str::kModeStandardDesc},
+        {"minimal", str::kStatusMinimal, str::kModeMinimalDesc},
+        {"plan", str::kStatusPlan, str::kModePlanDesc},
+    };
+    constexpr size_t kModeCount = 3;
+    for (size_t i = 0; i < kModeCount; ++i) {
+        const bool active = kModes[i].label == cur || (cur.empty() && i == 0);
+        m_mode_entries.push_back(SearchEntry{
+            .category = SearchCategory::Setting,
+            .title = std::string(kModes[i].title),
+            .subtitle = std::string(kModes[i].desc),
+            .keywords = std::string(kModes[i].label),
+            .payload = static_cast<int>(i),
+            .active = active,
+        });
+    }
+}
+
+void App::apply_mode(int index) {
+    if (index < 0 || index >= 3) return;
+    static const char* kLabels[] = {"standard", "minimal", "plan"};
+    const std::string label = kLabels[index];
+    // 真实模式：session 侧设置（计划联动权限 Plan，退出恢复）并回读；
+    // mock 模式：本地直接生效
+    if (m_deps.session) {
+        switch (index) {
+            case 1: m_deps.session->set_session_mode(agent::tool::SessionMode::Minimal); break;
+            case 2: m_deps.session->set_session_mode(agent::tool::SessionMode::Plan); break;
+            default: m_deps.session->set_session_mode(agent::tool::SessionMode::Standard); break;
+        }
+        m_vm.sidebar.mode = session_mode_label(m_deps.session->session_mode());
+    } else {
+        m_vm.sidebar.mode = label;
+        m_mock_mode_cycle = index;  // 与循环切换保持同源
+    }
+    m_vm.apply(ActionSetMode{.label = m_vm.sidebar.mode});
 }
 
 void App::cmd_resume(const std::string& args) {
@@ -700,52 +853,18 @@ void App::resume_session(const std::string& file_path, const std::string& title)
     }
 
     // 载入历史消息（含思考/工具卡片；tool 结果按 call_id 回填）
-    m_vm.messages.clear();
     m_vm.tabs.sub_agents.clear();
     m_vm.tabs.sub_selected = -1;
     m_vm.tabs.changes.changes.clear();
     m_vm.sub_records.clear();  // 切换会话：清空旧子 Agent 记录
     m_vm.sub_active = -1;
     m_vm.output_level = OutputLevel::Main;
-    invalidate_msg_cache();
-    const auto history = m_deps.session->get_messages();
-    for (const auto& cm : history) {
-        if (cm.role == agent::ChatMessage::Role::User) {
-            m_vm.apply(ActionAppendMessage{.role = "user", .text = cm.content});
-        } else if (cm.role == agent::ChatMessage::Role::Assistant) {
-            // 构造含卡片的 assistant 节点：正文 + 思考卡片 + 工具卡片
-            MessageNode n;
-            n.role = MsgRole::Assistant;
-            n.text = cm.content;
-            n.sealed = true;
-            if (!cm.reasoning_content.empty()) {
-                n.reasoned = true;
-                n.reasoning = cm.reasoning_content;
-                n.reasoning_expanded = m_vm.card_defaults.reasoning_expanded;
-                n.reasoning_ms = cm.reasoning_ms;
-            }
-            for (const auto& tu : cm.tool_uses) {
-                ToolCallNode t;
-                t.tool_name = tu.name;
-                t.call_id = tu.id;
-                t.arguments = tu.input.dump();
-                n.tool_calls.push_back(std::move(t));
-            }
-            m_vm.messages.push_back(std::move(n));
-        } else if (cm.role == agent::ChatMessage::Role::Tool) {
-            // 工具结果：按 call_id 回填对应卡片（出错默认展开，对齐实时路径）
-            for (auto it = m_vm.messages.rbegin(); it != m_vm.messages.rend(); ++it) {
-                if (auto* t = it->find_tool(cm.tool_call_id)) {
-                    t->result = cm.content;
-                    t->done = true;
-                    t->running = false;
-                    t->is_error = cm.is_error;
-                    t->expanded = cm.is_error;
-                    break;
-                }
-            }
-        }
-    }
+    load_session_transcript();
+
+    // #24：同步恢复侧边栏 Todo 清单（与 switch_session 内 restore_todos 同源：
+    // load_todos 取 JSONL 最后一条 todo 快照）。避免依赖异步 TodoUpdatedEvent
+    // 到达前显示上一会话的清单（事件缺失时 UI 永远错误）。
+    m_vm.sidebar.todos = agent::session::SessionStore::load_todos(file_path);
 
     // 恢复子 Agent 第二层记录（sub_records）：按写入顺序重放持久化事件，
     // 复用 ViewModel 的 apply 逻辑（含 observation 合并到 action 的语义），
@@ -776,6 +895,7 @@ void App::resume_session(const std::string& file_path, const std::string& title)
 
     // 还原上下文窗口统计：按历史消息估算已用 token，使侧栏进度条立即反映
     // 恢复会话的占用（而非从 0 开始，对齐 src/tui restore_from_history）
+    const auto history = m_deps.session->get_messages();
     const int32_t estimated = agent::compact::estimate_messages_tokens(history);
     m_vm.sidebar.context_used = estimated;
     m_vm.sidebar.total_tokens = estimated;
@@ -791,6 +911,157 @@ void App::resume_session(const std::string& file_path, const std::string& title)
     m_vm.sidebar.title = title;
     m_vm.apply(ActionAppendMessage{.role = "assistant",
         .text = std::string(str::kResumedPrefix) + title + std::string(str::kMdBoldEnd)});
+}
+
+/// @brief 从当前会话重建转录区（resume 历史载入 / 压缩上下文后刷新共用）
+void App::load_session_transcript() {
+    m_vm.messages.clear();
+    invalidate_msg_cache();
+    const auto history = m_deps.session->get_messages();
+
+    // 手动调用技能恢复：把对应 user 消息（技能展开的 query）还原为「原始输入回显 + Skill 卡」。
+    // 读取当前会话文件中的 skill 事件，按写入顺序匹配；压缩重建同样覆盖（共享本入口）。
+    std::vector<agent::session::SkillEvent> skills;
+    const std::string cur_sid = m_deps.session->session_id();
+    if (!cur_sid.empty()) {
+        const auto skill_path =
+            std::filesystem::path(m_deps.session_dir) / (cur_sid + ".jsonl");
+        skills = agent::session::SessionStore::load_skills(skill_path.string());
+    }
+    std::size_t skill_idx = 0;
+
+    int open_idx = -1;  // 正在合并的工具调用 assistant 节点索引（-1=无）
+    for (const auto& cm : history) {
+        if (cm.role == agent::ChatMessage::Role::User) {
+            open_idx = -1;  // 用户消息分隔回合
+            // 命中技能事件：该 user 消息是展开的 query → 还原为原始输入回显 + Skill 卡
+            if (skill_idx < skills.size() && cm.content == skills[skill_idx].query) {
+                const auto& ev = skills[skill_idx];
+                ++skill_idx;
+                if (!ev.raw_input.empty() && ev.raw_input != cm.content)
+                    m_vm.apply(ActionAppendMessage{.role = "user", .text = ev.raw_input});
+                m_vm.apply(ActionAppendSkill{.name = ev.name,
+                                             .input = ev.input,
+                                             .is_error = ev.is_error});
+                continue;
+            }
+            m_vm.apply(ActionAppendMessage{.role = "user", .text = cm.content});
+        } else if (cm.role == agent::ChatMessage::Role::Assistant) {
+            if (!cm.tool_uses.empty()) {
+                // 工具调用消息：合并进当前 open 节点（对齐实时路径：一个回合一条
+                // 消息多张卡片相邻，避免恢复会话时卡片间叠加消息级空行成两行间距）
+                if (open_idx < 0) {
+                    m_vm.messages.push_back(MessageNode{});
+                    open_idx = static_cast<int>(m_vm.messages.size()) - 1;
+                    auto& open = m_vm.messages[open_idx];
+                    open.role = MsgRole::Assistant;
+                    open.sealed = true;
+                    open.reasoning_expanded = m_vm.card_defaults.reasoning_expanded;
+                }
+                auto& open = m_vm.messages[open_idx];
+                if (!cm.content.empty()) open.text += cm.content;
+                if (!cm.reasoning_content.empty()) {
+                    open.reasoned = true;
+                    if (!open.reasoning.empty()) open.reasoning += "\n";
+                    open.reasoning += cm.reasoning_content;
+                    open.reasoning_ms += cm.reasoning_ms;
+                }
+                for (const auto& tu : cm.tool_uses) {
+                    ToolCallNode t;
+                    t.tool_name = tu.name;
+                    t.call_id = tu.id;
+                    t.arguments = tu.input.dump();
+                    t.text_pos = open.text.size();  // 正文插入点（对齐实时路径）
+                    open.tool_calls.push_back(std::move(t));
+                }
+            } else if (open_idx >= 0) {
+                // 同一回合的最终答复：并入 open 节点（对齐实时路径：最终答复与工具卡
+                // 同一条消息，避免恢复会话时末卡与最终文本之间叠加消息级空行成两行间距）
+                auto& open = m_vm.messages[open_idx];
+                if (!cm.content.empty()) {
+                    if (!open.text.empty()) open.text += "\n";
+                    open.text += cm.content;
+                }
+                if (!cm.reasoning_content.empty()) {
+                    open.reasoned = true;
+                    if (!open.reasoning.empty()) open.reasoning += "\n";
+                    open.reasoning += cm.reasoning_content;
+                    open.reasoning_ms += cm.reasoning_ms;
+                }
+                open_idx = -1;  // 回合结束
+            } else {
+                // 独立答复（无工具调用、无 open）：独立节点
+                MessageNode n;
+                n.role = MsgRole::Assistant;
+                n.text = cm.content;
+                n.sealed = true;
+                if (!cm.reasoning_content.empty()) {
+                    n.reasoned = true;
+                    n.reasoning = cm.reasoning_content;
+                    n.reasoning_expanded = m_vm.card_defaults.reasoning_expanded;
+                    n.reasoning_ms = cm.reasoning_ms;
+                }
+                m_vm.messages.push_back(std::move(n));
+            }
+        } else if (cm.role == agent::ChatMessage::Role::Tool) {
+            // 工具结果：按 call_id 回填对应卡片（出错默认展开，对齐实时路径）
+            for (auto it = m_vm.messages.rbegin(); it != m_vm.messages.rend(); ++it) {
+                if (auto* t = it->find_tool(cm.tool_call_id)) {
+                    t->result = cm.content;
+                    t->done = true;
+                    t->running = false;
+                    t->is_error = cm.is_error;
+                    t->expanded = cm.is_error;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// @brief 手动压缩上下文（搜索面板「压缩上下文」与 /compact 命令共用）
+void App::compact_context() {
+    if (!m_deps.session) return;
+    // 生成中安全：压缩会就地改写会话消息，先拒绝（不打断正在进行的推理）
+    if (m_deps.session->is_generating()) {
+        m_vm.apply(ActionAppendMessage{.role = "assistant",
+            .text = std::string(str::kCompactBusy)});
+        m_screen.RequestAnimationFrame();
+        return;
+    }
+    auto result = m_deps.session->compact_context();
+    std::string notice;
+    switch (result.action) {
+        case agent::CacheAwareCompactor::Action::None:
+            notice = std::string(str::kCompactNoNeed);
+            break;
+        case agent::CacheAwareCompactor::Action::SoftNotice:
+            notice = std::string(str::kCompactSoft);
+            break;
+        case agent::CacheAwareCompactor::Action::Stuck:
+            notice = std::string(str::kCompactStuck);
+            break;
+        default:
+            // 会话消息已被压缩器就地改写：重建转录区
+            load_session_transcript();
+            notice = std::string(str::kCompactDonePrefix)
+                     + std::to_string(result.tokens_before)
+                     + std::string(str::kCompactTokensArrow)
+                     + std::to_string(result.tokens_after)
+                     + std::string(str::kCompactTokensSuffix);
+            break;
+    }
+    // 刷新侧栏上下文占用统计（还原 / 恢复会话对齐）
+    m_vm.sidebar.context_used = result.tokens_after;
+    m_vm.sidebar.total_tokens = result.tokens_after;
+    m_vm.apply(ActionAppendMessage{.role = "assistant", .text = std::move(notice)});
+    m_screen.RequestAnimationFrame();
+}
+
+void App::cmd_new() {
+    if (!m_deps.session) return;
+    m_deps.session->new_session();
+    reset_vm_for_new_session();
 }
 
 void App::cmd_clear() {
@@ -829,6 +1100,9 @@ void App::reset_vm_for_new_session() {
     m_vm.tabs.changes.changes.clear();
     // 标题栏回退「新会话」；统计从零开始（新会话上下文）
     m_vm.sidebar.title.clear();
+    // #24：新会话清空 Todo 清单（与 ChatSession::new_session 的 restore_todos
+    // 空快照同源；同步清空避免异步 TodoUpdatedEvent 到达前残留旧会话清单）
+    m_vm.sidebar.todos.clear();
     m_vm.sidebar.context_used = 0;
     m_vm.sidebar.total_tokens = 0;
     m_vm.sidebar.prompt_tokens = 0;
@@ -856,13 +1130,8 @@ void App::cmd_rename(const std::string& args) {
 /// @brief /view：打开文件只读查看器（读取 ≤2MB + 按行切分 + 语言推断 + 定位）
 /// @details 相对路径基于当前工作目录解析；超限截断并提示。打开后切到文件 tab。
 void App::cmd_view(const std::string& args) {
-    // 去首尾空白
-    std::string path = args;
-    const auto is_space = [](char c) {
-        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
-    };
-    while (!path.empty() && is_space(path.front())) path.erase(path.begin());
-    while (!path.empty() && is_space(path.back())) path.pop_back();
+    // 去首尾空白 + 剥离前导 '@'（@path 面板触发语义）
+    const std::string path = normalize_cmd_path(args);
     if (path.empty()) {
         m_vm.apply(ActionAppendMessage{.role = "assistant",
             .text = std::string(str::kViewUsage)});
@@ -884,6 +1153,27 @@ void App::cmd_view(const std::string& args) {
     if (!fs::is_regular_file(p, ec)) {
         m_vm.apply(ActionAppendMessage{.role = "assistant",
             .text = std::string(str::kViewNotFound) + path + std::string(str::kCloseParenNl)});
+        return;
+    }
+
+    // —— 图片文件：/view 与项目树点击共用此路径（stb 解码 → 半块 truecolor 预览）——
+    if (is_image_file(p.string())) {
+        std::string err;
+        auto img = decode_image_file(p.string(), &err);
+        m_vm.tabs.file.path = p.string();
+        m_vm.tabs.file.lang.clear();
+        m_vm.tabs.file.scroll = 0;
+        m_vm.tabs.file.dirty = false;
+        m_vm.tabs.file.changes.clear();
+        m_vm.tabs.file.image = std::move(img);
+        if (m_vm.tabs.file.image) {
+            m_vm.tabs.file.lines.clear();
+        } else {
+            m_vm.tabs.file.lines = {"（图片解码失败：" + err + "）"};
+        }
+        m_vm.tabs.file_open = true;
+        m_vm.tabs.active = SidebarTab::kFiles;
+        m_screen.RequestAnimationFrame();
         return;
     }
 
@@ -926,6 +1216,7 @@ void App::cmd_view(const std::string& args) {
     }
 
     m_vm.tabs.file.path = p.string();
+    m_vm.tabs.file.image.reset();
     m_vm.tabs.file.lines = std::move(lines);
     m_vm.tabs.file.lang = lang_from_path(p.string());
     m_vm.tabs.file.scroll = 0;
@@ -943,12 +1234,8 @@ void App::cmd_view(const std::string& args) {
 ///          WithRestoredIO 全屏切换启动 nvim（模态）→ 返回后重读文件。
 ///          闭包必须在 UI 线程执行（Uninstall/Install 直接操作终端句柄）。
 void App::cmd_edit(const std::string& args) {
-    std::string path = args;
-    const auto is_space = [](char c) {
-        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
-    };
-    while (!path.empty() && is_space(path.front())) path.erase(path.begin());
-    while (!path.empty() && is_space(path.back())) path.pop_back();
+    // 去首尾空白 + 剥离前导 '@'（@path 面板触发语义）
+    const std::string path = normalize_cmd_path(args);
     if (path.empty()) {
         m_vm.apply(ActionAppendMessage{.role = "assistant",
             .text = std::string(str::kEditUsage)});
@@ -983,6 +1270,7 @@ void App::cmd_edit(const std::string& args) {
         // 新建文件：初始化空文件 tab（无磁盘内容可读）
         m_vm.tabs.file.path = p.string();
         m_vm.tabs.file.lines.clear();
+        m_vm.tabs.file.image.reset();
         m_vm.tabs.file.changes.clear();
         m_vm.tabs.file.lang = lang_from_path(p.string());
         m_vm.tabs.file.scroll = 0;
@@ -991,7 +1279,7 @@ void App::cmd_edit(const std::string& args) {
         m_vm.tabs.active = SidebarTab::kFiles;
     } else {
         // 打开文件 tab 显示当前内容（复用 /view 读取 + 行号 + 内联 diff）
-        cmd_view(args);
+        cmd_view(path);
     }
 
     if (is_new)
@@ -1027,8 +1315,11 @@ void App::cmd_edit(const std::string& args) {
     m_screen.RequestAnimationFrame();
 }
 
-/// @brief /nvim：在当前目录启动 nvim（WithRestoredIO 全屏切换，模态）
-void App::cmd_nvim() {
+/// @brief /nvim：启动 nvim（可带文件路径；WithRestoredIO 全屏切换，模态）
+void App::cmd_nvim(const std::string& args) {
+    // 去首尾空白 + 剥离前导 '@'（@path 面板触发语义）；空 = 在当前目录启动
+    const std::string path = normalize_cmd_path(args);
+
     auto nvim = agent::process::ToolRegistry::instance().find_executable("nvim");
     if (!nvim) {
         m_vm.apply(ActionAppendMessage{.role = "assistant",
@@ -1040,7 +1331,14 @@ void App::cmd_nvim() {
 
     bool launched = false;
     auto edit = m_screen.WithRestoredIO([&] {
-        auto r = agent::process::exec_interactive(*nvim, {});
+        std::vector<std::string> argv;
+        if (!path.empty()) {
+            namespace fs = std::filesystem;
+            fs::path p(path);
+            if (!p.is_absolute()) p = fs::current_path() / p;
+            argv.push_back(p.string());
+        }
+        auto r = agent::process::exec_interactive(*nvim, argv);
         if (r.is_ok()) launched = true;
     });
     edit();
@@ -1049,6 +1347,248 @@ void App::cmd_nvim() {
         m_vm.apply(ActionAppendMessage{.role = "assistant",
             .text = std::string(str::kEditFailed)});
     }
+    m_screen.RequestAnimationFrame();
+}
+
+/// @brief Ctrl+G：打开系统默认编辑器编辑当前输入（Prompt 文件双向同步）
+void App::edit_prompt() {
+    namespace fs = std::filesystem;
+    // 1. Prompt 文件路径（与输入历史同目录约定：~/.workx/prompt.md）
+    const fs::path prompt = agent::default_config_path().parent_path() / "prompt.md";
+    std::error_code ec;
+    fs::create_directories(prompt.parent_path(), ec);
+
+    // 2. 把当前输入框内容同步到 Prompt 文件
+    {
+        std::ofstream out(prompt, std::ios::binary | std::ios::trunc);
+        if (out) out.write(m_input_buffer.data(),
+                           static_cast<std::streamsize>(m_input_buffer.size()));
+    }
+
+    // 3. 解析默认编辑器（$WORKX_EDITOR → $EDITOR；否则 Windows=记事本，POSIX=nvim/vim/nano）
+    std::string editor_cmd;
+    std::vector<std::string> editor_args;
+    // 环境变量可能形如 "code --wait"，拆分首 token 为命令名、余下为前置参数
+    auto split_first = [](const std::string& s, std::string& cmd,
+                          std::vector<std::string>& args) {
+        const auto sp = s.find(' ');
+        if (sp == std::string::npos) { cmd = s; return; }
+        cmd = s.substr(0, sp);
+        std::string rest = s.substr(sp + 1);
+        size_t b = 0;
+        while (b < rest.size()) {
+            while (b < rest.size() && rest[b] == ' ') ++b;
+            if (b >= rest.size()) break;
+            const size_t en = rest.find(' ', b);
+            args.push_back(rest.substr(b, en == std::string::npos ? rest.size() : en - b));
+            b = en == std::string::npos ? rest.size() : en;
+        }
+    };
+    const char* env = std::getenv("WORKX_EDITOR");
+    if (!env || !*env) env = std::getenv("EDITOR");
+    if (env && *env) {
+        split_first(env, editor_cmd, editor_args);
+    } else {
+#ifdef _WIN32
+        editor_cmd = "notepad.exe";
+#else
+        auto pick = [&](const char* name) {
+            if (!editor_cmd.empty()) return;
+            if (auto p = agent::process::ToolRegistry::instance().find_executable(name))
+                editor_cmd = *p;
+        };
+        pick("nvim");
+        pick("vim");
+        pick("nano");
+#endif
+    }
+
+    if (editor_cmd.empty()) {
+        m_vm.apply(ActionAppendMessage{.role = "assistant",
+            .text = std::string("Ctrl+G：未找到可用编辑器，请设置 $EDITOR 或安装 nvim/vim/nano 之一")});
+        m_screen.RequestAnimationFrame();
+        return;
+    }
+
+    // 4a. Windows 记事本：走异步分支（TUI 与 GUI 记事本窗口并存，后台轮询实时同步，
+    //     按 Esc 收尾）。规避 Win11 Store 版 notepad stub 进程提前退出、
+    //     无法以「进程退出」作为编辑完成信号的问题。
+    m_prompt_path = prompt.string();
+#ifdef _WIN32
+    {
+        std::string low = editor_cmd;
+        for (char& c : low)
+            c = (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+        if (low == "notepad" || low == "notepad.exe") {
+            start_prompt_editor_async();
+            return;
+        }
+    }
+#endif
+
+    // 4b. 终端型编辑器（POSIX 或 Windows 自定义 TUI 编辑器）：阻塞式全屏编辑
+    const std::string path_str = prompt.string();
+    bool launched = false;
+    auto edit = m_screen.WithRestoredIO([&] {
+        std::vector<std::string> args = editor_args;
+        args.push_back(path_str);
+        auto r = agent::process::exec_interactive(editor_cmd, args);
+        if (r.is_ok()) launched = true;
+    });
+    edit();
+
+    if (!launched) {
+        m_vm.apply(ActionAppendMessage{.role = "assistant",
+            .text = std::string("Ctrl+G：编辑器启动失败，输入内容未更改")});
+        m_screen.RequestAnimationFrame();
+        return;
+    }
+
+    // 5. 编辑器退出后读回 Prompt 文件（与磁盘一致）
+    m_input_buffer = load_prompt_file(path_str);
+    m_composer_cursor = m_input_buffer.size();
+    if (m_composer) m_composer->TakeFocus();
+    m_screen.RequestAnimationFrame();
+}
+
+/// @brief 读 Prompt 文件并归一化（剥 UTF-8 BOM、CRLF/孤立 CR→LF、去尾换行）
+std::string App::load_prompt_file(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    std::string content((std::istreambuf_iterator<char>(in)),
+                        std::istreambuf_iterator<char>());
+    if (content.size() >= 3 && static_cast<unsigned char>(content[0]) == 0xEF &&
+        static_cast<unsigned char>(content[1]) == 0xBB &&
+        static_cast<unsigned char>(content[2]) == 0xBF)
+        content.erase(0, 3);
+    std::string lf;
+    lf.reserve(content.size());
+    for (size_t i = 0; i < content.size(); ++i) {
+        const char ch = content[i];
+        if (ch == '\r') {
+            if (i + 1 < content.size() && content[i + 1] == '\n') continue;  // CRLF → LF
+            lf.push_back('\n');  // 孤立 CR → LF
+        } else {
+            lf.push_back(ch);
+        }
+    }
+    while (!lf.empty() && lf.back() == '\n') lf.pop_back();
+    return lf;
+}
+
+/// @brief Windows notepad 异步分支：后台线程轮询 Prompt 文件实时同步输入框，Esc 结束
+void App::start_prompt_editor_async() {
+    if (m_prompt_editing.load()) return;  // 防重入：编辑会话已在进行
+    if (m_prompt_path.empty()) return;
+
+    // 记录本轮基线，清空残留 pending
+    {
+        std::lock_guard<std::mutex> lock(m_prompt_mutex);
+        m_prompt_last.clear();
+        m_prompt_pending.clear();
+        m_prompt_pending_dirty = false;
+    }
+    m_prompt_editing.store(true);
+
+#ifdef _WIN32
+    {
+        // UTF-8 路径 → 宽字符（notepad 命令行用）
+        auto to_wide = [](const std::string& s) {
+            const int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
+            std::wstring w(static_cast<size_t>(n > 0 ? n : 1), L'\0');
+            if (n > 0) MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, w.data(), n);
+            return w;
+        };
+        std::wstring wpath = to_wide(m_prompt_path);
+        std::wstring cmdline = L"notepad.exe \"" + wpath + L"\"";
+        STARTUPINFOW si{};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi{};
+        if (!CreateProcessW(nullptr, cmdline.data(), nullptr, nullptr, FALSE,
+                            CREATE_UNICODE_ENVIRONMENT, nullptr, nullptr, &si, &pi)) {
+            m_prompt_editing.store(false);
+            m_vm.apply(ActionAppendMessage{.role = "assistant",
+                .text = std::string("Ctrl+G：记事本启动失败，输入内容未更改")});
+            m_screen.RequestAnimationFrame();
+            return;
+        }
+        CloseHandle(pi.hThread);
+        m_prompt_editor_proc = pi.hProcess;
+    }
+#endif
+
+    // 后台轮询线程：
+    //  1) 检测到 Prompt 文件内容变化（保存）→ 投递 Custom，UI 同步输入框（保存即同步）；
+    //  2) 自动检测记事本关闭：首轮判 stub（启动即退出的 Win11 Store 版 stub 按进程退出
+    //     检测永远为真、无法当作「关窗」信号），真实长命记事本在首轮后退出 = 关闭窗口，
+    //     置 m_prompt_auto_done 由 UI 线程自动收尾读回（关闭时自动保存）。
+    m_prompt_watch_thread = std::thread([this] {
+        bool first_check = true;   // 首次是否已做 stub 判定
+        bool stub = false;         // 启动早期即退出的 stub（禁用自动关闭检测）
+        while (m_prompt_editing.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            // —— 同步：文件变化（保存）→ 投递 UI ——
+            std::string lf = load_prompt_file(m_prompt_path);
+            {
+                std::lock_guard<std::mutex> lock(m_prompt_mutex);
+                if (lf != m_prompt_last) {
+                    m_prompt_last = lf;
+                    m_prompt_pending = lf;
+                    m_prompt_pending_dirty = true;
+                    m_screen.PostEvent(ftxui::Event::Custom);
+                }
+            }
+            // —— 自动关闭检测（Windows）——
+#ifdef _WIN32
+            const HANDLE proc = static_cast<HANDLE>(m_prompt_editor_proc);
+            if (proc) {
+                const DWORD st = WaitForSingleObject(proc, 0);
+                if (first_check) {
+                    first_check = false;
+                    if (st == WAIT_OBJECT_0) stub = true;  // 启动即已退出 → stub，禁用自动检测
+                }
+                if (!stub && st == WAIT_OBJECT_0) {  // 真实记事本进程退出 = 关闭窗口
+                    m_prompt_auto_done.store(true);
+                    m_screen.PostEvent(ftxui::Event::Custom);
+                    break;
+                }
+            }
+#endif
+        }
+    });
+
+    if (m_composer) m_composer->TakeFocus();
+    m_screen.RequestAnimationFrame();
+}
+
+/// @brief 结束异步编辑会话（Esc）：停轮询线程 + 最后读回 Prompt 文件同步输入框
+void App::finish_prompt_editor() {
+    if (!m_prompt_editing.load()) return;
+    m_prompt_editing.store(false);
+    if (m_prompt_watch_thread.joinable()) m_prompt_watch_thread.join();
+#ifdef _WIN32
+    if (m_prompt_editor_proc) {
+        CloseHandle(static_cast<HANDLE>(m_prompt_editor_proc));
+        m_prompt_editor_proc = nullptr;
+    }
+#endif
+    if (!m_prompt_path.empty())
+        m_input_buffer = load_prompt_file(m_prompt_path);
+    m_composer_cursor = m_input_buffer.size();
+    if (m_composer) m_composer->TakeFocus();
+    m_screen.RequestAnimationFrame();
+}
+
+/// @brief UI 线程消费轮询线程的最新内容（Custom 事件）
+void App::drain_prompt_pending() {
+    std::string content;
+    {
+        std::lock_guard<std::mutex> lock(m_prompt_mutex);
+        if (!m_prompt_pending_dirty) return;
+        m_prompt_pending_dirty = false;
+        content = std::move(m_prompt_pending);
+    }
+    m_input_buffer = std::move(content);
+    m_composer_cursor = m_input_buffer.size();
     m_screen.RequestAnimationFrame();
 }
 
@@ -1120,6 +1660,7 @@ void App::reload_file() {
     }
 
     m_vm.tabs.file.lines = std::move(lines);
+    m_vm.tabs.file.image.reset();
     m_vm.tabs.file.lang = lang_from_path(p.string());
     m_vm.tabs.file.dirty = false;
     if (truncated)
@@ -1177,6 +1718,7 @@ void App::open_resume_palette() {
     // 面板互斥：同一时刻只开一个悬浮面板
     m_palette_open = false;
     m_model_open = false;
+    m_mode_open = false;
     m_provider_open = false;
     ensure_sessions_loaded();
     m_session_entries.clear();
@@ -1195,6 +1737,7 @@ void App::open_resume_palette() {
 }
 
 void App::open_provider_palette() {
+    log_run("provider: open_provider_palette");
     if (!m_deps.config_manager) {
         m_vm.apply(ActionAppendMessage{.role = "assistant",
             .text = std::string(str::kNoProviderConfig)});
@@ -1204,6 +1747,7 @@ void App::open_provider_palette() {
     m_palette_open = false;
     m_resume_open = false;
     m_model_open = false;
+    m_mode_open = false;
     m_providers = agent::load_provider_configs(*m_deps.config_manager);
     m_current_provider =
         m_deps.config_manager->get_or<std::string>(agent::keys::PROVIDER, "");
@@ -1214,7 +1758,11 @@ void App::open_provider_palette() {
 void App::switch_provider(int index) {
     if (index < 0 || index >= static_cast<int>(m_providers.size())) return;
     const agent::ProviderConfigEntry entry = m_providers[static_cast<size_t>(index)];
+    log_run("provider: switch_provider index=" + std::to_string(index) +
+            " name=" + entry.name + " id=" + entry.id +
+            " providers_size=" + std::to_string(m_providers.size()));
     if (!m_deps.create_provider) {
+        log_run("provider: switch_provider FAILED no create_provider dep");
         m_vm.apply(ActionAppendMessage{.role = "assistant",
             .text = std::string(str::kProviderSwitchFailedPrefix) + entry.name
                     + std::string(str::kCloseParenNl)});
@@ -1222,6 +1770,7 @@ void App::switch_provider(int index) {
     }
     // 正在生成中拒绝热切换（ReAct 循环持有 provider；run_completion 期间换后端竞态）
     if (m_deps.session && m_deps.session->is_generating()) {
+        log_run("provider: switch_provider REJECTED session generating");
         m_vm.apply(ActionAppendMessage{.role = "assistant",
             .text = std::string(str::kProviderBusy) + entry.name
                     + std::string(str::kCloseParenNl)});
@@ -1233,10 +1782,13 @@ void App::switch_provider(int index) {
     std::thread([this, entry] {
         auto result = m_deps.create_provider(entry);
         if (!result.provider) {
+            log_run("provider: create FAILED url=" + entry.base_url +
+                    " model=" + result.model_name);
             m_queue.push(ActionProviderSwitchFailed{.provider_name = entry.name});
             m_screen.PostEvent(Event::Custom);
             return;
         }
+        log_run("provider: create OK model=" + result.model_name);
         m_queue.push(ActionProviderSwitched{
             .provider = std::move(result.provider),
             .model_name = result.model_name,
@@ -1249,10 +1801,31 @@ void App::switch_provider(int index) {
 void App::handle_provider_switched(std::unique_ptr<agent::ICompletionProvider> provider,
                                    const std::string& model_name,
                                    const agent::ProviderConfigEntry& entry) {
-    if (!m_deps.session) return;
+    log_run("provider: handle_provider_switched name=" + entry.name);
+    // 持久化切换始终执行（即使当前无会话）：apply_provider_switch 只写内存，
+    // 必须落盘 provider/remote_url/model，否则重启读取旧配置还原为上一供应商
+    if (m_deps.config_manager)
+        agent::apply_provider_switch(*m_deps.config_manager, entry);
+    if (m_deps.save_config) m_deps.save_config();
+
+    // 无会话（启动时自定义供应商未装配后端 / mock 模式）：仅更新配置与界面显示。
+    // 新增后端随之析构；下次启动按新 provider 经 create_session 兜底装配会话。
+    if (!m_deps.session) {
+        log_run("provider: switched CONFIG-ONLY (no session) name=" + entry.name);
+        if (!model_name.empty()) {
+            m_vm.sidebar.model = model_name;
+            if (m_deps.on_model_changed) m_deps.on_model_changed();
+        }
+        rebuild_model_entries();
+        m_vm.apply(ActionAppendMessage{.role = "assistant",
+            .text = std::string(str::kProviderSwitchedPrefix) + entry.name
+                    + std::string(str::kMdBoldEnd)});
+        return;
+    }
     // 保留当前对话继续（import_messages 重置上下文压缩基线，不丢历史）
     auto messages = m_deps.session->get_messages();
     if (!m_deps.session->set_provider(std::move(provider))) {
+        log_run("provider: set_provider REJECTED session busy");
         // 竞态（处理时已开始生成）：拒绝本次切换，新后端随 unique_ptr 析构
         m_vm.apply(ActionAppendMessage{.role = "assistant",
             .text = std::string(str::kProviderBusy) + entry.name
@@ -1263,11 +1836,8 @@ void App::handle_provider_switched(std::unique_ptr<agent::ICompletionProvider> p
     // 刷新 admin 句柄（旧指针已随旧 provider 失效）
     if (auto* p = m_deps.session->completion_provider())
         m_deps.backend_admin = dynamic_cast<agent::IBackendAdmin*>(p);
-    // 持久化切换（成功后写配置，避免失败残留）
-    if (m_deps.config_manager)
-        agent::apply_provider_switch(*m_deps.config_manager, entry);
-    // apply_provider_switch 仅写内存；必须落盘，否则重启读取旧配置还原为上一供应商
-    if (m_deps.save_config) m_deps.save_config();
+    log_run("provider: switched OK name=" + entry.name +
+            " model=" + model_name);
     // 更新侧栏模型显示与模型列表 active 标记
     if (!model_name.empty()) {
         m_vm.sidebar.model = model_name;
@@ -1280,6 +1850,7 @@ void App::handle_provider_switched(std::unique_ptr<agent::ICompletionProvider> p
 }
 
 void App::handle_provider_switch_failed(const std::string& provider_name) {
+    log_run("provider: switch FAILED name=" + provider_name);
     m_vm.apply(ActionAppendMessage{.role = "assistant",
         .text = std::string(str::kProviderSwitchFailedPrefix) + provider_name
                 + std::string(str::kCloseParenNl)});
@@ -1391,11 +1962,13 @@ namespace {
 
 /// @brief 设置动作（搜索面板「设置」类 payload）
 enum class SettingAction {
-    PermCycle,      ///< 切换权限模式
+    ModeCycle,      ///< 切换工作模式（标准 / 计划 / 极简）
+    PermCycle,      ///< 切换权限模式（手动审批 / 完全访问）
     ModelSelector,  ///< 打开模型选择器
     ProviderSelector, ///< 打开供应商切换面板
-    ToggleThinking, ///< 折叠 / 展开思考
     ToggleSidebar,  ///< 切换侧边栏位置（左 / 右）
+    NewSession,     ///< 新建会话
+    CompactContext, ///< 压缩上下文
     Clear,          ///< 清空会话
     Exit,           ///< 退出
 };
@@ -1483,14 +2056,18 @@ std::vector<SearchEntry> App::assemble_search_entries() {
     }
 
     // 设置：静态条目
+    push_setting(out, SettingAction::ModeCycle, str::kSettingMode, str::kSettingModeDesc,
+                 "mode 模式 标准 计划 极简");
     push_setting(out, SettingAction::PermCycle, str::kSettingPerm, str::kSettingPermDesc,
-                 "permission plan bypass 权限");
+                 "permission bypass 权限 审批 访问");
     push_setting(out, SettingAction::ModelSelector, str::kSettingModel, str::kSettingModelDesc,
                  "model 模型");
     push_setting(out, SettingAction::ProviderSelector, str::kSettingProvider,
                  str::kSettingProviderDesc, "provider 供应商");
-    push_setting(out, SettingAction::ToggleThinking, str::kSettingThinking,
-                 str::kSettingThinkingDesc, "think reasoning 思考");
+    push_setting(out, SettingAction::NewSession, str::kSettingNewSession,
+                 str::kSettingNewSessionDesc, "new session 新建 会话");
+    push_setting(out, SettingAction::CompactContext, str::kSettingCompact,
+                 str::kSettingCompactDesc, "compact 压缩 上下文");
     push_setting(out, SettingAction::ToggleSidebar, str::kSettingSidebar,
                  str::kSettingSidebarDesc, "sidebar side 侧边栏 位置");
     push_setting(out, SettingAction::Clear, str::kSettingClear, str::kSettingClearDesc,
@@ -1537,16 +2114,11 @@ void App::apply_search_entry(int index) {
 
 void App::run_setting(int action) {
     switch (static_cast<SettingAction>(action)) {
+        case SettingAction::ModeCycle:
+            open_mode_selector();  // 模式选择面板（与 /model 同款，含模式介绍）
+            break;
         case SettingAction::PermCycle:
-            if (m_deps.session) {
-                m_deps.session->toggle_permission_mode();
-                m_vm.sidebar.permission = mode_label(m_deps.session->permission_mode());
-            } else {
-                static const char* kCycle[] = {"", "plan", "bypass"};
-                m_mock_perm_cycle = (m_mock_perm_cycle + 1) % 3;
-                m_vm.sidebar.permission = kCycle[m_mock_perm_cycle];
-            }
-            m_vm.apply(ActionPermissions{.label = m_vm.sidebar.permission});
+            toggle_permission();
             break;
         case SettingAction::ModelSelector:
             open_model_selector();
@@ -1554,14 +2126,11 @@ void App::run_setting(int action) {
         case SettingAction::ProviderSelector:
             open_provider_palette();
             break;
-        case SettingAction::ToggleThinking:
-            if (!m_vm.messages.empty()) {
-                auto& m = m_vm.messages.back();
-                if (m.reasoned) {
-                    m.reasoning_expanded = !m.reasoning_expanded;
-                    m_screen.RequestAnimationFrame();
-                }
-            }
+        case SettingAction::NewSession:
+            cmd_new();
+            break;
+        case SettingAction::CompactContext:
+            compact_context();
             break;
         case SettingAction::ToggleSidebar:
             m_sidebar_left = !m_sidebar_left;
@@ -1577,17 +2146,109 @@ void App::run_setting(int action) {
     }
 }
 
-void App::send_input(const std::string& text) {
+// —— 技能命令任意位置调用 ——
+namespace {
+/// /name 后边界判定：name 之后第一个字符（input[pos]）
+/// 到行尾 / 空白 / 标点 / 非 ASCII（含 CJK）→ 视为参数起始（边界成立）；
+/// ASCII 字母数字 - _ 视为名字延续（非边界，避免正则 "/verify" 误吞 "/verify-check"）。
+bool is_skill_boundary_after(const std::string& input, std::size_t pos) {
+    if (pos >= input.size()) return true;
+    const unsigned char c = static_cast<unsigned char>(input[pos]);
+    if (c >= 0x80) return true;
+    const bool word = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+                      (c >= 'A' && c <= 'Z') || c == '-' || c == '_';
+    return !word;
+}
+
+/// 在 input 任意位置查找首个已注册技能命令 "/name"，返回命中信息。
+/// 技能判定：命令注册表中 type()=="prompt"（内置命令均为 local，技能为 prompt）。
+struct SkillHit {
+    std::string name;
+    std::string args;  ///< /name 之后到行尾的参数文本
+};
+std::optional<SkillHit> find_skill_command_anywhere(
+    const std::string& input, const agent::command::CommandRegistry& reg) {
+    std::vector<std::string> names;
+    for (const auto& c : reg.get_user_invocable_commands())
+        if (c->type() == "prompt") names.push_back(c->name());
+    if (names.empty() || input.empty()) return std::nullopt;
+    std::sort(names.begin(), names.end(),
+              [](const std::string& a, const std::string& b) { return a.size() > b.size(); });
+    for (std::size_t i = 0; i < input.size(); ++i) {
+        if (input[i] != '/') continue;
+        for (const auto& n : names) {
+            if (input.compare(i + 1, n.size(), n) != 0) continue;
+            if (is_skill_boundary_after(input, i + 1 + n.size())) {
+                return SkillHit{n, input.substr(i + 1 + n.size())};
+            }
+        }
+    }
+    return std::nullopt;
+}
+}  // namespace
+
+void App::send_input(const std::string& text, bool force_flush) {
     // 输入历史：提交即追加并落盘（含斜杠命令，便于重复调用）
     if (!text.empty()) {
         m_input_history.push(text);
         m_input_history.save();
     }
 
-    // 本地命令：不发送给模型
+    // ！命令：以 '!' 开头视为 Shell 命令执行（跨平台 cmd/sh）。
+    // 顺序置于技能/斜杠命令之前，避免命令串内含 '/...' 被误判为技能调用。
+    // Enter 只执行并渲染 Bash 卡；Ctrl+Enter（force_flush）再把结果结构化发给模型。
+    if (!text.empty() && text[0] == '!') {
+        run_shell_command(text, force_flush);
+        return;
+    }
+
+    // 技能命令任意位置调用：/skill-name 可出现在消息任何位置（含开头）。
+    // 命中即：回显原始输入 + 注入合成 Skill 卡片 + 本地解析后路由模型。
+    if (!text.empty() && m_deps.command_registry) {
+        if (auto hit = find_skill_command_anywhere(text, *m_deps.command_registry)) {
+            handle_skill_invocation(text, hit->name, hit->args);
+            return;
+        }
+    }
+
+    // 本地命令：不发送给模型（技能已在上方拦截，此处剩余为非技能斜杠命令）
     if (!text.empty() && text[0] == '/') {
         // B2 统一命令：斜杠命令全部经 run_command 执行（单一命令路径）
         run_command(text, "");
+        return;
+    }
+
+    // @图片引用（如 @a.png）→ 图片附件绝对路径（多模态随请求上传）：
+    // 仅普通文本路径提取，非图片 @ 文件引用保持原样发送（模型经工具读取）。
+    auto extract_images = [&]() -> std::vector<std::string> {
+        std::vector<std::string> images;
+        agent::input::InputParser parser;
+        const auto parsed = parser.parse(text);
+        if (parsed.type == agent::input::InputType::Text) {
+            for (const auto& p : parsed.image_paths) {
+                std::error_code ec;
+                const auto abs = std::filesystem::weakly_canonical(
+                    std::filesystem::absolute(p, ec), ec);
+                if (!ec && !abs.empty() && std::filesystem::exists(abs, ec)) {
+                    images.push_back(abs.string());
+                }
+            }
+        }
+        return images;
+    };
+
+    // 模型忙碌：进入待发送队列（不丢消息）；Ctrl+Enter 请求下个工具轮边界立即冲刷。
+    // 不回显到转录区（由输入框上方队列卡片展示），不重复置 busy（已在生成中）。
+    if (m_deps.session && m_deps.session->is_generating()) {
+        if (force_flush) {
+            m_deps.session->request_flush();
+        }
+        if (m_deps.on_submit) {
+            // ChatSession::send_message 忙碌时自动入队 + 发布 MessageQueueUpdatedEvent
+            m_deps.on_submit(text, extract_images());
+            // 唤醒事件循环消费队列更新事件（事件总线仅入队、无泵线程）
+            m_screen.PostEvent(Event::Custom);
+        }
         return;
     }
 
@@ -1603,7 +2264,7 @@ void App::send_input(const std::string& text) {
 
     // 真实链路：统一经 on_submit 路由到会话（B2：输入链单一入口）
     if (m_deps.on_submit) {
-        m_deps.on_submit(text);
+        m_deps.on_submit(text, extract_images());
         // 真实链路唤醒：busy 已置位但动画线程镜像同步发生在 drain（Custom 事件）。
         // 立即投递一次 Custom 让 UI 线程消费事件队列并唤醒动画线程；
         // 否则 publish_async 事件积压（事件总线仅入队、无泵线程），
@@ -1611,6 +2272,79 @@ void App::send_input(const std::string& text) {
         m_screen.PostEvent(Event::Custom);
     } else {
         m_vm.apply(ActionSetBusy{.busy = false});
+    }
+}
+
+void App::handle_skill_invocation(const std::string& raw_input,
+                                  const std::string& name,
+                                  const std::string& args) {
+    // 1. 回显用户原始输入（含 /skill-name 指令文本）
+    m_vm.apply(ActionAppendMessage{.role = "user", .text = raw_input});
+    m_vm.apply(ActionSetBusy{.busy = true});
+    m_follow = true;
+
+    if (!m_command_processor) {
+        m_vm.apply(ActionAppendSkill{.name = name, .input = args, .is_error = true});
+        m_vm.apply(ActionAppendMessage{.role = "assistant",
+                                       .text = std::string(str::kProcessorUnavailable)});
+        return;
+    }
+
+    // 2. 本地解析技能 → 展开提示词
+    std::string invoke = "/" + name + (args.empty() ? "" : (" " + args));
+    agent::command::CommandContext ctx;
+    auto result = m_command_processor->process(invoke, ctx);
+
+    // 计算实际发往模型的展开提示词（/resume 时用于定位对应 user 消息）
+    std::string query;
+    if (result.should_query) {
+        query = result.output_text;
+        if (query.empty()) {
+            for (const auto& m : result.messages) {
+                if (!query.empty()) query += "\n\n";
+                query += m;
+            }
+        }
+    }
+
+    // 注入合成 Skill 卡片（本地解析完成态；仅 ViewModel 展示，不进模型上下文）
+    m_vm.apply(ActionAppendSkill{.name = name, .input = args, .is_error = result.is_error});
+
+    // skill 事件载荷（/resume 按 query 匹配恢复为「原始输入回显 + Skill 卡」）
+    const agent::session::SkillEvent skill_ev{
+        .name = name,
+        .input = args,
+        .raw_input = raw_input,
+        .query = query,
+        .is_error = result.is_error,
+    };
+    // 落盘（须在 user 消息持久化之后：SessionStore 在首条 user 消息时懒创建，
+    // 若 skill 是首条消息且先于 on_submit 落盘，store 尚不存在会被静默丢弃 → /resume 恢复失败）
+    auto persist_skill = [this](const agent::session::SkillEvent& ev) {
+        if (m_deps.session) m_deps.session->append_skill_event(ev);
+    };
+
+    if (result.is_error) {
+        persist_skill(skill_ev);
+        if (!result.output_text.empty()) m_vm.apply(ActionError{.message = result.output_text});
+        return;
+    }
+
+    // 4. 本地命令型技能（should_query=false）直接输出
+    if (!result.output_text.empty() && !result.should_query) {
+        persist_skill(skill_ev);
+        m_vm.apply(ActionAppendMessage{.role = "assistant", .text = result.output_text});
+        return;
+    }
+
+    // 5. 需要模型：先把展开后的提示词交给 on_submit（同步持久化 user 消息、创建 store），
+    //    再落盘 skill 事件（保证事件晚于其 query 消息，/resume 按 query 内容匹配即可恢复）。
+    if (result.should_query && m_deps.on_submit) {
+        if (!query.empty()) {
+            m_deps.on_submit(query, {});
+            persist_skill(skill_ev);
+            m_screen.PostEvent(Event::Custom);  // 同 run_command：唤醒事件循环消费积压事件
+        }
     }
 }
 
@@ -1647,10 +2381,103 @@ void App::run_command(const std::string& cmd, const std::string& args) {
         if (!query.empty()) {
             m_vm.apply(ActionAppendMessage{.role = "user", .text = query});
             m_vm.apply(ActionSetBusy{.busy = true});
-            m_deps.on_submit(query);
+            m_deps.on_submit(query, {});
             m_screen.PostEvent(Event::Custom);  // 同 send_input：唤醒事件循环消费积压事件
         }
     }
+}
+
+namespace {
+
+/// @brief 跨平台执行一条 Shell 命令，复用 shell_detect::detect()。
+/// @details Windows 优先 Git Bash（bash -c），未安装则降级 cmd.exe（/c）；
+///          POSIX 走 /bin/sh -c。与 BashTool 共用同一 shell 判定，保证命令语义一致，
+///          例如 `!ls`、`!grep` 在安装 Git Bash 的 Windows 上可直接执行。
+///          设超时防命令挂死。
+agent::ResultV2<agent::process::ExecOutput> exec_shell_command(
+    const std::string& command) {
+    // 引用静态缓存，程序生命周期内有效（shell_detect::detect 已做线程安全缓存）
+    const auto& sh = agent::tool::shell_detect::detect();
+    agent::process::ExecOptions opts;
+    opts.args = {sh.flag, command};
+    opts.timeout = std::chrono::milliseconds(120000);
+    return agent::process::exec(sh.cmd, opts);
+}
+
+/// @brief 组装发给模型的结构化命令结果（用户执行了什么命令、结果如何）
+std::string build_cmd_submit_text(
+    const std::string& command,
+    const agent::ResultV2<agent::process::ExecOutput>& res) {
+    std::string out = "用户执行了 Shell 命令：\n```bash\n" + command + "\n```\n";
+    if (res.is_err()) {
+        out += "\n命令启动失败：" + res.error().message;
+    } else {
+        const auto& r = res.value();
+        if (r.cancelled) {
+            out += "\n命令执行已被取消。";
+        } else if (r.timed_out) {
+            out += "\n命令执行超时。";
+        } else {
+            out += "\n命令退出码：" + std::to_string(r.exit_code) + "\n";
+            if (!r.stdout_text.empty())
+                out += "\n标准输出：\n" + r.stdout_text + "\n";
+            if (!r.stderr_text.empty())
+                out += "\n标准错误：\n" + r.stderr_text + "\n";
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
+void App::run_shell_command(const std::string& raw_input, bool send_to_model) {
+    std::string command = raw_input.substr(1);  // 去前导 '!'
+    const size_t b = command.find_first_not_of(" \t\n\r");
+    const size_t e = command.find_last_not_of(" \t\n\r");
+    if (b == std::string::npos) return;         // 空命令：忽略
+    command = command.substr(b, e - b + 1);
+
+    // 回显用户输入（含 '!' 前缀）
+    m_vm.apply(ActionAppendMessage{.role = "user", .text = raw_input});
+    if (m_deps.mock_mode) return;  // mock 模式不真实执行（合成结果卡由 mock 演示）
+
+    // 串行执行：上一命令未结束则等待，避免并发命令 push 交错
+    if (m_cmd_thread.joinable()) m_cmd_thread.join();
+
+    m_cmd_thread = std::thread([this, command, send_to_model] {
+        auto res = exec_shell_command(command);
+        std::string result;
+        bool is_error = false;
+        if (res.is_err()) {
+            result = std::string("<error>\n命令启动失败：") + res.error().message + "\n</error>";
+            is_error = true;
+        } else {
+            const auto& out = res.value();
+            if (out.cancelled || out.timed_out) {
+                result = std::string("<error>\n命令") +
+                         (out.timed_out ? "执行超时" : "执行已被取消") + "\n</error>";
+                is_error = true;
+            } else {
+                if (out.stdout_text.empty()) {
+                    result = "<stdout>\n</stdout>\n";
+                } else {
+                    result = "<stdout>\n" + out.stdout_text + "\n</stdout>\n";
+                }
+                if (!out.stderr_text.empty())
+                    result += "<stderr>\n" + out.stderr_text + "\n</stderr>\n";
+                result += "<exit_code>" + std::to_string(out.exit_code) + "</exit_code>";
+                is_error = (out.exit_code != 0);
+            }
+        }
+        m_queue.push(ActionAppendCmdResult{
+            .command = command, .result = std::move(result), .is_error = is_error});
+        if (send_to_model) {
+            m_queue.push(ActionSubmitCmdToModel{
+                .text = build_cmd_submit_text(command, res)});
+        }
+        // 唤醒 UI 线程消费队列并重绘（模拟流/项目扫描/轮询线程同一模式）
+        m_screen.PostEvent(ftxui::Event::Custom);
+    });
 }
 
 void App::start_mock_stream(const std::string& user_text) {
@@ -1836,8 +2663,9 @@ Element App::build_transcript(int width) {
         prefix[i + 1] = prefix[i] + m_msg_height[i] + 1;
 
     int dimy = ftxui::Terminal::Size().dimy;
-    // 减去：标题 1 + 面包屑 1 + 输入区 composer_height + 状态行 1 + 余量 2
-    int avail = std::max(1, dimy - (2 + 1 + composer_height(m_input_buffer) + 2));
+    // 减去：标题 1 + 面包屑 1 + 输入区 composer_height + 状态行 1 + hook 进度条 + 余量 2
+    int avail = std::max(1, dimy - (2 + 1 + composer_height(m_input_buffer) + 2
+                                   + hook_progress_height()));
     int content_h = prefix[n];
     int max_scroll = std::max(0, content_h - avail);
 
@@ -2102,7 +2930,8 @@ Element App::build_sub_agent_view(int width) {
 
     // 视口高度：与主转录区同公式，再减状态头 2 行（头 + 空行）
     int dimy = ftxui::Terminal::Size().dimy;
-    int avail = std::max(1, dimy - (2 + 1 + composer_height(m_input_buffer) + 2) - 2);
+    int avail = std::max(1, dimy - (2 + 1 + composer_height(m_input_buffer) + 2) - 2
+                            - hook_progress_height());
     int content_h = prefix[n];
     int max_scroll = std::max(0, content_h - avail);
 
@@ -2272,7 +3101,7 @@ Element App::build_ask_modal() const {
         ftxui::text(std::string(str::kAskIcon)),
         ftxui::text(progress) | ftxui::color(theme::T::TextFaint),
         ftxui::separatorEmpty(),
-        ftxui::flex(ftxui::text(title) | ftxui::bold),
+        ftxui::flex(ftxui::paragraph(title) | ftxui::bold),
     }));
     body.push_back(ftxui::separatorEmpty());
 
@@ -2326,12 +3155,124 @@ Element App::build_ask_modal() const {
         | ftxui::bgcolor(theme::T::Panel);
 }
 
+/// @brief 消息队列卡片（模型忙碌时前端入队的用户消息；输入框上方可折叠条）
+/// @details 折叠态单行摘要（条数 + Ctrl+Enter 提示）；展开态逐条预览 + ✕ 移除。
+///          命中区写入 m_queue_hits：标题行（button=-1）切换展开/折叠，
+///          每条 ✕（button=条目下标）调用 ChatSession::remove_queued_message。
+Element App::build_queue_bar() {
+    m_queue_hits.clear();
+    const auto& items = m_vm.message_queue.items;
+    if (items.empty()) return ftxui::emptyElement();
+
+    const bool expanded = m_vm.message_queue.expanded;
+
+    // 标题行：图标 + 条数 + Ctrl+Enter 提示 + 展开/收起箭头；整行点击切换展开
+    m_queue_hits.push_back(CardHit{});
+    CardHit& title_hit = m_queue_hits.back();
+    title_hit.msg_idx = -1;
+    title_hit.tool_idx = -1;
+    title_hit.button = -1;  // 标题行（切换展开/折叠）
+    const std::string title = std::string(str::kQueueIcon) +
+                              std::to_string(items.size()) +
+                              std::string(str::kQueueTitlePrefix);
+    auto title_body = ftxui::hbox({
+        ftxui::text(title) | ftxui::color(theme::T::Text),
+        ftxui::text(std::string(" · ")) | ftxui::color(theme::T::TextFaint),
+        ftxui::text(std::string(str::kQueueCtrlHint))
+            | ftxui::color(theme::T::TextFaint),
+        ftxui::flex(ftxui::text("")),
+        ftxui::text(std::string(expanded ? theme::icon_chevron_down()
+                                         : theme::icon_chevron_right()))
+            | ftxui::color(theme::T::TextFaint),
+    }) | ftxui::reflect(title_hit.box);
+
+    Elements rows;
+    rows.push_back(ftxui::hbox({
+        ftxui::text("  "),
+        title_body | ftxui::flex,
+        ftxui::text("  "),
+    }) | ftxui::bgcolor(theme::T::Panel));
+
+    if (expanded) {
+        // 展开态：逐条预览 + 每条末尾 ✕ 移除按钮
+        for (std::size_t i = 0; i < items.size(); ++i) {
+            m_queue_hits.push_back(CardHit{});
+            CardHit& hit = m_queue_hits.back();
+            hit.msg_idx = static_cast<int>(i);
+            hit.tool_idx = -1;
+            hit.button = static_cast<int>(i);  // ✕ 移除该条
+
+            // 预览：取首行单行展示（超宽由 text 裁剪，不换行）
+            std::string line = items[i].text;
+            const auto nl = line.find('\n');
+            if (nl != std::string::npos) line = line.substr(0, nl);
+            const std::string prefix = "  " + std::to_string(i + 1) + ". ";
+            rows.push_back(ftxui::hbox({
+                ftxui::text(prefix) | ftxui::color(theme::T::TextDim),
+                ftxui::text(line) | ftxui::color(theme::T::Text),
+                ftxui::flex(ftxui::text("")),
+                ftxui::text(std::string(str::kQueueRemove))
+                    | ftxui::color(theme::T::TextFaint)
+                    | ftxui::reflect(hit.box),
+                ftxui::text("  "),
+            }) | ftxui::bgcolor(theme::T::Panel));
+        }
+    }
+
+    return ftxui::vbox(std::move(rows));
+}
+
+// ---------------------------------------------------------------------------
+// Hook 执行进度条（#50 M-2）
+// ---------------------------------------------------------------------------
+
+int App::hook_progress_height() const {
+    return static_cast<int>(m_vm.hook_progress.size());
+}
+
+ftxui::Element App::build_hook_progress_elem() const {
+    const auto& rows = m_vm.hook_progress;
+    if (rows.empty()) return ftxui::emptyElement();
+
+    Elements elems;
+    elems.reserve(rows.size());
+    for (const auto& r : rows) {
+        // 状态图标 + 颜色（进行中蓝 / 完成绿 / 失败红）
+        const bool running = r.phase == "start";
+        const bool failed = r.phase == "failed";
+        const std::string icon = failed ? "✕ " : (running ? "● " : "✓ ");
+        const ftxui::Color icon_color =
+            failed ? theme::T::DiffDel
+                   : (running ? theme::T::Accent : theme::T::DiffAdd);
+
+        std::string text = r.event;
+        if (!r.tool_name.empty()) text += " · " + r.tool_name;
+        if (!r.label.empty()) text += "  " + r.label;
+        if (failed && !r.message.empty()) {
+            std::string msg = r.message;
+            const auto nl = msg.find('\n');
+            if (nl != std::string::npos) msg = msg.substr(0, nl);
+            if (msg.size() > 48) msg = msg.substr(0, 48) + "…";
+            text += "  " + msg;
+        }
+
+        elems.push_back(ftxui::hbox({
+            ftxui::text("  "),
+            ftxui::text(icon) | ftxui::color(icon_color),
+            ftxui::text(text) | ftxui::color(running ? theme::T::Text : theme::T::TextDim),
+            ftxui::flex(ftxui::text("")),
+            ftxui::text("  "),
+        }) | ftxui::bgcolor(theme::T::Panel));
+    }
+    return ftxui::vbox(std::move(elems));
+}
+
 // ---------------------------------------------------------------------------
 // 主循环
 // ---------------------------------------------------------------------------
 
 void App::run() {
-    // 启动即写运行日志：确保每次运行都创建 ~/.workx/logs/codex_run.log，
+    // 启动即写运行日志：确保每次运行都创建 ~/.workx/logs/workx_tui.log，
     // 而非仅在异常/mock 时才落盘（否则正常运行看不到该文件）
     log_run("app start");
 #if defined(_WIN32)
@@ -2356,8 +3297,10 @@ void App::run() {
             if (t.status == core::todo::TodoStatus::Completed) ++todo_done;
         }
         ftxui::Element line = build_status_line(m_vm.sidebar.model,
+                                                m_vm.sidebar.mode,
                                                 m_vm.sidebar.permission,
                                                 m_vm.busy,
+                                                m_anim_frame,
                                                 todo_done, todo_total);
         // Ctrl+C 提示：单次按下后 1 秒内显示「再次按 Ctrl+C 退出」，超时自动隐藏
         if (m_ctrl_c_hint) {
@@ -2371,6 +3314,15 @@ void App::run() {
                         | ftxui::color(theme::T::Accent),
                 });
             }
+        }
+        // Ctrl+G 异步编辑（Windows 记事本）进行中：状态行右侧常驻「编辑中」提示
+        if (m_prompt_editing.load()) {
+            line = ftxui::hbox({
+                std::move(line),
+                ftxui::text("  "),
+                ftxui::text(std::string("✎ Prompt 编辑中 · Esc 完成"))
+                    | ftxui::color(theme::T::Accent),
+            });
         }
         return line;
     };
@@ -2393,18 +3345,10 @@ void App::run() {
     comp_opt.buffer = &m_input_buffer;
     comp_opt.cursor = &m_composer_cursor;
     comp_opt.on_submit = [this](const std::string& t) { send_input(t); };
-    comp_opt.on_perm_toggle = [this] {
-        // 真实模式：session 侧切换并回读；mock 模式：本地循环 "" → plan → bypass
-        if (m_deps.session) {
-            m_deps.session->toggle_permission_mode();
-            m_vm.sidebar.permission = mode_label(m_deps.session->permission_mode());
-        } else {
-            static const char* kCycle[] = {"", "plan", "bypass"};
-            m_mock_perm_cycle = (m_mock_perm_cycle + 1) % 3;
-            m_vm.sidebar.permission = kCycle[m_mock_perm_cycle];
-        }
-        m_vm.apply(ActionPermissions{.label = m_vm.sidebar.permission});
-    };
+    // Ctrl+Enter：模型忙碌时入队并请求下个工具轮边界立即冲刷
+    comp_opt.on_submit_ctrl = [this](const std::string& t) { send_input(t, true); };
+    comp_opt.on_perm_toggle = [this] { toggle_permission(); };
+    comp_opt.on_mode_toggle = [this] { toggle_mode(); };
     comp_opt.on_toggle_thinking = [this] {
         if (!m_vm.messages.empty()) {
             auto& m = m_vm.messages.back();
@@ -2414,6 +3358,7 @@ void App::run() {
             }
         }
     };
+    comp_opt.on_edit = [this] { edit_prompt(); };
     // 输入栏提示面板（/ 命令 · @ 文件）：状态机回调
     comp_opt.suggest_active = [this] { return m_suggest_mode != SuggestMode::None; };
     comp_opt.suggest_move = [this](int delta) { suggest_move(delta); };
@@ -2449,9 +3394,9 @@ void App::run() {
         [this](int idx) {
             m_palette_open = false;
             apply_search_entry(idx);
-            // 选中动作可能已打开新面板（模型/供应商），焦点归新面板；
+            // 选中动作可能已打开新面板（模型/模式/供应商），焦点归新面板；
             // 仅无面板打开时恢复输入栏焦点
-            if (!m_model_open && !m_resume_open && !m_provider_open) {
+            if (!m_model_open && !m_mode_open && !m_resume_open && !m_provider_open) {
                 if (m_composer) m_composer->TakeFocus();
             }
         },
@@ -2470,6 +3415,18 @@ void App::run() {
         m_model_open,
         [this] { if (m_composer) m_composer->TakeFocus(); },
         std::string(str::kPaletteModelTitle));
+
+    // 模式选择面板：与 /model 同款（标题 + 输入框；active = 当前模式，副标题 = 模式介绍）
+    m_mode_comp = make_search_palette(
+        m_mode_entries,
+        [this](int idx) {
+            m_mode_open = false;
+            apply_mode(idx);
+            if (m_composer) m_composer->TakeFocus();
+        },
+        m_mode_open,
+        [this] { if (m_composer) m_composer->TakeFocus(); },
+        std::string(str::kPaletteModeTitle));
 
     // /resume 会话面板：仅会话条目（复用 m_session_metas 缓存）
     m_resume_comp = make_search_palette(
@@ -2529,7 +3486,11 @@ void App::run() {
     // 文件查看组件（文件 tab）：可聚焦，↑↓/PgUp/PgDn/滚轮滚动
     m_file_viewer = make_file_viewer(&m_vm.tabs.file);
 
-    // 可聚焦组件栈：composer、AskUser 输入、命令面板、模型/会话/供应商面板、子 Agent 菜单、变更记录、文件查看
+    // 项目文件树组件（项目 tab，常驻）：点击目录展开/收起、点击文件打开、滚轮滚动
+    m_project_tree = make_project_tree(&m_vm.tabs.project,
+                                       [this](const std::string& rel) { open_project_file(rel); });
+
+    // 可聚焦组件栈：composer、AskUser 输入、命令面板、模型/会话/供应商面板、子 Agent 菜单、变更记录、文件查看、项目文件树
     auto container = ftxui::Container::Vertical({
         m_composer,
         m_ask_input,
@@ -2540,6 +3501,7 @@ void App::run() {
         m_sub_menu,
         m_change_viewer,
         m_file_viewer,
+        m_project_tree,
     });
 
     auto layout = ftxui::Renderer(container, [&]() -> ftxui::Element {
@@ -2569,9 +3531,14 @@ void App::run() {
         const int msg_width = std::max(1, content_w - 2);
 
         auto build_sidebar_elem = [this, sidebar_cols](const ftxui::Element& sub_menu_elem,
-                                          const ftxui::Element& change_viewer_elem) {
+                                          const ftxui::Element& change_viewer_elem,
+                                          const ftxui::Element& project_tree_elem,
+                                          const ftxui::Element& file_viewer_elem) {
+            // 镜像"项目 tab 可见"给后台扫描线程：仅可见时周期重扫，避免无谓扫描。
+            m_project_tab_active.store(m_vm.tabs.active == SidebarTab::kProjects);
             return build_sidebar_tabs(m_vm.tabs, m_vm.sidebar, &m_tab_hits, &m_section_hits,
-                                      sub_menu_elem, change_viewer_elem)
+                                      sub_menu_elem, change_viewer_elem, project_tree_elem,
+                                      file_viewer_elem)
                 | ftxui::size(ftxui::WIDTH, ftxui::EQUAL, sidebar_cols)
                 | ftxui::yflex
                 | ftxui::bgcolor(theme::T::Panel);
@@ -2598,16 +3565,41 @@ void App::run() {
             change_viewer_elem = ftxui::emptyElement();
         }
 
+        // 项目文件树组件（项目 tab，常驻）：Render 进布局并 reflect box，
+        // 供 App 侧点击/滚轮命中转发到组件（目录展开/收起、文件打开、滚动）。
+        Element project_tree_elem;
+        if (m_vm.tabs.active == SidebarTab::kProjects) {
+            project_tree_elem = m_project_tree->Render() | ftxui::reflect(m_project_box);
+        } else {
+            m_project_box = ftxui::Box{1, 0, 1, 0};
+            project_tree_elem = ftxui::emptyElement();
+        }
+
+        // 文件查看器组件（文件 tab，可关）：Render 进布局并 reflect box，
+        // 供 App 侧滚轮命中转发到组件（文件滚动）。返回 emptyElement 因组件
+        // Render 已内联完整布局（含路径栏/分隔线/状态栏），勿二次包裹。
+        Element file_viewer_elem;
+        if (m_vm.tabs.active == SidebarTab::kFiles && m_vm.tabs.file_open &&
+            !m_vm.tabs.file.path.empty()) {
+            file_viewer_elem = m_file_viewer->Render() | ftxui::reflect(m_file_box);
+        } else {
+            m_file_box = ftxui::Box{1, 0, 1, 0};
+            file_viewer_elem = ftxui::emptyElement();
+        }
+
         // 后台任务：渲染时只读查询 TaskManager（原子字段，无锁安全）
         refresh_background_tasks();
 
-        Element sidebar_elem = build_sidebar_elem(sub_menu_elem, change_viewer_elem);
+        Element sidebar_elem = build_sidebar_elem(sub_menu_elem, change_viewer_elem,
+                                                  project_tree_elem, file_viewer_elem);
         // 侧栏折叠时清空 tab / 区块 / 子 Agent 菜单命中区，避免陈旧 box 误命中内容区点击
         if (!show_sidebar_body) {
             m_tab_hits.clear();
             m_section_hits.clear();
             m_sub_box = ftxui::Box{1, 0, 1, 0};  // 空 box（IsEmpty=true），禁用点击命中
             m_change_box = ftxui::Box{1, 0, 1, 0};
+            m_project_box = ftxui::Box{1, 0, 1, 0};
+            m_file_box = ftxui::Box{1, 0, 1, 0};
         }
         // 输出区域按层级切换：主会话 → 转录区；子 Agent → 第二层独立记录渲染
         Element output_elem;
@@ -2666,6 +3658,12 @@ void App::run() {
             m_suggest_mode, m_suggest_entries, m_suggest_selected,
             agent::global_file_index().is_ready(), &m_suggest_hits);
 
+        // 消息队列卡片（模型忙碌时前端入队的用户消息）：提示面板下方、输入区上方
+        Element queue_elem = build_queue_bar();
+
+        // Hook 执行进度条（#50 M-2）：输入区正上方，展示 Command/HTTP/Prompt hook 实时状态
+        Element hook_elem = build_hook_progress_elem();
+
         // 左列：标题 + 层级子列表（面包屑导航）+ 转录 + 输入区（含内嵌状态行）
         Element content_col = ftxui::vbox({
             // 标题栏 = 面包屑（首项即当前会话标题），背景与输出区一致（Surface）
@@ -2673,6 +3671,8 @@ void App::run() {
             left_col | ftxui::yflex,
             build_ask_modal(),
             suggest_elem,
+            queue_elem,
+            hook_elem,
             composer_zone,
         });
 
@@ -2706,6 +3706,8 @@ void App::run() {
             layers.push_back(ftxui::center(m_palette_comp->Render()));
         if (m_model_open)
             layers.push_back(ftxui::center(m_model_comp->Render()));
+        if (m_mode_open)
+            layers.push_back(ftxui::center(m_mode_comp->Render()));
         if (m_resume_open)
             layers.push_back(ftxui::center(m_resume_comp->Render()));
         if (m_provider_open)
@@ -2723,6 +3725,10 @@ void App::run() {
     auto root = layout | ftxui::CatchEvent([&](Event e) {
         if (e == Event::Custom) {
             drain();
+            // Ctrl+G 异步编辑：消费轮询线程投递的最新 Prompt 内容，同步到输入框
+            drain_prompt_pending();
+            // Ctrl+G 异步编辑：检测到记事本关闭（真实进程退出）→ 自动收尾保存
+            if (m_prompt_auto_done.exchange(false)) finish_prompt_editor();
             // 冒烟模式：UI 线程消费 driver 请求（投递消息 / 请求退出）
             if (m_smoke_submit.exchange(false)) {
                 send_input("smoke: 渲染与滚动验证");
@@ -2795,6 +3801,7 @@ void App::run() {
             if (ctrl_p) {
                 // 面板互斥：同一时刻只开一个悬浮面板
                 m_model_open = false;
+                m_mode_open = false;
                 m_resume_open = false;
                 m_provider_open = false;
                 // 打开前装配聚合条目（会话列表未加载则后台加载，面板刷新时自动出现）
@@ -2817,8 +3824,33 @@ void App::run() {
             adjust_sidebar_width(m_sidebar_left ? -2 : +2);
             return true;
         }
+        // 悬浮面板打开时，把键盘事件手动路由给当前活动面板组件。
+        // 面板组件（SearchPalette / ProviderManager）不在 FTXUI 标准焦点树中
+        //（App 手动 Render，仅对鼠标手动路由 OnEvent），若不在此转发，
+        // ↑↓ / Enter / 字符 / Backspace / Esc 等键盘事件都到不了面板，
+        // 表现为「面板上下键没反应」也无法确认。鼠标事件仍走下方原路由。
+        if ((m_palette_open || m_model_open || m_mode_open || m_resume_open ||
+             m_provider_open) && !e.is_mouse()) {
+            ftxui::Component active_panel = nullptr;
+            if (m_palette_open) active_panel = m_palette_comp;
+            else if (m_model_open) active_panel = m_model_comp;
+            else if (m_mode_open) active_panel = m_mode_comp;
+            else if (m_resume_open) active_panel = m_resume_comp;
+            else if (m_provider_open) active_panel = m_provider_comp;
+            if (active_panel && active_panel->OnEvent(e)) {
+                m_screen.RequestAnimationFrame();
+                return true;
+            }
+            // 面板未消费的 Esc：放行让面板自行处理（先清空搜索再关闭）。
+            if (e == Event::Escape) return false;
+        }
         // Esc：打断模型回复 / 工具调用（刷新 / AskUser / 面板的 Esc 已在上方各自处理）
         if (e == Event::Escape) {
+            // Ctrl+G 异步编辑（Windows 记事本）进行中：Esc 结束编辑会话并同步输入框
+            if (m_prompt_editing.load()) {
+                finish_prompt_editor();
+                return true;
+            }
             // 输入栏"/"命令 / "@"文件提示面板激活时，Esc 优先关闭它。
             // 根 CatchEvent 先于 composer 收到 Esc（事件自上而下分发），
             // 若在此不放行，composer 的 Esc 分支永远跑不到，面板会关不掉。
@@ -2899,10 +3931,12 @@ void App::run() {
                         now - m_last_ctrl_c).count() <= 1000) {
                     m_last_ctrl_c = {};  // 双击：退出
                     m_ctrl_c_hint = false;
+                    log_run("ctrl-c exit: double-press detected, calling on_exit");
                     if (m_deps.event_bus)
                         m_deps.event_bus->publish(agent::InterruptEvent{.force = true});
                     if (m_deps.on_exit) m_deps.on_exit();
                     else m_screen.Exit();
+                    log_run("ctrl-c exit: on_exit returned");
                     return true;
                 }
                 m_last_ctrl_c = now;
@@ -2923,6 +3957,7 @@ void App::run() {
             ftxui::Component active_panel = nullptr;
             if (m_palette_open) active_panel = m_palette_comp;
             else if (m_model_open) active_panel = m_model_comp;
+            else if (m_mode_open) active_panel = m_mode_comp;
             else if (m_resume_open) active_panel = m_resume_comp;
             else if (m_provider_open) active_panel = m_provider_comp;
             if (active_panel && active_panel->OnEvent(e)) {
@@ -2963,6 +3998,18 @@ void App::run() {
                 }
             }
             if (e.mouse().button == ftxui::Mouse::WheelUp) {
+                // 光标在文件查看器 box 内 → 转发滚动到文件组件并强制消费（不依赖组件返回值）
+                if (!m_file_box.IsEmpty() && m_file_box.Contain(e.mouse().x, e.mouse().y) &&
+                    m_file_viewer) {
+                    m_file_viewer->OnEvent(e);
+                    m_screen.RequestAnimationFrame();
+                    return true;
+                }
+                // 光标在项目文件树 box 内 → 滚动项目树而非主输出
+                if (!m_project_box.IsEmpty() && m_project_box.Contain(e.mouse().x, e.mouse().y)) {
+                    scroll_project(-3);
+                    return true;
+                }
                 if (m_vm.output_level == OutputLevel::SubAgent) {
                     m_sub_follow = false;
                     m_sub_scroll = std::max(0, m_sub_scroll - 3);
@@ -2974,6 +4021,18 @@ void App::run() {
                 return true;
             }
             if (e.mouse().button == ftxui::Mouse::WheelDown) {
+                // 光标在文件查看器 box 内 → 转发滚动到文件组件并强制消费（不依赖组件返回值）
+                if (!m_file_box.IsEmpty() && m_file_box.Contain(e.mouse().x, e.mouse().y) &&
+                    m_file_viewer) {
+                    m_file_viewer->OnEvent(e);
+                    m_screen.RequestAnimationFrame();
+                    return true;
+                }
+                // 光标在项目文件树 box 内 → 滚动项目树而非主输出
+                if (!m_project_box.IsEmpty() && m_project_box.Contain(e.mouse().x, e.mouse().y)) {
+                    scroll_project(3);
+                    return true;
+                }
                 if (m_vm.output_level == OutputLevel::SubAgent) {
                     m_sub_scroll += 3;
                 } else {
@@ -3021,6 +4080,13 @@ void App::run() {
                     m_screen.RequestAnimationFrame();
                     return true;
                 }
+                // 项目文件树组件：点击转发（目录展开/收起、文件打开）
+                if (!m_project_box.IsEmpty() &&
+                    m_project_box.Contain(e.mouse().x, e.mouse().y)) {
+                    m_project_tree->OnEvent(e);
+                    m_screen.RequestAnimationFrame();
+                    return true;
+                }
                 // 子 Agent 菜单：点击转发给 Menu（聚焦 + 选中该条目）
                 if (!m_sub_entries.empty() && !m_sub_box.IsEmpty() &&
                     m_sub_box.Contain(e.mouse().x, e.mouse().y)) {
@@ -3052,6 +4118,27 @@ void App::run() {
                             e.mouse().y >= b.y_min && e.mouse().y <= b.y_max) {
                             m_suggest_selected = static_cast<int>(i);
                             suggest_enter();
+                            m_screen.RequestAnimationFrame();
+                            return true;
+                        }
+                    }
+                }
+                // 消息队列卡片：标题行（button=-1）切换展开/折叠；✕（button=条目下标）移除该条
+                if (!m_queue_hits.empty()) {
+                    for (const auto& hit : m_queue_hits) {
+                        if (e.mouse().x >= hit.box.x_min && e.mouse().x <= hit.box.x_max &&
+                            e.mouse().y >= hit.box.y_min && e.mouse().y <= hit.box.y_max) {
+                            if (hit.button >= 0) {
+                                const auto& items = m_vm.message_queue.items;
+                                if (hit.button < static_cast<int>(items.size()) &&
+                                    m_deps.session) {
+                                    m_deps.session->remove_queued_message(
+                                        items[static_cast<std::size_t>(hit.button)].id);
+                                }
+                            } else {
+                                m_vm.message_queue.expanded =
+                                    !m_vm.message_queue.expanded;
+                            }
                             m_screen.RequestAnimationFrame();
                             return true;
                         }
@@ -3245,10 +4332,47 @@ void App::start_smoke_driver() {
 
 std::string App::mode_label(agent::tool::PermissionMode m) {
     switch (m) {
-        case agent::tool::PermissionMode::Plan: return "plan";
         case agent::tool::PermissionMode::BypassPermissions: return "bypass";
         default: return "";
     }
+}
+
+/// @brief 权限两态切换（手动审批 ↔ 完全访问；Shift+Tab / 设置面板）
+/// @details 真实模式：session 侧切换并回读；mock 模式：本地循环 "" → bypass
+void App::toggle_permission() {
+    if (m_deps.session) {
+        m_deps.session->toggle_permission_mode();
+        m_vm.sidebar.permission = mode_label(m_deps.session->permission_mode());
+    } else {
+        static const char* kCycle[] = {"", "bypass"};
+        m_mock_perm_cycle = (m_mock_perm_cycle + 1) % 2;
+        m_vm.sidebar.permission = kCycle[m_mock_perm_cycle];
+    }
+    m_vm.apply(ActionPermissions{.label = m_vm.sidebar.permission});
+}
+
+/// @brief 会话工作模式 → 状态行标签（"standard" / "plan" / "minimal"）
+std::string App::session_mode_label(agent::tool::SessionMode m) {
+    switch (m) {
+        case agent::tool::SessionMode::Plan: return "plan";
+        case agent::tool::SessionMode::Minimal: return "minimal";
+        default: return "standard";
+    }
+}
+
+/// @brief 工作模式三态切换（标准 → 极简 → 计划 → 标准；Tab / Ctrl+T / 设置面板）
+/// @details 真实模式：session 侧切换（计划联动权限 Plan，退出恢复）并回读；
+///          mock 模式：本地循环 standard → minimal → plan
+void App::toggle_mode() {
+    if (m_deps.session) {
+        m_deps.session->toggle_session_mode();
+        m_vm.sidebar.mode = session_mode_label(m_deps.session->session_mode());
+    } else {
+        static const char* kModeCycle[] = {"standard", "minimal", "plan"};
+        m_mock_mode_cycle = (m_mock_mode_cycle + 1) % 3;
+        m_vm.sidebar.mode = kModeCycle[m_mock_mode_cycle];
+    }
+    m_vm.apply(ActionSetMode{.label = m_vm.sidebar.mode});
 }
 
 // ---------------------------------------------------------------------------
@@ -3305,12 +4429,15 @@ void App::retry_message(int msg_idx) {
     m_screen.PostEvent(Event::Custom);  // 唤醒事件循环消费积压事件
 }
 
-/// @brief 关闭侧边栏可开合 tab（变更记录/文件），返回任务调度
+/// @brief 关闭侧边栏可开合 tab（变更记录/文件）
+/// @details 关闭活动 tab 后回到常驻内容 tab：文件查看器关闭跳转「项目」文件树，
+///          变更记录关闭跳转「任务调度」。
 void App::close_sidebar_tab(SidebarTab tab) {
     if (tab == SidebarTab::kChanges) m_vm.tabs.changes_open = false;
     if (tab == SidebarTab::kFiles) m_vm.tabs.file_open = false;
     if (m_vm.tabs.active == tab) {
-        m_vm.tabs.active = SidebarTab::kTasks;
+        m_vm.tabs.active =
+            (tab == SidebarTab::kFiles) ? SidebarTab::kProjects : SidebarTab::kTasks;
         if (m_composer) m_composer->TakeFocus();  // 关闭后交还输入栏焦点
     }
 }
@@ -3380,6 +4507,225 @@ void App::refresh_background_tasks() {
         lite.status = st == agent::TaskStatus::Running ? "Running" : "Pending";
         m_vm.tabs.background_tasks.push_back(std::move(lite));
     }
+}
+
+// ---------------------------------------------------------------------------
+// 项目文件树（项目 tab，常驻）：后台 git 扫描 + 树构建 + 打开/滚动
+// ---------------------------------------------------------------------------
+namespace {
+
+/// @brief 运行 git 命令（cwd 下），返回 stdout 非空行（空格分隔参数，本场景无参数含空格）
+std::vector<std::string> run_git_lines(const std::string& cwd, const char* args_joined) {
+    agent::process::ExecOptions opts;
+    opts.cwd = cwd;
+    opts.timeout = std::chrono::milliseconds(15000);
+    std::string cur;
+    for (const char c : std::string(args_joined)) {
+        if (c == ' ') {
+            if (!cur.empty()) { opts.args.push_back(cur); cur.clear(); }
+        } else {
+            cur += c;
+        }
+    }
+    if (!cur.empty()) opts.args.push_back(cur);
+    auto res = agent::process::exec("git", opts);
+    if (!res.is_ok()) return {};
+    std::vector<std::string> lines;
+    std::string t;
+    for (const char c : res.value().stdout_text) {
+        if (c == '\n') {
+            if (!t.empty()) lines.push_back(t);
+            t.clear();
+        } else {
+            t += c;
+        }
+    }
+    if (!t.empty()) lines.push_back(t);
+    return lines;
+}
+
+/// @brief 向树根插入一条文件路径（按 '/' 分段；目录由父段隐式合成），并把 git 状态写回叶子
+void add_node_path(std::vector<ProjectNode>& root, const std::string& rel,
+                   const std::map<std::string, char>& status) {
+    std::vector<std::string> comps;
+    std::size_t pos = 0;
+    while (pos <= rel.size()) {
+        const auto idx = rel.find('/', pos);
+        if (idx == std::string::npos) { comps.push_back(rel.substr(pos)); break; }
+        comps.push_back(rel.substr(pos, idx - pos));
+        pos = idx + 1;
+    }
+    std::vector<ProjectNode>* level = &root;
+    std::string run;
+    for (std::size_t i = 0; i < comps.size(); ++i) {
+        const bool last = (i + 1 == comps.size());
+        run = run.empty() ? comps[i] : run + "/" + comps[i];
+        ProjectNode* slot = nullptr;
+        for (auto& nd : *level)
+            if (nd.name == comps[i] && nd.rel_path == run) { slot = &nd; break; }
+        if (!slot) {
+            level->push_back(ProjectNode{});
+            slot = &level->back();
+            slot->name = comps[i];
+            slot->rel_path = run;
+            slot->is_dir = !last;
+        }
+        if (last && !status.empty()) {
+            const auto it = status.find(rel);
+            if (it != status.end()) { slot->status = it->second; slot->has_status = (it->second != ' '); }
+        }
+        level = &slot->children;
+    }
+}
+
+/// @brief 目录优先 + 名称（不区分大小写）排序，递归
+void sort_project_tree(std::vector<ProjectNode>& nodes) {
+    const auto lower = [](const std::string& s) {
+        std::string r;
+        r.reserve(s.size());
+        for (const unsigned char c : s) r += static_cast<char>(std::tolower(c));
+        return r;
+    };
+    std::stable_sort(nodes.begin(), nodes.end(),
+                     [&](const ProjectNode& a, const ProjectNode& b) {
+        if (a.is_dir != b.is_dir) return a.is_dir;  // 目录优先
+        const auto la = lower(a.name), lb = lower(b.name);
+        if (la != lb) return la < lb;
+        return a.name < b.name;
+    });
+    for (auto& nd : nodes)
+        if (nd.is_dir) sort_project_tree(nd.children);
+}
+
+/// @brief 由文件路径集合 + git 状态表构造排序文件树
+std::vector<ProjectNode> build_project_tree(const std::set<std::string>& paths,
+                                            const std::map<std::string, char>& status) {
+    std::vector<ProjectNode> root;
+    for (const auto& p : paths) add_node_path(root, p, status);
+    sort_project_tree(root);
+    return root;
+}
+
+/// @brief 非 git 仓库时的文件系统遍历（跳过重型目录，限制条目数）
+void walk_fs(const std::string& root, std::set<std::string>& out) {
+    namespace fs = std::filesystem;
+    static const std::set<std::string> kSkip = {
+        ".git", ".svn", ".hg", "node_modules", "build", "dist", "target", "out",
+        "__pycache__", ".venv", "venv", "cmake-build-debug", "cmake-build-release",
+        ".idea", ".vscode",
+    };
+    const std::string slash = std::string(1, '/');
+    std::error_code ec;
+    fs::recursive_directory_iterator it(fs::path(root),
+                                        fs::directory_options::skip_permission_denied, ec);
+    const fs::recursive_directory_iterator end;
+    int guard = 0;
+    try {
+        for (; it != end; it.increment(ec)) {
+            if (ec) break;
+            if (it->is_directory(ec)) {
+                if (kSkip.count(it->path().filename().string()))
+                    it.disable_recursion_pending();
+                continue;
+            }
+            if (!it->is_regular_file(ec)) continue;
+            if (++guard > 20000) break;
+            const std::string rel = fs::relative(it->path(), root, ec).generic_string();
+            if (!rel.empty()) out.insert(rel);
+        }
+    } catch (...) {
+    }
+}
+
+}  // namespace
+
+/// @brief 后台扫描项目文件树 + git 状态并推送 UI（项目 tab）
+/// @details 单个常驻线程：先首扫（含 loading 占位）；随后仅在项目 tab 可见时周期重扫，
+///          自动反映磁盘文件变化。重扫不置 loading（避免每帧闪烁"扫描项目文件中…"），
+///          apply_variant 内 merge_project_expand 保留既有目录展开态。
+///          git 仓库：git ls-files（已跟踪）+ git status --porcelain（改动/未跟踪）取并集，
+///          天然忽略被 ignore 的文件；非 git：文件系统遍历回退（无状态点）。
+void App::start_project_scan() {
+    if (m_project_watch_run.exchange(true)) return;
+    const std::string root = std::filesystem::current_path().string();
+    m_project_watch_thread = std::thread([this, root] {
+        const auto scan = [root]() {
+            ActionProjectFiles act;
+            act.root = root;
+            act.loading = false;
+            const bool is_git =
+                std::filesystem::is_directory(std::filesystem::path(root) / ".git");
+            act.is_git = is_git;
+            if (is_git) {
+                std::set<std::string> paths;
+                std::map<std::string, char> status;
+                for (auto& line : run_git_lines(root, "ls-files")) {
+                    if (line.empty()) continue;
+                    paths.insert(line);
+                    status[line] = ' ';
+                }
+                for (auto& line : run_git_lines(root, "status --porcelain --untracked-files=all")) {
+                    if (line.size() < 3) continue;
+                    const char x = line[0], y = line[1];
+                    std::string p = line.substr(3);  // 跳 "XY " / "?? "
+                    if (!p.empty() && p.front() == '"' && p.size() >= 2 && p.back() == '"')
+                        p = p.substr(1, p.size() - 2);
+                    const auto arrow = p.find(" -> ");  // 重命名/复制取新名
+                    if (arrow != std::string::npos) p = p.substr(arrow + 4);
+                    if (p.empty()) continue;
+                    const char code = (x == '?' && y == '?') ? '?'
+                                     : (y != ' ' ? y : x);
+                    paths.insert(p);
+                    status[p] = code;
+                }
+                act.tree = build_project_tree(paths, status);
+            } else {
+                std::set<std::string> paths;
+                walk_fs(root, paths);
+                act.tree = build_project_tree(paths, {});
+            }
+            return act;
+        };
+
+        // 首轮：loading 占位 + 完整扫描快照（PostEvent 唤醒事件循环消费并重绘）
+        m_queue.push(ActionProjectFiles{.root = root, .loading = true});
+        m_queue.push(scan());
+        m_screen.PostEvent(Event::Custom);
+
+        // 周期重扫：仅当项目 tab 可见，避免后台无谓拉起 git 进程
+        constexpr auto kInterval = std::chrono::seconds(2);
+        while (m_project_watch_run.load()) {
+            std::this_thread::sleep_for(kInterval);
+            if (!m_project_watch_run.load()) break;
+            if (!m_project_tab_active.load()) continue;
+            m_queue.push(scan());
+            m_screen.PostEvent(Event::Custom);  // 唤醒 UI 消费并重绘，实现自动更新可见
+        }
+    });
+}
+
+/// @brief 点击项目文件行打开查看器（相对项目根 → /view）
+void App::open_project_file(const std::string& rel_path) {
+    std::string abs = rel_path;
+    if (!m_vm.tabs.project.root.empty()) {
+        std::error_code ec;
+        const std::string joined =
+            (std::filesystem::path(m_vm.tabs.project.root) / rel_path)
+                .lexically_normal().string();
+        const std::filesystem::path canon = std::filesystem::weakly_canonical(joined, ec);
+        abs = ec ? joined : canon.string();
+    }
+    cmd_view(abs);
+}
+
+/// @brief 项目树方向键/滚轮滚动（钳制并请求重绘）
+void App::scroll_project(int delta) {
+    auto& p = m_vm.tabs.project;
+    const int total = static_cast<int>(flatten_project_rows(p.tree).size());
+    const int visible = std::max(1, ftxui::Terminal::Size().dimy - 7);
+    const int max_scroll = std::max(0, total - visible);
+    p.scroll = std::clamp(p.scroll + delta, 0, max_scroll);
+    m_screen.RequestAnimationFrame();
 }
 
 }  // namespace ftxtui

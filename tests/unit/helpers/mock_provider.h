@@ -158,11 +158,14 @@ public:
 
     // 记录最近一次请求的 tools schema（供测试断言子 Agent 工具集过滤）
     nlohmann::json last_tools;
+    // 记录最近一次请求的消息（供测试断言子 Agent 初始 system 消息 / 工具观察结果）
+    std::vector<ChatMessage> last_messages;
 
     std::shared_ptr<IStreamReader> submit_completion(const CompletionRequest& request) override {
         std::lock_guard<std::mutex> lock(mutex_);
         submit_count++;
         last_tools = request.tools;
+        last_messages = request.messages;
         if (readers_.empty()) return nullptr;
         auto reader = readers_.front();
         readers_.pop_front();

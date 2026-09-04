@@ -7,7 +7,10 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <functional>
+#include <iostream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
@@ -29,6 +32,13 @@
 #include "core/events/event_bus.h"
 #include "core/task/task_manager.h"
 #include "core/utils/file_index.h"
+
+#include "island/balance_fetcher.h"
+#include "island/cost_accumulator.h"
+#include "island/island_event_bridge.h"
+#include "island/island_server.h"
+#include "island/pricing_table.h"
+#include "island/registry_writer.h"
 
 #include "app.h"
 #include "crash_reporter.h"
@@ -65,8 +75,29 @@ int main(int argc, char** argv) {
     bool mock_mode = false;
     bool smoke_mode = false;
     for (int i = 1; i < argc; ++i) {
-        if (std::string(argv[i]) == "--mock") mock_mode = true;
-        if (std::string(argv[i]) == "--smoke") smoke_mode = true;
+        const std::string arg = argv[i];
+        if (arg == "--mock") mock_mode = true;
+        if (arg == "--smoke") smoke_mode = true;
+        if (arg == "--version" || arg == "-v") {
+            // 仅打印版本与简介后退出，不触发配置向导/索引/Island/TUI
+            std::cout << "workx " << WORKX_VERSION;
+#ifdef WORKX_BUILD_INFO
+            std::cout << " (build " << WORKX_BUILD_INFO << ")";
+#endif
+            // NDEBUG 为 release 配置（CMAKE_BUILD_TYPE=Release/RelWithDebInfo/MSVC Release）
+            // 统一设置的标准宏，未定义则为 debug 配置；跨 MSVC/GCC/Clang 可靠。
+            // 注意 build 信息里的 "-dirty" 是 git 工作区脏标记，与构建类型无关。
+#ifdef NDEBUG
+            std::cout << " [release]\n";
+#else
+            std::cout << " [debug]\n";
+#endif
+            std::cout << "WorkX — 一个现代化的终端 Code Agent / Work Agent\n"
+                      << "用法:\n"
+                      << "  workx                  启动 TUI\n"
+                      << "  workx --version | -v  显示版本与简介\n";
+            return 0;
+        }
     }
     // 冒烟（B5）依赖 mock 流：无后端也能在 CI 无头管道下跑通全链路
     if (smoke_mode) mock_mode = true;
@@ -118,7 +149,7 @@ int main(int argc, char** argv) {
         // 审计日志（大小轮转 + 天数清理）：启用后记录工具调用与安全事件
         if (cfg.get_or<bool>(agent::keys::AUDIT_ENABLED, true)) {
             std::string audit_file = cfg.get_or<std::string>(agent::keys::AUDIT_FILE, "");
-            if (audit_file.empty()) audit_file = (agent::log_dir() / "audit.jsonl").string();
+            if (audit_file.empty()) audit_file = (agent::log_dir() / "workx_audit.jsonl").string();
             agent::audit::AuditLogger::instance().init(
                 audit_file,
                 static_cast<size_t>(cfg.get_or<int>(agent::keys::AUDIT_MAX_SIZE_MB, 10)),
@@ -137,6 +168,13 @@ int main(int argc, char** argv) {
     agent::IBackendAdmin* backend_admin = nullptr;
     std::shared_ptr<agent::mcp::McpClientManager> mcp_manager;  // #27 M4：MCP server 状态
     auto command_registry = std::make_shared<agent::command::CommandRegistry>();
+    // Island 灵动岛 IPC：GUI（WhaleDock）通过 named pipe/socket 发现并连接本 TUI
+    std::unique_ptr<island::RegistryWriter> island_registry;
+    std::unique_ptr<island::PricingTable> island_pricing;
+    std::unique_ptr<island::IslandServer> island_server;
+    std::unique_ptr<island::CostAccumulator> island_cost;
+    std::unique_ptr<island::BalanceFetcher> island_balance;
+    std::unique_ptr<island::IslandEventBridge> island_bridge;
     // 上下文窗口（token）：启动时经 resolve_context_length 解析，注入侧栏进度条分母
     int32_t context_limit = 0;
     // models.dev 目录：堆上原子指针，后台 detach 线程按值捕获，前台 load() 并发安全
@@ -225,6 +263,89 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ---- Island 灵动岛 IPC 服务端（GUI 发现本 TUI 并订阅事件流）----
+    // 受 island.enabled 控制（默认 true）；mock 模式（CI 冒烟）不启动，避免测试副作用
+    if (!mock_mode && cfg.get_or<bool>(agent::keys::ISLAND_ENABLED, true)) {
+        island_registry = std::make_unique<island::RegistryWriter>(
+            island::RegistryWriter::default_registry_path());
+
+        // 单价表：DeepSeek 官方定价 fallback + 用户 ~/.workx/pricing.json 覆盖
+        island_pricing = std::make_unique<island::PricingTable>(
+            island::PricingTable::deepseek_default());
+        {
+            const auto pricing_path =
+                agent::default_config_path().parent_path() / "pricing.json";
+            std::error_code ec;
+            if (std::filesystem::exists(pricing_path, ec)) {
+                std::ifstream ifs(pricing_path);
+                if (ifs) {
+                    std::string text((std::istreambuf_iterator<char>(ifs)),
+                                     std::istreambuf_iterator<char>());
+                    if (auto loaded = island::PricingTable::load_from_json(text);
+                        loaded.is_ok()) {
+                        *island_pricing = std::move(loaded.value());
+                    }
+                }
+            }
+        }
+
+        island::IslandServerConfig isc;
+        isc.project_root = fs::current_path().string();
+        isc.model = model_name;
+        island_server = std::make_unique<island::IslandServer>(
+            std::move(isc), nullptr, island_registry.get());
+
+        // 余额拉取（DeepSeek /user/balance）：api_key 非空才启用低频定时拉取
+        const std::string api_key = cfg.get_or<std::string>(agent::keys::API_KEY, "");
+        if (!api_key.empty()) {
+            std::string base_url = cfg.get_or<std::string>(agent::keys::REMOTE_URL, "");
+            if (base_url.empty()) base_url = "https://api.deepseek.com";
+            island_balance = std::make_unique<island::BalanceFetcher>(
+                bus, api_key, base_url,
+                cfg.get_or<double>(agent::keys::ISLAND_USD_CNY_RATE, 7.2));
+            island_balance->start();
+        }
+
+        // 费用累积（订阅 StreamDone/UserInput/AgentDone → CostUpdatedEvent）
+        island_cost = std::make_unique<island::CostAccumulator>(
+            bus, *island_pricing, model_name);
+        if (island_balance) {
+            island_cost->set_on_task_completed(
+                [b = island_balance.get()] { b->trigger_refresh(); });
+        }
+
+        // 事件桥：EventBus → JSONL 推送给 GUI
+        island_bridge = std::make_unique<island::IslandEventBridge>(bus, *island_server);
+
+        // 请求处理：refresh_balance / get_model_pricing / get_session_summary
+        island_server->set_request_handler(
+            [b = island_balance.get(), p = island_pricing.get(), s = session.get()](
+                const std::string& type, const nlohmann::json&) -> nlohmann::json {
+                if (type == "refresh_balance") {
+                    if (!b) return nlohmann::json(nullptr);
+                    const auto r = b->refresh_and_wait(std::chrono::milliseconds(3000));
+                    return nlohmann::json{{"success", r.success},
+                                          {"balance_usd", r.balance_usd},
+                                          {"cny_balance", r.cny_balance},
+                                          {"fetched_at", r.fetched_at},
+                                          {"error", r.error},
+                                          {"source", r.source}};
+                }
+                if (type == "get_model_pricing") {
+                    if (!p) return nlohmann::json(nullptr);
+                    return p->to_json();
+                }
+                if (type == "get_session_summary") {
+                    nlohmann::json j{{"session_id", s ? s->session_id() : ""}};
+                    if (s) j["message_count"] = static_cast<int>(s->get_messages().size());
+                    return j;
+                }
+                return nlohmann::json(nullptr);
+            });
+
+        island_server->start();
+    }
+
     ftxtui::AppDeps deps;
     deps.session = session.get();
     deps.backend_admin = backend_admin;
@@ -245,8 +366,8 @@ int main(int argc, char** argv) {
     deps.agent_name = (session && !session->session_id().empty())
                           ? session->session_id()
                           : "default";
-    deps.on_submit = [&](const std::string& text) {
-        if (session) session->send_message(text);
+    deps.on_submit = [&](const std::string& text, const std::vector<std::string>& images) {
+        if (session) session->send_message(text, images);
     };
     // /provider 热切换：以目标供应商条目自身配置为准创建后端，
     // 自定义条目（非 preset）也能正确使用其 base_url/api_key，避免依赖旧全局 cfg
@@ -264,6 +385,14 @@ int main(int argc, char** argv) {
     // 清理
     tm.cancelAll();
     tm.waitForAll();
+    // Island 清理：先停 server（断开 GUI 连接、移除注册记录），再退订事件桥/费用/余额
+    if (island_server) island_server->stop();
+    island_bridge.reset();
+    island_cost.reset();
+    island_balance.reset();
+    island_server.reset();
+    island_pricing.reset();
+    island_registry.reset();
     if (session) {
         auto store = session->session_store();
         if (store) store->close();

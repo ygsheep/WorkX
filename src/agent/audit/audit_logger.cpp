@@ -19,6 +19,7 @@
 #include <filesystem>
 
 #include "agent/tool/secret_scanner.h"
+#include "agent/tool/encoding.h"
 
 namespace agent::audit {
 
@@ -217,7 +218,9 @@ std::string AuditLogger::serialize(const AuditEvent& event) const {
     if (!event.security_flags.empty()) j["security_flags"] = event.security_flags;
     if (!event.user.empty())        j["user"] = event.user;
 
-    return j.dump();
+    // UTF-8 兜底：递归清洗所有字符串字段，避免工具入参/输出含非 UTF-8
+    // 字节（如 GBK 子进程 stdout）时 j.dump() 抛出 nlohmann 的 type_error.316。
+    return tool::sanitize_json_strings(j).dump();
 }
 
 // ============================================================================
@@ -227,11 +230,15 @@ std::string AuditLogger::serialize(const AuditEvent& event) const {
 std::string AuditLogger::redact(const std::string& text) const {
     // 复用 SecretScanner 规则集逐处替换为 [REDACTED:label]
     // 不得保留明文前缀（#37 场景 5：密钥绝不进入审计日志）
-    return tool::redact_secrets(text);
+    // 先清洗非法 UTF-8 字节，避免下游 serialize 的 j.dump() 抛 type_error.316
+    return tool::redact_secrets(tool::sanitize_utf8(text));
 }
 
 nlohmann::json AuditLogger::redact_input(const nlohmann::json& input) const {
     if (!input.is_object()) return input;
+
+    // 先清洗非 UTF-8 字节，避免下方 input.dump().size() 抛 type_error.316
+    const nlohmann::json clean = tool::sanitize_json_strings(input);
 
     // 提取关键字段（避免记录全量输入导致日志爆炸）
     // 优先提取：file_path / command / pattern / path / url / cwd
@@ -241,8 +248,8 @@ nlohmann::json AuditLogger::redact_input(const nlohmann::json& input) const {
 
     nlohmann::json redacted;
     for (const auto& key : kKeyFields) {
-        if (input.contains(key)) {
-            const auto& val = input[key];
+        if (clean.contains(key)) {
+            const auto& val = clean[key];
             if (val.is_string()) {
                 redacted[key] = redact(val.get<std::string>());
             } else {
@@ -252,7 +259,7 @@ nlohmann::json AuditLogger::redact_input(const nlohmann::json& input) const {
     }
 
     // 记录输入大小（非敏感元信息）
-    redacted["_size"] = input.dump().size();
+    redacted["_size"] = clean.dump().size();
 
     return redacted;
 }

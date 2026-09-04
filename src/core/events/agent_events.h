@@ -3,7 +3,7 @@
  * @brief Agent 编排事件类型（H-10：从 events.h 按域拆分）
  * @details Agent 推理步骤、工具调用、工具结果、Agent 编排完成等事件。
  *          订阅方按需 include 本文件，避免引入系统/流式事件。
- * @version 1.1.0
+ * @version 1.2.0
  * @date 2026-07
  */
 
@@ -85,6 +85,21 @@ struct AgentVerdictEvent {
     std::string detail;       ///< 验证器返回的人可读说明（如测试失败数/缺失路径）
 };
 
+/// @brief Hook 执行进度事件（Issue #50 M-2：hook 进度可视化）
+/// @details 每条 hook 执行开始/结束时经 IEventBus 异步发布，供 UI 展示
+///          hook 执行状态（起始/完成/失败）。engine 侧仅负责发布；渲染由
+///          订阅方（如 TUI 卡片/状态栏）决定。phase 取 "start" / "done" / "failed"。
+struct HookProgressEvent {
+    std::string session_id;
+    uint64_t hook_id = 0;     ///< 单次 hook 执行唯一 id（HookManager 单调递增分配，供 start/done 关联）
+    std::string event;        ///< 触发事件名（PreToolUse/Stop/...）
+    std::string phase;        ///< "start" / "done" / "failed"
+    std::string hook_type;    ///< command / http / prompt / agent
+    std::string tool_name;    ///< 关联工具名（PreToolUse 等工具事件才有）
+    std::string message;      ///< 执行结果摘要（done/failed 时填充）
+    std::string hook_label;   ///< 展示标签（command 内容 / prompt 摘要，UI 展示用）
+};
+
 /// @brief 缓存诊断事件（DeepSeek 硬盘缓存命中率劣化归因）
 /// @details 当某轮缓存命中率显著下降时发布，用于 UI 显示归因。
 ///          reasons 取值："system" / "tools" / "log_rewrite"
@@ -149,10 +164,20 @@ struct EnterPlanModeEvent {
 /// @brief 退出计划模式事件（#28：ExitPlanModeV2Tool → TUI/宿主）
 /// @details AI 完成规划后发布：携带方案文本与用户批准结果。
 ///          approved=true 表示用户批准方案，可进入执行阶段。
+///          #54：critical_files 为结构化关键文件列表（explore 产物聚合，供执行阶段消费）。
 struct ExitPlanModeEvent {
     std::string session_id;
     std::string plan;       ///< 方案文本（改哪些文件、风险点等）
     bool approved = false;  ///< 用户是否批准
+    std::vector<std::string> critical_files;  ///< #54：关键文件（结构化，可为空由宿主从产物补齐）
+};
+
+/// @brief 方案预览事件（ExitPlanModeV2Tool → TUI）
+/// @details 退出规划模式呈现方案时，先把方案写入 markdown 文件，再发布本事件，
+///          通知 TUI 在侧边栏以 /view 方式打开该文件预览，避免在提问里直接堆全文。
+struct PlanPreviewEvent {
+    std::string session_id;
+    std::string plan_path;  ///< 方案 markdown 文件绝对路径（已落盘，供 TUI 读取）
 };
 
 /// @brief 子 Agent 后台任务完成事件（AgentTool → 订阅者，v1.1.0 后台结果自动回送）
@@ -243,6 +268,39 @@ struct McpServerStatusLite {
 ///          全量快照；TUI 主循环 drain 后经 ActionMcpStatus 更新侧栏（彩色状态点）。
 struct McpStatusChangedEvent {
     std::vector<McpServerStatusLite> servers;  ///< 全部配置 server 的状态快照
+};
+
+// ============================================================
+// 消息队列（模型忙碌时缓存用户输入，工具轮边界/整轮结束冲刷）
+// ============================================================
+
+/// @brief 排队消息条目（ChatSession 队列元素，TUI 队列卡片展示 + 单条移除）
+/// @details 由 ChatSession::enqueue_message 生成，仅存在于内存队列：
+///          未发送前不持久化、不进入 m_messages（发送时才合并为 user 消息）。
+struct QueuedMessageItem {
+    std::string id;                      ///< uuid（单条移除用）
+    std::string text;                    ///< 用户文本
+    std::vector<std::string> images;     ///< 图片附件绝对路径（可为空）
+    int64_t queued_at_ms = 0;            ///< 入队时刻（毫秒时间戳）
+};
+
+/// @brief 消息队列更新事件（ChatSession → TUI 队列卡片）
+/// @details 入队/移除/冲刷后发布当前队列全量快照（空 = 已清空，卡片消失）。
+struct MessageQueueUpdatedEvent {
+    std::string session_id;
+    std::vector<QueuedMessageItem> items;  ///< 当前队列快照（空=无排队消息）
+};
+
+/// @brief 队列冲刷事件（ChatSession → TUI 转录区回显）
+/// @details 排队消息被合并为单条 user 消息注入 ReAct 循环（整轮收尾冲刷 / 工具轮
+///          边界 Ctrl+Enter 冲刷）时发布，携带合并后的文本。UI 据此在转录区回显
+///          该 user 消息并置 busy=true，为新一轮流式回复建立上下文；否则排队消息
+///          只停留在队列卡片、冲刷后消失，新一轮回复也成了无前置消息的孤儿节点
+///          （仅 /resume 全量重建才可见）。publish 先于新一轮 run_completion，
+///          经 FIFO 异步队列保证本事件先于该轮 StreamTokenEvent 被 UI 处理。
+struct QueuedMessagesFlushedEvent {
+    std::string session_id;
+    std::string merged_text;  ///< merge_queued_text() 合并后的 user 消息文本
 };
 
 } // namespace agent

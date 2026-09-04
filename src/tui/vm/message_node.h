@@ -37,6 +37,7 @@ struct MessageNode {
     bool reasoned = false;     ///< 是否收到过思考增量（决定是否渲染思考折叠块）
     bool reasoning_expanded = false;  ///< 思考内容是否展开
     bool sealed = false;       ///< turn 已结束，后续 token/工具不再追加到本条
+    bool notice = false;       ///< UI 追加的非模型回复文本（通知/命令输出等），不显示操作按钮栏
     std::vector<ToolCallNode> tool_calls;
     std::vector<std::string> tool_use_ids;  ///< 当前已创建块的顺序（用于去重）
 

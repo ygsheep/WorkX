@@ -14,6 +14,7 @@
 #include "agent/tool/MCPTool/mcp_tool.h"
 #include "agent/tool/ListMcpResourcesTool/list_mcp_resources_tool.h"
 #include "agent/tool/ReadMcpResourceTool/read_mcp_resource_tool.h"
+#include "agent/tool/AgentTool/agent_tool.h"
 #include "agent/mcp/mcp_client_manager.h"
 #include "agent/tool/permission_ask.h"
 
@@ -245,4 +246,81 @@ TEST_CASE("ReadMcpResourceTool check_permissions（P2-7）", "[mcp_resource][per
     // 缺 server 放行
     auto no_server = tool.check_permissions(R"({"uri":"https://example.com/r"})"_json, ctx);
     REQUIRE(no_server.is_ok());
+}
+
+// ============================================================================
+// #56 方案 D：AgentTool mcpServers 作用域构建
+// ============================================================================
+
+TEST_CASE("AgentTool build_mcp_scope 空/null servers 返回空作用域", "[agent_tool][mcp_scope]") {
+    auto parent = std::make_shared<mcp::McpClientManager>();
+
+    // 空数组 / null → scope 为 nullptr（调用方以 scope 是否非空判定可用性），无 owned client
+    auto r1 = AgentTool::build_mcp_scope(R"([])"_json, parent.get());
+    REQUIRE(r1.scope == nullptr);
+    REQUIRE(r1.owned_clients.empty());
+
+    auto r2 = AgentTool::build_mcp_scope(nullptr, parent.get());
+    REQUIRE(r2.scope == nullptr);
+    REQUIRE(r2.owned_clients.empty());
+
+    // 非数组输入同样按空处理
+    auto r3 = AgentTool::build_mcp_scope(R"({"foo":1})"_json, parent.get());
+    REQUIRE(r3.scope == nullptr);
+    REQUIRE(r3.owned_clients.empty());
+}
+
+TEST_CASE("AgentTool build_mcp_scope 字符串引用复用父 client 不清理", "[agent_tool][mcp_scope]") {
+    auto parent = std::make_shared<mcp::McpClientManager>();
+    auto ref_client = std::make_shared<mcp::McpClient>();
+    parent->register_client("shared", ref_client);
+
+    auto r = AgentTool::build_mcp_scope(R"(["shared"])"_json, parent.get());
+
+    REQUIRE(r.scope != nullptr);
+    REQUIRE_FALSE(r.scope->empty());
+    REQUIRE(r.owned_clients.empty());                                  // 引用不复用 ∴ 无 owned client
+    REQUIRE(r.scope->get_client("shared") == ref_client);              // 同一实例被复用
+}
+
+TEST_CASE("AgentTool build_mcp_scope 未知引用/无父管理器时静默跳过", "[agent_tool][mcp_scope]") {
+    auto parent = std::make_shared<mcp::McpClientManager>();
+
+    // 未知引用名 → 跳过（不注册、不产物）
+    auto unknown = AgentTool::build_mcp_scope(R"(["ghost1"])"_json, parent.get());
+    REQUIRE(unknown.scope != nullptr);
+    REQUIRE(unknown.scope->empty());
+    REQUIRE(unknown.owned_clients.empty());
+
+    // 父管理器为 nullptr → 所有引用均跳过
+    auto null_parent = AgentTool::build_mcp_scope(R"(["ghost2"])"_json, nullptr);
+    REQUIRE(null_parent.owned_clients.empty());
+}
+
+TEST_CASE("AgentTool build_mcp_scope inline 连接失败静默跳过（异常安全）", "[agent_tool][mcp_scope]") {
+    auto parent = std::make_shared<mcp::McpClientManager>();
+    // inline 对象指向不存在的命令：connect_one_off 失败 → 静默跳过，不抛异常不挂起
+    nlohmann::json servers = nlohmann::json::array({
+        {{"name", "inline_bad"}, {"command", "no_such_command_xyz"}, {"args", nlohmann::json::array()}}
+    });
+    auto r = AgentTool::build_mcp_scope(servers, parent.get());
+    REQUIRE(r.scope != nullptr);
+    REQUIRE(r.scope->empty());          // 连接失败未注册
+    REQUIRE(r.owned_clients.empty());   // 失败不产生 owned client
+}
+
+TEST_CASE("AgentTool build_mcp_scope 混合引用与 inline 仅引用可见", "[agent_tool][mcp_scope]") {
+    auto parent = std::make_shared<mcp::McpClientManager>();
+    auto ref_client = std::make_shared<mcp::McpClient>();
+    parent->register_client("shared", ref_client);
+
+    nlohmann::json servers = nlohmann::json::array({
+        "shared",  // 引用：复用父 client
+        {{"name", "inline_bad"}, {"command", "no_such_command_xyz"}, {"args", nlohmann::json::array()}}  // inline：失败跳过
+    });
+    auto r = AgentTool::build_mcp_scope(servers, parent.get());
+    REQUIRE(r.scope != nullptr);
+    REQUIRE_FALSE(r.scope->empty());                        // 引用可用 → scope 非空
+    REQUIRE(r.scope->get_client("shared") == ref_client);
+    REQUIRE(r.owned_clients.empty());                       // 仅引用成功，无 owned client
 }
